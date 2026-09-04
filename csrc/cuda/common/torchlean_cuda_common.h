@@ -3,10 +3,10 @@
 #include <lean/lean.h>
 
 #include "torchlean_size_common.h"
+#include "torchlean_cuda_thread.h"
 
 #include <cuda_runtime.h>
 #include <stddef.h>
-#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -39,14 +39,14 @@ static inline void torchlean_cuda_free_checked(void** ptr, const char* msg) {
   }
 }
 
-static inline void torchlean_cuda_lock(pthread_mutex_t* mutex, const char* msg) {
-  if (pthread_mutex_lock(mutex) != 0) {
+static inline void torchlean_cuda_lock(torchlean_cuda_mutex_t* mutex, const char* msg) {
+  if (torchlean_cuda_mutex_lock(mutex) != 0) {
     lean_internal_panic(msg);
   }
 }
 
-static inline void torchlean_cuda_unlock(pthread_mutex_t* mutex, const char* msg) {
-  if (pthread_mutex_unlock(mutex) != 0) {
+static inline void torchlean_cuda_unlock(torchlean_cuda_mutex_t* mutex, const char* msg) {
+  if (torchlean_cuda_mutex_unlock(mutex) != 0) {
     lean_internal_panic(msg);
   }
 }
@@ -57,7 +57,7 @@ struct torchlean_cuda_scratch_block {
   cudaEvent_t ready;
 };
 
-static pthread_mutex_t g_torchlean_cuda_scratch_mutex = PTHREAD_MUTEX_INITIALIZER;
+static torchlean_cuda_mutex_t g_torchlean_cuda_scratch_mutex = TORCHLEAN_CUDA_MUTEX_INITIALIZER;
 static torchlean_cuda_scratch_block* g_torchlean_cuda_scratch_cache = nullptr;
 static size_t g_torchlean_cuda_scratch_count = 0;
 static size_t g_torchlean_cuda_scratch_cap = 0;
@@ -83,13 +83,13 @@ static inline void torchlean_cuda_scratch_push(torchlean_cuda_scratch_block bloc
 }
 
 static inline void torchlean_cuda_scratch_flush(void) {
-  torchlean_cuda_lock(&g_torchlean_cuda_scratch_mutex, "pthread_mutex_lock scratch flush failed");
+  torchlean_cuda_lock(&g_torchlean_cuda_scratch_mutex, "mutex lock scratch flush failed");
   torchlean_cuda_scratch_block* blocks = g_torchlean_cuda_scratch_cache;
   size_t count = g_torchlean_cuda_scratch_count;
   g_torchlean_cuda_scratch_cache = nullptr;
   g_torchlean_cuda_scratch_count = 0;
   g_torchlean_cuda_scratch_cap = 0;
-  torchlean_cuda_unlock(&g_torchlean_cuda_scratch_mutex, "pthread_mutex_unlock scratch flush failed");
+  torchlean_cuda_unlock(&g_torchlean_cuda_scratch_mutex, "mutex unlock scratch flush failed");
 
   for (size_t i = 0; i < count; ++i) {
     torchlean_cuda_scratch_block block = blocks[i];
@@ -106,7 +106,7 @@ static inline void* torchlean_cuda_scratch_alloc_bytes(size_t bytes, const char*
   if (bytes == 0) {
     return nullptr;
   }
-  torchlean_cuda_lock(&g_torchlean_cuda_scratch_mutex, "pthread_mutex_lock scratch alloc failed");
+  torchlean_cuda_lock(&g_torchlean_cuda_scratch_mutex, "mutex lock scratch alloc failed");
   for (size_t i = 0; i < g_torchlean_cuda_scratch_count; ++i) {
     if (g_torchlean_cuda_scratch_cache[i].bytes != bytes) {
       continue;
@@ -120,16 +120,16 @@ static inline void* torchlean_cuda_scratch_alloc_bytes(size_t bytes, const char*
         g_torchlean_cuda_scratch_cache[g_torchlean_cuda_scratch_count - 1];
       g_torchlean_cuda_scratch_count--;
       torchlean_cuda_unlock(&g_torchlean_cuda_scratch_mutex,
-                            "pthread_mutex_unlock scratch alloc failed");
+                            "mutex unlock scratch alloc failed");
       return ptr;
     }
     if (ready != cudaErrorNotReady) {
       torchlean_cuda_unlock(&g_torchlean_cuda_scratch_mutex,
-                            "pthread_mutex_unlock scratch alloc error failed");
+                            "mutex unlock scratch alloc error failed");
       checkCuda(ready, "cudaEventQuery scratch reuse event failed");
     }
   }
-  torchlean_cuda_unlock(&g_torchlean_cuda_scratch_mutex, "pthread_mutex_unlock scratch alloc failed");
+  torchlean_cuda_unlock(&g_torchlean_cuda_scratch_mutex, "mutex unlock scratch alloc failed");
   void* ptr = nullptr;
   cudaError_t err = cudaMalloc(&ptr, bytes);
   if (err != cudaSuccess) {
@@ -153,9 +153,9 @@ static inline void torchlean_cuda_scratch_free_bytes(void** ptr, size_t bytes, c
   checkCuda(cudaEventCreateWithFlags(&ready, cudaEventDisableTiming),
             "cudaEventCreate cached scratch block failed");
   checkCuda(cudaEventRecord(ready, 0), "cudaEventRecord cached scratch block failed");
-  torchlean_cuda_lock(&g_torchlean_cuda_scratch_mutex, "pthread_mutex_lock scratch free failed");
+  torchlean_cuda_lock(&g_torchlean_cuda_scratch_mutex, "mutex lock scratch free failed");
   torchlean_cuda_scratch_push({bytes, *ptr, ready});
-  torchlean_cuda_unlock(&g_torchlean_cuda_scratch_mutex, "pthread_mutex_unlock scratch free failed");
+  torchlean_cuda_unlock(&g_torchlean_cuda_scratch_mutex, "mutex unlock scratch free failed");
   *ptr = nullptr;
 }
 

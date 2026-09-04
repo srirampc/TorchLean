@@ -11,7 +11,6 @@
 #include <assert.h>
 #include <atomic>
 #include <math.h>
-#include <pthread.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdint.h>
@@ -79,7 +78,7 @@ static void torchlean_cuda_free_best_effort(void* ptr, const char* what);
 static void torchlean_cuda_destroy_event_best_effort(cudaEvent_t event, const char* what);
 static void torchlean_cuda_synchronize_event_best_effort(cudaEvent_t event, const char* what);
 
-static pthread_mutex_t g_torchlean_cuda_cache_mutex = PTHREAD_MUTEX_INITIALIZER;
+static torchlean_cuda_mutex_t g_torchlean_cuda_cache_mutex = TORCHLEAN_CUDA_MUTEX_INITIALIZER;
 static torchlean_cuda_cached_block* g_torchlean_cuda_cache = nullptr;
 static size_t g_torchlean_cuda_cache_count = 0;
 static size_t g_torchlean_cuda_cache_slot_capacity = 0;
@@ -95,12 +94,12 @@ static size_t g_torchlean_cuda_cache_bytes = 0;
 // decimal byte count; a malformed or overflowing value is rejected with a warning and leaves the
 // cache unbounded, rather than being silently misread as some other cap.
 //
-// The environment is read exactly once, under `pthread_once`, so concurrent first callers cannot
+// The environment is read exactly once, under `torchlean_cuda_once`, so concurrent first callers cannot
 // race on the parse: the initializer runs on a single thread while the others block, and the value
 // is published before any caller observes it. (A plain function-local static assigned after its
 // declaration would be a data race, and would depend on `-fthreadsafe-statics` being enabled.)
 static size_t g_torchlean_cuda_cache_cap_value = 0;
-static pthread_once_t g_torchlean_cuda_cache_cap_once = PTHREAD_ONCE_INIT;
+static torchlean_cuda_once_t g_torchlean_cuda_cache_cap_once = TORCHLEAN_CUDA_ONCE_INIT;
 
 // Strict decimal parser for the cap: accepts exactly a non-empty digit string whose value fits
 // in `size_t` — no sign, no whitespace, no base prefix — and reports malformed or overflowing
@@ -139,7 +138,7 @@ static void torchlean_cuda_cache_byte_cap_init(void) {
 }
 
 static size_t torchlean_cuda_cache_byte_cap(void) {
-  pthread_once(&g_torchlean_cuda_cache_cap_once, torchlean_cuda_cache_byte_cap_init);
+  torchlean_cuda_once(&g_torchlean_cuda_cache_cap_once, torchlean_cuda_cache_byte_cap_init);
   return g_torchlean_cuda_cache_cap_value;
 }
 
@@ -165,7 +164,7 @@ static float* torchlean_cuda_take_cached_block(size_t n) {
   if (n == 0) {
     return NULL;
   }
-  torchlean_cuda_lock(&g_torchlean_cuda_cache_mutex, "pthread_mutex_lock buffer cache failed");
+  torchlean_cuda_lock(&g_torchlean_cuda_cache_mutex, "mutex lock buffer cache failed");
   for (size_t i = 0; i < g_torchlean_cuda_cache_count; ++i) {
     if (g_torchlean_cuda_cache[i].size != n) {
       continue;
@@ -179,7 +178,7 @@ static float* torchlean_cuda_take_cached_block(size_t n) {
       g_torchlean_cuda_cache_count--;
       g_torchlean_cuda_cache_bytes -= (size_t)torchlean_float_bytes_for(n);
       torchlean_cuda_unlock(&g_torchlean_cuda_cache_mutex,
-                            "pthread_mutex_unlock buffer cache failed");
+                            "mutex unlock buffer cache failed");
       return data;
     }
     if (ready != cudaErrorNotReady) {
@@ -187,7 +186,7 @@ static float* torchlean_cuda_take_cached_block(size_t n) {
               cudaGetErrorString(ready));
     }
   }
-  torchlean_cuda_unlock(&g_torchlean_cuda_cache_mutex, "pthread_mutex_unlock buffer cache failed");
+  torchlean_cuda_unlock(&g_torchlean_cuda_cache_mutex, "mutex unlock buffer cache failed");
   return NULL;
 }
 
@@ -215,7 +214,7 @@ static void torchlean_cuda_return_cached_block(size_t n, float* data) {
   const size_t incoming = (size_t)torchlean_float_bytes_for(n);
   const size_t cap = torchlean_cuda_cache_byte_cap();
   bool over_cap = false;
-  torchlean_cuda_lock(&g_torchlean_cuda_cache_mutex, "pthread_mutex_lock buffer return failed");
+  torchlean_cuda_lock(&g_torchlean_cuda_cache_mutex, "mutex lock buffer return failed");
   // Overflow-safe form of `g_torchlean_cuda_cache_bytes + incoming > cap`: the sum is never formed,
   // so it cannot wrap `size_t`. A single incoming block larger than the cap trips it directly;
   // otherwise `cap - incoming` is a well-defined non-negative headroom that the current total must
@@ -227,7 +226,7 @@ static void torchlean_cuda_return_cached_block(size_t n, float* data) {
     torchlean_cuda_cache_push({n, data, ready});
     g_torchlean_cuda_cache_bytes += incoming;
   }
-  torchlean_cuda_unlock(&g_torchlean_cuda_cache_mutex, "pthread_mutex_unlock buffer return failed");
+  torchlean_cuda_unlock(&g_torchlean_cuda_cache_mutex, "mutex unlock buffer return failed");
   if (over_cap) {
     // Caching this block would grow the process-global cache past the byte cap, so free it now
     // instead. The just-recorded event signals when pending work on the block completes; wait on it
@@ -240,14 +239,14 @@ static void torchlean_cuda_return_cached_block(size_t n, float* data) {
 }
 
 static void torchlean_cuda_flush_cached_blocks(void) {
-  torchlean_cuda_lock(&g_torchlean_cuda_cache_mutex, "pthread_mutex_lock buffer flush failed");
+  torchlean_cuda_lock(&g_torchlean_cuda_cache_mutex, "mutex lock buffer flush failed");
   torchlean_cuda_cached_block* blocks = g_torchlean_cuda_cache;
   size_t count = g_torchlean_cuda_cache_count;
   g_torchlean_cuda_cache = nullptr;
   g_torchlean_cuda_cache_count = 0;
   g_torchlean_cuda_cache_slot_capacity = 0;
   g_torchlean_cuda_cache_bytes = 0;
-  torchlean_cuda_unlock(&g_torchlean_cuda_cache_mutex, "pthread_mutex_unlock buffer flush failed");
+  torchlean_cuda_unlock(&g_torchlean_cuda_cache_mutex, "mutex unlock buffer flush failed");
 
   for (size_t i = 0; i < count; ++i) {
     torchlean_cuda_cached_block block = blocks[i];
@@ -958,9 +957,9 @@ extern "C" LEAN_EXPORT uint64_t torchlean_cuda_allocator_device_total_bytes(uint
 
 extern "C" LEAN_EXPORT uint64_t torchlean_cuda_allocator_cache_bytes(uint32_t u) {
   (void)u;
-  torchlean_cuda_lock(&g_torchlean_cuda_cache_mutex, "pthread_mutex_lock cache-bytes query failed");
+  torchlean_cuda_lock(&g_torchlean_cuda_cache_mutex, "mutex lock cache-bytes query failed");
   uint64_t bytes = (uint64_t)g_torchlean_cuda_cache_bytes;
-  torchlean_cuda_unlock(&g_torchlean_cuda_cache_mutex, "pthread_mutex_unlock cache-bytes query failed");
+  torchlean_cuda_unlock(&g_torchlean_cuda_cache_mutex, "mutex unlock cache-bytes query failed");
   return bytes;
 }
 

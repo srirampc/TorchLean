@@ -57,7 +57,7 @@ architecture but still need platform-specific runtime work.
 | Linux | &#10003; | &#10003; Native CUDA | SDPA forward with TorchLean backward | Supported |
 | macOS, Intel or Apple silicon | &#10003; | Not applicable | Not yet | CPU supported; Metal is planned |
 | Windows with WSL2 | &#10003; Linux path | &#10003; CUDA on WSL2 | Linux path | Recommended Windows setup |
-| Native Windows | Bring-up target | Not validated | Not wired | Backend target exists; native toolchain work remains |
+| Native Windows (MSYS2) | &#10003; | &#10003; Native CUDA | Not wired | CPU and CUDA build in a MinGW64 shell; see Native Windows |
 
 Here, "LibTorch provider" means the current scaled-dot-product-attention bridge, not a requirement
 for ordinary TorchLean models and not a claim that every operation is delegated to PyTorch. The
@@ -165,31 +165,68 @@ NVIDIA's [CUDA on WSL guide](https://docs.nvidia.com/cuda/wsl-user-guide/index.h
 Windows NVIDIA driver and the CUDA toolkit inside WSL; do not install a second Linux display driver
 inside WSL.
 
-### Native Windows
+### Native Windows (MSYS2)
 
-Native Windows is represented in the backend target vocabulary, but it is still a bring-up target
-rather than a regularly tested release path. Install Git, the Visual Studio C++ build tools, and the
-Windows SDK. Then install Elan from PowerShell:
+Native Windows builds run inside an [MSYS2](https://www.msys2.org/) MinGW64 shell. Lake invokes
+`cc` directly, and the standard Lean for Windows toolchain does not put a `cc` on `PATH`, so the
+build must run inside MSYS2 (which provides `gcc`/`cc`). First, install MSYS2 and Elan on 
+Powershell as given in  manual install instructions given at the 
+Lean [website](https://lean-lang.org/install/manual/).
+Then from a **MinGW64/UCRT64** shell install the toolchain:
 
-```powershell
-curl -O --location https://elan.lean-lang.org/elan-init.ps1
-powershell -ExecutionPolicy Bypass -f elan-init.ps1
-del elan-init.ps1
+```bash
+pacman -S --needed mingw-w64-x86_64-toolchain
 ```
 
-The intended native CPU commands are:
+Open a new MinGW64 shell so `elan`, `lean`, `lake`, and `cc` are on `PATH`, 
+then clone and build the CPU configuration:
 
-```powershell
+```bash
+git clone https://github.com/lean-dojo/TorchLean.git
+cd TorchLean
 lake exe cache get
 lake build
+lake exe torchlean quickstart_mlp --device cpu --steps 10
 ```
 
-The remaining work is platform engineering: the native libraries must be compiled with a compatible
-Windows C/C++ toolchain; CUDA and LibTorch must be discovered as `.lib` and DLL artifacts; Linux
-linker options such as `-Wl,-rpath` must be replaced; and the CPU stubs and GPU runtime must be tested
-under the Windows loader and ABI. Once those pieces are wired, the existing device, provider, and
-capsule abstractions do not need to be redesigned. Until then, WSL2 is the supported route for both
-CPU and NVIDIA GPU execution on Windows.
+#### Native CUDA
+
+The CUDA backend also builds natively, linking against the NVIDIA CUDA toolkit, the MSVC x64
+libraries, and the MSYS2 MinGW libraries. Install the
+[NVIDIA CUDA toolkit for Windows](https://developer.nvidia.com/cuda-downloads) and the Visual
+Studio C++ build tools, then pass the three directories Lake needs:
+
+```bash
+lake -R -K cuda=true \
+  -K cuda_home="C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.3" \
+  -K msvc_lib_dir="C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.51.36231\lib\x64" \
+  -K msys2_lib_dir="C:/msys64/mingw64/lib" \
+  -K cuda_arch=89 \
+  build
+```
+
+`-K cuda_home=...` is the CUDA toolkit root, `-K msvc_lib_dir=...` is the MSVC `lib/x64` directory
+(used to satisfy the `LIBCMT`/`libcpmt`/`OLDNAMES` default-library records embedded in nvcc's
+MSVC-compiled host objects), and `-K msys2_lib_dir=...` is the MinGW library directory (providing
+`libuuid.a` and MinGW CRT symbols). All three are mandatory on Windows; the build fails early with
+a clear message when any is missing or points at a directory that does not exist. There is no
+`-Wl,-rpath` on Windows — the CUDA runtime DLLs (`cudart64_*`, `cublas64_*`, `cufft64_*`) must be
+on `PATH` at run time.
+
+To build the torchlean executables, run:
+
+```bash
+lake -R -K cuda=true \
+  -K cuda_home="C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.3" \
+  -K msvc_lib_dir="C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.51.36231\lib\x64" \
+  -K msys2_lib_dir="C:/msys64/mingw64/lib" \
+  -K cuda_arch=89 \
+  build torchlean
+```
+
+
+LibTorch is not yet wired for native Windows. WSL2 remains the most regularly tested Windows route,
+but the native CPU and CUDA paths above are built and run today.
 
 ## Use TorchLean From Another Lean Project
 

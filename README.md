@@ -24,6 +24,46 @@ TorchLean's backend architecture, see the [Installation guide](https://lean-dojo
 TorchLean is pinned by `lean-toolchain` and currently builds with
 `leanprover/lean4:v4.33.0`.
 
+### Native Windows (MSYS2)
+
+The CPU build works on native Windows through an [MSYS2](https://www.msys2.org/) MinGW64 shell.
+Lake invokes `cc` directly, and the standard Lean for Windows toolchain does not put a `cc` on
+`PATH`, so the build must run inside MSYS2 (which provides `gcc`/`cc`). Install MSYS2 and Elan
+on Windows via Command Prompt or Powershell, then from a **MinGW64** shell:
+
+```bash
+pacman -S --needed mingw-w64-x86_64-toolchain
+git clone https://github.com/lean-dojo/TorchLean.git
+cd TorchLean
+lake exe cache get
+lake build
+```
+
+For the native CUDA backend you also need the NVIDIA CUDA toolkit and the MSVC x64 libraries, and
+you pass three directories so the linker can resolve the CUDA, MSVC, and MinGW libraries:
+
+```bash
+lake -R -K cuda=true \
+  -K cuda_home="C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.3" \
+  -K msvc_lib_dir="C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.51.36231\lib\x64" \
+  -K msys2_lib_dir="C:/msys64/mingw64/lib" \
+  -K cuda_arch=89 \
+  build
+
+lake -R -K cuda=true \
+  -K cuda_home="C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.3" \
+  -K msvc_lib_dir="C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.51.36231\lib\x64" \
+  -K msys2_lib_dir="C:/msys64/mingw64/lib" \
+  -K cuda_arch=89 \
+  build torchlean
+```
+
+On Windows, `-K cuda_home=...`, `-K msvc_lib_dir=...`, and `-K msys2_lib_dir=...` are mandatory for
+CUDA builds; the build fails early with a clear message when any is missing or points at a
+directory that does not exist. At runtime the CUDA DLLs (`cudart64_*`, `cublas64_*`, `cufft64_*`)
+must be on `PATH`. LibTorch support is not yet wired for native Windows. WSL2 remains the
+best-tested Windows route; see the Installation guide.
+
 ## Quickstart
 
 ```bash

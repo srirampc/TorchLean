@@ -45,18 +45,159 @@ private def libtorchEnabled : Bool :=
   | some v => v == "true" || v == "1"
   | none => false
 
+/-- `-gencode` flags selecting the GPU architectures nvcc compiles for, from `-K cuda_arch=...`.
+
+Accepts a comma-separated list of compute capabilities, e.g. `-K cuda_arch=89` or
+`-K cuda_arch=89,90`. Each entry `XY` emits `-gencode arch=compute_XY,code=sm_XY`.
+This allows runs on machines whose NVIDIA driver is older than the
+CUDA toolkit: without matching SASS, the driver must JIT-compile the embedded PTX,
+and an older driver rejects a newer toolkit's PTX with
+`cudaErrorUnsupportedPtxVersion` (error 222) at kernel launch.
+Defaults to `89` (Ada Lovelace consumer/workstation parts) so a plain `-K cuda=true`
+build runs on the most common recent GPUs without extra flags. -/
+private def cudaGencodeArgs : Array String :=
+  let archs :=
+    match get_config? cuda_arch with
+    | some v =>
+        let v := v.trimAscii.toString
+        if v.isEmpty then #["89"] else v.splitOn "," |>.toArray
+    | none => #["89"]
+  archs.flatMap fun arch =>
+    let arch := arch.trimAscii.toString
+    if arch.isEmpty then #[]
+    else #["-gencode", s!"arch=compute_{arch},code=sm_{arch}"]
+
+/-- Validate a required `-K` directory option for Windows CUDA builds.
+
+Missing / malformed values are reported by printing a message to stderr and exiting with
+status.  -/
+private def windowsRequiredDir (opt desc eg : String) (cfg : Option String) : IO String := do
+  match cfg with
+  | some p =>
+      let d := p.trimAscii.toString
+      if d.isEmpty || d.startsWith "-" then
+        IO.eprintln s!"error: `-K {opt}=...` must be a directory path ({desc}), got: {d}"
+        IO.Process.exit 1
+      else
+        pure d
+  | none =>
+      IO.eprintln s!"error: CUDA builds on Windows require `-K {opt}=...` ({desc}), e.g. `-K {opt}={eg}`"
+      IO.Process.exit 1
+
+/-- Resolve and validate all three directories required for Windows CUDA builds
+`(cuda_home, msvc_lib_dir, msys2_lib_dir)`, exiting with a message when any
+of these three `-K` option is missing or malformed. -/
+private def resolveWindowsDirs : IO (String × String × String) := do
+  let cudaHome ←
+    match get_config? cuda_home with
+    | some p => pure (cleanCudaHome p)
+    | none =>
+        windowsRequiredDir "cuda_home" "CUDA toolkit root"
+          "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v13.3" none
+  let msvcLibDir ←
+    windowsRequiredDir "msvc_lib_dir" "MSVC x64 library directory"
+      "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.51.36231/lib/x64"
+      (get_config? msvc_lib_dir)
+  let msys2LibDir ←
+    windowsRequiredDir "msys2_lib_dir" "MSYS2 MinGW library directory"
+      "C:/msys64/mingw64/lib"
+      (get_config? msys2_lib_dir)
+  pure (cudaHome, msvcLibDir, msys2LibDir)
+
+/-- Pure reader for the `-K cuda_home` option string (no validation). -/
+private def windowsCudaHomeOpt : Option String :=
+  (get_config? cuda_home).map cleanCudaHome
+
+/-- Resolve a required Windows directory option in a *pure* context. -/
+private def unsafeResolveWindowsDir (opt : Option String) : String :=
+  match opt with
+  | some d => d
+  | none =>
+      -- Unreachable on a Windows CUDA build: the build job runs `prepareWindowsCudaLink` first,
+      -- which validates every directory and exits with a clear message when one is missing.
+      ""
+
+/-- Directory populated by `prepareWindowsCudaLink` with copies of the handful of Windows
+libraries that nvcc's MSVC-compiled host objects reference through `/DEFAULTLIB:`.
+
+The libs directory should contain *only* the libraries nothing else can provide
+(eg. `LIBCMT`, `libcpmt`, `OLDNAMES`, and `uuid`), so that its early position in link line
+is harmless. -/
+private def windowsLinkLibsDir : FilePath :=
+  __dir__ / ".lake" / "build" / "win-link-shim"
+
+/-- The list of libraries copied into `windowsLinkLibsDir` to accomodate
+the names in nvcc's MSVC-compiled host objects via `/DEFAULTLIB:`.
+
+Currently, this includes:
+1. LIBCMT.lib, libcpmt.lib and libvcruntime.lib: MSVC C/C++ runtime libs
+2. OLDNAMES.lib : Old POSIX names
+3. libuuid.a (from MSYS2) : Windows SDK GUID definitions
+The UCRT static library (`libucrt.lib`) is absent since it is
+provided by Lean itself.  -/
+private def windowsLinkLibsInputs (msvcDir msys2Dir : String) : Array FilePath :=
+  #["LIBCMT.lib", "libcpmt.lib", "OLDNAMES.lib", "libvcruntime.lib"].map
+    (fun f => FilePath.mk msvcDir / FilePath.mk f)
+  ++ #[FilePath.mk msys2Dir / "libuuid.a"]
+
+/-- Populate `windowsLinkLibsDir`,  but if a directory or library required by a
+Windows CUDA build is not provided or does not exist, fail build job with a clear
+message.
+
+Runs inside the job (`Lake.Build.JobM`), so the failure aborts the job before
+`nvcc` or the linker emit their more obscure diagnostics. -/
+private def prepareWindowsCudaLink : JobM Unit := do
+  if Platform.isWindows then
+    let (cudaHome, msvcLibDir, msys2LibDir) ← (resolveWindowsDirs : JobM _)
+    let mut missing : Array String := #[]
+    for (optName, dir) in #[("cuda_home", cudaHome), ("msvc_lib_dir", msvcLibDir),
+        ("msys2_lib_dir", msys2LibDir)] do
+      unless (← FilePath.pathExists dir) do
+        missing := missing.push s!"-K {optName} (directory does not exist: {dir})"
+    unless missing.isEmpty do
+      error s!"TorchLean CUDA build on Windows: required directories do not exist:\n  {String.intercalate "\n  " missing.toList}"
+    -- Copy the windows libraries. Copying unconditionally since the file sizes are only a few MBs.
+    -- NOTE: We cannot add the MSVC / MSYS2 library directories with `-L` because
+    -- Lake always inserts package `moreLinkArgs` before the Lean toolchain's
+    -- own library directories (`mkLeanLinkArgs`).
+    -- When added first, Windows libraries shadows the Lean-included `libgmp.a`/`libuv.a`/...,
+    -- leading to linker errors.
+    IO.FS.createDirAll windowsLinkLibsDir
+    let mut missingLibs : Array String := #[]
+    for src in windowsLinkLibsInputs msvcLibDir msys2LibDir do
+      if (← src.pathExists) then
+        copyFile src (windowsLinkLibsDir / src.fileName.getD src.toString)
+      else
+        missingLibs := missingLibs.push src.toString
+    unless missingLibs.isEmpty do
+      error s!"TorchLean CUDA build on Windows: required libraries do not exist:\n  {String.intercalate "\n  " missingLibs.toList}"
+
 /-- Native link flags selected by the `cuda` Lake option. -/
 private def nativeLinkArgs : Array String :=
   if cudaEnabled then
     let lt := match libtorchHomeConfig with | some h => h | none => "libtorch"
-    let cudaArgs := #[
-      "-L", s!"{cudaHome}/lib64", "-lcudart", "-lcublas", "-lcufft",
-      "-Wl,-rpath," ++ s!"{cudaHome}/lib64"
-    ]
-    if libtorchEnabled then
-      cudaArgs.push ("-Wl,-rpath," ++ s!"{lt}/lib")
+    if Platform.isWindows then
+      -- CUDA's Windows toolkit keeps import libraries under `lib/x64`, and the loader resolves
+      -- the runtime DLLs through PATH, so there is no rpath flag to pass.
+      -- The MSVC/MSYS2 libraries come from `windowsLinkLibsDir` (see its docstring).
+      let cudaArgs := #[
+        "-L", s!"{unsafeResolveWindowsDir windowsCudaHomeOpt}/lib/x64",
+        "-lcudart", "-lcublas", "-lcufft",
+        "-L", windowsLinkLibsDir.toString,
+      ]
+      if libtorchEnabled then
+        cudaArgs ++ #["-L", s!"{lt}/lib"]
+      else
+        cudaArgs
     else
-      cudaArgs
+      let cudaArgs := #[
+        "-L", s!"{cudaHome}/lib64", "-lcudart", "-lcublas", "-lcufft",
+        "-Wl,-rpath," ++ s!"{cudaHome}/lib64"
+      ]
+      if libtorchEnabled then
+        cudaArgs.push ("-Wl,-rpath," ++ s!"{lt}/lib")
+      else
+        cudaArgs
   else if Platform.isWindows || Platform.isOSX then
     -- Windows and macOS provide libm via the default C runtime
     #[]
@@ -227,14 +368,28 @@ private def buildNativeBackendLib (pkg : Package) (spec : NativeBackendLib) := d
   let includeArgs := nativeIncludeArgs pkg
   let libFile := pkg.buildDir / nameToStaticLib spec.stem
   if cudaEnabled then
+    -- On Windows the CUDA toolkit root comes from the mandatory `-K cuda_home=...`.
+    let cudaIncDir :=
+      if Platform.isWindows then s!"{unsafeResolveWindowsDir windowsCudaHomeOpt}/include"
+      else s!"{cudaHome}/include"
     let srcJob ← inputFile (pkg.dir / spec.cudaSrc) false
     let oFile := pkg.buildDir / s!"{spec.stem}.o"
+    -- MSVC (nvcc's mandatory host compiler on Windows) has no -fPIC;
+    -- x64 Windows code is position-independent by construction.
+    let picArgs := if Platform.isWindows then #[] else #["-Xcompiler", "-fPIC"]
+    -- Use C++ [[noreturn]] on Windows.
+    let msvcArgs :=
+      if Platform.isWindows then #["-D_Noreturn=[[noreturn]]"] else #[]
+    -- Split flags per Lake's `buildO`'s `weakArgs`/`traceArgs`.
     let oJob ← buildO oFile srcJob
-      (#[
-        "-I", lean.includeDir.toString,
-        "-I", s!"{cudaHome}/include",
-        "-c", "--std=c++17", "-O2", "-Xcompiler", "-fPIC"
-      ] ++ includeArgs) #[] "nvcc" (pure headerDeps.getTrace)
+      -- `weakArgs` (not hashed into the rebuild trace) for system-dependent include paths.
+      (#["-I", lean.includeDir.toString, "-I", cudaIncDir] ++ includeArgs)
+      -- `traceArgs` (hashed) hold everything that changes the compiled artifact:
+      --     `-gencode`, `-O2`,  `_Noreturn` workaround, and the CUDA/CPU target selection.
+      -- `-gencode` in `traceArgs` is triggers rebuild when the arch list changes.
+      (#["-c", "--std=c++17", "-O2"] ++ cudaGencodeArgs ++ picArgs ++ msvcArgs)
+      "nvcc"
+      (do prepareWindowsCudaLink; pure headerDeps.getTrace)
     buildStaticLib libFile #[oJob]
   else
     let srcJob ← inputFile (pkg.dir / spec.stubSrc) false
