@@ -24,15 +24,16 @@ TorchLean's backend architecture, see the [Installation guide](https://lean-dojo
 TorchLean is pinned by `lean-toolchain` and currently builds with
 `leanprover/lean4:v4.33.0`.
 
-### Native Windows (MSYS2)
+### Native Windows (MSYS2/UCRT64)
 
-The CPU build works on native Windows through an [MSYS2](https://www.msys2.org/) MinGW64 shell.
+TorchLean builds on native Windows — CPU, and optionally CUDA and LibTorch — through an
+[MSYS2](https://www.msys2.org/) MinGW64 shell.
 Lake invokes `cc` directly, and the standard Lean for Windows toolchain does not put a `cc` on
 `PATH`, so the build must run inside MSYS2 (which provides `gcc`/`cc`). Install MSYS2 and Elan
 on Windows via Command Prompt or Powershell, then from a **MinGW64** shell:
 
 ```bash
-pacman -S --needed mingw-w64-x86_64-toolchain
+pacman -S --needed mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-clang mingw-w64-x86_64-toolchain
 git clone https://github.com/lean-dojo/TorchLean.git
 cd TorchLean
 lake exe cache get
@@ -48,21 +49,31 @@ lake -R -K cuda=true \
   -K msvc_lib_dir="C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.51.36231\lib\x64" \
   -K msys2_lib_dir="C:/msys64/mingw64/lib" \
   -K cuda_arch=89 \
-  build
-
-lake -R -K cuda=true \
-  -K cuda_home="C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.3" \
-  -K msvc_lib_dir="C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.51.36231\lib\x64" \
-  -K msys2_lib_dir="C:/msys64/mingw64/lib" \
-  -K cuda_arch=89 \
   build torchlean
 ```
 
 On Windows, `-K cuda_home=...`, `-K msvc_lib_dir=...`, and `-K msys2_lib_dir=...` are mandatory for
 CUDA builds; the build fails early with a clear message when any is missing or points at a
 directory that does not exist. At runtime the CUDA DLLs (`cudart64_*`, `cublas64_*`, `cufft64_*`)
-must be on `PATH`. LibTorch support is not yet wired for native Windows. WSL2 remains the
-best-tested Windows route; see the Installation guide.
+must be on `PATH`. WSL2 remains the best-tested Windows route; see the Installation guide.
+
+The optional LibTorch SDPA bridge also builds on native Windows. It needs the Windows (MSVC)
+LibTorch distribution and, because the bridge C++ source is compiled with `clang-cl`, an MSYS2
+shell with the MSVC environment initialized (`vcvars64.bat`, so `clang-cl` finds the MSVC and
+Windows SDK headers):
+
+```bash
+lake -R -K cuda=true \
+  -K cuda_home="C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.3" \
+  -K msvc_lib_dir="C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.51.36231\lib\x64" \
+  -K msys2_lib_dir="C:/msys64/mingw64/lib" \
+  -K cuda_arch=89 \
+  -K libtorch=true -K libtorch_home="C:/path/to/libtorch" \
+  build torchlean
+```
+
+At runtime the LibTorch DLLs (`torch.dll`, `torch_cpu.dll`, `torch_cuda.dll`, `c10.dll`,
+`c10_cuda.dll`) must be on `PATH` as well (e.g. `C:\path\to\libtorch\lib`).
 
 ## Quickstart
 

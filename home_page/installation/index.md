@@ -57,7 +57,7 @@ architecture but still need platform-specific runtime work.
 | Linux | &#10003; | &#10003; Native CUDA | SDPA forward with TorchLean backward | Supported |
 | macOS, Intel or Apple silicon | &#10003; | Not applicable | Not yet | CPU supported; Metal is planned |
 | Windows with WSL2 | &#10003; Linux path | &#10003; CUDA on WSL2 | Linux path | Recommended Windows setup |
-| Native Windows (MSYS2) | &#10003; | &#10003; Native CUDA | Not wired | CPU and CUDA build in a MinGW64 shell; see Native Windows |
+| Native Windows (MSYS2) | &#10003; | &#10003; Native CUDA | SDPA forward with TorchLean backward | CPU, CUDA, and LibTorch build in a MinGW64 shell; see Native Windows |
 
 Here, "LibTorch provider" means the current scaled-dot-product-attention bridge, not a requirement
 for ordinary TorchLean models and not a claim that every operation is delegated to PyTorch. The
@@ -175,7 +175,7 @@ Lean [website](https://lean-lang.org/install/manual/).
 Then from a **MinGW64/UCRT64** shell install the toolchain:
 
 ```bash
-pacman -S --needed mingw-w64-x86_64-toolchain
+pacman -S --needed mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-clang mingw-w64-x86_64-toolchain
 ```
 
 Open a new MinGW64 shell so `elan`, `lean`, `lake`, and `cc` are on `PATH`, 
@@ -225,8 +225,42 @@ lake -R -K cuda=true \
 ```
 
 
-LibTorch is not yet wired for native Windows. WSL2 remains the most regularly tested Windows route,
-but the native CPU and CUDA paths above are built and run today.
+#### Native LibTorch
+
+The optional LibTorch attention bridge also builds natively. Download the Windows (MSVC)
+LibTorch distribution from the
+[official LibTorch installation page](https://docs.pytorch.org/cppdocs/installing.html) and
+extract it outside the repository. The bridge C++ source is compiled with MSYS2's `clang-cl`,
+which needs the MSVC and Windows SDK headers — so start the MSYS2 shell from an environment
+where `vcvars64.bat` has already run (e.g. an *x64 Native Tools Command Prompt*, launching
+`msys2_shell.cmd -mingw64` from it), leaving `INCLUDE` and `LIB` set. Then add two options to
+the CUDA build:
+
+```bash
+lake -R -K cuda=true \
+  -K cuda_home="C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.3" \
+  -K msvc_lib_dir="C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.51.36231\lib\x64" \
+  -K msys2_lib_dir="C:/msys64/mingw64/lib" \
+  -K cuda_arch=89 \
+  -K libtorch=true -K libtorch_home="C:/path/to/libtorch" \
+  build
+
+lake -R -K cuda=true \
+  -K cuda_home="C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.3" \
+  -K msvc_lib_dir="C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.51.36231\lib\x64" \
+  -K msys2_lib_dir="C:/msys64/mingw64/lib" \
+  -K cuda_arch=89 \
+  -K libtorch=true -K libtorch_home="C:/path/to/libtorch" \
+  exe libtorch_sdpa_test
+```
+
+On Windows the bridge is linked as a static archive, so the executable itself imports the
+LibTorch DLLs — the LibTorch `lib` directory must be on `PATH` at run time (alongside the CUDA
+`bin` directory), providing `torch.dll`, `torch_cpu.dll`, `torch_cuda.dll`, `c10.dll`, and
+`c10_cuda.dll`.
+
+WSL2 remains the most regularly tested Windows route, but the native CPU, CUDA, and LibTorch
+paths above are built and run today.
 
 ## Use TorchLean From Another Lean Project
 

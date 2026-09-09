@@ -136,7 +136,7 @@ def libTorchSDPAForward : KernelCapsule :=
         #[.nativeSymbol
           { path := "csrc/cuda/kernels/torchlean_libtorch_sdpa.cpp"
             symbol := "torchlean_libtorch_sdpa_fwd"
-            buildTarget? := some "torchlean_libtorch_sdpa_so" }]
+            buildTarget? := some "torchlean_libtorch_sdpa" }]
     valueContract :=
       ContractDescriptor.trusted
         (.valueRefinement .scaledDotProductAttention)
