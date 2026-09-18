@@ -9,7 +9,8 @@ redirect_from:
 
 If you want to try TorchLean on a laptop, start with the CPU build. It does not require PyTorch,
 CUDA, or a GPU. The repository pins its Lean version in `lean-toolchain`, so Elan will select the
-right compiler for you.
+right compiler for you: Lean 4.34.0. Mathlib uses the matching release, and `lakefile.lean` pins
+FloatLib to commit `40301cd44f253a4ac6ccd34a0eb6c221e185e25c`.
 
 ## A Five-Minute CPU Install
 
@@ -49,8 +50,8 @@ lake exe verify --help
 
 That CPU build is the common starting point on every platform. From there, TorchLean can build
 its native CUDA runtime or link an external provider without changing the Lean model being run.
-The table below separates paths that work today from targets that are represented in the backend
-architecture but still need platform-specific runtime work.
+The table below separates paths that work today from platforms that still need platform-specific
+runtime work.
 
 | Platform | CPU | NVIDIA GPU | LibTorch provider | Current status |
 | --- | --- | --- | --- | --- |
@@ -77,6 +78,13 @@ sudo apt install -y git curl build-essential
 Then follow the five-minute install above. The default build uses the portable CPU runtime. It also
 builds harmless CUDA stub archives so that CPU-only machines can compile the complete Lean project;
 the stubs do not pretend that a GPU is present.
+
+Linux native targets also build a private mimalloc 3.4.4 object from checksum-pinned source.
+Position-independent code and initial-exec thread-local storage let it link into executables and
+shared libraries. It includes a narrow arena-purge wakeup repair; the installed Lean compiler and
+`#eval` keep their existing allocator. The
+[native allocation boundary](https://github.com/lean-dojo/TorchLean/blob/main/docs/TRUST_BOUNDARIES.md#native-host-allocation)
+describes the repair and its remaining assumptions.
 
 ### NVIDIA CUDA
 
@@ -169,16 +177,16 @@ inside WSL.
 
 Native Windows builds run inside an [MSYS2](https://www.msys2.org/) MinGW64 shell. Lake invokes
 `cc` directly, and the standard Lean for Windows toolchain does not put a `cc` on `PATH`, so the
-build must run inside MSYS2 (which provides `gcc`/`cc`). First, install MSYS2 and Elan on 
-Powershell as given in  manual install instructions given at the 
+build must run inside MSYS2 (which provides `gcc`/`cc`). First, install MSYS2 and Elan
+as described in the manual install instructions on the
 Lean [website](https://lean-lang.org/install/manual/).
-Then from a **MinGW64/UCRT64** shell install the toolchain:
+Then from a **MinGW64/UCRT64** shell install the `gcc` and `clang` toolchain:
 
 ```bash
 pacman -S --needed mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-clang mingw-w64-x86_64-toolchain
 ```
 
-Open a new MinGW64 shell so `elan`, `lean`, `lake`, and `cc` are on `PATH`, 
+Open a new MinGW64/UCRT64 shell so `elan`, `lean`, `lake`, and `cc` are on `PATH`, 
 then clone and build the CPU configuration:
 
 ```bash
@@ -194,14 +202,18 @@ lake exe torchlean quickstart_mlp --device cpu --steps 10
 The CUDA backend also builds natively, linking against the NVIDIA CUDA toolkit, the MSVC x64
 libraries, and the MSYS2 MinGW libraries. Install the
 [NVIDIA CUDA toolkit for Windows](https://developer.nvidia.com/cuda-downloads) and the Visual
-Studio C++ build tools, then pass the three directories Lake needs:
+Studio C++ build tools.
+The CUDA source compilation requires MSVC — so start the MSYS2 shell from an environment
+where `vcvars64.bat` has already run (e.g. an *x64 Native Tools Command Prompt*, launching
+`msys2_shell.cmd -mingw64` from it), leaving `INCLUDE` and `LIB` set. 
+To build `torchlean` via `lake`, pass all the three directories Lake needs:
 
 ```bash
 lake -R -K cuda=true \
   -K cuda_home="C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.3" \
   -K msvc_lib_dir="C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.51.36231\lib\x64" \
   -K msys2_lib_dir="C:/msys64/mingw64/lib" \
-  -K cuda_arch=89 \
+  -K cuda_arch=sm_89 \
   build
 ```
 
@@ -213,21 +225,21 @@ a clear message when any is missing or points at a directory that does not exist
 `-Wl,-rpath` on Windows — the CUDA runtime DLLs (`cudart64_*`, `cublas64_*`, `cufft64_*`) must be
 on `PATH` at run time.
 
-To build the torchlean executables, run:
+To build the torchlean executable, run:
 
 ```bash
 lake -R -K cuda=true \
   -K cuda_home="C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.3" \
   -K msvc_lib_dir="C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.51.36231\lib\x64" \
   -K msys2_lib_dir="C:/msys64/mingw64/lib" \
-  -K cuda_arch=89 \
+  -K cuda_arch=sm_89 \
   build torchlean
 ```
 
 
 #### Native LibTorch
 
-The optional LibTorch attention bridge also builds natively. Download the Windows (MSVC)
+The optional LibTorch attention bridge can also be built natively. Download the Windows (MSVC)
 LibTorch distribution from the
 [official LibTorch installation page](https://docs.pytorch.org/cppdocs/installing.html) and
 extract it outside the repository. The bridge C++ source is compiled with MSYS2's `clang-cl`,
@@ -241,7 +253,7 @@ lake -R -K cuda=true \
   -K cuda_home="C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.3" \
   -K msvc_lib_dir="C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.51.36231\lib\x64" \
   -K msys2_lib_dir="C:/msys64/mingw64/lib" \
-  -K cuda_arch=89 \
+  -K cuda_arch=sm_89 \
   -K libtorch=true -K libtorch_home="C:/path/to/libtorch" \
   build
 
@@ -249,7 +261,7 @@ lake -R -K cuda=true \
   -K cuda_home="C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.3" \
   -K msvc_lib_dir="C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.51.36231\lib\x64" \
   -K msys2_lib_dir="C:/msys64/mingw64/lib" \
-  -K cuda_arch=89 \
+  -K cuda_arch=sm_89 \
   -K libtorch=true -K libtorch_home="C:/path/to/libtorch" \
   exe libtorch_sdpa_test
 ```
@@ -285,18 +297,31 @@ import NN.API
 open TorchLean
 ```
 
-The numerical library has a smaller independent import:
+Scalar arithmetic and numerical proofs come from the separate
+[FloatLib package](https://github.com/lean-dojo/FloatLib), included as a pinned dependency:
 
 ```lean
-import NN.Floats
-open TorchLean.Floats
+import FloatLib
+open FloatLib.Floats
+
+abbrev Binary128 :=
+  ExecFloat.Binary (exponentBits := 15) (fractionBits := 112)
+
+def reading : Binary128 := 1.5
+def scaled : Binary128 := reading * 2.25
 ```
 
-It includes formats, rounding, finite binary32 semantics, executable IEEE binary32 operations,
-interval rounders, and scalar quantization. It does not load the tensor, model, autograd, CUDA,
-certificate, or external-tool layers. Use `NN.Spec.Quantization` when tensor quantization is needed,
-and `NN.Proofs.RuntimeApprox.FP32` when connecting binary32 arithmetic to runtime-approximation
-proofs.
+Here the type chooses 113 bits of significand precision in a 128-bit IEEE layout. Literals are
+rounded from exact rationals directly into the selected format. Wider software formats use the
+same public arithmetic interface; selecting one does not add arbitrary-precision hardware support
+to CUDA or cuBLAS.
+
+`import FloatLib` supplies configured numerical types, reference semantics, refinement theorems,
+and intervals without importing TorchLean's model or runtime layers. Binary elementary functions
+have a separate import,
+`FloatLib.Floats.Formats.BinaryInterchange.Configured.Transcendentals`; they are deterministic
+approximations and need their own accuracy claims. Tensor quantization and graph-level numerical
+proofs remain TorchLean integrations.
 
 For development against a neighboring checkout, use a path dependency:
 
@@ -306,9 +331,27 @@ require TorchLean from "../TorchLean"
 
 ## From A Model To A Kernel
 
-Installation chooses a device or a complete backend profile; the model API stays the same. The
-planner then selects an implementation per operation and rejects unavailable providers instead of
-quietly changing the request.
+Installation chooses a device or a complete backend profile; the model API stays the same. Each
+operation an eager session executes is first matched to a `KernelCapsule`: a record naming the
+operation, provider, device, trust level (`checked` or `trustedExternal`), VJP mode, and four
+contract descriptors (shape, layout, value, VJP) with their evidence. Its `numericalPolicy` has one
+field, `reduction`, which says whether the kernel accumulates in the fixed left-fold order of the
+tensor semantics or in an implementation-defined order. The numerical certificate registry reads
+that field, so a CUDA or LibTorch capsule cannot inherit a fixed-left reduction certificate.
+
+Selection has three steps. The planner picks the first capsule whose device, provider preference,
+VJP mode, and trust level fit the profile. `checkContracts` then produces a `ContractCheck` that
+rejects any selected descriptor whose evidence the profile's assurance policy does not admit. The
+session finally calls `KernelCapsule.bind` to pair the capsule with a handler for the same
+operation, provider, and device before running it. Unavailable providers fail at that point instead
+of quietly changing the request. `--show-backend` prints each selected capsule the first time a
+session uses it.
+
+The attention provider is the one place where the profile changes which implementation runs.
+`checked_cuda` prefers TorchLean's composed attention (CUDA batched matrix multiplication with
+TorchLean's hard-masked softmax). `libtorch_forward_cuda` prefers the LibTorch SDPA forward
+capsule. Both keep `vjpMode := .torchLeanTape`, so TorchLean records the tape node and owns the
+backward pass in either case.
 
 Read [Inside the Backend Planner]({{ '/blueprint/Runtime___-Autograd___-and-Interop/Inside-The-Backend-Planner/' | relative_url }})
 for capsules, provider preference, VJP ownership, assurance policies, and backend reports. Read
@@ -331,7 +374,7 @@ For CUDA, rebuild and run the suite with `-R -K cuda=true`.
 
 For a complete account of Lean axioms, executable checkers, CUDA and FFI code, external artifact
 producers, and floating-point assumptions, read
-[`TRUST_BOUNDARIES.md`](https://github.com/lean-dojo/TorchLean/blob/main/TRUST_BOUNDARIES.md).
+[`docs/TRUST_BOUNDARIES.md`](https://github.com/lean-dojo/TorchLean/blob/main/docs/TRUST_BOUNDARIES.md).
 
 ## References
 
@@ -341,6 +384,5 @@ producers, and floating-point assumptions, read
 - [NVIDIA CUDA on WSL User Guide](https://docs.nvidia.com/cuda/wsl-user-guide/index.html).
 - [Installing LibTorch](https://docs.pytorch.org/cppdocs/installing.html).
 - George C. Necula, ["Proof-Carrying Code"](https://doi.org/10.1145/263699.263712), POPL 1997.
-  Ordinary kernel capsules are contract and provenance records, not proof-carrying binaries.
-  TorchLean's separate typed `ProofCarryingKernel` interface retains a Lean refinement theorem with
-  an implementation when such a proof is available.
+  Kernel capsules are contract and provenance records, not proof-carrying binaries; none of the
+  maintained capsules carries a Lean refinement theorem for its implementation.

@@ -13,19 +13,20 @@ open System
 This lakefile is organized in the following layers, each depending only on the ones above it:
 
 1. **Config options** — parsing and validation of the `-K` options.
-2. **Windows-specific functions** — host directory resolution and the link shim.
-3. **Compile/link flag functions** — compile/link argument arrays per platform/external library.
-4. **Build helper functions** — job-building functions for native objects and libraries.
-5. **LibTorch bridge** — helpers for the optional LibTorch SDPA backend library
+2. **Windows native linking** — host directory resolution, the link shim, and the
+   platform-aware compile/link flag functions.
+3. **Native build helpers** — compiler discovery/tracing and the job-building functions
+   for the CUDA backends and the packed-CPU-tensor runtime.
+4. **LibTorch bridge** — helpers for the optional LibTorch SDPA backend library
    (shared on Linux, static on Windows — see the `torchlean_libtorch_sdpa` target).
-6. **Target declarations** — thin wiring only: no logic beyond fetching and sequencing.
+5. **Target declarations** — thin wiring only: no logic beyond fetching and sequencing.
 
 ## Windows native linking
 
 On Windows, a PE DLL/executable must resolve every imported symbol at *link time*,
 bound to a static library or to the import library of a named DLL — there is no
 "resolve from whatever is loaded in the process" fallback like ELF's global symbol
-scope. Furthermore,
+scope. Furthermore:
 
 * Everything the native objects reference must appear on the executable's
   link line: the CUDA and the LibTorch import libraries (if enabled).
@@ -38,9 +39,66 @@ scope. Furthermore,
 
 /-- Whether Lake should compile the native CUDA sources instead of the portable C stubs. -/
 private def cudaEnabled : Bool :=
-  match get_config? cuda with
-  | some v => v == "true" || v == "1"
-  | none => false
+  let value := (get_config? cuda).getD "false"
+  value == "true" || value == "1"
+
+/-- CUDA toolkit root used for includes, libraries, and runtime search paths. -/
+private def cudaHome : String := Id.run do
+  let home := ((get_config? cuda_home).getD "").trimAscii.toString
+  if home.startsWith "-" then
+    panic! s!"cuda_home must be a path, not an option-like value: {home}"
+  return if home.isEmpty then "/usr/local/cuda" else home
+
+/--
+GPU architectures included in the native CUDA objects.
+
+`all-major` includes native code for each supported major architecture and works on headless
+builders. Set `cuda_arch=sm_80`, for example, to build specifically for A100. `native` is rejected:
+nvcc otherwise falls back to its default target when no GPU is visible, and the same setting could
+produce different objects on different build machines.
+-/
+private def cudaArch : String := Id.run do
+  let value := ((get_config? cuda_arch).getD "all-major").trimAscii.toString
+  let arch := if value.isEmpty then "all-major" else value
+  if arch == "native" then
+    panic! "cuda_arch=native is not supported; use all-major or an explicit target such as sm_80"
+  if arch == "all-major" || arch == "all" then
+    return arch
+  let suffix := (arch.drop 3).toString
+  let digits := if suffix.endsWith "a" || suffix.endsWith "f" then
+    (suffix.dropEnd 1).toString else suffix
+  if arch.startsWith "sm_" && !digits.isEmpty && digits.toList.all Char.isDigit then
+    return arch
+  panic! s!"invalid cuda_arch: {arch}; expected all-major, all, or a real target such as sm_80"
+
+/-- Optional LibTorch root; relative paths are resolved against the package directory. -/
+private def libtorchHomeConfig : Option String :=
+  (get_config? libtorch_home).bind fun path =>
+    let path := path.trimAscii.toString
+    if path.isEmpty then none else some path
+
+/-- Whether to build the optional LibTorch-backed backend capsules. -/
+private def libtorchEnabled : Bool :=
+  let value := (get_config? libtorch).getD "false"
+  value == "true" || value == "1"
+
+/-! ## Windows native linking -/
+
+/-- Validate a required `-K` directory option for Windows CUDA builds.
+
+Reports the failure through Lake's error channel (`JobM`), so the message is attached to
+the failing target and printed by Lake itself. An `IO`-level `eprintln` + `Process.exit`
+from a worker thread would kill the process before the stderr text is flushed. -/
+private def windowsRequiredDir (opt desc eg : String) (cfg : Option String) : JobM String := do
+  match cfg with
+  | some p =>
+      let d := p.trimAscii.toString
+      if d.isEmpty || d.startsWith "-" then
+        error s!"`-K {opt}=...` must be a directory path ({desc}), got: {d}"
+      else
+        pure d
+  | none =>
+      error s!"CUDA builds on Windows require `-K {opt}=...` ({desc}), e.g. `-K {opt}={eg}`"
 
 /-- Normalize and lightly validate a CUDA toolkit root passed through `-K cuda_home=...`. -/
 private def cleanCudaHome (p : String) : String :=
@@ -52,74 +110,11 @@ private def cleanCudaHome (p : String) : String :=
   else
     h
 
-/-- CUDA toolkit root used for includes, libraries, and runtime search path. -/
-private def cudaHome : String :=
-  match get_config? cuda_home with
-  | some p => cleanCudaHome p
-  | none => "/usr/local/cuda"
-
-/-- Whether to build the optional LibTorch-backed backend capsules. -/
-private def libtorchEnabled : Bool :=
-  match get_config? libtorch with
-  | some v => v == "true" || v == "1"
-  | none => false
-
-/-- Optional explicit LibTorch root from `-K libtorch_home=...`. -/
-private def libtorchHomeConfig : Option String :=
-  match get_config? libtorch_home with
-  | some p =>
-      let t := p.trimAscii.toString
-      if t.isEmpty then none else some t
-  | none => none
-
-  /-- LibTorch root for `-I` / `-L` (must match `resolve_libtorch.sh`). -/
-  private def libtorchHome (pkg : Package) : String :=
-    match libtorchHomeConfig with
-    | some h => h
-    | none => (pkg.dir / "libtorch").toString
-
-
-/-- nvcc `-gencode` flags to select the GPU architectures,  from `-K cuda_arch=...`.
-
-Accepts a comma-separated list of compute capabilities, e.g. `-K cuda_arch=89` or
-`-K cuda_arch=89,90`. Each entry `XY` emits `-gencode arch=compute_XY,code=sm_XY`.
-Defaults to `89` (Ada Lovelace consumer/workstation parts) so a plain `-K cuda=true`
-build runs on the most common recent GPUs without extra flags. -/
-private def cudaGencodeFlags : Array String :=
-  let archs :=
-    match get_config? cuda_arch with
-    | some v =>
-        let v := v.trimAscii.toString
-        if v.isEmpty then #["89"] else v.splitOn "," |>.toArray
-    | none => #["89"]
-  archs.flatMap fun arch =>
-    let arch := arch.trimAscii.toString
-    if arch.isEmpty then #[]
-    else #["-gencode", s!"arch=compute_{arch},code=sm_{arch}"]
-
-/-! ## Windows-specific functions -/
-
-/-- Validate a required `-K` directory option for Windows CUDA builds.
-
-Missing / malformed values are reported by printing a message to stderr and exiting with
-status. -/
-private def windowsRequiredDir (opt desc eg : String) (cfg : Option String) : IO String := do
-  match cfg with
-  | some p =>
-      let d := p.trimAscii.toString
-      if d.isEmpty || d.startsWith "-" then
-        IO.eprintln s!"error: `-K {opt}=...` must be a directory path ({desc}), got: {d}"
-        IO.Process.exit 1
-      else
-        pure d
-  | none =>
-      IO.eprintln s!"error: CUDA builds on Windows require `-K {opt}=...` ({desc}), e.g. `-K {opt}={eg}`"
-      IO.Process.exit 1
-
 /-- Resolve and validate all three directories required for Windows CUDA builds
-`(cuda_home, msvc_lib_dir, msys2_lib_dir)`, exiting with a message when any
-of these three `-K` option is missing or malformed. -/
-private def windowsResolveDirs : IO (String × String × String) := do
+`(cuda_home, msvc_lib_dir, msys2_lib_dir)`, failing with a clear message when any
+of these three `-K` options is missing or malformed. Runs in `JobM` so the failure
+is reported as a normal Lake error instead of a silent process exit. -/
+private def windowsResolveDirs : JobM (String × String × String) := do
   let cudaHome ←
     match get_config? cuda_home with
     | some p => pure (cleanCudaHome p)
@@ -135,16 +130,6 @@ private def windowsResolveDirs : IO (String × String × String) := do
       "C:/msys64/mingw64/lib"
       (get_config? msys2_lib_dir)
   pure (cudaHome, msvcLibDir, msys2LibDir)
-
-/-- Pure reader for the `-K cuda_home` option string (no validation). -/
-private def windowsCudaHomeOpt : Option String :=
-  (get_config? cuda_home).map cleanCudaHome
-
-/-- Resolve a required Windows directory option in a *pure* context. -/
-private def windowsUnsafeResolveDir (opt : Option String) : String :=
-  match opt with
-  | some d => d
-  | none => ""
 
 /-- Directory populated by `windowsPrepareCudaLink` with copies of Windows
 libraries that nvcc's MSVC-compiled host objects reference via `/DEFAULTLIB:`. -/
@@ -164,11 +149,14 @@ private def windowsLinkLibNames (msvcDir msys2Dir : String) : Array FilePath :=
 
 /-- Validate the Windows host directories and populate `windowsLinkLibsDir`.
 
-Runs inside the job (`Lake.Build.JobM`), so the failure aborts the job before
-`nvcc` or the linker emit their more obscure diagnostics. -/
+Runs inside a `JobM` (from the `torchlean_cuda_compiler` target), so the failure aborts
+the build before `nvcc` or the linker emit their more obscure diagnostics. The resolved
+directory strings are traced so that changing any of them re-runs the validation and the
+shim re-copy. -/
 private def windowsPrepareCudaLink : JobM Unit := do
   if Platform.isWindows then
-    let (cudaHome, msvcLibDir, msys2LibDir) ← (windowsResolveDirs : JobM _)
+    let (cudaHome, msvcLibDir, msys2LibDir) ← windowsResolveDirs
+    addPureTrace (cudaHome, msvcLibDir, msys2LibDir) "windows CUDA link directories"
     let mut missing : Array String := #[]
     for (optName, dir) in #[("cuda_home", cudaHome), ("msvc_lib_dir", msvcLibDir),
         ("msys2_lib_dir", msys2LibDir)] do
@@ -189,55 +177,44 @@ private def windowsPrepareCudaLink : JobM Unit := do
 
 /-! ## Pure compile/link flag functions -/
 
-/-- Include paths corresponding to TorchLean C/C++/CUDA sources. -/
-private def torchLeanIncludes (pkg : Package) : Array String :=
+/-- CUDA toolkit include directory. -/
+private def cudaIncludes : Array String :=
+  #["-I", s!"{cudaHome}/include"]
+
+/-- Include paths shared by the CUDA implementations and the portable C stubs. -/
+private def nativeIncludeArgs (pkg : Package) : Array String :=
   #[
     "-I", (pkg.dir / "csrc/cuda/common").toString,
     "-I", (pkg.dir / "csrc/cuda/conv_pool").toString
   ]
 
-/-- Compile flags for a portable C stub object (plain C compiler). -/
-private def stubCompileFlags (pkg : Package) (lean : LeanInstall) : Array String :=
-  #["-I", lean.includeDir.toString] ++ torchLeanIncludes pkg ++ #["-O2", "-fPIC"]
-
-/-- CUDA toolkit include directory for the current platform. -/
-private def cudaIncludes : Array String :=
-  if Platform.isWindows then
-    -- On Windows the CUDA toolkit root comes from the mandatory `-K cuda_home=...`.
-    #["-I", s!"{windowsUnsafeResolveDir windowsCudaHomeOpt}/include"]
-  else
-    #["-I", s!"{cudaHome}/include"]
-
 /-- Compile flags for a CUDA backend object (nvcc).
 
-Returns `(weakArgs, traceArgs)` per expected inputs for Lake's `buildO`: `weakArgs`
-(not hashed into the rebuild trace) hold system-dependent include paths';
-`traceArgs` (hashed) hold `-gencode`, `-O2`, the `_Noreturn`
-workaround, and CUDA/CPU target selection -/
-private def cudaCompileFlags (pkg : Package) (lean : LeanInstall) : Array String × Array String :=
-  let weakArgs :=
-    #["-I", lean.includeDir.toString] ++ cudaIncludes ++ torchLeanIncludes pkg
-  let traceArgs :=
-    -- MSVC (nvcc's mandatory host compiler on Windows) has no `-fPIC`
-    let picArgs := if Platform.isWindows then #[] else #["-Xcompiler", "-fPIC"]
-    -- `_Noreturn` is a C keyword rejected by nvcc's frontend, so map it to C++ `[[noreturn]]`.
-    let msvcArgs := if Platform.isWindows then #["-D_Noreturn=[[noreturn]]"] else #[]
-    #["-c", "--std=c++17", "-O2"] ++ cudaGencodeFlags ++ picArgs ++ msvcArgs
-  (weakArgs, traceArgs)
+These are the traced arguments: changing the target or compiler must invalidate the object.
+Windows differs from Linux in two ways: MSVC (nvcc's mandatory host compiler) rejects
+`-fPIC`, and its frontend rejects the `_Noreturn` C keyword, which is mapped to C++'s
+`[[noreturn]]` via a macro. -/
+private def cudaCompileFlags : Array String :=
+  -- MSVC (nvcc's mandatory host compiler on Windows) has no `-fPIC`.
+  let picArgs := if Platform.isWindows then #[] else #["-Xcompiler", "-fPIC"]
+  -- `_Noreturn` is a C keyword rejected by nvcc's frontend, so map it to C++ `[[noreturn]]`.
+  let msvcArgs := if Platform.isWindows then #["-D_Noreturn=[[noreturn]]"] else #[]
+  #["--std=c++17", "-O2", s!"--gpu-architecture={cudaArch}"] ++ picArgs ++ msvcArgs
 
 /-- C++ compile flags for LibTorch C++ sources (g++ on Linux; clang-cl on Windows). -/
 private def torchBridgeCompileFlags (pkg : Package) (lean : LeanInstall) (lt : String) : Array String :=
   let compileArgs :=
     if Platform.isWindows then
-      -- Only clang-cl works both libtorch MSVC ABI and lean's FFI.
-      -- LibTorch requires at least C++17.
+      -- Only clang-cl works for both the libtorch MSVC ABI and Lean's FFI.
+      -- LibTorch requires C++20: its headers use C++20 features unconditionally
+      -- (`std::strong_ordering`, `string_view::starts_with`, `requires`).
       -- `/EHsc` enables C++ exceptions (off by default in clang-cl); libtorch's error
       -- handling (`TORCH_CHECK` -> `throw c10::Error`) does not compile without it.
       -- `-D__STDNORETURN_H` predefines the include guard of clang's `stdnoreturn.h`,
       -- whose `#define noreturn _Noreturn` is active even in C++ mode.
-      #["-c", "-O2", "/std:c++17", "/EHsc", "-D__STDNORETURN_H"]
+      #["-O2", "/std:c++20", "/EHsc", "-D__STDNORETURN_H"]
     else
-      #["-c", "-O2", "-fPIC", "-std=c++17", "-D_GLIBCXX_USE_CXX11_ABI=1"]
+      #["-O2", "-fPIC", "-std=c++17", "-D_GLIBCXX_USE_CXX11_ABI=1"]
   #[
     "-I", lean.includeDir.toString,
     "-I", s!"{pkg.dir}/csrc/cuda/common"
@@ -251,11 +228,11 @@ private def libtorchLibs : Array String :=
   #["-ltorch", "-ltorch_cpu", "-ltorch_cuda", "-lc10", "-lc10_cuda"]
 
 /-- CUDA toolkit import libraries for the executable link. -/
-private def cudaLinkFlags : Array String :=
+private def cudaLinkArgs : Array String :=
   if Platform.isWindows then
     -- CUDA's Windows toolkit keeps import libraries under `lib/x64`.
     #[
-      "-L", s!"{windowsUnsafeResolveDir windowsCudaHomeOpt}/lib/x64",
+      "-L", s!"{cudaHome}/lib/x64",
       "-lcudart", "-lcublas", "-lcufft",
       "-L", windowsLinkLibsDir.toString
     ]
@@ -266,8 +243,8 @@ private def cudaLinkFlags : Array String :=
     ]
 
 /-- Link flags for the LibTorch SDPA shared library (Linux only; on Windows the bridge
-is a static archive whose LibTorch dependencies are named in `torchBridgeExeLinkFlags`). -/
-private def torchBridgeLinkFlags (lt : String) : Array String :=
+is a static archive whose LibTorch dependencies are named in `torchBridgeExeLinkArgs`). -/
+private def torchBridgeLinkArgs (lt : String) : Array String :=
   #[
     "-L", s!"{lt}/lib",
     "-Wl,--no-as-needed"
@@ -282,7 +259,7 @@ private def torchBridgeLinkFlags (lt : String) : Array String :=
 Windows the bridge is a static archive (`.a`), so it must name the import
 libraries itself; on Linux the bridge `.so` carries its own dependencies and the
 executable only needs the rpath to find it. -/
-private def torchBridgeExeLinkFlags (lt : String) : Array String :=
+private def torchBridgeExeLinkArgs (lt : String) : Array String :=
   if Platform.isWindows then
     -- `libvcruntime.lib` supplies the MSVC C++-EH support the clang-cl-compiled bridge
     -- object references (`__CxxFrameHandler4`, `__std_terminate`, `__uncaught_exceptions`)
@@ -292,10 +269,11 @@ private def torchBridgeExeLinkFlags (lt : String) : Array String :=
     #["-Wl,-rpath," ++ s!"{lt}/lib"]
 
 /-- Native link flags selected by the `cuda`/`libtorch` Lake options. -/
-private def nativeLinkFlags : Array String :=
+private def nativeLinkArgs : Array String :=
   if cudaEnabled then
-    let lt := match libtorchHomeConfig with | some h => h | none => "libtorch"
-    cudaLinkFlags ++ (if libtorchEnabled then torchBridgeExeLinkFlags lt else #[])
+    let lt := libtorchHomeConfig.getD "libtorch"
+    cudaLinkArgs ++ (if libtorchEnabled then torchBridgeExeLinkArgs lt else #[]) ++
+      if Platform.isWindows || Platform.isOSX then #[] else #["-lstdc++"]
   else if Platform.isWindows || Platform.isOSX then
     -- Windows and macOS provide libm via the default C runtime
     #[]
@@ -305,6 +283,7 @@ private def nativeLinkFlags : Array String :=
     #["-lm", "-lstdc++"]
 
 package TorchLean where
+  buildDir := FilePath.mk ((get_config? torchleanBuildDir).getD ".lake/build")
   version := v!"0.1.0"
   description := "Neural network specification, execution, and verification in Lean 4."
   keywords := #["machine-learning", "neural-networks", "verification", "autograd", "cuda"]
@@ -317,135 +296,265 @@ package TorchLean where
     ⟨`pp.unicode.fun, true⟩,
     ⟨`autoImplicit, false⟩,
     ⟨`relaxedAutoImplicit, false⟩,
-    ⟨`backward.privateInPublic, false⟩,
-    ⟨`backward.privateInPublic.warn, false⟩]
-  moreLinkArgs := nativeLinkFlags
+    ⟨`warningAsError, true⟩]
+  dynlibs := #[`@/torchlean_tensor_cpu_shared]
+  moreLinkArgs := nativeLinkArgs
 
-/-! ## Build helpers -/
+/-!
+## Native backend libraries
 
-/-- One native backend: the CUDA implementation plus the portable C stub that stands in
-for it when the package is built without `-K cuda=true`. -/
-private structure NativeBackendLib where
-  stem : String
-  cudaSrc : String
-  stubSrc : String
+TorchLean has a small amount of native code behind Lean `extern` declarations. Each component has
+the same build shape: compile the CUDA implementation when the package is built with
+`-K cuda=true`; otherwise compile the matching C stub so the Lean package still builds on machines
+without a CUDA toolkit.
+-/
 
-/-- Track project-owned native headers so a header-only edit invalidates every dependent
-object. -/
+/-! ## Native build helpers -/
+
+/-- Track project-owned native headers so a header-only edit invalidates every dependent object. -/
 private def nativeHeaderDeps (pkg : Package) : SpawnM (Job Unit) := do
   let isHeader := fun path : FilePath => path.extension == some "h"
   let common ← inputDir (pkg.dir / "csrc/cuda/common") true isHeader
   let convPool ← inputDir (pkg.dir / "csrc/cuda/conv_pool") true isHeader
   pure <| common.mix convPool
 
-/-- Compile one native source file to an object, tracking the project-owned headers. -/
-private def compileNativeObj (pkg : Package) (src oFile : FilePath)
-    (weakArgs traceArgs : Array String) (compiler : FilePath)
-    (extraDepTrace : JobM Unit := pure ()) : SpawnM (Job FilePath) := do
-  let headerDeps ← nativeHeaderDeps pkg
-  let srcJob ← inputFile src false
-  buildO oFile srcJob weakArgs traceArgs compiler do
-    extraDepTrace
-    pure headerDeps.getTrace
-
-/-- Build one native backend library for the current Lake configuration. -/
-private def buildNativeBackendLib (pkg : Package) (spec : NativeBackendLib) := do
-  let lean ← getLeanInstall
-  let libFile := pkg.buildDir / nameToStaticLib spec.stem
-  if cudaEnabled then
-    let oFile := pkg.buildDir / s!"{spec.stem}.o"
-    let (weakArgs, traceArgs) := cudaCompileFlags pkg lean
-    let oJob ← compileNativeObj pkg (pkg.dir / spec.cudaSrc) oFile weakArgs traceArgs "nvcc"
-      windowsPrepareCudaLink
-    buildStaticLib libFile #[oJob]
+/--
+Find the executable that will be passed to a native compile or link command.
+Keep its invocation path: names such as `clang++` can select a language mode even when they are
+symlinks to the same binary. The dependency trace separately records the resolved file.
+-/
+private def nativeCompilerPath (name : String) : JobM FilePath := do
+  let path := FilePath.mk name
+  let cwd ← IO.currentDir
+  -- Windows executables always carry a `.exe` extension, and `pathExists` is a plain
+  -- filesystem check (no `PATHEXT` fallback), so a bare `cc`/`g++`/`clang-cl` on PATH
+  -- must also be probed with the suffix appended.
+  let names : List FilePath :=
+    if Platform.isWindows && !path.toString.toLower.endsWith ".exe" then
+      [path, FilePath.mk (path.toString ++ ".exe")]
+    else
+      [path]
+  if path.isAbsolute || path.components.length > 1 then
+    for nm in names do
+      let candidate := cwd / nm
+      if (← candidate.pathExists) && !(← candidate.isDir) then
+        return candidate.normalize
   else
-    let oFile := pkg.buildDir / s!"{spec.stem}_stub.o"
-    let oJob ← compileNativeObj pkg (pkg.dir / spec.stubSrc) oFile
-      (stubCompileFlags pkg lean) #[] "cc"
-    buildStaticLib libFile #[oJob]
+    for dir in SearchPath.parse ((← IO.getEnv "PATH").getD "") do
+      for nm in names do
+        let candidate := cwd / dir / nm
+        if (← candidate.pathExists) && !(← candidate.isDir) then
+          return candidate.normalize
+  error s!"native compiler not found: {name}"
 
-/-! ## LibTorch bridge helpers -/
+/-- Hash tool contents on each build, including replacements installed at the same path. -/
+private def traceNativeTool (path : FilePath) : JobM Unit := do
+  let resolved ← IO.FS.realPath path
+  addPureTrace (path.toString, resolved.toString) "native tool paths"
+  addTrace (.ofHash (← computeFileHash resolved) resolved.toString)
 
-/-- Resolve LibTorch; caches `.lake/build/libtorch.path`. -/
+/-- Resolve and trace a native compiler before checking whether its object can be reused. -/
+private def nativeCompilerJob (name : String) : SpawnM (Job FilePath) := Job.async do
+  let compiler ← nativeCompilerPath name
+  traceNativeTool compiler
+  return compiler
+
+/--
+Record nvcc's extra flags without allowing them to replace the traced target or host compiler.
+Option files and response files could hide those overrides, so pass ordinary flags directly.
+-/
+private def traceCudaFlags : JobM Unit := do
+  let selectors := #[
+    "-arch", "--gpu-architecture", "-code", "--gpu-code", "-gencode", "--generate-code",
+    "-ccbin", "--compiler-bindir", "-optf", "--options-file", "@"
+  ]
+  for name in #["NVCC_PREPEND_FLAGS", "NVCC_APPEND_FLAGS"] do
+    let value := (← IO.getEnv name).getD ""
+    if selectors.any (fun selector => (value.splitOn selector).length > 1) then
+      error <| s!"{name} cannot select architectures, host compilers, or option files; " ++
+        "use cuda_arch and NVCC_CCBIN for the target and host compiler"
+    addPureTrace value name
+
+/--
+One dependency shared by the four native CUDA components. The Lean revision alone does not
+identify nvcc or its host compiler. Record the actual tools, toolkit version, and environment
+flags before Lake decides whether a previously compiled object can be reused. On Windows this
+also validates the mandatory `-K cuda_home/msvc_lib_dir/msys2_lib_dir` directories and
+(re)populates the link shim before any nvcc compile or link runs.
+-/
+target torchlean_cuda_compiler pkg : FilePath × FilePath := Job.async do
+  if Platform.isWindows then windowsPrepareCudaLink
+  let home := pkg.dir / cudaHome
+  let tool (name : String) := if Platform.isWindows then name ++ ".exe" else name
+  let nvcc := home / "bin" / tool "nvcc"
+  let defaultHost := if Platform.isWindows then "cl.exe" else "g++"
+  let configured := ((← IO.getEnv "NVCC_CCBIN").getD "").trimAscii.toString
+  let hostName := if configured.isEmpty then defaultHost else configured
+  let hostPath := FilePath.mk hostName
+  let hostName ← if ← hostPath.isDir then
+    pure (hostPath / defaultHost).toString else pure hostName
+  let host ← nativeCompilerPath hostName
+  traceCudaFlags
+  traceNativeTool nvcc
+  traceNativeTool host
+  traceNativeTool (home / "bin" / tool "ptxas")
+  -- Toolkit packages can update these components independently of the nvcc driver binary.
+  for relative in #["nvvm/bin/cicc", "bin/nvcc.profile", "version.json", "version.txt"] do
+    let path := home / relative
+    if ← path.pathExists then
+      traceNativeTool path
+  let version ← captureProc {
+    cmd := nvcc.toString
+    args := #["--version"]
+    env := #[("NVCC_PREPEND_FLAGS", none), ("NVCC_APPEND_FLAGS", none)]
+  }
+  addPureTrace version "CUDA compiler version"
+  return (nvcc, host)
+
+/-- Compile a CUDA component or its portable stub, tracking headers and compiler settings. -/
+private def buildNativeBackendLib (pkg : Package) (dir stem : String) :
+    FetchM (Job FilePath) := do
+  let lean ← getLeanInstall
+  let headerDeps ← nativeHeaderDeps pkg
+  let source := if cudaEnabled then s!"{stem}.cu" else s!"{stem}_stub.c"
+  let srcJob ← inputFile (pkg.dir / "csrc/cuda" / dir / source) false
+  let srcJob := srcJob.zipWith (fun src _ => src) headerDeps
+  let objectStem := if cudaEnabled then stem else s!"{stem}_stub"
+  let libraryStem := if cudaEnabled then s!"{stem}_cuda" else objectStem
+  let oFile := pkg.buildDir / s!"{objectStem}.o"
+  let includes := #["-I", lean.includeDir.toString] ++ nativeIncludeArgs pkg
+  let oJob ← if cudaEnabled then
+    let compilerJob ← torchlean_cuda_compiler.fetch
+    compilerJob.bindM fun (nvcc, host) => do
+      -- These are traced arguments: changing the target or compiler must invalidate the object.
+      let flags := cudaCompileFlags ++ #[s!"--compiler-bindir={host}"]
+      buildO oFile srcJob includes flags nvcc getLeanTrace
+  else
+    let compilerJob ← nativeCompilerJob "cc"
+    compilerJob.bindM fun compiler =>
+      buildO oFile srcJob includes #["-O2", "-fPIC"] compiler getLeanTrace
+  buildStaticLib (pkg.buildDir / nameToStaticLib libraryStem) #[oJob]
+
+/-- CUDA+cuBLAS matrix multiplication, or portable stubs. -/
+target torchlean_dgemm_cuda pkg : FilePath :=
+  buildNativeBackendLib pkg "blas" "torchlean_dgemm_cuda"
+
+/-- CUDA kernels, or portable stubs. -/
+target torchlean_cuda_kernels pkg : FilePath :=
+  buildNativeBackendLib pkg "kernels" "torchlean_cuda_kernels"
+
+/-- CUDA convolution and pooling, or portable stubs. -/
+target torchlean_cuda_conv_pool pkg : FilePath :=
+  buildNativeBackendLib pkg "conv_pool" "torchlean_cuda_conv_pool"
+
+/-- CUDA tensor buffers, or portable stubs. -/
+target torchlean_cuda_tensor pkg : FilePath :=
+  buildNativeBackendLib pkg "tensor" "torchlean_cuda_tensor"
+
+/-- Compile the native bulk operations for packed host tensor storage once. -/
+private def buildTensorCpuObject (pkg : Package) := do
+  let lean ← getLeanInstall
+  let srcJob ← inputFile
+    (pkg.dir / "csrc/cpu/torchlean_tensor.c") false
+  let oFile := pkg.buildDir / "torchlean_tensor_cpu.o"
+  let compilerJob ← nativeCompilerJob "cc"
+  compilerJob.bindM fun compiler =>
+    buildO oFile srcJob #["-I", lean.includeDir.toString] #["-O3", "-fPIC"] compiler getLeanTrace
+
+/-- Object shared by the static executable link and the dynamic elaborator library. -/
+target torchlean_tensor_cpu_object pkg : FilePath :=
+  buildTensorCpuObject pkg
+
+/-- Packed host tensor primitives linked into compiled executables. -/
+target torchlean_tensor_cpu pkg : FilePath := do
+  let oJob ← torchlean_tensor_cpu_object.fetch
+  let libFile := pkg.buildDir / nameToStaticLib "torchlean_tensor_cpu"
+  buildStaticLib libFile #[oJob]
+
+/-- Packed host tensor primitives loaded by Lean for `#eval` and documentation examples. -/
+target torchlean_tensor_cpu_shared pkg : Dynlib := do
+  let oJob ← torchlean_tensor_cpu_object.fetch
+  let libName := "torchlean_tensor_cpu"
+  let libFile := pkg.sharedLibDir / nameToSharedLib libName
+  buildLeanSharedLib libName libFile #[oJob] #[]
+
+/-- Repair large frees and delayed arena purging in the pinned Linux allocator. -/
+target torchlean_allocator pkg : FilePath := do
+  let lean ← getLeanInstall
+  let buildScript := pkg.dir / "scripts/lean_allocator.py"
+  let scriptJob ← inputFile buildScript false
+  let compatJob ← inputFile (pkg.dir / "csrc/runtime/lean_libc_compat.h") false
+  let headerJob ← inputFile (lean.includeDir / "lean/mimalloc.h") false
+  let deps := scriptJob.mix (compatJob.mix headerJob)
+  let compilerJob ← nativeCompilerJob "c++"
+  compilerJob.bindM fun compiler => do
+    let output := pkg.buildDir / "torchlean_allocator.o"
+    buildFileAfterDep output deps (fun _ => do
+      proc {
+        cmd := "python3"
+        args := #[buildScript.toString, "--lean-include", lean.includeDir.toString,
+          "--compiler", compiler.toString, "--output", output.toString]
+      }) getLeanTrace
+
+/-! ## LibTorch bridge -/
+
+/-- LibTorch root for native include and library paths. -/
+private def libtorchHome (pkg : Package) : String :=
+  (pkg.dir / libtorchHomeConfig.getD "libtorch").toString
+
+/-- Validate the configured SDK and track its path for native builds. -/
 private def libtorchResolveJob (pkg : Package) : SpawnM (Job FilePath) := do
   let stamp := pkg.buildDir / "libtorch.path"
-  let resolver := pkg.dir / "scripts" / "setup" / "resolve_libtorch.sh"
-  let resolverJob ← inputFile resolver false
-  let args :=
-    match libtorchHomeConfig with
-    | some home => #[resolver.toString, home]
-    | none => #[resolver.toString]
-  buildFileAfterDep stamp resolverJob fun _ =>
-    proc { cmd := "bash", args := args, cwd := some pkg.dir }
+  let home : FilePath := libtorchHome pkg
+  let configJob ← inputFile (pkg.dir / "lakefile.lean") false
+  buildFileAfterDep stamp configJob (fun _ => do
+    unless (← (home / "include").isDir) && (← (home / "lib").isDir) do
+      error <| s!"LibTorch home must contain include/ and lib/: {home}. " ++
+        "Pass -Klibtorch_home=/path/to/libtorch when enabling the optional bridge."
+    IO.FS.createDirAll pkg.buildDir
+    IO.FS.writeFile stamp (home.toString ++ "\n"))
+    (pure <| .ofHash (pureHash home.toString) "LibTorch configuration")
 
-/-- Compile the LibTorch SDPA bridge translation unit to an object file. -/
+/-- Compile the LibTorch SDPA bridge translation unit (clang-cl on Windows, g++ on Linux). -/
 private def buildLibtorchSDPAObj (pkg : Package) : SpawnM (Job FilePath) := do
   let lean ← getLeanInstall
-  let _ ← libtorchResolveJob pkg
+  let resolveJob ← libtorchResolveJob pkg
+  let headerDeps ← nativeHeaderDeps pkg
   let lt := libtorchHome pkg
+  let cppJob ← inputFile (pkg.dir / "csrc/cuda/kernels/torchlean_libtorch_sdpa.cpp") false
   let cppO := pkg.buildDir / "torchlean_libtorch_sdpa.o"
+  let deps := cppJob.zipWith (fun src _ => src) (resolveJob.mix headerDeps)
   let compiler := if Platform.isWindows then "clang-cl" else "c++"
-  compileNativeObj pkg (pkg.dir / "csrc/cuda/kernels/torchlean_libtorch_sdpa.cpp") cppO
-    (torchBridgeCompileFlags pkg lean lt) #[] compiler
+  let compilerJob ← nativeCompilerJob compiler
+  compilerJob.bindM fun compiler =>
+    buildO cppO deps #[] (torchBridgeCompileFlags pkg lean lt) compiler getLeanTrace
 
 /-- Linkable error-returning symbols when the CUDA LibTorch provider is unavailable. -/
 private def buildLibtorchSDPAStub (pkg : Package) := do
   let lean ← getLeanInstall
+  let srcJob ← inputFile (pkg.dir / "csrc/cuda/kernels/torchlean_libtorch_sdpa_stub.c") false
   let oFile := pkg.buildDir / "torchlean_libtorch_sdpa_stub.o"
-  let oJob ← compileNativeObj pkg (pkg.dir / "csrc/cuda/kernels/torchlean_libtorch_sdpa_stub.c")
-    oFile #["-I", lean.includeDir.toString, "-O2", "-fPIC"] #[] "cc"
+  let compilerJob ← nativeCompilerJob "cc"
+  let oJob ← compilerJob.bindM fun compiler =>
+    buildO oFile srcJob #["-I", lean.includeDir.toString] #["-O2", "-fPIC"] compiler getLeanTrace
   let libFile := pkg.buildDir / nameToStaticLib "torchlean_libtorch_sdpa_stub"
   buildStaticLib libFile #[oJob]
 
-/-- Link the LibTorch SDPA bridge shared library from its object file job (Linux only;
-see the `torchlean_libtorch_sdpa` target for the Windows shape). The shared library
-encapsulates the LibTorch/CUDA dependencies, so executables only need the `.so` path
-resolved at load time (via the `rpath` entries in `torchBridgeLinkFlags`). -/
-private def linkLibtorchSDPASo (pkg : Package) (cppOJob : Job FilePath)
-    : SpawnM (Job FilePath) := do
+/-- Link the LibTorch SDPA bridge shared library from its object file (Linux only).
+The shared library encapsulates the LibTorch/CUDA dependencies, so executables only need the
+`.so` path resolved at load time (via the `rpath` entries in `torchBridgeLinkArgs`). -/
+private def buildLibtorchSDPASo (pkg : Package) (cppOJob : Job FilePath) := do
   let lt := libtorchHome pkg
   let soFile := pkg.buildDir / nameToSharedLib "torchlean_libtorch_sdpa"
   cppOJob.mapM fun o => do
+    let linker ← nativeCompilerPath "g++"
+    traceNativeTool linker
+    addPureTrace (torchBridgeLinkArgs lt) "link flags"
     let art ← buildArtifactUnlessUpToDate soFile (ext := sharedLibExt) (restore := true) do
-      compileSharedLib soFile (#[o.toString] ++ torchBridgeLinkFlags lt) "g++"
+      compileSharedLib soFile (#[o.toString] ++ torchBridgeLinkArgs lt) linker
     return art.path
 
 /-! ## Target declarations -/
-
-/-- The four CUDA backends, in link order. Each also has a portable C stub used when the
-package is built without `-K cuda=true`. -/
-private def tensorBackend   : NativeBackendLib :=
-  { stem := "torchlean_cuda_tensor"
-    cudaSrc := "csrc/cuda/tensor/torchlean_cuda_tensor.cu"
-    stubSrc := "csrc/cuda/tensor/torchlean_cuda_tensor_stub.c" }
-private def kernelsBackend  : NativeBackendLib :=
-  { stem := "torchlean_cuda_kernels"
-    cudaSrc := "csrc/cuda/kernels/torchlean_cuda_kernels.cu"
-    stubSrc := "csrc/cuda/kernels/torchlean_cuda_kernels_stub.c" }
-private def convPoolBackend : NativeBackendLib :=
-  { stem := "torchlean_cuda_conv_pool"
-    cudaSrc := "csrc/cuda/conv_pool/torchlean_cuda_conv_pool.cu"
-    stubSrc := "csrc/cuda/conv_pool/torchlean_cuda_conv_pool_stub.c" }
-private def dgemmBackend    : NativeBackendLib :=
-  { stem := "torchlean_dgemm_cuda"
-    cudaSrc := "csrc/cuda/blas/torchlean_dgemm_cuda.cu"
-    stubSrc := "csrc/cuda/blas/torchlean_dgemm_cuda_stub.c" }
-
-/-- Native backend for `torchlean_cuda_tensor`: CUDA buffer runtime when `-K cuda=true`, else C stub. -/
-extern_lib torchlean_cuda_tensor (pkg) :=
-  buildNativeBackendLib pkg tensorBackend
-
-/-- Native backend for `torchlean_cuda_kernels`: CUDA kernels when `-K cuda=true`, else C stub. -/
-extern_lib torchlean_cuda_kernels (pkg) :=
-  buildNativeBackendLib pkg kernelsBackend
-
-/-- Native backend for `torchlean_cuda_conv_pool`: CUDA conv/pool when `-K cuda=true`, else C stub. -/
-extern_lib torchlean_cuda_conv_pool (pkg) :=
-  buildNativeBackendLib pkg convPoolBackend
-
-/-- Native backend for `torchlean_dgemm_cuda`: CUDA+cuBLAS when `-K cuda=true`, else C stub. -/
-extern_lib torchlean_dgemm_cuda (pkg) :=
-  buildNativeBackendLib pkg dgemmBackend
 
 /-- LibTorch SDPA bridge, when built with `-K cuda=true -K libtorch=true`;
 otherwise a stub static library whose symbols error at call time.
@@ -455,28 +564,49 @@ LibTorch/CUDA dependencies (via `rpath`); On Windows, it is a *static*
 archive. A Windows DLL would export nothing by default — the bridge
 `.cpp` has no `__declspec(dllexport)` annotations — and its LibTorch/MSVC-EH
 dependencies would need another DLL-side resolution, so the static archive is
-created with the same shape as the stub -/
+created with the same shape as the stub. This platform-neutral name is what
+`NN/Backend/Attention.lean` references in `buildTarget?`. -/
 target torchlean_libtorch_sdpa pkg : FilePath := do
   if cudaEnabled && libtorchEnabled then
     let cppOJob ← buildLibtorchSDPAObj pkg
     if Platform.isWindows then
       buildStaticLib (pkg.buildDir / nameToStaticLib "torchlean_libtorch_sdpa") #[cppOJob]
     else
-      linkLibtorchSDPASo pkg cppOJob
+      buildLibtorchSDPASo pkg cppOJob
   else
+    pure (Job.pure (pkg.buildDir / "torchlean_libtorch_sdpa_skipped"))
+
+/-- Error-returning stub symbols used when the LibTorch bridge is not enabled. -/
+target torchlean_libtorch_sdpa_stub pkg : FilePath :=
+  if !cudaEnabled || !libtorchEnabled then
     buildLibtorchSDPAStub pkg
+  else
+    pure (Job.pure (pkg.buildDir / "torchlean_libtorch_sdpa_stub_skipped"))
 
 @[default_target]
 lean_lib NN where
-  moreLinkObjs := #[torchlean_libtorch_sdpa]
+  moreLinkObjs :=
+    (if Platform.isWindows || Platform.isOSX then (#[] : TargetArray FilePath)
+      else (#[torchlean_allocator] : TargetArray FilePath)) ++
+    (#[
+      torchlean_tensor_cpu,
+      torchlean_dgemm_cuda,
+      torchlean_cuda_kernels,
+      torchlean_cuda_conv_pool,
+      torchlean_cuda_tensor
+    ] : TargetArray FilePath) ++
+      if cudaEnabled && libtorchEnabled then
+        (#[torchlean_libtorch_sdpa] : TargetArray FilePath)
+      else
+        (#[torchlean_libtorch_sdpa_stub] : TargetArray FilePath)
   -- The reusable library follows its canonical umbrella. Examples, tests, CI-only modules,
   -- documentation, and executable roots have separate targets below.
   roots := #[`NN]
 
 /-- Runnable and narrative examples, kept out of the reusable `NN` library target. -/
 lean_lib NNExamples where
-  roots := #[`NN.Examples.Zoo]
-  globs := #[.submodules `NN.Examples]
+  roots := #[`NN.Examples]
+  globs := #[.one `NN.Examples, .submodules `NN.Examples]
 
 /-- Test modules used by the curated native test runner. -/
 lean_lib NNTests where
@@ -499,12 +629,16 @@ lean_lib TorchLeanDocs where
 lean_exe verify where
   root := `NN.Verification.Main
 
--- Curated test suite runner (native executable).
--- We run this via `lake exe nn_tests_suite` instead of `lean --run ...` because the Lean
--- interpreter cannot execute definitions from precompiled `.olean`s unless the whole dependency
--- closure is built with interpreter support.
+-- Native runner for `lake test`, including tests that call backend externs.
 lean_exe nn_tests_suite where
   root := `NN.Tests.Suite
+
+-- Cross-runtime numerical regression tools.
+lean_exe pytorch_export_check where
+  root := `NN.Tests.Interop.PyTorchMain
+
+lean_exe native_float32_parity where
+  root := `NN.Tests.Floats.NativePrimitiveParityMain
 
 -- Optional LibTorch SDPA bridge test. Requires:
 --   lake exe -K cuda=true -K libtorch=true libtorch_sdpa_test
@@ -516,28 +650,19 @@ lean_exe torchlean_lint where
   srcDir := "scripts/checks"
   root := `TorchLeanLint
 
--- Device-agnostic runnable examples (CPU by default; pass `--cuda` after building with CUDA).
---
--- This single executable supports all runnable examples (MLP/CNN/Transformer/Vit/ResNet/GPT2/PPO)
--- via a simple
--- subcommand interface:
---   `lake exe torchlean <example> [args...]`
---
--- CUDA build: `lake build -R -K cuda=true`
+-- Runnable examples: `lake exe torchlean <example> [args...]`.
+-- Build with `lake -R -K cuda=true build` before passing `--cuda` to an example.
 lean_exe torchlean where
-  root := `NN.Examples.Models.RunnerMain
+  root := `NN.Examples.RunnerMain
 
--- Self-checking positive/negative example for the functional transcendental +
--- scalar-affine ops (`nn.functional.{exp,log,scale,shift,affine}`). Runs the
--- autograd checks compiled; exits non-zero on any regression.
---   `lake exe transcendentals_check`
-lean_exe transcendentals_check where
-  root := `NN.Examples.Functional.Transcendentals
+-- Shared executable numerical formats and refinement proofs.
+require floatlib from git
+  "https://github.com/lean-dojo/FloatLib" @ "40301cd44f253a4ac6ccd34a0eb6c221e185e25c"
 
 -- Complete API documentation (HTML) via `lake build TorchLeanDocs:docs`.
 require «doc-gen4» from git
-  "https://github.com/leanprover/doc-gen4" @ "v4.33.0"
+  "https://github.com/leanprover/doc-gen4" @ "v4.34.0"
 
 -- Keep `mathlib` last so Mathlib’s dependency versions win, which is required for cache tooling.
 require mathlib from git
-  "https://github.com/leanprover-community/mathlib4" @ "v4.33.0"
+  "https://github.com/leanprover-community/mathlib4" @ "v4.34.0"
