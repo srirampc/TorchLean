@@ -208,11 +208,13 @@ private def torchBridgeCompileFlags (pkg : Package) (lean : LeanInstall) (lt : S
       -- Only clang-cl works for both the libtorch MSVC ABI and Lean's FFI.
       -- LibTorch requires C++20: its headers use C++20 features unconditionally
       -- (`std::strong_ordering`, `string_view::starts_with`, `requires`).
-      -- `/EHsc` enables C++ exceptions (off by default in clang-cl); libtorch's error
-      -- handling (`TORCH_CHECK` -> `throw c10::Error`) does not compile without it.
+      -- `/EHa` enables C++ exceptions plus SEH (`__try/__except`): the FFI entries are
+      -- wrapped in an SEH boundary because this exe mixes MinGW/Itanium (Lean runtime)
+      -- and MSVC-ABI (clang-cl bridge + torch DLLs) exception handling, and a torch
+      -- `c10::Error` thrown at the boundary can escape the C++ catch handlers and abort.
       -- `-D__STDNORETURN_H` predefines the include guard of clang's `stdnoreturn.h`,
       -- whose `#define noreturn _Noreturn` is active even in C++ mode.
-      #["-O2", "/std:c++20", "/EHsc", "-D__STDNORETURN_H"]
+      #["-O2", "/std:c++20", "/EHa", "-D__STDNORETURN_H"]
     else
       #["-O2", "-fPIC", "-std=c++17", "-D_GLIBCXX_USE_CXX11_ABI=1"]
   #[
