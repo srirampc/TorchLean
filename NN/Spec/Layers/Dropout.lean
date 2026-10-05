@@ -21,8 +21,8 @@ We therefore expose two deterministic variants:
 
 - `dropoutMaskedSpec p mask x`
   A fully deterministic "training-style" dropout that takes the mask explicitly. Kept entries are
-  scaled by `1 / max(1 - p, ε)`; when `1 - p ≤ 0` (so `p ≥ 1`) every entry is dropped and the
-  output is zero, matching `torch.nn.Dropout(1.0)`.
+  scaled by `1 / max(1 - p, ε)` when `1 - p > 0`, and by zero otherwise. Kept entries still
+  evaluate `x * scale`: an IEEE infinity or NaN multiplied by zero can produce NaN.
 
 How this differs from PyTorch:
 
@@ -64,9 +64,9 @@ def dropoutInferenceBackwardSpec {s : Shape} (p : α) (gradOutput : Tensor α s)
 /-- Scale applied to kept entries by masked dropout: `1 / max(1 - p, ε)` when `1 - p > 0`, and
 `0` otherwise.
 
-The zero branch makes `p = 1` (and any `p ≥ 1`) drop every entry, as `torch.nn.Dropout(1.0)`
-does; without it the clamp to `ε` would return `x / ε` for kept entries. The clamp only matters
-on the open interval `1 - ε < p < 1`, where PyTorch would divide by the tiny `1 - p` instead. -/
+The zero branch selects a zero scale; it does not bypass multiplication at kept positions.
+For ordered real arithmetic with positive `ε`, the clamp changes the scale only on
+`1 - ε < p < 1`, where ordinary inverted dropout would divide by the tiny `1 - p` instead. -/
 def dropoutKeepScale (p : α) : α :=
   let keep : α := (1 : α) - p
   if keep > 0 then (1 : α) / Max.max keep Context.defaultEpsilon else 0
@@ -74,7 +74,8 @@ def dropoutKeepScale (p : α) : α :=
 /-- Deterministic training-style dropout with an explicit mask.
 
 If `mask[i] = true`, keep element `x[i]` scaled by `dropoutKeepScale p`, otherwise drop it to `0`.
-For `p ≥ 1` the scale is `0`, so the output is the zero tensor regardless of the mask. -/
+When the scale is zero, kept entries still compute `x[i] * 0`, preserving the scalar backend's
+exception and signed-zero behavior. Only blocked entries return the literal zero directly. -/
 def dropoutMaskedSpec {s : Shape} (p : α) (mask : Tensor Bool s) (x : Tensor α s) : Tensor α s :=
   let scale : α := dropoutKeepScale p
   map2Spec (fun xi mi => if mi then xi * scale else 0) x mask
@@ -82,10 +83,9 @@ def dropoutMaskedSpec {s : Shape} (p : α) (mask : Tensor Bool s) (x : Tensor α
 /-- Backward/VJP for `dropoutMaskedSpec` with respect to `x`.
 
 This mirrors the forward: gradients are masked and (in the kept positions) multiplied by
-`dropoutKeepScale p`, which is `0` when `p ≥ 1`. -/
+`dropoutKeepScale p`, including its zero-scale multiplication behavior. -/
 def dropoutMaskedBackwardSpec {s : Shape} (p : α) (mask : Tensor Bool s) (gradOutput : Tensor α
   s) : Tensor α s :=
-  let scale : α := dropoutKeepScale p
-  map2Spec (fun gi mi => if mi then gi * scale else 0) gradOutput mask
+  dropoutMaskedSpec p mask gradOutput
 
 end Spec

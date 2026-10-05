@@ -368,10 +368,20 @@ private def certifyAxisSources
                     {indentExpr certificateType}\nexpected\
                     {indentExpr axisProposition}"
               axisCertificate? := some certificate
+        -- A conditional logical length may be supplied by different occurrences
+        -- in different branches, or be singleton without a fixed source.
+        if axisCertificate?.isNone then
+          axisCertificate? ← observing? <|
+            certifyWithTactic
+              "that a logical einsum length is singleton or supplied by an input occurrence"
+              axisProposition
+              (← `(tactic|
+                simp (config := { zeta := true }) [List.any_cons, List.any_nil] <;>
+                (repeat' split <;> simp_all)))
         let some axisCertificate := axisCertificate?
           | throwError
-              "could not prove that one logical einsum length is supplied \
-                by an input occurrence:{indentExpr axisProposition}\n\
+              "could not prove that one logical einsum length is singleton \
+                or supplied by an input occurrence:{indentExpr axisProposition}\n\
                 Add the shape equality or singleton-broadcasting hypothesis \
                 needed by this operation."
         let remainingCertificate ← certifyAxes remainingAxes

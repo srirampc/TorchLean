@@ -90,7 +90,8 @@ Input:
 Output:
 - `y : outDim` graph embedding produced by averaging node embeddings.
 
-The `h_n : n > 0` assumption is only used to make the mean pooling well-defined (division by `n`).
+The `h_n : n > 0` assumption supplies the mean reduction's nonempty-axis evidence. Casting `n`
+and dividing the sum by it still use the scalar backend's arithmetic.
 -/
 def GCN2Spec.forward
   {n inDim hidDim outDim : Nat}

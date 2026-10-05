@@ -26,23 +26,13 @@ The e-graph normalizes proof terms; executable tensors continue to use the
 native `Array` lowerings.
 -/
 
-/--
-Bound a quotient when the available product bound lists the quotient bound
-before the divisor.
--/
-private theorem Nat.div_lt_of_lt_mul_comm {value divisor bound : Nat}
-    (h : value < bound * divisor) :
-    value / divisor < bound := by
-  apply Nat.div_lt_of_lt_mul
-  simpa only [Nat.mul_comm] using h
-
 /-- Bound one decoded digit after identifying the finite index size. -/
 private theorem Fin.div_lt_of_size_eq_mul_bound
     {size divisor bound : Nat} (index : Fin size)
     (hSize : size = bound * divisor) :
     index.val / divisor < bound := by
   subst size
-  exact Nat.div_lt_of_lt_mul_comm index.isLt
+  exact Nat.div_lt_of_lt_mul (by simpa only [Nat.mul_comm] using index.isLt)
 
 public meta section
 
@@ -54,11 +44,7 @@ open Lean Elab Tactic Meta
 Inline only the outer `let` chain of a generated term, exposing its lowering
 head without unfolding the lowering itself.
 
-Not private, even though everything else in this section is: the `einops?` report decoders in
-`Tactic/Report/` need the same traversal, and they used to get it from a byte-identical copy of
-these four lines in `NN/Tactic/Einops/Report/Analysis/Common.lean`. `Report.Impl` is
-nested in this namespace, so the uses over there resolve to this definition without any
-qualification.
+The lowering proof helpers and the `einops?` report decoders use this traversal.
 -/
 partial def instantiateOuterLets : Expr → Expr
   | .letE _ _ value body _ =>
@@ -141,12 +127,12 @@ private partial def rearrangePullProgram? (expression : Expr) :
         (combinedMap, sourceTensor, combinedNormalized, hNormalized)
     return some (coordinateMap, inputTensor, normalized, hNormalized)
   else if expression.isAppOfArity
-      ``Lowering.transformTensorFused 8 then
+      ``Lowering.transformTensorFused 9 then
     let arguments := expression.getAppArgs
-    let checked := arguments[2]!
-    let hAxes := arguments[3]!
-    let inputMap := arguments[4]!
-    let inputTensor := arguments[7]!
+    let checked := arguments[3]!
+    let hAxes := arguments[4]!
+    let inputMap := arguments[5]!
+    let inputTensor := arguments[8]!
     let checkedMap ←
       mkAppM ``Check.CheckedTransform.inputCoordinateOfOutput #[
         checked, hAxes]
@@ -156,25 +142,17 @@ private partial def rearrangePullProgram? (expression : Expr) :
       mkAppM ``Rep.pull #[coordinateMap, inputTensor]
     let hNormalized ←
       mkAppM ``Lowering.transformTensorFused_correct #[
-        checked, hAxes, inputMap, arguments[5]!, arguments[6]!, inputTensor]
+        checked, hAxes, inputMap, arguments[6]!, arguments[7]!, inputTensor]
     return some (coordinateMap, inputTensor, normalized, hNormalized)
   else
     return none
 
-/-!
-`checkedTransformShapes` is not redefined here. `Elab.Transform.View` exports it, and this file now
-imports that module, which costs nothing: `View`'s entire import closure was already inside this
-file's. The private copy that used to live here matched the original line for line, docstring
-included.
-
-The `open` is needed because this file sits in `TorchLean.Tensor.Internal` while the elaborator
-helpers live one level down in `Elab.Impl`, so the name does not resolve on its own.
--/
+-- Reuse the elaborator's checked input and output shape view.
 open Elab.Impl (checkedTransformShapes)
 
 /-- Recover the scalar type of a native tensor expression. -/
 private def tensorScalarType (inputTensor : Expr) : MetaM Expr := do
-  let inputType ← inferType inputTensor
+  let inputType ← withTransparency .reducible <| whnf (← inferType inputTensor)
   unless inputType.isAppOfArity ``Rep 3 do
     throwError "expected a tensor input"
   let arguments := inputType.getAppArgs
@@ -185,14 +163,14 @@ private def tensorScalarType (inputTensor : Expr) : MetaM Expr := do
 
 /-- Recover the static shape of a native tensor expression. -/
 private def tensorShape (inputTensor : Expr) : MetaM Expr := do
-  let inputType ← inferType inputTensor
+  let inputType ← withTransparency .reducible <| whnf (← inferType inputTensor)
   unless inputType.isAppOfArity ``Rep 3 do
     throwError "expected a tensor input"
   return inputType.getAppArgs[1]!
 
 /-- Recover the physical storage selected for a native tensor expression. -/
 private def tensorStorage (inputTensor : Expr) : MetaM Expr := do
-  let inputType ← inferType inputTensor
+  let inputType ← withTransparency .reducible <| whnf (← inferType inputTensor)
   unless inputType.isAppOfArity ``Rep 3 do
     throwError "expected a tensor input"
   return inputType.getAppArgs[2]!
@@ -975,6 +953,7 @@ syntax (name := einopsTactic) "einops" : tactic
 
 elab_rules : tactic
   | `(tactic| einops) => do
+      evalTactic (← `(tactic| dsimp only [id, Rep.castShape]))
       unless ← closeFusedPullbacks do
         unless ← closeEquivalentRearrangements do
           let normalizeUnpack ← withMainContext do

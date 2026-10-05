@@ -87,11 +87,6 @@ def requireScalarValue {a : Type} [TorchLean.Storage a]
     requireValueTensor (tag := tag) (s := Shape.scalar) t id
   pure (Tensor.item tScalar)
 
-/-!
-## SGD update helper
-
-This is a small tensor-level update used by many tests.
--/
 end Train
 end Autograd
 end Runtime

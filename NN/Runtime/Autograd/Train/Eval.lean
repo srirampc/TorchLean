@@ -35,18 +35,17 @@ Names must match, so unrelated quantities are not silently averaged.
 -/
 def addMetrics {a : Type} [Add a]
   (tag : String) (xs ys : Array (Metric a)) : Result (Array (Metric a)) := do
-  if xs.size != ys.size then
+  if hsize : xs.size = ys.size then
+    let mut result := Array.emptyWithCapacity xs.size
+    for h : i in [:xs.size] do
+      let left := xs[i]
+      let right := ys[i]'(hsize ▸ h.2.1)
+      if left.name != right.name then
+        throw (tagError tag s!"metric name mismatch: {left.name} vs {right.name}")
+      result := result.push { name := left.name, value := left.value + right.value }
+    pure result
+  else
     throw (tagError tag "metric length mismatch")
-  let mut result := Array.emptyWithCapacity xs.size
-  for i in [:xs.size] do
-    match xs[i]?, ys[i]? with
-    | some left, some right =>
-        if left.name != right.name then
-          throw (tagError tag s!"metric name mismatch: {left.name} vs {right.name}")
-        result := result.push { name := left.name, value := left.value + right.value }
-    | _, _ =>
-        throw (tagError tag "metric length changed during aggregation")
-  pure result
 
 /-!
 ## Report sums (for weighted aggregation)

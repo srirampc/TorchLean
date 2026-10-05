@@ -23,7 +23,7 @@ from runtime training code, so RL examples can be checked against a small pure s
 
 Folder map:
 
-- `Core`: Bellman/TD/return/GAE algebra over array-backed rollout data.
+- `Core`: Bellman/TD/return/GAE algebra over shape-indexed trajectories.
 - `Environment`: a pure Gymnasium-style environment contract with explicit latent state.
 - `MDP`: deterministic finite MDPs over `Fin n` states/actions and tensor value tables.
 - `FiniteStochasticMDP`: finite stochastic MDPs with row-stochastic tensor transition kernels.

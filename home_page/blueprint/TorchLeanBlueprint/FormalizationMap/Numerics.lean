@@ -92,7 +92,7 @@ nearest-even model over real values. It leaves out NaNs, infinities, and the upp
 so claims about those cases belong to FloatLib binary32.
 :::
 
-:::theorem "fp32_rounding_accuracy" (parent := "binary32_semantics") (lean := "TorchLean.Floats.FP32.round_abs_error")
+:::theorem "fp32_rounding_accuracy" (parent := "binary32_semantics") (lean := "FloatLib.Floats.Formats.BinaryInterchange.Model.abs_roundAt_sub_le")
 Rounding in the {uses "rounded_real_fp32"}[rounded-real model] differs from its real input by at
 most half an ULP.
 :::
@@ -110,7 +110,7 @@ executable addition, multiplication, division, fused multiply-add, and square ro
 rounding modes and operation-specific exception status.
 :::
 
-:::theorem "finite_ieee_refinement" (parent := "binary32_semantics") (lean := "TorchLean.Floats.IEEE754.IEEE32Exec.toReal_add_eq_fp32Round_of_isFinite")
+:::theorem "finite_ieee_refinement" (parent := "binary32_semantics") (lean := "TorchLean.Floats.IEEE754.IEEE32Exec.toReal_add_eq_round_of_isFinite")
 On the stated finite-result path, {uses "executable_binary32"}[executable addition] agrees with
 {uses "rounded_real_fp32"}[rounded-real binary32 addition]. Matching bridge theorems cover
 subtraction, multiplication, fused multiply-add, square root, and division.

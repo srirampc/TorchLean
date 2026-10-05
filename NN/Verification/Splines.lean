@@ -7,7 +7,6 @@ Authors: TorchLean Team
 module
 
 public import NN.Verification.Splines.PiecewisePolyCert
-import Mathlib.Analysis.SpecialFunctions.Trigonometric.DerivHyp
 
 /-!
 # Spline Verification

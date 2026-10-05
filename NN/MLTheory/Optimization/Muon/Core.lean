@@ -6,9 +6,6 @@ Authors: TorchLean Team
 
 module
 
-public import Mathlib.Analysis.SpecialFunctions.Pow.NNReal
-public import Mathlib.Data.Sym.Sym2.Init
-import Mathlib.Tactic.NormNum.GCD
 public import NN.Runtime.Optim.Optimizers
 public import NN.Spec.Core.TensorReductionShape.LinearAlgebra
 
@@ -26,8 +23,11 @@ There are two useful levels:
 * `ApproxMatrixOrthogonalizer eps` says the Gram residual $Q^\mathsf{T}Q-I$ is entrywise bounded
   by $\varepsilon$.
 
-The theorems below connect those contracts to the executable Muon step: if the backend satisfies one
-of these contracts, the direction used in the parameter update is certified at the same level.
+`NN.MLTheory.Optimization.Muon.Certificates` connects those contracts to the executable Muon step:
+if the backend satisfies one of them on the fresh momentum buffer, the direction used in the
+parameter update is certified at the same level. Concrete backends live in
+`NN.MLTheory.Optimization.Muon.QR` (exact, under positive QR pivots) and
+`NN.MLTheory.Optimization.Muon.NewtonSchulz` (residual-checked).
 -/
 
 @[expose] public section
@@ -81,7 +81,8 @@ A backend approximately orthogonalizes one specified momentum buffer.
 
 This is also the lightest sound checker boundary we can put on an approximate backend: after it
 returns a direction, prove or check that the direction's Gram residual is bounded by
-$\varepsilon$, and nothing more. `residualCheckedApproxOrthogonalizer` uses it exactly that way.
+$\varepsilon$, and nothing more. `residualCheckedApproxOrthogonalizer` in
+`NN.MLTheory.Optimization.Muon.NewtonSchulz` uses it exactly that way.
 -/
 def ApproxOrthogonalizesBuffer {m n : Nat} (eps : α)
     (orthogonalizer : Orthogonalizer α (.dim m (.dim n .scalar)))
@@ -136,8 +137,8 @@ structure ApproxCertifiedOrthogonalizer (α : Type) [TorchLean.Storage α] [Cont
 Checked exact Muon backend with a per-buffer success predicate.
 
 This is the practical interface for algorithms whose correctness has preconditions on the matrix
-being orthogonalized. The QR backend below is the first instance: its success predicate is positive
-executable `R` pivots.
+being orthogonalized. The QR backend in `NN.MLTheory.Optimization.Muon.QR` is the first instance:
+its success predicate is positive pivots of the real-valued QR specification.
 -/
 structure CheckedExactOrthogonalizer (α : Type) [TorchLean.Storage α] [Context α]
     (m n : Nat) where

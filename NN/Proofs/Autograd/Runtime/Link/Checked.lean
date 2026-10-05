@@ -49,6 +49,24 @@ theorem vjpChecked_eq {α Δ : Type} [Storage α] [Add α] [Zero α]
     Algebra.Graph.lowerGraphDataToTape_ctx_eq_eval]
   rfl
 
+/-- A successful checked reverse pass returns the graph pullback and forward value.
+Validation is required at the input actually executed; no scalar algebraic laws are needed. -/
+theorem eq_of_vjpChecked_ok {α Δ : Type} [Storage α] [Add α] [Zero α]
+    {Γ : List Shape} {τ : Shape}
+    (graph : TypedGraphWithData α Δ Γ τ) (inputs : TensorPack α Γ) (data : Δ)
+    (seed : Tensor α τ) (result : TensorPack α Γ × Tensor α τ)
+    (checked : graph.vjpChecked inputs data seed = .ok result) :
+    result = (graph.vjpWithSeed inputs data seed, graph.forward inputs data) := by
+  obtain ⟨tape, lowered⟩ : ∃ tape,
+      Runtime.Autograd.TypedGraph.lowerToTapeChecked graph.data inputs data = .ok tape := by
+    cases lowered : Runtime.Autograd.TypedGraph.lowerToTapeChecked graph.data inputs data with
+    | error message =>
+      simp only [vjpChecked, lowered, Bind.bind, Except.bind] at checked
+      cases checked
+    | ok tape => exact ⟨tape, rfl⟩
+  exact (Except.ok.inj
+    ((vjpChecked_eq graph inputs data seed tape lowered).symm.trans checked)).symm
+
 /-- The selected output has the derivative obtained by projecting the graph derivative. -/
 theorem hasFDerivAt_forward {Δ : Type} {Γ : List Shape} {τ : Shape}
     (graph : TypedGraphWithData ℝ Δ Γ τ)
@@ -107,7 +125,7 @@ theorem vjpWithSeed_adjoint_fderiv {Δ : Type} {Γ : List Shape} {τ : Shape}
     intro x
     rw [ContinuousLinearMap.adjoint_inner_right, CtxVec.getCLM_apply,
       ← flattenCtx_unflattenCtx x, CtxVec.get_flattenCtx,
-      ← dotList_eq_inner_flattenCtx, dotList_eq_algebra_dotList,
+      ← dotList_eq_inner_flattenCtx, TensorPack.dotList_eq_algebra_dotList,
       Algebra.TensorPack.dotList_single, ← dot_eq_tensorAlgebra_dot,
       dot_eq_inner_tensorToVec]
   rw [(hasFDerivAt_forward graph proofGraph same inputs data correct).fderiv,
@@ -134,16 +152,7 @@ theorem vjpChecked_adjoint_fderiv {Δ : Type} {Γ : List Shape} {τ : Shape}
     flattenCtx result.1 =
       (fderiv ℝ (fun x => tensorToVec (graph.forward (unflattenCtx x) data))
         (flattenCtx inputs)).adjoint (tensorToVec seed) := by
-  obtain ⟨tape, lowered⟩ : ∃ tape,
-      Runtime.Autograd.TypedGraph.lowerToTapeChecked graph.data inputs data = .ok tape := by
-    cases lowered : Runtime.Autograd.TypedGraph.lowerToTapeChecked graph.data inputs data with
-    | error message =>
-      simp only [vjpChecked, lowered, Bind.bind, Except.bind] at checked
-      cases checked
-    | ok tape => exact ⟨tape, rfl⟩
-  have sameResult := Except.ok.inj ((vjpChecked_eq graph inputs data seed tape lowered).symm.trans
-    checked)
-  rw [← sameResult]
+  rw [eq_of_vjpChecked_ok graph inputs data seed result checked]
   exact vjpWithSeed_adjoint_fderiv graph proofGraph same inputs data seed correct
 
 end Runtime.Autograd.Torch.TypedGraphWithData

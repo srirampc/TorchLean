@@ -89,9 +89,9 @@ namespace Parameter
 ### Constructors
 -/
 /--
-Create a `ParamEntry` from a typed tensor.
+Create a `Parameter` from a typed tensor.
 
-This is mostly a convenience for assembling a `ParamTable` from known-shaped tensors.
+This is mostly a convenience for assembling a `ParameterTable` from known-shaped tensors.
 -/
 def create {α : Type} [TorchLean.Storage α] {s : Shape}
     (id : Nat) (t : Tensor α s) (name : Option String := none) :
@@ -103,10 +103,6 @@ end Parameter
 namespace ParameterTable
 
 variable {α : Type} [TorchLean.Storage α]
-
-/-- Array of ids for membership checks. -/
-def ids (parameters : ParameterTable α) : Array Nat :=
-  parameters.map (·.id)
 
 /-- Find a parameter entry by id. -/
 def find? (parameters : ParameterTable α) (id : Nat) : Option (Parameter α) :=
@@ -120,15 +116,9 @@ def get {α : Type} [TorchLean.Storage α] {s : Shape}
       exact .error (tagError tag s!"missing param id {id}")
   | some parameter =>
       if h : parameter.value.shape = s then
-        exact .ok (Tensor.castShape parameter.value.tensor h)
+        exact .ok (parameter.value.cast h)
       else
         exact .error (tagError tag s!"param shape mismatch for id {id}")
-
-/-- Replace a parameter entry value by id. -/
-def set (parameters : ParameterTable α) (id : Nat)
-    (value : Spec.SomeTensor α) : ParameterTable α :=
-  parameters.map
-    (fun parameter => if parameter.id = id then { parameter with value := value } else parameter)
 
 /--
 Build the set of parameter identifiers, rejecting duplicate ids.
@@ -179,8 +169,8 @@ inductive LearningRateScheduler (α : Type) where
   /--
   PyTorch `OneCycleLR` (learning rate only): fractional phase endpoints `pct_start * total - 1`,
   `min_lr = initial_lr / final_div_factor`, cosine or linear annealing, and the optional
-  three-phase variant. The native `oneCycle` uses linear ramps with a `max_lr / final_div_factor`
-  floor.
+  three-phase variant. The native `oneCycle` uses the same endpoint factors with linear ramps and
+  phase boundaries at `pct_start * total`.
   -/
   | torchOneCycle : Optim.Scheduler.PyTorch.OneCycle α -> LearningRateScheduler α
   /--
@@ -276,6 +266,14 @@ structure ParameterGroup (α : Type) [Context α] where
   rho : α := 1 - (1 / 10)
   /-- Optional learning-rate scheduler for this group. -/
   scheduler : Option (LearningRateScheduler α) := none
+  /--
+  Derived Adam powers by parameter id, certified for this group's coefficients.
+
+  Learning-rate and scheduler updates preserve these powers. When changing either beta in an
+  existing group, set `adamPowers := ∅`; powers are then reconstructed lazily from each parameter's
+  moment counter. This field is copied by optimizer snapshots.
+  -/
+  adamPowers : Std.TreeMap Nat (Σ stepCount, Optim.AdamPowers beta1 beta2 stepCount) := ∅
 
 /-!
 ## Per-parameter optimizer buffers
@@ -360,7 +358,7 @@ structure OptimizerState (α : Type) [TorchLean.Storage α] [Context α] where
 A pure state snapshot for saving/restoring optimizer state.
 
 PyTorch analogy: this is the data carried by `optimizer.state_dict()` (modulo naming/layout).
-We use association lists instead of `HashMap` so the result is deterministic and easy to serialize.
+We store the buffers as an array of key-value pairs for serialization.
 -/
 structure OptimizerSnapshot (α : Type) [TorchLean.Storage α] [Context α] where
   /-- Optimizer algorithm used to interpret the stored buffers. -/
@@ -430,10 +428,6 @@ For AdamW the integration step delegates to the canonical optimizer's decoupled 
 def addWeightDecay (parameters gradients : Tensor α s) (weightDecay : α) : Tensor α s :=
   addSpec gradients (scaleSpec parameters weightDecay)
 
-/-- Zero buffer used when a parameter has no stored state yet (PyTorch initialises lazily). -/
-def zeroBuffer (s : Shape) : Tensor α s :=
-  Tensor.full s (0 : α)
-
 /-- Plain SGD: `p - lr * (g + wd * p)`. Stateless. -/
 def sgd (group : ParameterGroup α) (parameters gradient : Tensor α s) : Tensor α s :=
   let gradientWithDecay := addWeightDecay parameters gradient group.weightDecay
@@ -460,7 +454,7 @@ def momentum (group : ParameterGroup α) (buffers : Option (ParameterBuffers α 
   let state : Optim.MomentumSGD.State α s :=
     { learningRate := group.learningRate
       momentum := group.momentum
-      momentumBuffer := previousBuffer?.getD (zeroBuffer s) }
+      momentumBuffer := previousBuffer?.getD (Tensor.full s (0 : α)) }
   let result :=
     Optim.MomentumSGD.update (α := α) (s := s) state parameters bufferGradient
   let nextParameters :=
@@ -476,7 +470,7 @@ def momentum (group : ParameterGroup α) (buffers : Option (ParameterBuffers α 
 def squaredGradientBuffer (buffers : Option (ParameterBuffers α s)) : Tensor α s :=
   match buffers with
   | some (.squaredGradient accumulator) => accumulator
-  | _ => zeroBuffer s
+  | _ => Tensor.full s (0 : α)
 
 /-- AdaGrad with coupled weight decay. -/
 def adagrad (group : ParameterGroup α) (buffers : Option (ParameterBuffers α s))
@@ -505,11 +499,26 @@ def rmsprop (group : ParameterGroup α) (buffers : Option (ParameterBuffers α s
 def adamBuffers (buffers : Option (ParameterBuffers α s)) : Nat × Tensor α s × Tensor α s :=
   match buffers with
   | some (.adam stepCount firstMoment secondMoment) => (stepCount, firstMoment, secondMoment)
-  | _ => (0, zeroBuffer s, zeroBuffer s)
+  | _ => (0, Tensor.full s (0 : α), Tensor.full s (0 : α))
+
+/--
+Read powers for the parameter's moment counter, reconstructing them after a counter change.
+
+The group type already certifies the coefficients. Only natural-number equality is needed here,
+so scalar equality need not be lawful or even decidable.
+-/
+def adamPowers (group : ParameterGroup α) (id stepCount : Nat) :
+    Optim.AdamPowers group.beta1 group.beta2 stepCount :=
+  match group.adamPowers.get? id with
+  | some ⟨cachedStep, powers⟩ =>
+      if h : cachedStep = stepCount then h ▸ powers
+      else Optim.AdamPowers.compute group.beta1 group.beta2 stepCount
+  | none => Optim.AdamPowers.compute group.beta1 group.beta2 stepCount
 
 /-- Adam with coupled weight decay and parameter-local bias correction. -/
-def adam (group : ParameterGroup α) (buffers : Option (ParameterBuffers α s))
-    (parameters gradient : Tensor α s) : Tensor α s × ParameterBuffers α s :=
+def adam (id : Nat) (group : ParameterGroup α) (buffers : Option (ParameterBuffers α s))
+    (parameters gradient : Tensor α s) :
+    Tensor α s × ParameterBuffers α s × ParameterGroup α :=
   let (stepCount, firstMoment, secondMoment) := adamBuffers buffers
   let gradientWithDecay := addWeightDecay parameters gradient group.weightDecay
   let state : Optim.Adam.State α s :=
@@ -519,15 +528,21 @@ def adam (group : ParameterGroup α) (buffers : Option (ParameterBuffers α s))
       epsilon := group.epsilon
       firstMoment := firstMoment
       secondMoment := secondMoment
-      stepCount := stepCount }
+      stepCount := stepCount
+      powers := adamPowers group id stepCount }
   let result := Optim.Adam.update (α := α) (s := s) state parameters gradientWithDecay
+  let nextPowers :=
+    group.adamPowers.insert id
+      ⟨result.optimizerState.stepCount, result.optimizerState.powers⟩
   (result.parameters,
     .adam result.optimizerState.stepCount result.optimizerState.firstMoment
-      result.optimizerState.secondMoment)
+      result.optimizerState.secondMoment,
+    { group with adamPowers := nextPowers })
 
 /-- AdamW: decoupled weight decay handled by the canonical update, no gradient preprocessing. -/
-def adamw (group : ParameterGroup α) (buffers : Option (ParameterBuffers α s))
-    (parameters gradient : Tensor α s) : Tensor α s × ParameterBuffers α s :=
+def adamw (id : Nat) (group : ParameterGroup α) (buffers : Option (ParameterBuffers α s))
+    (parameters gradient : Tensor α s) :
+    Tensor α s × ParameterBuffers α s × ParameterGroup α :=
   let (stepCount, firstMoment, secondMoment) := adamBuffers buffers
   let state : Optim.AdamW.State α s :=
     { learningRate := group.learningRate
@@ -537,11 +552,16 @@ def adamw (group : ParameterGroup α) (buffers : Option (ParameterBuffers α s))
       weightDecay := group.weightDecay
       firstMoment := firstMoment
       secondMoment := secondMoment
-      stepCount := stepCount }
+      stepCount := stepCount
+      powers := adamPowers group id stepCount }
   let result := Optim.AdamW.update (α := α) (s := s) state parameters gradient
+  let nextPowers :=
+    group.adamPowers.insert id
+      ⟨result.optimizerState.stepCount, result.optimizerState.powers⟩
   (result.parameters,
     .adam result.optimizerState.stepCount result.optimizerState.firstMoment
-      result.optimizerState.secondMoment)
+      result.optimizerState.secondMoment,
+    { group with adamPowers := nextPowers })
 
 /-- Adadelta with coupled weight decay. -/
 def adadelta (group : ParameterGroup α) (buffers : Option (ParameterBuffers α s))
@@ -550,7 +570,7 @@ def adadelta (group : ParameterGroup α) (buffers : Option (ParameterBuffers α 
     match buffers with
     | some (.adadelta squaredGradientAverage squaredUpdateAverage) =>
         (squaredGradientAverage, squaredUpdateAverage)
-    | _ => (zeroBuffer s, zeroBuffer s)
+    | _ => (Tensor.full s (0 : α), Tensor.full s (0 : α))
   let gradientWithDecay := addWeightDecay parameters gradient group.weightDecay
   let state : Optim.Adadelta.State α s :=
     { learningRate := group.learningRate
@@ -566,25 +586,29 @@ def adadelta (group : ParameterGroup α) (buffers : Option (ParameterBuffers α 
 /--
 Apply the configured update rule to one parameter.
 
-Returns the new parameter value and the buffers to store for it (`none` for stateless SGD, which
-leaves any stored buffers untouched).
+Returns the new parameter value, the buffers to store for it (`none` for stateless SGD), and the
+group with its derived Adam powers updated.
 -/
-def updateParameter (algorithm : OptimizerAlgorithm) (group : ParameterGroup α)
+def updateParameter (algorithm : OptimizerAlgorithm) (id : Nat) (group : ParameterGroup α)
     (buffers : Option (ParameterBuffers α s)) (parameters gradient : Tensor α s) :
-    Tensor α s × Option (ParameterBuffers α s) :=
+    Tensor α s × Option (ParameterBuffers α s) × ParameterGroup α :=
   match algorithm with
-  | .sgd => (sgd group parameters gradient, none)
-  | .momentum => let r := momentum group buffers parameters gradient; (r.1, some r.2)
-  | .adagrad => let r := adagrad group buffers parameters gradient; (r.1, some r.2)
-  | .rmsprop => let r := rmsprop group buffers parameters gradient; (r.1, some r.2)
-  | .adam => let r := adam group buffers parameters gradient; (r.1, some r.2)
-  | .adamw => let r := adamw group buffers parameters gradient; (r.1, some r.2)
-  | .adadelta => let r := adadelta group buffers parameters gradient; (r.1, some r.2)
+  | .sgd => (sgd group parameters gradient, none, group)
+  | .momentum => let r := momentum group buffers parameters gradient; (r.1, some r.2, group)
+  | .adagrad => let r := adagrad group buffers parameters gradient; (r.1, some r.2, group)
+  | .rmsprop => let r := rmsprop group buffers parameters gradient; (r.1, some r.2, group)
+  | .adam =>
+      let r := adam id group buffers parameters gradient
+      (r.1, some r.2.1, r.2.2)
+  | .adamw =>
+      let r := adamw id group buffers parameters gradient
+      (r.1, some r.2.1, r.2.2)
+  | .adadelta => let r := adadelta group buffers parameters gradient; (r.1, some r.2, group)
 
 /-- Shape-check a gradient delivered as a shape-erased tensor against its parameter. -/
 def castGradient (id : Nat) (gradient : Spec.SomeTensor α) (s : Shape) : Result (Tensor α s) :=
   if h : gradient.shape = s then
-    pure (Tensor.castShape gradient.tensor h)
+    pure (gradient.cast h)
   else
     throw (tagError "optim" s!"gradient shape mismatch for id {id}")
 
@@ -602,19 +626,21 @@ def advanceSchedulers (parameterGroups : Array (ParameterGroup α)) : Array (Par
     { group with learningRate := learningRate, scheduler := scheduler })
 
 /--
-Build a map from parameter id to its `ParameterGroup`.
+Build a map from parameter id to its group index.
 
 Fails if an id appears in multiple groups (PyTorch also disallows overlapping param groups).
 -/
 def parameterGroupMap (parameterGroups : Array (ParameterGroup α)) :
-    Result (Std.HashMap Nat (ParameterGroup α)) := do
-  let mut groupByParameterId : Std.HashMap Nat (ParameterGroup α) := {}
+    Result (Std.HashMap Nat Nat) := do
+  let mut groupByParameterId : Std.HashMap Nat Nat := {}
+  let mut groupIndex := 0
   for group in parameterGroups do
     for id in group.parameterIds do
       if groupByParameterId.contains id then
         throw (tagError "optim" s!"param id {id} appears in multiple groups")
       else
-        groupByParameterId := groupByParameterId.insert id group
+        groupByParameterId := groupByParameterId.insert id groupIndex
+    groupIndex := groupIndex + 1
   pure groupByParameterId
 
 end Internal
@@ -648,7 +674,7 @@ def step
     (parameters : ParameterTable α)
     (gradients : Std.HashMap Nat (Spec.SomeTensor α)) : Result (Step α) := do
   let parameterIds ← ParameterTable.Internal.checkedIdSet parameters
-  let parameterGroups := Internal.advanceSchedulers optimizerState.parameterGroups
+  let mut parameterGroups := Internal.advanceSchedulers optimizerState.parameterGroups
   let groupByParameterId ← Internal.parameterGroupMap parameterGroups
   for (id, _) in groupByParameterId.toList do
     if !parameterIds.contains id then
@@ -656,10 +682,12 @@ def step
   let mut parameterStates := optimizerState.parameterStates
   let mut updatedParameters : ParameterTable α := #[]
   for parameter in parameters do
-    let group ← match groupByParameterId.get? parameter.id with
-      | some group => pure group
+    let groupIndex ← match groupByParameterId.get? parameter.id with
+      | some groupIndex => pure groupIndex
       | none =>
           throw (tagError "optim" s!"no parameter group for id {parameter.id}")
+    let some group := parameterGroups[groupIndex]?
+      | throw (tagError "optim" s!"missing parameter group for id {parameter.id}")
     match gradients.get? parameter.id with
     | none =>
         updatedParameters := updatedParameters.push parameter
@@ -669,9 +697,10 @@ def step
         let buffers ← match parameterStates.get? parameter.id with
           | none => pure none
           | some state => some <$> state.cast parameter.id s
-        let (nextValue, nextBuffers) :=
-          Internal.updateParameter optimizerState.algorithm group buffers
+        let (nextValue, nextBuffers, nextGroup) :=
+          Internal.updateParameter optimizerState.algorithm parameter.id group buffers
             parameter.value.tensor gradient
+        parameterGroups := parameterGroups.set! groupIndex nextGroup
         if let some nextBuffers := nextBuffers then
           parameterStates :=
             parameterStates.insert parameter.id (ParameterState.ofBuffers nextBuffers)

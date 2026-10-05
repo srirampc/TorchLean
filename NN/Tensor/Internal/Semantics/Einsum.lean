@@ -8,6 +8,7 @@ module
 public import NN.Tensor.Internal.Check.Einsum
 public import Mathlib.Algebra.BigOperators.Fin
 public import NN.Tensor.Internal.Representation.Fiber -- shake: keep
+import Mathlib.Data.Matrix.Mul
 
 /-!
 # Algebraic semantics for einsum
@@ -25,9 +26,9 @@ The operand values are multiplied in source order and contracted coordinates
 are accumulated in row-major order. These ordered semantics require only
 `Mul`, `Add`, and scalar zero and one, so the same denotation applies to IEEE
 floating-point values without asserting false associativity or commutativity
-instances. When the scalar operations do form additive and multiplicative
-monoids, a theorem identifies the ordered denotation with the usual
-`Rep.push` fiber sum. Distributivity enters only in multilinearity
+instances. When scalar addition forms a commutative monoid, a theorem
+identifies the ordered denotation with the usual `Rep.push` fiber sum of
+ordered products. Distributivity enters only in multilinearity
 theorems, and commutative multiplication only in the selected-operand
 adjoint.
 
@@ -587,7 +588,7 @@ is independent of rank and operand count, making it suitable for relating
 symbolic einsum expressions to established finite-sum operations.
 -/
 theorem denoteEinsum_apply_reconstructed {R : Type u}
-    [Storage R] [AddCommMonoid R] [Monoid R]
+    [Storage R] [AddCommMonoid R] [Mul R] [OfNat R 1]
     (checked : CheckedEinsum)
     (inputTensors : checked.InputTensors R)
     (outputCoordinate : Coord checked.output)
@@ -653,11 +654,11 @@ theorem denoteEinsum_apply_reconstructed {R : Type u}
       reconstructedFiber_eq_candidate
 
 /--
-For lawful additive and multiplicative monoids, the ordered denotation is the
-usual fiber sum of source-ordered operand products.
+For lawful commutative addition, the ordered denotation is the usual fiber
+sum of source-ordered operand products. No multiplication laws are needed.
 -/
 theorem denoteEinsum_eq_push {R : Type u}
-    [Storage R] [AddCommMonoid R] [Monoid R]
+    [Storage R] [AddCommMonoid R] [Mul R] [OfNat R 1]
     (checked : CheckedEinsum) (inputTensors : checked.InputTensors R) :
     denoteEinsum checked inputTensors =
       Rep.push checked.outputCoordinateOfGlobal
@@ -770,8 +771,9 @@ operation-specific cases.
         (einsumOperandVjp checked inputTensors operand outputCotangent) := by
   have dot_comm {shape : Shape} (leftTensor rightTensor : Rep R shape) :
       Rep.dot leftTensor rightTensor =
-        Rep.dot rightTensor leftTensor := by
-    simp only [Rep.dot, mul_comm]
+        Rep.dot rightTensor leftTensor :=
+    dotProduct_comm (fun coordinate => leftTensor coordinate)
+      (fun coordinate => rightTensor coordinate)
   calc
     Rep.dot
           (denoteEinsum checked
@@ -895,7 +897,7 @@ Einsum partitions complete logical assignments by their output coordinate,
 so summing the output recovers the sum of all ordered operand products.
 -/
 @[grind =] theorem sum_denoteEinsum {R : Type u}
-    [Storage R] [AddCommMonoid R] [Monoid R]
+    [Storage R] [AddCommMonoid R] [Mul R] [OfNat R 1]
     (checked : CheckedEinsum) (inputTensors : checked.InputTensors R) :
     (∑ outputCoordinate, denoteEinsum checked inputTensors outputCoordinate) =
       ∑ globalCoordinate,

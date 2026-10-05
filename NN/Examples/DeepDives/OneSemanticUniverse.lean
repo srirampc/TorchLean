@@ -39,7 +39,7 @@ Notes:
 check.
 
 Run:
-  `lake exe torchlean one_semantic_universe --samples 50`
+  `scripts/lake.sh exe torchlean one_semantic_universe --samples 50`
 -/
 
 @[expose] public section
@@ -65,7 +65,7 @@ def usage : String :=
     [ "TorchLean one semantic universe tutorial"
     , ""
     , "Usage:"
-    , "  lake exe torchlean one_semantic_universe [options]"
+    , "  scripts/lake.sh exe torchlean one_semantic_universe [options]"
     , ""
     , "Options:"
     , "  --samples N"
@@ -123,8 +123,8 @@ def Parameters.map {α β : Type}
 /--
 Concrete parameters, written as small decimal literals.
 
-These are the only numbers in the file; every other instantiation is obtained from them by `map`, so
-the four semantics are guaranteed to be looking at the same network.
+The executable binary32 parameters are obtained from these host `Float` values by `Parameters.map`.
+Conversion may round coefficients; the graph structure and parameter layout remain fixed.
 -/
 def floatParameters : Parameters Float :=
   { hiddenWeight :=
@@ -216,6 +216,12 @@ def evaluateOutput
       (outputId := 5)
   NN.IR.Graph.expectShape (α := α) (expected := []) output
 
+/-- Propagate the tutorial graph using the endpoint operations of the inferred scalar type. -/
+def propagateBounds {α : Type} [Storage α] [Context α]
+    [BoundOps α] [NonlinearBoundOps α]
+    (parameters : ParamStore α) : Array (Option (FlatBox α)) :=
+  runIBP graph parameters
+
 /-!
 ### Proof-oriented instantiations
 
@@ -226,7 +232,7 @@ intended for reasoning rather than native execution.
 section ProofOnly
 
 /-- Evaluation over the reals: the mathematical meaning of the network, with no rounding at all. -/
-noncomputable def evaluateReal
+noncomputable example
     (parameters : Parameters ℝ) (input : Tensor ℝ input) :
     Except String (Tensor ℝ []) :=
   evaluateOutput (α := ℝ) parameters input
@@ -235,22 +241,22 @@ noncomputable def evaluateReal
 Evaluation over rounded reals: each operation rounds to nearest binary32, but the carrier is still
 `ℝ`, which is what makes the error proofs possible.
 -/
-noncomputable def evaluateFP32
+noncomputable example
     (parameters : Parameters TorchLean.Floats.FP32)
     (input : Tensor TorchLean.Floats.FP32 input) :
     Except String (Tensor TorchLean.Floats.FP32 []) :=
   evaluateOutput (α := TorchLean.Floats.FP32) parameters input
 
 /-- Interval bound propagation over the reals. -/
-noncomputable def propagateRealBounds
+noncomputable example
     (parameters : ParamStore ℝ) : Array (Option (FlatBox ℝ)) :=
-  runIBP (α := ℝ) graph parameters
+  propagateBounds parameters
 
 /-- The same propagation over rounded reals. -/
-noncomputable def propagateFP32Bounds
+noncomputable example
     (parameters : ParamStore TorchLean.Floats.FP32) :
     Array (Option (FlatBox TorchLean.Floats.FP32)) :=
-  runIBP (α := TorchLean.Floats.FP32) graph parameters
+  propagateBounds parameters
 
 end ProofOnly
 
@@ -337,7 +343,7 @@ def showIEEECheck (samples : Nat) : IO Unit := do
   -- Compute the IBP box with directed rounding via
   -- `BoundOps (FloatLib.Floats.ExecFloat.Binary 8 23)`.
   let parameters := parameterStore (α := (Binary 8 23)) ieeeParameters flatInputBox
-  let ibp := runIBP (α := (Binary 8 23)) graph parameters
+  let ibp := propagateBounds parameters
   let outEntry ←
     match ibp[5]? with
     | some outEntry => pure outEntry

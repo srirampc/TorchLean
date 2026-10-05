@@ -66,15 +66,6 @@ theorem softplusBounds_sound_real {lo hi outLo outHi x : ℝ}
   exact ⟨(max_le_max hxlo le_rfl).trans hsoft.1,
     hsoft.2.trans (add_le_add (max_le_max hxhi le_rfl) le_rfl)⟩
 
-/-- The reciprocal fallback for logarithm is valid on the entire positive real axis.
-
-It is deliberately coarse near zero. Its purpose is to give directed-arithmetic backends a usable
-enclosure even when they do not supply a correctly rounded logarithm transfer. -/
-theorem log_reciprocal_bounds_real {x : ℝ} (hx : 0 < x) :
-    1 - 1 / x ≤ Real.log x ∧ Real.log x ≤ x - 1 := by
-  simpa only [one_div] using
-    And.intro (Real.one_sub_inv_le_log_of_pos hx) (Real.log_le_sub_one_of_pos hx)
-
 /-- SafeLog encloses both its input and its scalar epsilon, without replacing epsilon by a default.
 
 Successful transfer establishes positivity of the lower logarithm argument. The proof uses that
@@ -103,7 +94,8 @@ theorem safeLogBounds_sound_real {lo hi epsilonLo epsilonHi outLo outHi x epsilo
 
 /-- A scalar enclosure lifts coordinatewise to the flat tensor representation.
 
-The transfer may fail on any coordinate. If it returns a box, `traverseFin` gives the corresponding
+The transfer may fail on any coordinate. If it returns a box, `Tensor.Internal.sequenceFinM` gives
+the corresponding
 successful scalar transfer at every index, so no unchecked default endpoints enter the proof. -/
 theorem enclosesBox_boxUnaryEnclosure {f : ℝ → ℝ}
     {enclose : ℝ → ℝ → Option (ℝ × ℝ)}
@@ -120,7 +112,7 @@ theorem enclosesBox_boxUnaryEnclosure {f : ℝ → ℝ}
   subst hDim
   simp only [castDimScalar_self] at hx
   unfold boxUnaryEnclosure? at hB
-  cases hb : Internal.traverseFin (fun i => enclose (lo.getScalar i) (hi.getScalar i)) with
+  cases hb : Tensor.Internal.sequenceFinM (fun i => enclose (lo.getScalar i) (hi.getScalar i)) with
   | none =>
       rw [hb] at hB
       cases hB
@@ -129,7 +121,7 @@ theorem enclosesBox_boxUnaryEnclosure {f : ℝ → ℝ}
       obtain rfl := Option.some.inj hB
       refine ⟨rfl, ?_⟩
       intro i
-      have hiB := Internal.traverseFin_eq_some_iff.mp hb i
+      have hiB := Tensor.Internal.sequenceFinM_get_of_eq_some hb i
       simpa using hEnclose hiB (hx i).1 (hx i).2
 
 /-- The executable softplus box transfer encloses the real tensor specification. -/

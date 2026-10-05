@@ -21,8 +21,7 @@ import ProofWidgets.Component.HtmlDisplay
 
 Training/testing loop visualizations (logs, curves, and small reports).
 
-TorchLean’s core runtime and specs are purely mathematical; "training loops" are just repeated
-application of an update rule. In practice, the first thing you want when debugging training is:
+When debugging a training loop, it helps to inspect the values recorded after each update:
 
 - a loss curve (did it decrease? did it blow up?),
 - a few scalar metrics (accuracy, learning rate, gradient norm),
@@ -379,7 +378,7 @@ macro "#train_log_file_view " path:term : command =>
           </div>
           <div style={json% {"margin-top": "6px", "opacity": "0.9"}}>
             {.text "Tip: this file is usually produced by a TorchLean executable training run. "}
-            {.text "Run the matching `lake exe ...` command (often with `-- --log <path>`), "}
+            {.text "Run the matching `scripts/lake.sh exe torchlean ... --log <path>` command, "}
             {.text "or pass an absolute path here."}
           </div>
           <div style={json% {"margin-top": "6px"}}>

@@ -34,7 +34,7 @@ step equation, with or without the `crownNodeSemanticsSupported` guard. -/
 theorem fallback_sound {ibp : Array (Option (FlatBox ℝ))} {vals : Array (Option Val)}
     {ctx : AffineCtx} {x : Tensor ℝ [ctx.inputDim]} {id : Nat} {B0 : FlatBox ℝ}
     {b : FlatAffineBounds ℝ} {v : Val}
-    (hib : ibp[id]! = some B0) (hb : Cert.boundsConst (α := ℝ) ctx.inputDim B0.dim B0.lo B0.hi = b)
+    (hib : ibp[id]! = some B0) (hb : Graph.boundsConst (α := ℝ) ctx.inputDim B0.dim B0.lo B0.hi = b)
     (hv : vals[id]! = some v) (hlt : id < vals.size)
     (hibp : IBPEnclosesVals (ibp := ibp) (vals := vals)) :
     EnclosesAtInput (α := ℝ) ctx x b v := by

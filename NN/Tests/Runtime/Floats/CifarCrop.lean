@@ -7,7 +7,7 @@ Authors: TorchLean Team
 module
 
 public import NN.Examples.Models.Common.RealData
-public import NN.Tests.Runtime.Floats.Utils
+public import NN.Tests.Utils
 
 /-!
 # Packed CIFAR Crop Check
@@ -25,7 +25,6 @@ namespace CifarCrop
 open TorchLean
 open NN.Examples.Models
 open Tests.Utils
-open Tests.Floats.Utils
 
 def input : Tensor Float [1, RealData.cifarChannels, RealData.cifarHeight, RealData.cifarWidth] :=
   Tensor.generateFlat [1, RealData.cifarChannels, RealData.cifarHeight, RealData.cifarWidth]

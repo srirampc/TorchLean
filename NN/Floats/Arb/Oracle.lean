@@ -165,30 +165,18 @@ def oracleScriptPath : String :=
   "NN/Floats/Arb/arb_oracle.py"
 
 /--
-Resolve which Python executable to use.
-
-In words: if the environment variable `TORCHLEAN_ARB_PY` is set, use it; otherwise fall
-back to the provided `pythonCmd` (default: `"python3"`).
--/
-def resolvePythonCmd (pythonCmd : String) : IO String := do
-  -- Allow a project-wide override for non-default python environments.
-  TorchLean.External.Process.resolveCmdFromEnv "TORCHLEAN_ARB_PY" pythonCmd
-
-/--
 Run the oracle script as a subprocess and parse its stdout as JSON.
 
 This is the shared IO boundary used by both unary queries and general JSON requests.
 -/
 def runPythonJson (pythonCmd : String) (args : Array String) : IO Json := do
-  let pythonCmd ← resolvePythonCmd pythonCmd
-  TorchLean.External.Process.runJsonStdoutChecked (ctx := "Arb oracle")
+  let pythonCmd ← TorchLean.External.Process.resolveCmdFromEnv "TORCHLEAN_ARB_PY" pythonCmd
+  TorchLean.External.Process.runJson (ctx := "Arb oracle")
     (cmd := pythonCmd) (args := args) (cwd := some ".")
 
 /-- Internal JSON helper: interpret a JSON string as a `String`, or return an error. -/
 def jsonToString (j : Json) : Except String String :=
-  match j with
-  | .str s => .ok s
-  | _ => .error s!"Expected string, got {j}"
+  j.getStr?.mapError fun _ => s!"Expected string, got {j}"
 
 /--
 Internal JSON helper: interpret a JSON number as a `Nat`, or return an error.
@@ -198,7 +186,7 @@ The oracle schema uses Nats only for metadata fields such as precision/digits.
 def jsonToNat (j : Json) : Except String Nat :=
   match j with
   | .num n =>
-    -- `Json.num` stores a `Scientific` number. The oracle schema uses natural numbers here, so
+    -- `Json.num` stores a `JsonNumber`. The oracle schema uses natural numbers here, so
     -- parsing from the decimal representation is sufficient (and keeps this helper
     -- dependency-free).
     match n.toString.toNat? with
@@ -220,12 +208,15 @@ def jsonToIntFromStringKey (o : Json) (k : String) : Except String Int := do
 /--
 Parse an Arb `mid_rad_10exp` object into `MidRad10Exp`.
 
-In words: this reads the exact integer encoding of an interval ball.
+In words: this reads the exact integer encoding of an interval ball. A negative radius is
+rejected, since it would describe a reversed interval.
 -/
 def parseMidRad10Exp (j : Json) : Except String MidRad10Exp := do
   let mid ← jsonToIntFromStringKey j "mid"
   let rad ← jsonToIntFromStringKey j "rad"
   let exp ← jsonToIntFromStringKey j "exp"
+  if rad < 0 then
+    throw s!"Expected a nonnegative Arb radius, got {rad}"
   pure { mid, rad, exp }
 
 /--
@@ -346,27 +337,6 @@ def run (q : Query) (pythonCmd : String := "python3") : IO Result := do
   | .error msg => throw <| IO.userError s!"Arb oracle result parse error: {msg}\njson:\n{j}"
 
 /--
-Ensure the temp directory used for request files exists.
-
-We write request JSON payloads to `.lake/build/tmp/` so they are available for debugging if the
-oracle subprocess fails or its output cannot be parsed. On success, we delete the file unless
-`TORCHLEAN_ARB_KEEP_TMP` is set.
--/
-def ensureTmpDir : IO Unit :=
-  IO.FS.createDirAll ".lake/build/tmp"
-
-/-- Return `true` iff request payload files should be kept on disk even on success. -/
-def keepTmpRequests : IO Bool := do
-  pure <| (← IO.getEnv "TORCHLEAN_ARB_KEEP_TMP") |>.isSome
-
-/-- Best-effort file removal helper (ignore errors). -/
-def tryRemoveFile (path : System.FilePath) : IO Unit := do
-  try
-    IO.FS.removeFile path
-  catch _ =>
-    pure ()
-
-/--
 Generate a fresh request filepath for an Arb oracle payload.
 
 In words: use the current monotone time in milliseconds plus a random suffix to reduce
@@ -388,22 +358,22 @@ This respects `TORCHLEAN_ARB_PY` (if set) to choose the Python executable.
 -/
 def runRequestJson (req : Json) (precBits : Nat := 200) (digits : Nat := 50)
     (pythonCmd : String := "python3") : IO Json := do
-  ensureTmpDir
+  IO.FS.createDirAll ".lake/build/tmp"
   let path ← freshReqPath
   IO.FS.writeFile path req.pretty
-  try
-    let j ← runPythonJson pythonCmd #[
-      oracleScriptPath,
-      "--request", path.toString,
-      "--prec-bits", toString precBits,
-      "--digits", toString digits
-    ]
-    if !(← keepTmpRequests) then
-      tryRemoveFile path
-    pure j
-  catch e =>
-    -- Keep the request payload on disk for debugging.
-    throw e
+  -- Subprocess and raw JSON failures retain the request; typed parsing happens after cleanup.
+  let j ← runPythonJson pythonCmd #[
+    oracleScriptPath,
+    "--request", path.toString,
+    "--prec-bits", toString precBits,
+    "--digits", toString digits
+  ]
+  if (← IO.getEnv "TORCHLEAN_ARB_KEEP_TMP").isNone then
+    try
+      IO.FS.removeFile path
+    catch _ =>
+      pure ()
+  pure j
 
 /--
 Parse an `expr` response payload into `ExprResult`.
@@ -426,10 +396,7 @@ def parseMLPResult (j : Json) : Except String MLPResult := do
   let output ← j.getObjVal? "output"
   let vec ← output.getObjVal? "vector"
   let arr ← vec.getArr?
-  let out ← arr.mapM (fun yi => do
-    let (ball, lo, hi) ← parseBallLoHi yi
-    pure (ball, lo, hi)
-  )
+  let out ← arr.mapM parseBallLoHi
   pure { precBits, digits, output := out }
 
 /--

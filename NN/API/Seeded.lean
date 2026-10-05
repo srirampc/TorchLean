@@ -41,13 +41,13 @@ abbrev Builder := rand.SeedM
 
 namespace functional
 export Runtime.Autograd.Model.F
-  (square checkpoint
+  (square
    exp sin cos log scale shift affine
    detach
    addB mulB
    embedding mean
    dropoutSeeded
-   fft rfft1d irfft1d selectiveScanDiag selectiveScanDiagVar spectralConv1dRfft SpectralPath)
+   fft rfft irfft selectiveScanDiag selectiveScanDiagVar spectralConv SpectralPath)
 end functional
 
 open Spec TorchLean
@@ -173,18 +173,9 @@ def relu {shape : Shape} : Builder (Sequential shape shape) :=
 def silu {shape : Shape} : Builder (Sequential shape shape) :=
   pure (activation (s := shape) .silu)
 
-/--
-Build tanh-approximate GELU without consuming an initialization seed.
-
-This retains the historical `nn.gelu` behavior. `geluTanh` names the same formula explicitly.
-Erf-based GELU is not supported by the scalar operation interface.
--/
+/-- Build GELU's cubic tanh approximation without consuming an initialization seed. -/
 def gelu {shape : Shape} : Builder (Sequential shape shape) :=
   pure (activation (s := shape) .gelu)
-
-/-- Explicit constructor for GELU's cubic tanh approximation. -/
-def geluTanh {shape : Shape} : Builder (Sequential shape shape) :=
-  gelu
 
 /-- Build an elementwise sigmoid layer without consuming an initialization seed. -/
 def sigmoid {shape : Shape} : Builder (Sequential shape shape) :=
@@ -394,21 +385,6 @@ def gru (sequenceLength inputWidth hiddenWidth : Nat) (batchShape : Shape := [])
                 (Sequential.fromLayer <| Runtime.Autograd.Model.Layers.gruResetAfter
                   sequenceLength inputWidth hiddenWidth inputWeightSeed hiddenWeightSeed)
 
-/--
-Load one reset-after GRU cell's parameters and share it over every batch position.
-
-Pass `Spec.GRUResetAfterSpec.ofPyTorch weightIH weightHH biasIH biasHH`. The gate order and
-matrix layout are retained, and no initialization seeds are consumed.
--/
-def gruFromPyTorch (sequenceLength : Nat) {inputWidth hiddenWidth : Nat}
-    (parameters : Spec.GRUResetAfterSpec Float inputWidth hiddenWidth)
-    (batchShape : Shape := []) :
-    Builder (Sequential
-      ((batchShape.appendDim sequenceLength).appendDim inputWidth)
-      ((batchShape.appendDim sequenceLength).appendDim hiddenWidth)) :=
-  pure <| Impl.batchedRecurrent batchShape <| Sequential.fromLayer <|
-    Runtime.Autograd.Model.Layers.gruFromPyTorch sequenceLength parameters
-
 /-- Build a seeded selective Mamba layer, shared over every index in `batchShape`. -/
 def mamba (sequenceLength inputWidth hiddenWidth : Nat) (batchShape : Shape := [])
     (options : Runtime.Autograd.Model.Mamba.Options := {}) :
@@ -573,7 +549,12 @@ def groupNorm {d channels : Nat}
       (batchShape.concat ((spatial.to Shape).prependDim channels))) :=
   pure <| Impl.groupNorm batchShape spatial groups (eps := eps) (affine := affine) (bias := bias)
 
-/-- Build an embedding lookup layer from a freshly seeded embedding table. -/
+/--
+Build an embedding layer for dense vocabulary weights.
+
+One-hot inputs select a table row; other inputs form weighted combinations of rows.
+For token indices, use `embedding` instead, without constructing one-hot tensors.
+-/
 def oneHotEmbedding (vocabularySize embeddingWidth : Nat)
     (config : Embedding.Config := {})
     (batchShape : Shape := []) :
@@ -592,7 +573,7 @@ def oneHotEmbedding (vocabularySize embeddingWidth : Nat)
           (batchShape := batchShape)
 
 /--
-Build a trainable lookup table for a tensor of natural-number indices.
+Build a lookup table for bounded token indices of type `Fin vocabularySize`.
 
 Example:
 ```lean
@@ -644,7 +625,7 @@ def rope (batchShape : Shape := []) {sequenceLength headWidth : Nat}
       pure <| Impl.rope batchShape
         (sequenceLength := sequenceLength) (headWidth := headWidth) config
 
-/-- Build learned positional embeddings from a freshly allocated parameter seed. -/
+/-- Build learned positional embeddings, consuming a seed only for stochastic initialization. -/
 def learnedPositionalEmbedding (batchShape : Shape := [])
     {sequenceLength embeddingWidth : Nat}
     (config : LearnedPositionalEmbedding.Config := {}) :
@@ -709,18 +690,18 @@ Example:
 -- Two heads of width 4 give an internal attention width of 8, which here happens to match the
 -- model width; the two are independent, so `headCount * headWidth` may differ from it.
 def model : nn.Builder (nn.Sequential [4, 8] [4, 8]) :=
-  nn.multiHeadAttention { headCount := 2, headWidth := 4 }
+  nn.attention { headCount := 2, headWidth := 4 }
     (sequenceLength := 4) (modelWidth := 8)
 
 -- Causal masking is a separate argument rather than a config field, because the mask is a value
 -- with the sequence length in its type.
 def causal : nn.Builder (nn.Sequential [4, 8] [4, 8]) :=
-  nn.multiHeadAttention { headCount := 2, headWidth := 4 }
+  nn.attention { headCount := 2, headWidth := 4 }
     (mask := some (Spec.causalMask 4)) (sequenceLength := 4) (modelWidth := 8)
 ```
 -/
-def multiHeadAttention {sequenceLength modelWidth : Nat}
-    (config : MultiHeadAttention.Config)
+def attention {sequenceLength modelWidth : Nat}
+    (config : Attention.Options)
     (mask : Option (Tensor Bool [sequenceLength, sequenceLength]) := none)
     (batchShape : Shape := []) :
     Builder (Sequential
@@ -742,7 +723,7 @@ def multiHeadAttention {sequenceLength modelWidth : Nat}
           withInitializationSeed projectionInitialization fun valueWeightSeed =>
             withInitializationSeed outputInitialization fun outputWeightSeed =>
               withOptionalDropoutSeed config.dropout? fun dropoutSeed =>
-                pure <| Impl.multiHeadAttention batchShape
+                pure <| Impl.attention batchShape
                   (sequenceLength := sequenceLength) (modelWidth := modelWidth)
                   config
                   (queryWeightSeed := queryWeightSeed)

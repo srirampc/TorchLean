@@ -21,7 +21,7 @@ Reusable PyTorch weight-import surface.
 The general import path is JSON-first:
 
 1. PyTorch loads the original checkpoint / `state_dict`.
-2. The adapter emitted by `NN.Runtime.PyTorch.Export.StateDict` writes nested-list JSON.
+2. A caller-supplied Python script writes the tensors as nested-list JSON.
 3. `Import.Core` parses that JSON into shape-checked TorchLean tensors.
 
 For graphs, the matching path is:

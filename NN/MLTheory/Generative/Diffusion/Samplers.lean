@@ -6,7 +6,6 @@ Authors: TorchLean Team
 
 module
 
-import Mathlib.Tactic.Positivity.Finset
 public import NN.Proofs.Analysis.Lipschitz.Norm
 public import NN.Spec.Generative.Diffusion.PFODE
 public import NN.Spec.Generative.Diffusion.ReverseDDIM
@@ -126,7 +125,7 @@ theorem eulerStep_l2_distance_bound
         |dt| * NN.MLTheory.Robustness.Spec.tensorDistance (α := ℝ)
           (fun {s} => Proofs.tensorL2Norm (s := s)) (f x t) (f y t) := by
   simp only [NN.MLTheory.Robustness.Spec.tensorDistance,
-    NN.MLTheory.Robustness.Spec.tensor_distance_tensor_sub_eq_sub_spec, eulerStep]
+    eulerStep]
   rw [sub_add_scaled_eq]
   calc
     Proofs.tensorL2Norm (addSpec (subSpec x y) (scaleSpec (subSpec (f x t) (f y t)) dt))
@@ -148,11 +147,11 @@ sampler.
 -/
 theorem eulerStep_l2_lipschitz_of_rhs_lipschitz
     (f : Tensor ℝ s → ℝ → Tensor ℝ s) (t dt L : ℝ)
-    (h : NN.MLTheory.Robustness.Spec.isLipschitzContinuous (α := ℝ)
+    (h : NN.MLTheory.Robustness.Spec.IsLipschitzContinuous (α := ℝ)
       (fun x : Tensor ℝ s => f x t)
       (fun {s} => Proofs.tensorL2Norm (s := s))
       (fun {s} => Proofs.tensorL2Norm (s := s)) L) :
-    NN.MLTheory.Robustness.Spec.isLipschitzContinuous (α := ℝ)
+    NN.MLTheory.Robustness.Spec.IsLipschitzContinuous (α := ℝ)
       (fun x : Tensor ℝ s => eulerStep (α := ℝ) (s := s) f x t dt)
       (fun {s} => Proofs.tensorL2Norm (s := s))
       (fun {s} => Proofs.tensorL2Norm (s := s)) (1 + |dt| * L) := by
@@ -192,11 +191,11 @@ trajectories. This is the theorem downstream PF-ODE certificates should target f
 -/
 theorem pfOdeEulerSystem_l2_lipschitz_of_rhs_lipschitz
     (sch : VPLinearSchedule ℝ) (model : EpsModel ℝ s) (t dt L : ℝ)
-    (h : NN.MLTheory.Robustness.Spec.isLipschitzContinuous (α := ℝ)
+    (h : NN.MLTheory.Robustness.Spec.IsLipschitzContinuous (α := ℝ)
       (fun x : Tensor ℝ s => pfOdeRhs (α := ℝ) (s := s) sch model x t)
       (fun {s} => Proofs.tensorL2Norm (s := s))
       (fun {s} => Proofs.tensorL2Norm (s := s)) L) :
-    NN.MLTheory.Robustness.Spec.isLipschitzContinuous (α := ℝ)
+    NN.MLTheory.Robustness.Spec.IsLipschitzContinuous (α := ℝ)
       (pfOdeEulerSystem (s := s) sch model t dt).step
       (fun {s} => Proofs.tensorL2Norm (s := s))
       (fun {s} => Proofs.tensorL2Norm (s := s)) (1 + |dt| * L) := by
@@ -217,10 +216,10 @@ TorchLean.
 theorem ddimStepSystem_lipschitz_of_step_lipschitz
     (sched : VPSchedule SpecScalar T) (model : EpsModel SpecScalar s) (k : Fin T)
     (norm : ∀ {s : Shape}, SpecTensor s → SpecScalar) (L : SpecScalar)
-    (h : NN.MLTheory.Robustness.Spec.isLipschitzContinuous
+    (h : NN.MLTheory.Robustness.Spec.IsLipschitzContinuous
       (fun x : SpecTensor s => ddimStep (α := SpecScalar) (T := T) (s := s) sched model k x)
       norm norm L) :
-    NN.MLTheory.Robustness.Spec.isLipschitzContinuous
+    NN.MLTheory.Robustness.Spec.IsLipschitzContinuous
       (ddimStepSystem (T := T) (s := s) sched model k).step norm norm L := by
   simpa [ddimStepSystem]
 
@@ -235,12 +234,12 @@ IBP/CROWN on the vector field) to the reusable `trajectory` and `iterate` defini
 theorem pfOdeEulerSystem_lipschitz_of_step_lipschitz
     (sch : VPLinearSchedule SpecScalar) (model : EpsModel SpecScalar s) (t dt : SpecScalar)
     (norm : ∀ {s : Shape}, SpecTensor s → SpecScalar) (L : SpecScalar)
-    (h : NN.MLTheory.Robustness.Spec.isLipschitzContinuous
+    (h : NN.MLTheory.Robustness.Spec.IsLipschitzContinuous
       (fun x : SpecTensor s =>
         eulerStep (α := SpecScalar) (s := s)
           (pfOdeRhs (α := SpecScalar) (s := s) sch model) x t dt)
       norm norm L) :
-    NN.MLTheory.Robustness.Spec.isLipschitzContinuous
+    NN.MLTheory.Robustness.Spec.IsLipschitzContinuous
       (pfOdeEulerSystem (s := s) sch model t dt).step norm norm L := by
   simpa [pfOdeEulerSystem]
 
@@ -254,7 +253,7 @@ follows without re-opening the sampler definition.
 theorem ddimStepSystem_contracts_of_step_contracts
     (sched : VPSchedule SpecScalar T) (model : EpsModel SpecScalar s) (k : Fin T)
     (norm : ∀ {s : Shape}, SpecTensor s → SpecScalar) (factor : SpecScalar)
-    (h : NN.MLTheory.Robustness.Spec.isContractive (α := SpecScalar)
+    (h : NN.MLTheory.Robustness.Spec.IsContractive (α := SpecScalar)
       (fun x : SpecTensor s => ddimStep (α := SpecScalar) (T := T) (s := s) sched model k x)
       norm factor) :
     Spec.Dynamics.isContractive (ddimStepSystem (T := T) (s := s) sched model k)
@@ -274,7 +273,7 @@ sampler trajectories.
 theorem pfOdeEulerSystem_contracts_of_step_contracts
     (sch : VPLinearSchedule SpecScalar) (model : EpsModel SpecScalar s) (t dt : SpecScalar)
     (norm : ∀ {s : Shape}, SpecTensor s → SpecScalar) (factor : SpecScalar)
-    (h : NN.MLTheory.Robustness.Spec.isContractive (α := SpecScalar)
+    (h : NN.MLTheory.Robustness.Spec.IsContractive (α := SpecScalar)
       (fun x : SpecTensor s =>
         eulerStep (α := SpecScalar) (s := s)
           (pfOdeRhs (α := SpecScalar) (s := s) sch model) x t dt)

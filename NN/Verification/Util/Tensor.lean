@@ -99,11 +99,6 @@ def matOfArray (rows cols : Nat) (xs : Array (Array Float)) :
   else
     none
 
-/-- Convert a vector tensor to a float array. -/
-def vecToArray {n : Nat} {storage : TorchLean.Storage Float}
-    (x : @Tensor Float [n] storage) : Array Float :=
-  Tensor.to x (Array Float)
-
 /-- Load a length-checked vector tensor from a JSON float array, or raise a schema error. -/
 def requireVecOfArray (ctx : String) (n : Nat) (xs : Array Float) :
     IO (Tensor Float [n]) := do

@@ -18,8 +18,9 @@ file := "Why-Execution-Alone-Is-Not-Enough"
 Suppose a classifier returns class `3` on an image. We have learned what happened at one point. A
 robustness claim asks a larger question: does class `3` remain ahead of every competitor throughout
 a whole neighborhood of that image? That question is the one adversarial examples made unavoidable
-{Informal.citep szegedy2014}[], because the neighbors that flip the answer are usually invisible to
-the eye and may be absent from a test set.
+{Informal.citep szegedy2014}[], because nearby inputs that flip the answer can be hard to
+distinguish
+by eye and may be absent from a test set.
 
 The difference is visible in the quantifiers. Let $`f_\theta(x)` be the vector of class scores
 for parameters $`\theta`, and let $`c_\theta(x)` select a class with maximal score, using a fixed
@@ -300,10 +301,10 @@ repository root:
 ```terminal
 # Lower the fixed small MLP and propagate the input box
 # through its graph.
-lake exe verify -- torchlean-ibp
+scripts/lake.sh exe verify -- torchlean-ibp
 ```
 
-It prints:
+A recorded run printed:
 
 ```terminal +output
 === TorchLean → IR → IBP (small MLP) workflow ===
@@ -554,7 +555,7 @@ input box through the reference IEEE binary32 semantics instead of the host's na
 changes the answer:
 
 ```terminal +output
-$ lake exe verify -- torchlean-ibp --arithmetic=ieee
+$ scripts/lake.sh exe verify -- torchlean-ibp --arithmetic=ieee
 === TorchLean → IR → IBP (small MLP) workflow ===
 [TorchLean] arithmetic: IEEE-754 binary32 reference
 lowered IR nodes: 18
@@ -728,16 +729,16 @@ The command
 ```terminal
 # Discover the workflow names before choosing the checker
 # and its artifact.
-lake exe verify -- list
+scripts/lake.sh exe verify -- list
 ```
 
-shows the executable verification workflows in the current checkout, one line each:
+lists the executable verification workflows in the current checkout. Selected entries include:
 
 ```
   lirpa-mlp [<path>]   -- IBP cert: feed-forward MLP
   lirpa-attention [<path>]   -- IBP cert: attention softmax block
   pinn-cert [<path>]   -- PINN certificate recomputation check
-  abcrown-leaf [<path>]   -- α,β-CROWN leaf artifact structural check
+  abcrown-leaf [<path>]   -- α,β-CROWN leaf artifact consistency check (no bound recheck)
   torchlean-ibp   -- TorchLean → IR → IBP workflow (MLP)
   torchlean-crown-ops   -- TorchLean → IR → IBP+CROWN workflow
   ode   -- ODE enclosure verification (sub/super NN bounds)

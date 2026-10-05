@@ -6,8 +6,6 @@ Authors: TorchLean Team
 
 module
 
-public import NN.API.CLI
-
 /-!
 # Generated Tutorial Dataset Paths
 
@@ -15,11 +13,9 @@ TorchLean tutorials can generate deterministic sample datasets under `NN/Example
 This module centralizes:
 
 - the default data directory,
-- the file paths of the generated sample datasets, and
-- a CLI helper for overriding the directory via `--data-dir`.
+- the file paths of the generated sample datasets.
 
-Keeping these paths in one module keeps tutorial code from hardcoding filenames or reimplementing
-the same flag parsing in each example.
+The examples use the shared CLI parser to override this directory with `--data-dir`.
 -/
 
 @[expose] public section

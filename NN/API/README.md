@@ -67,7 +67,7 @@ def data := Data.fromTensors inputs targets
 
 def trainer :=
   Trainer.new model
-    { objective := .meanSquaredError
+    { objective := .mse
       optimizer := optim.adam { learningRate := 0.03 }
       seed := 2026 }
 
@@ -176,7 +176,7 @@ let (gradient, value) ← autograd.grad loss x (value := true)
 uses a tensor function with no model parameters.
 
 ```lean
-let state := autograd.model.initialState model
+let state := nn.initialState model
 let (gradient, lossValue) ←
   autograd.model.grad model lossFn state input target (value := true)
 ```
@@ -211,10 +211,13 @@ Lower the architecture with `nn.lowerToTypedGraph model (α := Scalar)`, then us
 derivative retain `1 + 2^-100`. `NN/Tests/API/Precision.lean` supplies maintained checks at
 several widths and native controls.
 
-This path uses CPU software arithmetic. The supervised trainer's data, reports, checkpoints and
-default initialization pass through `Float`; selecting a wide scalar does not extend those
-boundaries or CUDA kernels. Configured transcendental functions use FloatLib's deterministic
-approximations, without a general accuracy theorem for `exp`, `log`, or their derivatives.
+This path uses CPU software arithmetic. `trainer.openTyped` also retains the selected scalar
+for samples, predictions, state, losses, and exact checkpoints. The ordinary `trainer.open`
+and `trainer.train` paths use binary32 execution and `Float` boundaries. Default seeded
+initialization and trainer coefficients still originate in `Float`; selecting a wide scalar
+does not recover discarded bits or extend CUDA kernels. Configured transcendental functions use
+FloatLib's deterministic approximations, without a general accuracy theorem for `exp`, `log`, or
+their derivatives.
 The default safeguard rounds `1/1000000`, falling back to the smallest positive subnormal when
 that rounds to zero. In a tiny format this may be large; choose explicit tolerances for the problem.
 Normalization separately rounds the exact rational `1/100000`, which remains nonzero in binary16.
@@ -243,9 +246,9 @@ Advanced tools remain explicit:
 Start with the runnable learning path:
 
 ```bash
-lake exe torchlean quickstart_tensors
-lake exe torchlean quickstart_autograd
-lake exe torchlean quickstart_mlp --steps 20
+scripts/lake.sh exe torchlean quickstart_tensors
+scripts/lake.sh exe torchlean quickstart_autograd
+scripts/lake.sh exe torchlean quickstart_mlp --steps 20
 ```
 
 Detailed subsystem guides:

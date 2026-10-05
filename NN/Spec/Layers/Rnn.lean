@@ -60,11 +60,12 @@ We use a single weight matrix applied to a concatenated vector `[x_t; h_{t-1}]`:
 
 `h_t = tanh(W [x_t; h_{t-1}] + b)`.
 
-This is equivalent to the common split-parameter form:
+Over exact arithmetic this is equivalent to the common split-parameter form:
 
 `h_t = tanh(W_ih x_t + W_hh h_{t-1} + b)`,
 
-just packaged to reuse the same tensor primitives elsewhere in TorchLean.
+The fused implementation uses one dot-product accumulation across input and hidden coordinates.
+Two separately rounded products and their sum need not give identical IEEE results.
 -/
 structure RNNSpec (α : Type) [TorchLean.Storage α]
     (inputSize hiddenSize : Nat) where
@@ -101,9 +102,7 @@ def rnnCellSpec {inputSize hiddenSize : Nat}
 Parameter gradients for an `RNNSpec` cell.
 
 The cell holds a single weight matrix applied to `[x_t; h_{t-1}]` plus a bias, so this pair is the
-whole parameter gradient. The seq2seq baseline in `NN/Spec/Models/Seq2seq.lean` used to declare its
-own identical copy of this record; sharing one means an encoder gradient and a decoder gradient have
-the same type.
+whole parameter gradient. Encoder and decoder cells use the same record.
 
 PyTorch analogue: `(cell.weight_ih.grad, cell.weight_hh.grad)` fused into one matrix, plus the bias
 gradient.
@@ -203,65 +202,6 @@ def rnnSequenceSpec {seqLen inputSize hiddenSize : Nat}
     (hidden, hidden)
   Tensor.dim outputs.getScalar
 
-/-- Batched RNN forward pass (maps `rnnSequenceSpec` over the batch dimension). -/
-def rnnBatchedSpec {batchSize seqLen inputSize hiddenSize : Nat}
-  (rnn : RNNSpec α inputSize hiddenSize)
-  (inputs : Tensor α [batchSize, seqLen, inputSize])
-  (initialHidden : Tensor α [batchSize, hiddenSize]) :
-  Tensor α [batchSize, seqLen, hiddenSize] :=
-  Tensor.dim (fun b =>
-    rnnSequenceSpec rnn (Tensor.unstack inputs b) (Tensor.unstack initialHidden b))
-
-/--
-Gradient w.r.t. weights from a full unroll, given per-step preactivation gradients.
-
-This helper is for analyses that already have preactivation gradients. It assumes:
-- the initial hidden state is `0`, and
-- `gradOutputs[t]` is already `dL/dz_t` (preactivation gradient).
-
-For end-to-end BPTT from `dL/dh_t`, prefer `rnnSequenceBackwardSpec`.
--/
-def rnnWeightsDerivSpec {seqLen inputSize hiddenSize : Nat}
-  (inputs : Tensor α [seqLen, inputSize])
-  (hiddens : Tensor α [seqLen, hiddenSize])
-  (gradOutputs : Tensor α [seqLen, hiddenSize]) :
-  Tensor α [hiddenSize, inputSize + hiddenSize] :=
-  -- Assumes initial hidden state is 0 (matches the default module wrappers).
-  -- Assumes `gradOutputs` is the preactivation gradient at each timestep.
-  -- For full BPTT from post-activation gradients, use `rnnSequenceBackwardSpec`.
-  let rec accumulate_grads (t : Nat) (acc : Tensor α [hiddenSize, inputSize + hiddenSize]) :
-      Tensor α [hiddenSize, inputSize + hiddenSize] :=
-    if h : t < seqLen then
-      let inputT := get inputs ⟨t, h⟩
-      let hiddenPrev :=
-        if ht : t > 0 then
-          have h_pred : t - 1 < t := by
-            simpa [Nat.pred_eq_sub_one] using Nat.pred_lt (Nat.ne_of_gt ht)
-          have h_t' : t - 1 < seqLen := lt_trans h_pred h
-          get hiddens ⟨t - 1, h_t'⟩
-        else
-          Tensor.full (.dim hiddenSize .scalar) 0
-      let gradPreactT := get gradOutputs ⟨t, h⟩
-      let concatT := concatAxisSpec .scalar inputT hiddenPrev
-      let gradWT := outerProductSpec gradPreactT concatT
-      accumulate_grads (t + 1) (addSpec acc gradWT)
-    else
-      acc
-  accumulate_grads 0 (Tensor.full (.dim hiddenSize (.dim (inputSize + hiddenSize) .scalar)) 0)
-
-/--
-Gradient w.r.t. bias from per-step preactivation gradients.
-
-This is `sum_t dL/dz_t` over the sequence dimension.
--/
-def rnnBiasDerivSpec {seqLen hiddenSize : Nat}
-  (gradOutputs : Tensor α [seqLen, hiddenSize])
-  (h : seqLen ≠ 0) :
-  Tensor α [hiddenSize] :=
-  -- Assumes `gradOutputs` is already the preactivation gradient.
-  -- For full RNN backprop, prefer `rnnSequenceBackwardSpec`.
-  reduceSum 0 gradOutputs (Shape.hasNonemptyAxisZeroOfNe h).proof
-
 /--
 Full BPTT backward pass through an RNN sequence.
 
@@ -270,6 +210,9 @@ This is the spec-level version of what PyTorch autograd computes for `nn.RNN` wh
 - we walk time in reverse,
 - accumulate parameter gradients,
 - and compute gradients for each input step plus the initial hidden state.
+
+`initialHidden` may be nonzero; it supplies the previous state at the first timestep. For an empty
+sequence, both parameter gradients and the gradient of that initial state are zero.
 
 ### Diagram: forward unroll + BPTT (vanilla RNN)
 

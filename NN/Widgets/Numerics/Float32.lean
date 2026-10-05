@@ -29,9 +29,9 @@ These widgets are meant for debugging/teaching, not for proof scripts.
 
 ## Main definitions
 
-- `float32Html`: inspect class/fields/bits for one `ExecFloat.Binary 8 23` value.
-- `float32RoundHtml`: show `Float64 -> Float32` rounding behavior.
-- `float32CompareHtml`: side-by-side bit-level comparison.
+- `Float32.html`: inspect class/fields/bits for one `ExecFloat.Binary 8 23` value.
+- `Float32.roundHtml`: show `Float64 -> Float32` rounding behavior.
+- `Float32.compareHtml`: side-by-side bit-level comparison.
 - `#float32_view`, `#float32_round_view`, `#float32_compare_view`: command entry points.
 -/
 
@@ -46,17 +46,11 @@ namespace NN.Widgets
 
 open UI
 
-namespace Float32Internal
+namespace Float32
 
-/-- Compact rendering of a 32-bit word for the bit-pattern pills. -/
-def u32Hex (u : UInt32) : String :=
-  "0x" ++ u.toBitVec.toHex
-
-/--
-The 64-bit counterpart, used when a widget shows a binary64 input alongside its float32 result.
--/
-def u64Hex (u : UInt64) : String :=
-  "0x" ++ u.toBitVec.toHex
+/-- Render a bit vector in hexadecimal, preserving the width encoded by its type. -/
+def hex {width : Nat} (bits : BitVec width) : String :=
+  "0x" ++ bits.toHex
 
 /-- Render exactly `width` low-order bits of `n` as a binary string. -/
 def bitsFixed (width : Nat) (n : Nat) : String :=
@@ -72,8 +66,7 @@ def bitsFixed (width : Nat) (n : Nat) : String :=
 /-- One labelled, colour-coded run of bits: the sign, exponent and fraction fields each get one.
 
 Colours are given as `rgba` overlays rather than solid fills so the widget stays readable against
-both
-light and dark editor themes. -/
+both light and dark editor themes. -/
 def bitPill (label bits : String) (bg : String) : ProofWidgets.Html :=
   let styleObj : Lean.Json :=
     Lean.Json.mkObj [
@@ -108,19 +101,14 @@ def classify (x : ExecFloat.Binary 8 23) : String :=
 
 /-- Render a dyadic rational as `±mantissa * 2^exponent`.
 
-This is the exact value of a finite float, written the way Flocq and Coq's `Fappli_IEEE` write it,
-so
-what the widget shows can be compared directly against the proofs. -/
+The significand and exponent come from FloatLib's decoded dyadic value; the sign is kept explicit
+even for zero. -/
 def dyadicString (d : FloatLib.Numerics.Dyadic) : String :=
   let sign := if d.negative then "-" else "+"
   s!"{sign}{d.significand} * 2^{d.exponent}"
 
-end Float32Internal
-
-open Float32Internal
-
 /-- Render an executable float32 (`ExecFloat.Binary 8 23`) as HTML. -/
-def float32Html (x : ExecFloat.Binary 8 23) : ProofWidgets.Html :=
+def html (x : ExecFloat.Binary 8 23) : ProofWidgets.Html :=
   let b := ExecFloat.Binary.toBits32 x
   let s := ExecFloat.Binary.signBit x
   let e := (ExecFloat.Binary.toModel x).expField
@@ -142,8 +130,8 @@ def float32Html (x : ExecFloat.Binary 8 23) : ProofWidgets.Html :=
   }}>
     <div style={json% {"display": "flex", "gap": "8px", "flex-wrap": "wrap", "margin-bottom":
       "10px"}}>
-      {pill "FloatLib binary32"} {pill s!"class={cls}"} {pill s!"bits={u32Hex b}"} {pill
-        s!"asFloat={toString f64}"}
+      {pill "FloatLib binary32"} {pill s!"class={cls}"} {pill s!"bits={hex b.toBitVec}"} {pill
+        s!"display(binary64)={toString f64}"}
     </div>
     <div style={json% {"display": "flex", "gap": "8px", "flex-wrap": "wrap", "margin-bottom":
       "10px"}}>
@@ -189,39 +177,43 @@ pattern.
 instance : TensorElemView (ExecFloat.Binary 8 23) :=
   ⟨fun x =>
     let b := ExecFloat.Binary.toBits32 x
-    let cls := Float32Internal.classify x
+    let cls := classify x
     let v := ExecFloat.Binary.toFloat <| ExecFloat.Binary.ofModel <|
       Model.cast FloatFormat.binary32 FloatFormat.binary64 (ExecFloat.Binary.toModel x)
-    let title := s!"class={cls}\nbits={Float32Internal.u32Hex b}\nasFloat={toString v}";
+    let title := s!"class={cls}\nbits={hex b.toBitVec}\ndisplay(binary64)={toString v}";
     <span title={title}>{monospace (toString v)}</span>⟩
 
-namespace Float32Internal
 
 /-- Compare two `ExecFloat.Binary 8 23` values at the bit level and render the results as HTML. -/
-def float32CompareHtml (x y : ExecFloat.Binary 8 23) : ProofWidgets.Html :=
+def compareHtml (x y : ExecFloat.Binary 8 23) : ProofWidgets.Html :=
   let bx := ExecFloat.Binary.toBits32 x
   let byBits := ExecFloat.Binary.toBits32 y
   let diff := bx ^^^ byBits
   let same := decide (bx = byBits);
   <div style={json% {"display": "grid", "grid-template-columns": "1fr", "gap": "10px"}}>
     <div style={json% {"display": "flex", "gap": "8px", "flex-wrap": "wrap"}}>
-      {pill "binary32 compare"} {pill s!"sameBits={same}"} {pill s!"xor={u32Hex diff}"}
+      {pill "binary32 compare"} {pill s!"sameBits={same}"} {pill s!"xor={hex diff.toBitVec}"}
     </div>
-    <div style={json% {"display": "grid", "grid-template-columns": "1fr 1fr", "gap": "10px"}}>
+    <div style={json% {"display": "grid",
+      "grid-template-columns": "repeat(auto-fit, minmax(min(100%, 340px), 1fr))",
+      "gap": "10px"}}>
       <div>
         <div style={json% {"margin-bottom": "6px"}}>{pill "x"}</div>
-        {float32Html x}
+        {html x}
       </div>
       <div>
         <div style={json% {"margin-bottom": "6px"}}>{pill "y"}</div>
-        {float32Html y}
+        {html y}
       </div>
     </div>
   </div>
 
 /-- Show how a Lean `Float` (binary64) rounds to an executable float32 (`ExecFloat.Binary 8 23`,
-binary32). -/
-def float32RoundHtml (x : Float) : ProofWidgets.Html :=
+binary32).
+
+The result is widened to native binary64 for its decimal display. The displayed difference is
+computed by native binary64 subtraction; it is not an exact-real error certificate. -/
+def roundHtml (x : Float) : ProofWidgets.Html :=
   let b64 : UInt64 := x.toBits
   let x32 : ExecFloat.Binary 8 23 := ExecFloat.Binary.ofModel <|
     Model.cast FloatFormat.binary64 FloatFormat.binary32
@@ -231,16 +223,16 @@ def float32RoundHtml (x : Float) : ProofWidgets.Html :=
   let err : Float := y - x;
   <span style={json% {"display": "grid", "grid-template-columns": "1fr", "gap": "10px"}}>
     <span style={json% {"display": "flex", "gap": "8px", "flex-wrap": "wrap"}}>
-      {pill "Float → binary32"}
-      {pill s!"input(Float64)={toString x}"}
-      {pill s!"inputBits={u64Hex b64}"}
-      {pill s!"rounded(Float32)={toString y}"}
-      {pill s!"roundingError={toString err}"}
+      {pill "native binary64 → FloatLib binary32"}
+      {pill s!"input(native binary64)={toString x}"}
+      {pill s!"inputBits={hex b64.toBitVec}"}
+      {pill s!"rounded(widened to binary64)={toString y}"}
+      {pill s!"difference(binary64)={toString err}"}
     </span>
-    {float32Html x32}
+    {html x32}
   </span>
 
-end Float32Internal
+end Float32
 
 /-!
 ## Commands
@@ -249,16 +241,16 @@ end Float32Internal
 syntax (name := float32ViewCmd) "#float32_view " term : command
 
 macro "#float32_view " x:term : command =>
-  UI.canonicalCommand <$> `(#html (float32Html $x))
+  UI.canonicalCommand <$> `(#html (Float32.html $x))
 
 syntax (name := float32RoundViewCmd) "#float32_round_view " term : command
 
 macro "#float32_round_view " x:term : command =>
-  UI.canonicalCommand <$> `(#html (Float32Internal.float32RoundHtml $x))
+  UI.canonicalCommand <$> `(#html (Float32.roundHtml $x))
 
 syntax (name := float32CompareViewCmd) "#float32_compare_view " term ", " term : command
 
 macro "#float32_compare_view " x:term ", " y:term : command =>
-  UI.canonicalCommand <$> `(#html (Float32Internal.float32CompareHtml $x $y))
+  UI.canonicalCommand <$> `(#html (Float32.compareHtml $x $y))
 
 end NN.Widgets

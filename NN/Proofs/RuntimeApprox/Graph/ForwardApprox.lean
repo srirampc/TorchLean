@@ -180,8 +180,7 @@ theorem approxTensorWithTol_mono {s : Shape} {toSpec : α → SpecScalar}
     (habs : tol₁.abs ≤ tol₂.abs) (hrel : tol₁.rel ≤ tol₂.rel) (hslack : tol₁.slack ≤ tol₂.slack)
     (h : approxTensorWithTol (toSpec := toSpec) spec runtime tol₁) :
     approxTensorWithTol (toSpec := toSpec) spec runtime tol₂ :=
-  approx_with_tol_mono (toSpec := toSpec) (norm := linfNorm)
-    (spec := spec) (runtime := runtime) habs hrel hslack h
+  approxWithTol_mono (toSpec := toSpec) (norm := linfNorm) habs hrel hslack h
 
 /--
 `approxTensorWithTol` specialized to an absolute-only tolerance is equivalent to `approxTensor`.
@@ -192,11 +191,8 @@ This is mostly a convenience lemma for switching between the "tolerance" API and
 theorem approxTensorWithTol_absOnly_iff {s : Shape} {toSpec : α → SpecScalar}
     {spec : SpecTensor s} {runtime : Tensor α s} {eps : ℝ} (heps : 0 ≤ eps) :
     approxTensorWithTol (toSpec := toSpec) spec runtime (ApproxTol.absOnly eps) ↔
-      approxTensor (toSpec := toSpec) spec runtime eps := by
-  -- Reduce to the `approx_with` lemma.
-  simpa [approxTensor, approxTensorWithTol] using
-    (approx_with_tol_absOnly_iff (toSpec := toSpec) (norm := linfNorm)
-      (spec := spec) (runtime := runtime) heps)
+      approxTensor (toSpec := toSpec) spec runtime eps :=
+  approxWithTol_absOnly_iff (toSpec := toSpec) (norm := linfNorm) heps
 
 /-- Context-level approximation with a per-entry error list. -/
 def approxCtx (toSpec : α → SpecScalar) : {ss : List Shape} →
@@ -278,10 +274,7 @@ theorem approxCtx_get {toSpec : α → SpecScalar} {Γ : List Shape}
       (TorchLean.TensorPack.get (α := α) xR i)
       (EList.get eps i) := by
   induction Γ with
-  | nil =>
-      cases i with
-      | mk val isLt =>
-          exact False.elim ((Nat.not_lt_zero val) isLt)
+  | nil => exact i.elim0
   | cons s0 Γ ih =>
       cases xS with
       | cons xSh xSt =>
@@ -312,23 +305,9 @@ theorem approxCtx_get_tolAbsOnly {toSpec : α → SpecScalar} {Γ : List Shape}
     approxTensorWithTol (α := α) (toSpec := toSpec)
       (TorchLean.TensorPack.get (α := SpecScalar) xS i)
       (TorchLean.TensorPack.get (α := α) xR i)
-      (ApproxTol.absOnly (EList.get eps i)) := by
-  have hi :
-      approxTensor (α := α) (toSpec := toSpec)
-        (TorchLean.TensorPack.get (α := SpecScalar) xS i)
-        (TorchLean.TensorPack.get (α := α) xR i)
-        (EList.get eps i) :=
-    approxCtx_get (α := α) (toSpec := toSpec) (xS := xS) (xR := xR) (eps := eps) h i
-  have : approxWith (α := α) (toSpec := toSpec) (norm := linfNorm)
-      (TorchLean.TensorPack.get (α := SpecScalar) xS i)
-      (TorchLean.TensorPack.get (α := α) xR i)
-      (EList.get eps i) := by
-    simpa [approxTensor] using hi
-  simpa using
-    (approxTensor_to_approxTensorWithTol_absOnly (toSpec := toSpec)
-      (spec := (TorchLean.TensorPack.get (α := SpecScalar) xS i))
-      (runtime := (TorchLean.TensorPack.get (α := α) xR i))
-      (eps := (EList.get eps i)) this)
+      (ApproxTol.absOnly (EList.get eps i)) :=
+  approxTensorWithTol_absOnly_of_approxWith (toSpec := toSpec) (EList.get eps i)
+    (approxCtx_get (α := α) (toSpec := toSpec) h i)
 
 /--
 Split a context approximation for `ss ++ [τ]` into:

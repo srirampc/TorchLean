@@ -7,7 +7,6 @@ module
 
 public meta import NN.Tactic.Einops.Report.Analysis.Common
 public import NN.Tactic.Einops.Report.Analysis.Common
-import Mathlib.Algebra.Order.Field.Basic
 
 /-!
 # Transform reports
@@ -125,7 +124,7 @@ def concreteTransformReport (operation : String)
   if nonemptyReduction then
     obligations := obligations ++
       [s!"Nonempty reduction: fiber shape {formatShape reducedShape} has \
-          certified positive size {shapeSize reducedShape}."]
+          certified positive size {reducedShape.prod}."]
   let logicalStages :=
     if operation = "rearrange" then
       [s!"Rep.reshape: physical input {formatShape inputShape} to \
@@ -173,8 +172,8 @@ def concreteTransformReport (operation : String)
        s!"Rep.reshape: retained elementary shape \
           {formatShape elementaryOutputShape} to physical output \
           {formatShape outputShape}."]
-  let inputEntries := shapeSize inputShape
-  let outputEntries := shapeSize outputShape
+  let inputEntries := inputShape.prod
+  let outputEntries := outputShape.prod
   let workEstimate :=
     if operation = "rearrange" ∨ operation = "repeat" then
       [s!"Output entries: {outputEntries}.",
@@ -182,10 +181,13 @@ def concreteTransformReport (operation : String)
        "Result buffers: 1.",
        "Materialized intermediate tensors: 0."]
     else
-      let fiberEntries := shapeSize reducedShape
+      let fiberEntries := reducedShape.prod
       let visits := outputEntries * fiberEntries
       let reductionCalls :=
-        if foldReduction then
+        if foldReduction && nonemptyReduction then
+          [s!"First-value initializations: {outputEntries}.",
+           s!"Fold-step calls: {outputEntries * (fiberEntries - 1)}."]
+        else if foldReduction then
           [s!"Fold-step calls: {visits}.",
            s!"Finalizer calls: {outputEntries}."]
         else

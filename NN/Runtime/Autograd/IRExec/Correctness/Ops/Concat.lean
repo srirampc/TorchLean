@@ -94,42 +94,15 @@ theorem array_mapM_ok_of_pointwise {β γ δ : Type}
       rw [list_mapM_ok_of_pointwise f g h hpt xs.toList l hl]
       simp [Functor.map, Except.map]
 
-/-- A successful `Except` traversal preserves the list length. -/
-theorem list_length_of_mapM_ok {β γ : Type} (f : β → Except String γ) :
-    ∀ (xs : List β) (ys : List γ), xs.mapM f = .ok ys → ys.length = xs.length := by
-  intro xs
-  induction xs with
-  | nil =>
-      intro ys hys
-      simp [Pure.pure, Except.pure] at hys
-      subst hys
-      rfl
-  | cons x xs ih =>
-      intro ys hys
-      rw [List.mapM_cons] at hys
-      cases hx : f x with
-      | error msg => simp [hx] at hys
-      | ok y =>
-          rw [hx] at hys
-          cases hxs : xs.mapM f with
-          | error msg => simp [hxs] at hys
-          | ok ys' =>
-              rw [hxs] at hys
-              simp [Pure.pure, Except.pure] at hys
-              subst hys
-              simp [ih ys' hxs]
-
-/-- A successful `Except` traversal preserves the array size. -/
+/-- A successful traversal has the same size, by comparing the two traversals to unit arrays. -/
 theorem array_size_of_mapM_ok {β γ : Type} (f : β → Except String γ)
     (xs : Array β) (ys : Array γ) (hys : xs.mapM f = .ok ys) : ys.size = xs.size := by
-  rw [Array.mapM_eq_mapM_toList] at hys
-  cases hl : xs.toList.mapM f with
-  | error msg => simp [hl, Functor.map, Except.map] at hys
-  | ok l =>
-      rw [hl] at hys
-      simp [Functor.map, Except.map] at hys
-      subst hys
-      simpa using list_length_of_mapM_ok f xs.toList l hl
+  have hUnits : (pure (xs.map fun _ => ()) : Except String (Array Unit)) =
+      .ok (ys.map fun _ => ()) := by
+    simpa only [Array.mapM_pure] using
+      array_mapM_ok_of_pointwise f (fun _ => pure ()) (fun _ => ())
+        (fun _ _ _ => rfl) xs ys hys
+  simpa using (congrArg Array.size (Except.ok.inj hUnits)).symm
 
 /-- Decoding a leading-axis parent whose stored tail already matches succeeds without a cast. -/
 @[simp] theorem expectLeadingAxisInput_mk {α : Type} [TorchLean.Storage α] [Context α]
@@ -152,27 +125,12 @@ theorem concatInputsForward_eq {α : Type} [TorchLean.Storage α] [Context α]
     (hSum : inputs.foldl (fun acc input => acc + input.1) 0 = nOut)
     (context : TorchLean.TensorPack α Γ) :
     concatInputsForward (α := α) inputs nOut hSum context =
-      Tensor.castShape (concatLeadingAxisFromInputs (α := α) context inputs).2
+      Tensor.castShape (concatInputs (α := α) context inputs).2
         (congrArg (fun k => Shape.dim k rest)
-          ((concatLeadingAxisFromInputs_size_eq_sum (α := α) context inputs).trans hSum)) := rfl
+          ((concatInputs_size_eq_sum (α := α) context inputs).trans hSum)) := rfl
 
-/-- Folding from the first element over the remaining ones is `concatLeadingAxisList`. -/
-theorem foldl_extract_one_eq_concatLeadingAxisList {α : Type} [TorchLean.Storage α] [Context α]
-    {rest : Shape} (first : Sigma fun n => Tensor α (.dim n rest))
-    (others : List (Sigma fun n => Tensor α (.dim n rest))) :
-    ((first :: others).toArray.extract 1).foldl
-        (fun acc nxt =>
-          match acc, nxt with
-          | ⟨n1, t1⟩, ⟨n2, t2⟩ =>
-              ⟨n1 + n2, Tensor.concatAxisSpec .scalar (α := α) (n := n1) (m := n2)
-                (suffix := rest) t1 t2⟩)
-        first =
-      concatLeadingAxisList (α := α) (rest := rest) (first :: others) := by
-  rw [← Array.foldl_toList]
-  simp [concatLeadingAxisList]
-
-/-- Folding from the first array element over the remaining ones is `concatLeadingAxisList`. -/
-theorem foldl_extract_one_eq_concatLeadingAxisList' {α : Type} [TorchLean.Storage α] [Context α]
+/-- Folding from the first array element over the remaining ones is `concatList`. -/
+theorem foldl_extract_one_eq_concatList {α : Type} [TorchLean.Storage α] [Context α]
     {rest : Shape} (sigs : Array (Sigma fun n => Tensor α (.dim n rest))) (h : 0 < sigs.size) :
     (sigs.extract 1).foldl
         (fun acc nxt =>
@@ -181,32 +139,7 @@ theorem foldl_extract_one_eq_concatLeadingAxisList' {α : Type} [TorchLean.Stora
               ⟨n1 + n2, Tensor.concatAxisSpec .scalar (α := α) (n := n1) (m := n2)
                 (suffix := rest) t1 t2⟩)
         sigs[0] =
-      concatLeadingAxisList (α := α) (rest := rest) sigs.toList := by
-  obtain ⟨first, others, hl⟩ :
-      ∃ first others, sigs.toList = first :: others := by
-    cases hs : sigs.toList with
-    | nil =>
-        exfalso
-        have hZero : sigs.size = 0 := by simpa using congrArg List.length hs
-        simp [hZero] at h
-    | cons first others => exact ⟨first, others, rfl⟩
-  have hsigs : sigs = (first :: others).toArray := by
-    apply Array.ext'
-    simpa using hl
-  subst hsigs
-  exact foldl_extract_one_eq_concatLeadingAxisList first others
-
-/-- Projection-form variant of `foldl_extract_one_eq_concatLeadingAxisList'`, matching the fold
-shape `simp` produces from the evaluator's pattern match. -/
-theorem foldl_extract_one_eq_concatLeadingAxisList_proj {α : Type} [TorchLean.Storage α]
-    [Context α] {rest : Shape} (sigs : Array (Sigma fun n => Tensor α (.dim n rest)))
-    (h : 0 < sigs.size) :
-    (sigs.extract 1).foldl
-        (fun acc nxt =>
-          (⟨acc.1 + nxt.1, Tensor.concatAxisSpec .scalar (α := α) (n := acc.1) (m := nxt.1)
-            (suffix := rest) acc.2 nxt.2⟩ : Sigma fun n => Tensor α (.dim n rest)))
-        sigs[0] =
-      concatLeadingAxisList (α := α) (rest := rest) sigs.toList := by
+      concatList (α := α) (rest := rest) sigs.toList := by
   obtain ⟨first, others, hl⟩ :
       ∃ first others, sigs.toList = first :: others := by
     cases hs : sigs.toList with
@@ -220,7 +153,7 @@ theorem foldl_extract_one_eq_concatLeadingAxisList_proj {α : Type} [TorchLean.S
     simpa using hl
   subst hsigs
   rw [← Array.foldl_toList]
-  simp [concatLeadingAxisList]
+  simp [concatList]
 
 /--
 The evaluator's leading-axis concat fold over parents that already carry the tail `rest` is the
@@ -251,27 +184,20 @@ theorem evalConcatLeadingAxisFold_eq_concatInputsForward
     simpa using hSize
   rw [Array.getElem?_eq_getElem hSize']
   simp only
-  rw [foldl_extract_one_eq_concatLeadingAxisList' _ hSize']
+  rw [foldl_extract_one_eq_concatList _ hSize']
   have hIR :
-      concatLeadingAxisList (α := α) (rest := rest)
+      concatList (α := α) (rest := rest)
           (inputs.map fun input =>
             (⟨input.1, input.2 context⟩ : Sigma fun n => Tensor α (.dim n rest))).toList =
-        concatLeadingAxisFromInputs (α := α) context inputs := by
-    simp [concatLeadingAxisFromInputs]
+        concatInputs (α := α) context inputs := by
+    simp [concatInputs]
   rw [hIR, concatInputsForward_eq]
-  have hY : (concatLeadingAxisFromInputs (α := α) context inputs).1 = nOut :=
-    (concatLeadingAxisFromInputs_size_eq_sum (α := α) context inputs).trans hSum
+  have hY : (concatInputs (α := α) context inputs).1 = nOut :=
+    (concatInputs_size_eq_sum (α := α) context inputs).trans hSum
   rw [dite_eq_left hY]
   change Except.ok _ = Except.ok _
   congr 2
   exact eq_mp_eq_cast_shape _ _ _
-
-/-- The lowering context used by `buildFrom` for node `n` at position `i`. -/
-abbrev loweringContext {α : Type} [TorchLean.Storage α] [Context α]
-    (g : NN.IR.Graph) (payload : Payload α) (inShape : Shape) (ss : List Shape)
-    (i : Nat) (n : NN.IR.Node) : NodeLoweringContext α ([inShape] ++ ss) :=
-  { graph := g, payload := payload, index := i, node := n,
-    parentIdx := fun pid s => mkIdx (inShape := inShape) (ss := ss) pid s }
 
 /-- Each successful axis-zero concat input reads a parent value of the recorded shape. -/
 theorem concatAxisZeroInputs_getParentValue {α : Type} [TorchLean.Storage α] [Context α]
@@ -343,13 +269,6 @@ theorem someTensor_mk_castShape {α : Type} [TorchLean.Storage α] [Context α] 
   subst h
   rfl
 
-/-- `cast` along an equality of tensor types is the shape cast. -/
-theorem cast_eq_cast_shape {α : Type} [TorchLean.Storage α] {s t : Shape}
-    (x : Tensor α s) (h : Tensor α s = Tensor α t) (h' : s = t) :
-    cast h x = Tensor.castShape x h' := by
-  subst h'
-  rfl
-
 /-- Casting the second components of equal leading-axis sigmas gives equal tensors. -/
 theorem sigma_cast_shape_congr {α : Type} [TorchLean.Storage α] {rest t : Shape}
     (X Y : Sigma fun n => Tensor α (.dim n rest)) (hXY : X = Y)
@@ -357,10 +276,6 @@ theorem sigma_cast_shape_congr {α : Type} [TorchLean.Storage α] {rest t : Shap
     Tensor.castShape X.2 h₁ = Tensor.castShape Y.2 h₂ := by
   subst hXY
   rfl
-
-/-- `Eq.mpr` along a reflexive tensor-type equality is the identity. -/
-@[simp] theorem eq_mpr_tensor_refl {α : Type} [TorchLean.Storage α] {s : Shape}
-    (h : Tensor α s = Tensor α s) (t : Tensor α s) : Eq.mpr h t = t := rfl
 
 /-- Permuting a validated front input's parent value moves the concatenated axis to the front. -/
 theorem permuteSomeTensor_frontInput {α : Type} [TorchLean.Storage α] [Context α]
@@ -680,7 +595,8 @@ theorem buildFrom_denoteAllFrom_concat_pos
           -Array.size_map, -Array.size_extract]
         erw [hInfer]
         -- Keep the array sizes and `sigs[0]` unnormalized so the fold lemma matches syntactically.
-        simp [hB, hAxis, hPermFront, hPermBack, hOFE, Array.mapM_map, Function.comp_def,
+        simp [hB, hAxis, hPermFront, hPermBack, hOFE, NN.IR.Graph.evalConcatLeadingAxisFold,
+          NN.IR.Graph.expectLeadingAxisInput, Array.mapM_map, Function.comp_def,
           permuteSomeTensor_frontInput, Array.mapM_pure, -Array.getElem?_map, -Array.size_map,
           -Array.size_extract]
         have hSigsSize :
@@ -693,7 +609,7 @@ theorem buildFrom_denoteAllFrom_concat_pos
                 fi.final_eq⟩ : Sigma fun n => Tensor α (.dim n restFront))).size := by
           simpa using hFrontSize
         have hIR :
-            concatLeadingAxisList (α := α) (rest := restFront)
+            concatList (α := α) (rest := restFront)
                 (frontInputs.map fun fi =>
                   (⟨fi.nP, Tensor.castShape
                     (applySwapsTensor (α := α) (s := fi.sIn) (swaps := fi.swaps)
@@ -702,35 +618,41 @@ theorem buildFrom_denoteAllFrom_concat_pos
                           (.cons x .nil))
                         fi.ip))
                     fi.final_eq⟩ : Sigma fun n => Tensor α (.dim n restFront))).toList =
-              concatLeadingAxisFromInputs (α := α)
+              concatInputs (α := α)
                 (ForwardData.eval (α := α) (Γ := [inShape]) (ss := ss) gd (.cons x .nil))
                 inputs := by
-          simp [concatLeadingAxisFromInputs, inputs, ConcatFrontInput.toInput, Function.comp_def]
+          simp [concatInputs, inputs, ConcatFrontInput.toInput, Function.comp_def]
         have hY :
-            (concatLeadingAxisFromInputs (α := α)
+            (concatInputs (α := α)
               (ForwardData.eval (α := α) (Γ := [inShape]) (ss := ss) gd (.cons x .nil)) inputs).1 =
               nOutFront :=
-          (concatLeadingAxisFromInputs_size_eq_sum (α := α) _ inputs).trans hSum'
+          (concatInputs_size_eq_sum (α := α) _ inputs).trans hSum'
         erw [Array.getElem?_eq_getElem hSigsSize]
         simp only
         split
         · rename_i hFoldEq
+          simp only [Pure.pure, Except.pure, Except.ok_bind]
           rw [permuteSomeTensor_eq_applySwapsTensor (α := α) _ permBack outBack swapsBack hPB
             (by simpa using hSwapsBack)]
           simp only [Graph.expectShape_mk_of_eq hOutBackFinal, Functor.map, Except.map,
             Except.ok_bind, NN.IR.Graph.normalizeNodeOutput_nodeShape, nodeData,
-            mkForwardNode_eval]
+            mkForwardNode_run]
           have hX :=
-            (foldl_extract_one_eq_concatLeadingAxisList_proj (α := α) (rest := restFront) _
+            (foldl_extract_one_eq_concatList (α := α) (rest := restFront) _
               hSigsSize).trans hIR
-          rw [cast_eq_cast_shape _ _ (congrArg (fun k => Shape.dim k restFront) hFoldEq),
+          have cast_shape {s t : Shape} (tensor : Tensor α s)
+              (h : Tensor α s = Tensor α t) (hShape : s = t) :
+              cast h tensor = tensor.castShape hShape := by
+            subst hShape
+            rfl
+          rw [cast_shape _ _ (congrArg (fun k => Shape.dim k restFront) hFoldEq),
             concatInputsForward_eq]
           erw [sigma_cast_shape_congr _ _ hX (congrArg (fun k => Shape.dim k restFront) hFoldEq)
             (congrArg (fun k => Shape.dim k restFront) hY)]
         · rename_i hFoldNe
           exfalso
           apply hFoldNe
-          erw [foldl_extract_one_eq_concatLeadingAxisList_proj _ hSigsSize, hIR]
+          erw [foldl_extract_one_eq_concatList _ hSigsSize, hIR]
           exact hY
       apply buildFrom_denoteAllFrom_nodeData_exact (α := α) (g := g)
         (payload := payload) (gd := gd) (i := i) (st' := st') (x := x) (hi := hi)

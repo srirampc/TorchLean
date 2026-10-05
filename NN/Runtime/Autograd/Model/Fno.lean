@@ -26,12 +26,6 @@ namespace Runtime.Autograd.Model.Layers.FNO
 
 open Spec TorchLean TorchLean.Tensor
 
-/-- Shape of an `m × n` matrix. -/
-abbrev matrixShape (m n : Nat) : Shape := [m, n]
-
-/-- Shape of a vector with `n` entries. -/
-abbrev vectorShape (n : Nat) : Shape := [n]
-
 /-- Reshape `[modes, width]` for mode-wise batched matrix multiplication. -/
 def reshapeModesForMatmul (modes width : Nat) :
     Layer [modes, width] [modes, 1, width] :=
@@ -91,10 +85,6 @@ def pointwiseAffine (grid inChannels outChannels : Nat) (weightSeed : Nat := 0) 
 abbrev fieldShape {d : Nat} (spatial : TorchLean.Tensor Nat [d]) (channels : Nat) : Shape :=
   (spatial.to Shape).appendDim channels
 
-/-- Tensor shape of a scalar field over the spatial grid. -/
-abbrev scalarFieldShape {d : Nat} (spatial : TorchLean.Tensor Nat [d]) : Shape :=
-  spatial.to Shape
-
 /-- Number of spatial grid points. -/
 def gridSize {d : Nat} (spatial : TorchLean.Tensor Nat [d]) : Nat :=
   spatial.prod
@@ -134,7 +124,7 @@ def phase {α : Type} [TorchLean.Storage α] [Context α] (extents : List Nat)
 /-- Cosine part of the dense multidimensional DFT matrix. -/
 def dftCosMatrix {α : Type} [TorchLean.Storage α] [Context α] {d : Nat}
     (spatial : TorchLean.Tensor Nat [d]) :
-    Tensor α (matrixShape (gridSize spatial) (gridSize spatial)) :=
+    Tensor α [gridSize spatial, gridSize spatial] :=
   Tensor.dim (fun frequency =>
     Tensor.dim (fun input =>
       let angle := 2 * MathFunctions.pi *
@@ -144,7 +134,7 @@ def dftCosMatrix {α : Type} [TorchLean.Storage α] [Context α] {d : Nat}
 /-- Negative-sine part of the dense multidimensional DFT matrix. -/
 def dftNegSinMatrix {α : Type} [TorchLean.Storage α] [Context α] {d : Nat}
     (spatial : TorchLean.Tensor Nat [d]) :
-    Tensor α (matrixShape (gridSize spatial) (gridSize spatial)) :=
+    Tensor α [gridSize spatial, gridSize spatial] :=
   Tensor.dim (fun frequency =>
     Tensor.dim (fun input =>
       let angle := 2 * MathFunctions.pi *
@@ -154,7 +144,7 @@ def dftNegSinMatrix {α : Type} [TorchLean.Storage α] [Context α] {d : Nat}
 /-- Normalized cosine part of the dense multidimensional inverse DFT matrix. -/
 def idftCosMatrix {α : Type} [TorchLean.Storage α] [Context α] {d : Nat}
     (spatial : TorchLean.Tensor Nat [d]) :
-    Tensor α (matrixShape (gridSize spatial) (gridSize spatial)) :=
+    Tensor α [gridSize spatial, gridSize spatial] :=
   Tensor.dim (fun input =>
     Tensor.dim (fun frequency =>
       let angle := 2 * MathFunctions.pi *
@@ -164,7 +154,7 @@ def idftCosMatrix {α : Type} [TorchLean.Storage α] [Context α] {d : Nat}
 /-- Normalized sine part of the dense multidimensional inverse DFT matrix. -/
 def idftSinMatrix {α : Type} [TorchLean.Storage α] [Context α] {d : Nat}
     (spatial : TorchLean.Tensor Nat [d]) :
-    Tensor α (matrixShape (gridSize spatial) (gridSize spatial)) :=
+    Tensor α [gridSize spatial, gridSize spatial] :=
   Tensor.dim (fun input =>
     Tensor.dim (fun frequency =>
       let angle := 2 * MathFunctions.pi *
@@ -233,34 +223,6 @@ def restoreSpatial {d channels : Nat} (spatial : TorchLean.Tensor Nat [d]) :
     forward := fun _ {α} _ _ => fun {m} _ _ => fun x =>
       Runtime.Autograd.Model.reshape (m := m) (α := α) (s₁ := source) (s₂ := target) x sameSize }
 
-/-- Add the singleton channel axis used inside an FNO model. -/
-def addScalarChannel {d : Nat} (spatial : TorchLean.Tensor Nat [d]) :
-    Layer (scalarFieldShape spatial) (fieldShape spatial 1) :=
-  let source : Shape := scalarFieldShape spatial
-  let target : Shape := fieldShape spatial 1
-  have sameSize : Shape.size source = Shape.size target := by
-    simp [source, target, fieldShape, Shape.size_appendDim]
-  { kind := "AddScalarChannel"
-    stateShapes := []
-    initState := .nil
-    requiresGrad := #[]
-    forward := fun _ {α} _ _ => fun {m} _ _ => fun x =>
-      Runtime.Autograd.Model.reshape (m := m) (α := α) (s₁ := source) (s₂ := target) x sameSize }
-
-/-- Remove the singleton channel axis after the output projection. -/
-def removeScalarChannel {d : Nat} (spatial : TorchLean.Tensor Nat [d]) :
-    Layer (fieldShape spatial 1) (scalarFieldShape spatial) :=
-  let source : Shape := fieldShape spatial 1
-  let target : Shape := scalarFieldShape spatial
-  have sameSize : Shape.size source = Shape.size target := by
-    simp [source, target, fieldShape, Shape.size_appendDim]
-  { kind := "RemoveScalarChannel"
-    stateShapes := []
-    initState := .nil
-    requiresGrad := #[]
-    forward := fun _ {α} _ _ => fun {m} _ _ => fun x =>
-      Runtime.Autograd.Model.reshape (m := m) (α := α) (s₁ := source) (s₂ := target) x sameSize }
-
 end Internal
 
 /--
@@ -279,8 +241,8 @@ def block {d : Nat} (spatial modes : TorchLean.Tensor Nat [d]) (width : Nat)
   let field : Shape := fieldShape spatial width
   let flat : Shape := flatFieldShape spatial width
   let spectralShape : Shape := spectralWeightShape spatial width
-  let skipShape : Shape := matrixShape width width
-  let biasShape : Shape := vectorShape width
+  let skipShape : Shape := [width, width]
+  let biasShape : Shape := [width]
   let spectralReal0 : Tensor Float spectralShape :=
     Torch.Init.tensor (s := spectralShape) (sch := .uniform (-0.05) 0.05)
       (seed := spectralRealSeed)

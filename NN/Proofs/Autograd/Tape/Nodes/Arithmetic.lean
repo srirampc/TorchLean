@@ -65,15 +65,8 @@ def affineFderiv {Γ : List Shape} {sIn sOut : Shape}
       have hlin :
           HasFDerivAt
             (fun x : CtxVec Γ => A (CtxVec.get (Γ := Γ) (s := sIn) idx x))
-            (A.comp (CtxVec.getCLM (Γ := Γ) (s := sIn) idx)) xV := by
-        have h :=
-          ((A.comp (CtxVec.getCLM (Γ := Γ) (s := sIn) idx)).hasFDerivAt (x := xV))
-        have hfun :
-            (fun x : CtxVec Γ => A (CtxVec.get (Γ := Γ) (s := sIn) idx x)) =
-              fun x => (A.comp (CtxVec.getCLM (Γ := Γ) (s := sIn) idx)) x := by
-          funext x
-          simp [CtxVec.getCLM_apply, ContinuousLinearMap.comp_apply]
-        exact h.congr_of_eventuallyEq hfun.eventuallyEq
+            (A.comp (CtxVec.getCLM (Γ := Γ) (s := sIn) idx)) xV :=
+        A.hasFDerivAt.comp xV (CtxVec.hasFDerivAt_get (Γ := Γ) (s := sIn) idx xV)
       simpa [affine, Node.forwardVec_ofFn, ContinuousLinearMap.comp_apply] using
         hlin.const_add b
     jvp_eq := by
@@ -102,20 +95,9 @@ def addFderiv {Γ : List Shape} {s : Shape} (a b : Idx Γ s) :
 { deriv := fun _ => (CtxVec.getCLM (Γ := Γ) (s := s) a) + (CtxVec.getCLM (Γ := Γ) (s := s) b)
   hasFDerivAt := by
     intro xV
-    -- the forward map is a continuous linear map
-    have hfun :
-        (fun x : CtxVec Γ =>
-            CtxVec.get (Γ := Γ) (s := s) a x + CtxVec.get (Γ := Γ) (s := s) b x)
-          =
-        fun x : CtxVec Γ =>
-            ((CtxVec.getCLM (Γ := Γ) (s := s) a) + (CtxVec.getCLM (Γ := Γ) (s := s) b)) x := by
-      funext x
-      simp [CtxVec.getCLM_apply]
-    have h :=
-      ((CtxVec.getCLM (Γ := Γ) (s := s) a) +
-        (CtxVec.getCLM (Γ := Γ) (s := s) b)).hasFDerivAt (x := xV)
-    have hderiv := h.congr_of_eventuallyEq hfun.eventuallyEq
-    simpa [add, Node.forwardVec_ofFn] using hderiv
+    exact (CtxVec.getCLM a + CtxVec.getCLM b).hasFDerivAt.congr_of_eventuallyEq
+      (Filter.Eventually.of_forall fun x => by
+        simp [add, Node.forwardVec_ofFn, CtxVec.getCLM_apply])
   jvp_eq := by
     intro xV dxV
     simp [add, Node.jvpVec_ofFn, CtxVec.getCLM_apply] }
@@ -140,19 +122,9 @@ def subFderiv {Γ : List Shape} {s : Shape} (a b : Idx Γ s) :
 { deriv := fun _ => (CtxVec.getCLM (Γ := Γ) (s := s) a) - (CtxVec.getCLM (Γ := Γ) (s := s) b)
   hasFDerivAt := by
     intro xV
-    have hfun :
-        (fun x : CtxVec Γ =>
-            CtxVec.get (Γ := Γ) (s := s) a x - CtxVec.get (Γ := Γ) (s := s) b x)
-          =
-        fun x : CtxVec Γ =>
-            ((CtxVec.getCLM (Γ := Γ) (s := s) a) - (CtxVec.getCLM (Γ := Γ) (s := s) b)) x := by
-      funext x
-      simp [CtxVec.getCLM_apply]
-    have h :=
-      ((CtxVec.getCLM (Γ := Γ) (s := s) a) -
-        (CtxVec.getCLM (Γ := Γ) (s := s) b)).hasFDerivAt (x := xV)
-    have hderiv := h.congr_of_eventuallyEq hfun.eventuallyEq
-    simpa [sub, Node.forwardVec_ofFn] using hderiv
+    exact (CtxVec.getCLM a - CtxVec.getCLM b).hasFDerivAt.congr_of_eventuallyEq
+      (Filter.Eventually.of_forall fun x => by
+        simp [sub, Node.forwardVec_ofFn, CtxVec.getCLM_apply])
   jvp_eq := by
     intro xV dxV
     simp [sub, Node.jvpVec_ofFn, CtxVec.getCLM_apply] }
@@ -175,15 +147,9 @@ def scaleFderiv {Γ : List Shape} {s : Shape} (idx : Idx Γ s) (c : ℝ) :
 { deriv := fun _ => c • (CtxVec.getCLM (Γ := Γ) (s := s) idx)
   hasFDerivAt := by
     intro xV
-    have hfun :
-        (fun x : CtxVec Γ => c • CtxVec.get (Γ := Γ) (s := s) idx x)
-          =
-        fun x : CtxVec Γ => (c • (CtxVec.getCLM (Γ := Γ) (s := s) idx)) x := by
-      funext x
-      simp [CtxVec.getCLM_apply]
-    have h := (c • (CtxVec.getCLM (Γ := Γ) (s := s) idx)).hasFDerivAt (x := xV)
-    have hderiv := h.congr_of_eventuallyEq hfun.eventuallyEq
-    simpa [scale, Node.forwardVec_ofFn] using hderiv
+    exact (c • CtxVec.getCLM idx).hasFDerivAt.congr_of_eventuallyEq
+      (Filter.Eventually.of_forall fun x => by
+        simp [scale, Node.forwardVec_ofFn, CtxVec.getCLM_apply])
   jvp_eq := by
     intro xV dxV
     simp [scale, Node.jvpVec_ofFn, CtxVec.getCLM_apply] }
@@ -376,32 +342,13 @@ def mulFderiv {Γ : List Shape} {s : Shape} (a b : Idx Γ s) :
         (evalCLM (n := n) i).comp (CtxVec.getCLM (Γ := Γ) (s := s) a)
       let bCLM : CtxVec Γ →L[ℝ] ℝ :=
         (evalCLM (n := n) i).comp (CtxVec.getCLM (Γ := Γ) (s := s) b)
-      -- Treat `aCLM`/`bCLM` as the derivatives of the coordinate projections `x ↦ get a x i`, `x ↦
-      -- get b x i`.
-      have ha0 : HasFDerivAt (fun x : CtxVec Γ => aCLM x) aCLM xV :=
-        aCLM.hasFDerivAt (x := xV)
-      have hb0 : HasFDerivAt (fun x : CtxVec Γ => bCLM x) bCLM xV :=
-        bCLM.hasFDerivAt (x := xV)
+      -- Coordinate `i` of a block read is the evaluation functional after the block projection.
       have ha : HasFDerivAt (fun x : CtxVec Γ => CtxVec.get (Γ := Γ) (s := s) a x i) aCLM xV := by
-        have hEq :
-            (fun x : CtxVec Γ => CtxVec.get (Γ := Γ) (s := s) a x i) =
-              (fun x : CtxVec Γ => aCLM x) := by
-          funext x
-          -- Unfold `aCLM` to a coordinate projection of `CtxVec.getCLM a`.
-          simp [aCLM, ContinuousLinearMap.comp_apply, evalCLM_apply]
-          -- Relate `getCLM` to `get` under the coordinate projection.
-          exact
-            (congrArg (fun v : Vec n => v.ofLp i) (CtxVec.getCLM_apply (Γ := Γ) (s := s) a x)).symm
-        exact ha0.congr_of_eventuallyEq hEq.eventuallyEq
+        simpa only [Function.comp_def, evalCLM_apply] using
+          (evalCLM (n := n) i).hasFDerivAt.comp xV (CtxVec.hasFDerivAt_get (Γ := Γ) (s := s) a xV)
       have hb : HasFDerivAt (fun x : CtxVec Γ => CtxVec.get (Γ := Γ) (s := s) b x i) bCLM xV := by
-        have hEq :
-            (fun x : CtxVec Γ => CtxVec.get (Γ := Γ) (s := s) b x i) =
-              (fun x : CtxVec Γ => bCLM x) := by
-          funext x
-          simp [bCLM, ContinuousLinearMap.comp_apply, evalCLM_apply]
-          exact
-            (congrArg (fun v : Vec n => v.ofLp i) (CtxVec.getCLM_apply (Γ := Γ) (s := s) b x)).symm
-        exact hb0.congr_of_eventuallyEq hEq.eventuallyEq
+        simpa only [Function.comp_def, evalCLM_apply] using
+          (evalCLM (n := n) i).hasFDerivAt.comp xV (CtxVec.hasFDerivAt_get (Γ := Γ) (s := s) b xV)
       -- Product rule in `ℝ`.
       have hmul :=
         (ha.mul hb)
@@ -537,26 +484,12 @@ def divFderivAt {Γ : List Shape} {s : Shape} (a b : Idx Γ s) (xV : CtxVec Γ)
       let bCLM : CtxVec Γ →L[ℝ] ℝ :=
         (evalCLM (n := n) i).comp (CtxVec.getCLM (Γ := Γ) (s := s) b)
       have ha : HasFDerivAt (fun x : CtxVec Γ => CtxVec.get (Γ := Γ) (s := s) a x i) aCLM xV := by
-        have h0 : HasFDerivAt (fun x : CtxVec Γ => aCLM x) aCLM xV := aCLM.hasFDerivAt (x := xV)
-        have hEq :
-            (fun x : CtxVec Γ => CtxVec.get (Γ := Γ) (s := s) a x i)
-              = (fun x : CtxVec Γ => aCLM x) := by
-          funext x
-          simp [aCLM, ContinuousLinearMap.comp_apply, evalCLM_apply]
-          exact (congrArg (fun v : Vec n => v.ofLp i)
-            (CtxVec.getCLM_apply (Γ := Γ) (s := s) a x)).symm
-        exact h0.congr_of_eventuallyEq hEq.eventuallyEq
+        simpa only [Function.comp_def, evalCLM_apply] using
+          (evalCLM (n := n) i).hasFDerivAt.comp xV (CtxVec.hasFDerivAt_get (Γ := Γ) (s := s) a xV)
       have hbder :
           HasFDerivAt (fun x : CtxVec Γ => CtxVec.get (Γ := Γ) (s := s) b x i) bCLM xV := by
-        have h0 : HasFDerivAt (fun x : CtxVec Γ => bCLM x) bCLM xV := bCLM.hasFDerivAt (x := xV)
-        have hEq :
-            (fun x : CtxVec Γ => CtxVec.get (Γ := Γ) (s := s) b x i)
-              = (fun x : CtxVec Γ => bCLM x) := by
-          funext x
-          simp [bCLM, ContinuousLinearMap.comp_apply, evalCLM_apply]
-          exact (congrArg (fun v : Vec n => v.ofLp i)
-            (CtxVec.getCLM_apply (Γ := Γ) (s := s) b x)).symm
-        exact h0.congr_of_eventuallyEq hEq.eventuallyEq
+        simpa only [Function.comp_def, evalCLM_apply] using
+          (evalCLM (n := n) i).hasFDerivAt.comp xV (CtxVec.hasFDerivAt_get (Γ := Γ) (s := s) b xV)
       have hinv :
           HasFDerivAt (fun x : CtxVec Γ => (CtxVec.get (Γ := Γ) (s := s) b x i)⁻¹)
             ((-((CtxVec.get (Γ := Γ) (s := s) b xV i) ^ 2)⁻¹) • bCLM) xV :=

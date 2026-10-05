@@ -6,7 +6,9 @@ Authors: TorchLean Team
 
 module
 
-public import NN.Spec.Core.Context.Real
+-- Downstream Lipschitz proofs (`NN.Proofs.Analysis.Lipschitz.Network`) reach the `Context ℝ`
+-- instance only through this public import, so keep it even though nothing here names it.
+public import NN.Spec.Core.Context.Real -- shake: keep-downstream
 public import NN.Proofs.Tensor.Basic.LinearAlgebra
 
 /-!
@@ -55,65 +57,6 @@ theorem dot_scale_left {s : Shape} (a b : Tensor ℝ s) (k : ℝ) :
   intro coordinate _
   simp [scaleSpec, mapSpec, Tensor.map, mulSpec, map2Spec, mul_assoc]
   ring
-
-/-!
-## Shape preservation
--/
-
-/-- Elementwise addition does not change the statically tracked shape size. -/
-theorem shape_size_add {s : Shape} (a b : Tensor ℝ s) :
-    Shape.size (shapeOf (addSpec a b)) = Shape.size s := by
-  rw [shapeOf_eq_shape]
-
-/-- Elementwise multiplication does not change the statically tracked shape size. -/
-theorem shape_size_mul {s : Shape} (a b : Tensor ℝ s) :
-    Shape.size (shapeOf (mulSpec a b)) = Shape.size s := by
-  rw [shapeOf_eq_shape]
-
-/-!
-## Uniform finite bounds
--/
-
-/-- Every coordinate is at most `bound`. -/
-private def tensorAllLE {s : Shape} (bound : ℝ) (tensor : Tensor ℝ s) : Prop :=
-  ∀ coordinate, tensor coordinate ≤ bound
-
-/-- A finite, representation-independent upper bound for all tensor entries. -/
-private noncomputable def tensorMax {s : Shape} (tensor : Tensor ℝ s) : ℝ :=
-  ∑ coordinate : s.Coord, |tensor coordinate|
-
-private theorem tensorAllLE_mono {s : Shape} {lower upper : ℝ}
-    (tensor : Tensor ℝ s) (hTensor : tensorAllLE lower tensor) (hBounds : lower ≤ upper) :
-    tensorAllLE upper tensor := by
-  intro coordinate
-  exact (hTensor coordinate).trans hBounds
-
-private theorem tensorAllLE_tensorMax {s : Shape} (tensor : Tensor ℝ s) :
-    tensorAllLE (tensorMax tensor) tensor := by
-  intro coordinate
-  apply (le_abs_self (tensor coordinate)).trans
-  exact Finset.single_le_sum
-    (fun index _ => abs_nonneg (tensor index))
-    (Finset.mem_univ coordinate)
-
-private theorem map_min_eq_self_of_tensorAllLE {s : Shape} {bound : ℝ}
-    (tensor : Tensor ℝ s) (hTensor : tensorAllLE bound tensor) :
-    mapSpec (fun value => min value bound) tensor = tensor := by
-  apply TorchLean.Tensor.Internal.Rep.ext
-  intro coordinate
-  simp only [mapSpec, Tensor.map, TorchLean.Tensor.Internal.Rep.map_apply]
-  exact min_eq_left (hTensor coordinate)
-
-/-- A finite tensor admits a uniform bound, expressed by an idempotent minimum clamp. -/
-theorem safediv_bound {s : Shape} (a b : Tensor ℝ s) :
-    ∀ _i : Fin s.size, (Context.defaultEpsilon : ℝ) > 0 →
-      ∃ bound,
-        absSpec (safedivSpec a b) =
-          mapSpec (fun value => min value bound) (absSpec (safedivSpec a b)) := by
-  intro _ _
-  let tensor := absSpec (safedivSpec a b)
-  refine ⟨tensorMax tensor, ?_⟩
-  exact (map_min_eq_self_of_tensorAllLE tensor (tensorAllLE_tensorMax tensor)).symm
 
 /-!
 ## Squared norm

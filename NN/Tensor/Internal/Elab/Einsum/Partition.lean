@@ -180,20 +180,11 @@ theorem OrderedFlatPartition.foldl_append_eq_array_ofFn
       apply inductionHypothesis
         (appendBuffer (part ()) initial) hRange
       rw [toArray_appendBuffer, hInitial, hPart]
-      have hCombined :
-          Array.ofFn
-                (flatRange total 0 start (by omega) values) ++
-              Array.ofFn
-                (flatRange total start length (by omega) values) =
-            Array.ofFn
-              (flatRange total 0 (start + length) (by omega) values) := by
-        convert
-          array_ofFn_flatRange_append total 0 start length
-            (by omega) values using 1
-        congr 1
-        apply congrArg Array.ofFn
-        funext index
-        simp only [flatRange, Nat.zero_add]
-      exact hCombined
+      convert
+        array_ofFn_flatRange_append total 0 start length (by omega) values using 1
+      congr 1
+      apply congrArg Array.ofFn
+      funext index
+      simp only [flatRange, Nat.zero_add]
 
 end TorchLean.Tensor.Internal.Elab.Impl

@@ -6,7 +6,7 @@ Authors: TorchLean Team
 
 module
 
-public import NN.Runtime.Autograd.Engine.Cuda.Ops
+public import NN.Runtime.Autograd.Engine.LibTorch.Ops
 public import NN.Tensor
 public import NN.Tests.Runtime.Cuda.Utils
 
@@ -59,6 +59,9 @@ def run : IO Unit := do
   IO.println "=== CUDA kernel coverage: batch_norm ==="
 
   let outShape : Shape := [channels, height, width]
+  let upstream : Tensor Float outShape :=
+    (Tensor.from #[1.0, -2.0, 0.5, 3.0, -0.25, 1.5, -1.0, 0.75]).reshape
+      [channels, height, width] (by dsimp; decide)
 
   -- CPU tape
   let t0 : Tape Float := Tape.empty
@@ -70,37 +73,68 @@ def run : IO Unit := do
       input_wellFormed xId gId bId)
   let yCpu ← Utils.cpuValue (s := outShape) t4 yId
   let seedCpu : Spec.SomeTensor Float :=
-    Spec.SomeTensor.ofTensor (Tensor.full outShape (1.0 : Float))
+    Spec.SomeTensor.ofTensor upstream
   let gradsCpu ← Utils.okOrThrow (Tape.backwardDenseAll (α := Float) (t := t4) yId seedCpu)
   let dxCpu ← Utils.cpuGrad (s := outShape) gradsCpu xId
   let dGammaCpu ← Utils.cpuGrad (s := [channels]) gradsCpu gId
   let dBetaCpu ← Utils.cpuGrad (s := [channels]) gradsCpu bId
 
   -- CUDA tape
-  let t0c : Runtime.Autograd.Cuda.Tape := Runtime.Autograd.Cuda.Tape.empty
-  let (t1c, xIdc) := Runtime.Autograd.Cuda.Tape.leaf (t := t0c) (Utils.tensorToAnyBuffer x)
+  let baseline ← Runtime.Autograd.LibTorch.Buffer.allocatorStats
+  let xBuffer ← Runtime.Autograd.LibTorch.Buffer.ofFloatArrayIO
+    (Runtime.Autograd.LibTorch.Convert.flattenFloat x)
+  let gammaBuffer ← Runtime.Autograd.LibTorch.Buffer.ofFloatArrayIO
+    (Runtime.Autograd.LibTorch.Convert.flattenFloat gamma)
+  let betaBuffer ← Runtime.Autograd.LibTorch.Buffer.ofFloatArrayIO
+    (Runtime.Autograd.LibTorch.Convert.flattenFloat beta)
+  let t0c : Runtime.Autograd.LibTorch.Tape := Runtime.Autograd.LibTorch.Tape.empty
+  let (t1c, xIdc) := Runtime.Autograd.LibTorch.Tape.leaf (t := t0c)
+    { s := outShape, buf := xBuffer }
     (name := some "x")
-  let (t2c, gIdc) := Runtime.Autograd.Cuda.Tape.leaf (t := t1c) (Utils.tensorToAnyBuffer gamma)
+  let (t2c, gIdc) := Runtime.Autograd.LibTorch.Tape.leaf (t := t1c)
+    { s := [channels], buf := gammaBuffer }
     (name := some "gamma")
-  let (t3c, bIdc) := Runtime.Autograd.Cuda.Tape.leaf (t := t2c) (Utils.tensorToAnyBuffer beta)
+  let (t3c, bIdc) := Runtime.Autograd.LibTorch.Tape.leaf (t := t2c)
+    { s := [channels], buf := betaBuffer }
     (name := some "beta")
-  let (t4c, yIdc) ← Utils.okOrThrow
-    (Runtime.Autograd.Cuda.Tape.batchNorm (t := t3c) (channels := channels)
-      (spatial := spatial) input_wellFormed xIdc gIdc bIdc)
+  let result ← IO.lazyPure fun _ =>
+    Runtime.Autograd.LibTorch.Tape.batchNorm (t := t3c) (channels := channels)
+      (spatial := spatial) input_wellFormed xIdc gIdc bIdc
+  let (t4c, yIdc) ← Utils.okOrThrow result
+  let forward ← Runtime.Autograd.LibTorch.Buffer.allocatorStats
+  -- Inputs, output, normalized input, broadcast gamma, and one channel-sized standard deviation.
+  let expectedBytes := 4 * (4 * Shape.size outShape + 3 * channels)
+  unless forward.liveBytes.toNat == baseline.liveBytes.toNat + expectedBytes do
+    throw <| IO.userError
+      s!"batchnorm: retained forward scratch ({forward.liveBytes} live bytes)"
   let yCuda ← Utils.cudaValue (s := outShape) t4c yIdc
-  let seedCuda : Runtime.Autograd.Cuda.AnyBuffer :=
-    { s := outShape,
-      buf := Runtime.Autograd.Cuda.Buffer.full (UInt32.ofNat (Spec.Shape.size outShape)) 1.0 }
-  let gradsCuda ← Utils.okOrThrow
-    (Runtime.Autograd.Cuda.Tape.backwardDenseAll (t := t4c) yIdc seedCuda)
-  let dxCuda ← Utils.cudaGrad (s := outShape) gradsCuda xIdc
-  let dGammaCuda ← Utils.cudaGrad (s := [channels]) gradsCuda gIdc
-  let dBetaCuda ← Utils.cudaGrad (s := [channels]) gradsCuda bIdc
-
   Utils.assertTensorApprox (s := outShape) "batchnorm forward" yCuda yCpu (tol := 5e-3)
-  Utils.assertTensorApprox (s := outShape) "batchnorm dx" dxCuda dxCpu (tol := 5e-3)
-  Utils.assertTensorApprox (s := [channels]) "batchnorm dgamma" dGammaCuda dGammaCpu (tol := 5e-3)
-  Utils.assertTensorApprox (s := [channels]) "batchnorm dbeta" dBetaCuda dBetaCpu (tol := 5e-3)
+  for pass in [0:3] do
+    let seedBuffer ← Runtime.Autograd.LibTorch.Buffer.ofFloatArrayIO
+      (Runtime.Autograd.LibTorch.Convert.flattenFloat upstream)
+    let gradients ← Runtime.Autograd.LibTorch.Tape.backwardSparse t4c yIdc
+      { s := outShape, buf := seedBuffer } (fun id => id == xIdc || id == gIdc || id == bIdc)
+    for (id, shape, expected) in #[
+        (xIdc, outShape, Runtime.Autograd.LibTorch.Convert.flattenFloat dxCpu),
+        (gIdc, [channels], Runtime.Autograd.LibTorch.Convert.flattenFloat dGammaCpu),
+        (bIdc, [channels], Runtime.Autograd.LibTorch.Convert.flattenFloat dBetaCpu)] do
+      let some gradient := gradients.get? id
+        | throw <| IO.userError s!"batchnorm: missing gradient {id} on pass {pass}"
+      unless gradient.s == shape do
+        throw <| IO.userError "batchnorm: gradient shape mismatch"
+      Utils.assertFloatArrayApprox s!"batchnorm gradient {id}, pass {pass}"
+        (← Runtime.Autograd.LibTorch.Buffer.toFloatArrayIO gradient.buf) expected (tol := 5e-3)
+    Runtime.Autograd.LibTorch.Tape.releaseSparseGrads gradients
+    let after ← Runtime.Autograd.LibTorch.Buffer.allocatorStats
+    unless after.liveBytes == forward.liveBytes do
+      throw <| IO.userError "batchnorm: backward retained temporary payloads"
+  for node in t4c.nodes do
+    discard <| Runtime.Autograd.LibTorch.Buffer.releaseIO node.value.buf
+    for buffer in node.cleanup do
+      discard <| Runtime.Autograd.LibTorch.Buffer.releaseIO buffer
+  let retired ← Runtime.Autograd.LibTorch.Buffer.allocatorStats
+  unless retired.liveBytes == baseline.liveBytes do
+    throw <| IO.userError "batchnorm: tape retirement retained payloads"
 
 end BatchNorm
 end Cuda

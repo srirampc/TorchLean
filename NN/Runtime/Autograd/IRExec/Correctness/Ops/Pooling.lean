@@ -6,7 +6,7 @@ Authors: TorchLean Team
 
 module
 
-public import NN.Runtime.Autograd.IRExec.Correctness.SemanticEquivalenceCommon
+public import NN.Runtime.Autograd.IRExec.Correctness.Common
 
 /-!
 # Pooling Correctness
@@ -85,7 +85,7 @@ theorem buildFrom_denoteAllFrom_maxPool
                             let input : Tensor α
                                 (plan.leading.concat
                                   (Shape.ofList (Tensor.to plan.spatial (List Nat)))) :=
-                              Tensor.castShape (getIdx (α := α) (xs := context) parentIdx)
+                              Tensor.castShape (readTensor (α := α) (xs := context) parentIdx)
                                 plan.concat_eq.symm
                             let layer : Spec.MaxPoolSpec config.spatialRank config.kernel
                                 config.stride config.padding plan.kernelNonzero
@@ -192,7 +192,7 @@ theorem buildFrom_denoteAllFrom_avgPool
                             let input : Tensor α
                                 (plan.leading.concat
                                   (Shape.ofList (Tensor.to plan.spatial (List Nat)))) :=
-                              Tensor.castShape (getIdx (α := α) (xs := context) parentIdx)
+                              Tensor.castShape (readTensor (α := α) (xs := context) parentIdx)
                                 plan.concat_eq.symm
                             let layer : Spec.AvgPoolSpec config.spatialRank config.kernel
                                 config.stride config.padding plan.kernelNonzero

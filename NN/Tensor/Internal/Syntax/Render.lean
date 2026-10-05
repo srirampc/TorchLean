@@ -35,10 +35,6 @@ def tokenKind : Axis → TokenKind
   | .unit => .word "1"
   | .ellipsis => .ellipsis
 
-/-- Render one elementary axis without source-location metadata. -/
-def render (axis : Axis) : String :=
-  axis.tokenKind.render
-
 end Axis
 
 namespace CompositeAxis
@@ -50,13 +46,6 @@ def tokenKinds (axis : CompositeAxis) : List TokenKind :=
     .leftParen :: body ++ [.rightParen]
   else
     body
-
-/--
-Render one top-level axis, retaining parentheses even for empty or unary
-groups because grouping is part of the parsed syntax.
--/
-def render (axis : CompositeAxis) : String :=
-  TokenKind.renderSequence axis.tokenKinds
 
 end CompositeAxis
 

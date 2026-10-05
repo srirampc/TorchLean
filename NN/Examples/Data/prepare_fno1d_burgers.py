@@ -82,7 +82,7 @@ def load_mat(path: pathlib.Path) -> tuple[np.ndarray, np.ndarray, dict[str, str]
     return x, y, {"x": x_key, "y": y_key}
 
 
-def resample_to_grid(a: np.ndarray, grid: int) -> np.ndarray:
+def resample(a: np.ndarray, grid: int) -> np.ndarray:
     if grid <= 1:
         raise SystemExit("--grid must be > 1")
     if grid > a.shape[1]:
@@ -107,8 +107,8 @@ def main() -> None:
 
     x, y, fields = load_mat(mat_path)
     source_grid = x.shape[1]
-    x = resample_to_grid(x, args.grid)
-    y = resample_to_grid(y, args.grid)
+    x = resample(x, args.grid)
+    y = resample(y, args.grid)
 
     needed = args.ntrain + args.ntest
     if needed > x.shape[0]:
@@ -120,10 +120,10 @@ def main() -> None:
     test_idx = perm[args.ntrain :]
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
-    np.save(args.out_dir / "burgers_train_X.npy", x[train_idx].astype(np.float32))
-    np.save(args.out_dir / "burgers_train_y.npy", y[train_idx].astype(np.float32))
-    np.save(args.out_dir / "burgers_test_X.npy", x[test_idx].astype(np.float32))
-    np.save(args.out_dir / "burgers_test_y.npy", y[test_idx].astype(np.float32))
+    np.save(args.out_dir / "burgers_train_X.npy", x[train_idx])
+    np.save(args.out_dir / "burgers_train_y.npy", y[train_idx])
+    np.save(args.out_dir / "burgers_test_X.npy", x[test_idx])
+    np.save(args.out_dir / "burgers_test_y.npy", y[test_idx])
 
     meta = {
         "source": str(mat_path),

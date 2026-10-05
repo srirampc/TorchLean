@@ -214,22 +214,6 @@ def compileInputFlatIndexValue
   | none => pure dynamicIndex
 
 /--
-Transport an index bound across an equality of its natural-number value.
-
-Generated input views use this helper before composing a logical operand index
-with a certified source-index map.
--/
-def indexBoundFromValueEquality
-    (inputSize hIndexValue rightIndexBound : Expr) : MetaM Expr := do
-  let indexBoundPredicate ←
-    withLocalDeclD `inputIndex (mkConst ``Nat) fun inputIndex => do
-      let bound ← mkLT inputIndex inputSize
-      mkLambdaFVars #[inputIndex] bound
-  let indexBoundEquality ←
-    mkAppM ``congrArg #[indexBoundPredicate, hIndexValue]
-  mkAppM ``Eq.mpr #[indexBoundEquality, rightIndexBound]
-
-/--
 Lift equality of two bounded index values to equality of their `Fin` terms.
 -/
 def finIndexEquality
@@ -242,11 +226,11 @@ def finIndexEquality
 /--
 Compile one operand read from a generated row-major index.
 
-Both branches end at the same certified `Fin` index. Concrete buffers use
-native word arithmetic and `Array.uget`; symbolic buffers retain ordinary
-natural-number arithmetic. The native branch additionally proves that
-`USize.toNat` recovers the generated reference index exactly, so wrapping
-cannot affect execution.
+Both branches end at the same certified `Fin` index. Concrete buffers that fit
+every Lean target use native word arithmetic and `Storage.uget`; buffers whose
+sizes remain symbolic or are at least `2^32` retain ordinary natural-number
+arithmetic. The native branch proves that `USize.toNat` recovers the generated
+reference index exactly, so wrapping cannot affect execution.
 -/
 def compileInputRead
     (tensor inputSize inputIndexValue normalizedInputIndexValue
@@ -273,8 +257,7 @@ def compileInputRead
   let certifiedInputIndexBound ←
     mkAppM ``Fin.isLt #[certifiedInputIndex]
   let inputIndexBound ←
-    indexBoundFromValueEquality inputSize hInputIndexValue
-      certifiedInputIndexBound
+    mkAppM ``lt_of_eq_of_lt #[hInputIndexValue, certifiedInputIndexBound]
   if useNativeIndex then
     let nativeIndexFits ← mkLT normalizedInputIndexValue inputSize
     let directIndexBound ←
@@ -348,7 +331,7 @@ def compileInputRead
       withTransparency .all <|
         mkExpectedTypeHint hNativeCertified expectedNativeEquality
     let nativeIndexBound ←
-      indexBoundFromValueEquality inputSize hNativeIndex directIndexBound
+      mkAppM ``lt_of_eq_of_lt #[hNativeIndex, directIndexBound]
     let nativeInputIndex ←
       mkAppOptM ``Fin.mk #[
         some inputSize, some nativeIndexNat, some nativeIndexBound]

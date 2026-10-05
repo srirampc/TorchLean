@@ -29,36 +29,36 @@ needs an equality of encodings instead. These models keep that distinction expli
 
 | Purpose | Scalar API | TorchLean adapter |
 | --- | --- | --- |
-| Rounded reals and error bounds | `Flocq.NF` | `FP32/` |
+| Rounded reals and error bounds | `Flocq.NF` | `FP32.lean` |
 | Configurable encoded formats | `ExecFloat.Binary` | Direct FloatLib API |
-| Computed real rounding | Flocq calculation theorems | `FP32.round_eq_computed` |
-| Outward intervals | FloatLib interval models | `Interval/FP32.lean`, `Interval/IEEEExec32.lean` |
-| Affine quantization | FloatLib rounding policies | `Quantization.lean` |
+| Computed real rounding | `round_nearestEven_computed` | Direct FloatLib API |
+| Intervals | FloatLib interval models | `Interval/`, external Arb adapter |
+| Affine quantization | FloatLib rounding policies | `NN/Spec/Quantization.lean` |
 | Native Lean float expressions | FloatLib `IEEE754.Native` proofs | Direct upstream imports |
 
 Here `Flocq` is `FloatLib.Floats.Formats.Flocq`, and `ExecFloat` is
-`FloatLib.Floats.ExecFloat`. `FP32/Core.lean` supplies the specialization,
-`FP32/Error.lean` its error corollaries, and `FP32/Sterbenz.lean` exact-subtraction results.
+`FloatLib.Floats.ExecFloat`. `FP32.lean` supplies the rounded-real specialization.
+Consumers use FloatLib's generic rounding-error and exact-subtraction theorems directly.
 The interval APIs are `FloatLib.Floats.Interval` and `BinaryInterchange.Model.Interval`.
 
 Format widths and exponent bounds come from FloatLib's `FloatFormat` descriptors, including
-`FloatFormat.binary32` for the `FP32` bridge constants. The former `NeuralFloat` format, rounding,
-scalar, and analysis implementations are supplied by FloatLib; new consumers should use its
-namespaces directly.
+`FloatFormat.binary32` for the `FP32` bridge constants. Use FloatLib's namespaces directly for
+formats, rounding, scalar arithmetic, and analysis.
 
-The former `NN.Floats.Calc` implementation is now supplied by
-`FloatLib.Floats.Formats.Flocq.Calculation.Round`, `.Operations`, `.Arithmetic`, and `.Bracket`.
+Calculation proofs use `FloatLib.Floats.Formats.Flocq.Calculation.Round`, `.Operations`,
+`.Arithmetic`, and `.Bracket`.
 Encoded-format consumers import `FloatLib.Floats.Formats.BinaryInterchange` and
-`FloatLib.Floats.Formats.IEEE754.Native` directly. The former scalar aliases and forwarding
-operations have been deleted. Consumer proofs use `ExecFloat.Binary.toModel` for the exact
+`FloatLib.Floats.Formats.IEEE754.Native` directly. Consumer proofs use
+`ExecFloat.Binary.toModel` for the exact
 configured-to-model conversion.
 
 ## Rounded reals and encoded values
 
 `FP32` abbreviates `NF binaryRadix (fltExp (-149) 24) nearestEven`. It rounds each real operation
 to a grid with 24 significant bits and gradual underflow down to the binary32 subnormal scale.
-**Its exponent has no upper bound.** NaNs, infinities, and signed zeros are absent. Consequently,
-`FP32.ieeeMaxFinite` is a guard for transferring an IEEE result, not a largest element of `FP32`.
+**Its exponent has no upper bound.** NaNs, infinities, and signed zeros are absent, so `FP32`
+has no largest element. Transferring an executable IEEE result into this model needs a
+finiteness hypothesis on that result.
 
 For executable encoded arithmetic, use `ExecFloat.Binary 8 23` for binary32. The two parameters
 count exponent and stored fraction bits. FloatLib owns arithmetic, special-value behavior,
@@ -87,11 +87,10 @@ also imports `NN.Core.Numeric` for native scalar instances, including direct bin
 
 `IEEEExec/Bridge/Finite.lean` transfers FloatLib's arithmetic refinement to configured binary32.
 Its add and multiply theorems have the original result-finiteness premise and conclude that the
-encoded real value equals one `fp32Round` of the exact operation. Subnormal cases do not acquire
+encoded real value equals one `Model.roundAt FloatFormat.binary32` of the exact operation. Subnormal cases do not acquire
 a global relative-error assumption.
 
-The former `Bridge/LeanFloat32` proof graph has been removed. Its consumers now import
-FloatLib's native bridge directly. The CUDA contract reads native bits through
+Native proofs import FloatLib's native bridge directly. The CUDA contract reads native bits through
 `ExecFloat.Binary.ofFloat32`; the tensor error bounds still use `Bridge/Finite.lean`.
 
 For native addition, the finite-input premise is part of the theorem. Square root compares
@@ -119,19 +118,14 @@ example (x : Float32) :
   toModel_ofFloat32_sqrt x
 ```
 
-These examples also appear in `NN/Examples/BugZoo/FloatBoundary.lean`. The retired local
-unconditional multiplication, division, and comparison bridge exports have no asserted
-one-for-one upstream replacement. Configured arithmetic retains its own total software-model
-refinements. Native CPU instructions, CUDA kernels, cuBLAS, and LibTorch have separate execution
+These examples also appear in `NN/Examples/BugZoo/FloatBoundary.lean`. Configured arithmetic
+has total software-model refinements. Native CPU instructions and LibTorch have separate execution
 contracts recorded in `docs/TRUST_BOUNDARIES.md`.
 
-The scalar expression AST and its finite-evaluation refinement moved from
-`IEEEExec/Bridge/Expressions.lean` to `NN.Proofs.RuntimeApprox.IEEE32.Expressions`.
-Its operation adapters live in `NN.Proofs.RuntimeApprox.IEEE32.Arithmetic`. The old
-`Bridge/FP32` and `Bridge/FP32Total` file families were removed as local scalar proof families;
-their generic foundations now come from FloatLib. Required TorchLean refinements remain in these
-proof adapters and `Bridge/Finite.lean`. This is not a claim that every old convenience theorem
-has an identically named upstream replacement.
+`NN.Proofs.RuntimeApprox.IEEE32.Expressions` defines the scalar expression AST and proves its
+finite-evaluation refinement. Its operation adapters live in
+`NN.Proofs.RuntimeApprox.IEEE32.Arithmetic`; `IEEEExec/Bridge/Finite.lean` specializes FloatLib's
+generic arithmetic refinements to the binary32 model used by TorchLean.
 
 `NN.Proofs.RuntimeApprox.Reductions.Tree` keeps the array-facing reduction API and uses FloatLib's
 generic reduction-tree error bound. The binary32 execution refinement remains in
@@ -147,13 +141,16 @@ promise a finite encoded result for an unrepresentable derivative.
 
 ## Intervals, quantization, and external enclosures
 
-`Interval32` selects binary32 endpoints from FloatLib's generic configured interval API; its
-arithmetic and conversion proofs come from FloatLib. `Interval/FP32.lean` specializes rounded-real
-enclosures. `NN.Spec.Quantization` lifts FloatLib's `RealAffineQuantizer` to shaped tensors;
-integer code ranges specify int8, uint8, int4, or custom quantizers independently of tensor layout.
+Use `FloatLib.Numerics.Interval (FloatLib.Floats.ExecFloat.Binary 8 23)` directly for binary32
+endpoints, with arithmetic and conversion proofs from `ExecFloat.Binary.Interval`.
+TorchLean's numerical graph certificates use these binary32 endpoints; selecting another scalar
+format does not supply a graph certificate for that format. FloatLib's `Model.roundAt_mem_Icc`
+gives the half-ulp enclosure of a rounded real. `NN.Spec.Quantization` lifts FloatLib's
+`RealAffineQuantizer` to shaped tensors; integer code ranges specify int8, uint8, int4, or custom
+quantizers independently of tensor layout.
 
 `NN.Floats` imports the Arb interface, but importing it does not run an oracle. Actual requests
-cross the Python/Arb/FLINT process boundary. `Interval/IEEEExec32ArbTrans.lean` is a separate
+cross the Python/Arb/FLINT process boundary. `Interval/Arb.lean` is a separate
 adapter for those external enclosures; parsing an oracle result is not a Lean proof of it.
 
 The worked tensor example remains in `NN/Examples/DeepDives/Floats/EffectiveRounding.lean`.

@@ -95,17 +95,10 @@ theorem buildFrom_denoteAllFrom_const
           simp [NN.IR.Graph.evalAt, NN.IR.Graph.evalNode, NN.IR.Graph.normalizeNodeOutput, hN, hk,
             hT, input, throw, throwThe, MonadExceptOf.throw, nodeData]
           try rfl
-        have hStep :
-            denoteAllState (α := α) inShape st1 x =
-              vals0.push (Spec.SomeTensor.mk (α := α) n.outShape (nodeData.eval ctx)) := by
-          simpa [vals0, st1, ctx] using
-            (denoteAllState_snoc (α := α) (inShape := inShape) (ss := ss) (τ := n.outShape)
-              (gd := gd) (nodeData := nodeData) (x := x))
         have hTail := ih st1 hRec
-        exact buildFrom_denoteAllFrom_finish (α := α) (g := g) (payload := payload)
-          (i := i) (x := x) (hi := hi) (τ := n.outShape)
-          (nodeData := nodeData) (st1 := st1) (st' := st')
-          (ctx := ctx) (vals0 := vals0) (input := input) hTail hEval hStep
+        exact buildFrom_denoteAllFrom_nodeData_exact (α := α) (g := g) (payload := payload)
+          (gd := gd) (i := i) (st' := st') (x := x) (hi := hi)
+          (τ := n.outShape) (nodeData := nodeData) hTail hEval
       · exact False.elim <| by
           exact throw_bind_ne_ok (h := by simpa [hOut] using hBuild)
 

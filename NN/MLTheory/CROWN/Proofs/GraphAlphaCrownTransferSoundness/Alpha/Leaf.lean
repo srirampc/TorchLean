@@ -43,7 +43,7 @@ theorem input_sound {g : Graph} {ps : ParamStore ℝ} {ibp : Array (Option (Flat
     by_contra hne
     simp [stepAlpha, alphaCrownStepNode?, hk, hne] at hs
   subst hidCtx
-  have hb : Cert.boundsIdentity (α := ℝ) ctx.inputDim = b :=
+  have hb : Graph.boundsIdentity (α := ℝ) ctx.inputDim = b :=
     Option.some.inj (by simpa [stepAlpha, alphaCrownStepNode?, hk] using hs)
   subst hb
   rcases hinputs with ⟨vin, hmap, hdim, hxEq⟩
@@ -68,7 +68,7 @@ theorem const_sound {g : Graph} {ps : ParamStore ℝ} {ibp : Array (Option (Flat
   cases hcv : ps.constVals[id]? with
   | none => simp [stepAlpha, alphaCrownStepNode?, hk, hcv] at hs
   | some vc =>
-    have hb : Cert.boundsConst (α := ℝ) ctx.inputDim vc.n vc.v vc.v = b :=
+    have hb : Graph.boundsConst (α := ℝ) ctx.inputDim vc.n vc.v vc.v = b :=
       Option.some.inj (by simpa [stepAlpha, alphaCrownStepNode?, hk, hcv] using hs)
     have hev : ps.constVals[id]? = some v := by
       simpa [CertSoundness.evalNode?, hk] using hEvalSome

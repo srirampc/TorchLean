@@ -41,7 +41,6 @@ runtime backward pass is the Fréchet derivative of the forward pass; those resu
 
 @[expose] public section
 
-
 namespace Proofs
 
 open Spec TorchLean

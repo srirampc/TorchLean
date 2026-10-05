@@ -7,13 +7,14 @@ WildDet3D exporter and draws the model's 2D bbox next to the bbox induced by pro
 3D corners.
 
 This script is not trusted by Lean.  It is only a visual explanation for humans; the
-accept/reject decision comes from `lake exe verify -- camera-box3d-cert ...`.
+accept/reject decision comes from `scripts/lake.sh exe verify -- camera-box3d-cert ...`.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
 from typing import Any
 
@@ -29,7 +30,10 @@ def _bbox_from_metadata(metadata: dict[str, Any], key: str) -> list[float]:
     value = metadata.get(key)
     if not isinstance(value, list) or len(value) != 4:
         raise ValueError(f"metadata.{key}: expected four floats")
-    return [float(x) for x in value]
+    bbox = [float(x) for x in value]
+    if not all(math.isfinite(x) for x in bbox) or bbox[0] > bbox[2] or bbox[1] > bbox[3]:
+        raise ValueError(f"metadata.{key}: expected finite ordered bbox")
+    return bbox
 
 
 def _draw_interval(
@@ -72,7 +76,11 @@ def plot(cert_path: Path, out_path: Path) -> Path:
     exported = _bbox_from_metadata(metadata, "exported_bbox2d")
     image_w = float(cert["image_width"])
     image_h = float(cert["image_height"])
-    encloses = bool(metadata.get("model_bbox_encloses_projected_corners"))
+    if not all(math.isfinite(x) and x > 0 for x in (image_w, image_h)):
+        raise ValueError("image dimensions must be finite and positive")
+    encloses = metadata.get("model_bbox_encloses_projected_corners")
+    if not isinstance(encloses, bool):
+        raise ValueError("metadata.model_bbox_encloses_projected_corners: expected boolean")
 
     width, height = 960, 520
     image = Image.new("RGB", (width, height), (250, 249, 245))

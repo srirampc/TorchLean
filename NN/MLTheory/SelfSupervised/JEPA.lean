@@ -79,10 +79,7 @@ theorem jepaLoss_target_ext {n : Nat} {Context Target Pred : Type}
     (h : ∀ i ∈ idxs, target₁ i = target₂ i) :
     jepaLoss idxs context target₁ predict repLoss =
       jepaLoss idxs context target₂ predict repLoss := by
-  apply congrArg Array.sum
-  apply Array.ext <;> simp only [Array.size_map]
-  intro i hi₁ hi₂
-  simp only [Array.getElem_map]
-  rw [h idxs[i] (Array.getElem_mem hi₁)]
+  unfold jepaLoss maskedLoss
+  exact congrArg Array.sum (Array.map_congr_left fun i hi => by rw [h i hi])
 
 end NN.MLTheory.SelfSupervised

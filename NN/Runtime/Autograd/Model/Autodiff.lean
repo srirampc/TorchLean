@@ -37,15 +37,7 @@ namespace Autodiff
 
 namespace Impl
 
-/--
-Unwrap a runtime `Result` into `IO`, throwing a user error on failure.
-
-This is used throughout this module because lowering and backpropagation utilities return an
-`Autograd.Result` with a structured error message.
--/
-def okOrThrow {α : Type} : Runtime.Autograd.Result α → IO α
-  | .ok a => pure a
-  | .error e => throw <| IO.userError e
+export Runtime.Autograd (okOrThrow)
 
 /-- Execute the checked graph pullback, reporting domain errors through the IO API. -/
 def vjpWithValue {α : Type} [Storage α] [Add α] [Zero α]
@@ -58,23 +50,6 @@ def vjpWithValue {α : Type} [Storage α] [Add α] [Zero α]
 end Impl
 
 open Impl
-
-/-- Lower a scalar-valued TorchLean program to a reusable typed graph. -/
-def lowerScalarToTypedGraph {α : Type} [TorchLean.Storage α] [Context α]
-    {paramShapes inputShapes : List Shape}
-    (program :
-      ∀ {β : Type}, [TorchLean.Storage β] → [Context β] →
-        Runtime.Autograd.Model.Program β (paramShapes ++ inputShapes) Shape.scalar) :
-    IO (Runtime.Autograd.Torch.TypedScalarGraph α (paramShapes ++ inputShapes)) := do
-  let Γ : List Shape := paramShapes ++ inputShapes
-  let build : Runtime.Autograd.TypedGraph.GraphM.M α Γ (Runtime.Autograd.TypedGraph.GraphM.Var
-    Shape.scalar) := do
-    let vs ← Runtime.Autograd.TypedGraph.GraphM.args (α := α) (Γ := Γ)
-    CurriedRef.applyVarList (Γ := Γ)
-      (β := Runtime.Autograd.TypedGraph.GraphM.M α Γ (Runtime.Autograd.TypedGraph.GraphM.Var
-        Shape.scalar))
-      (program (β := α) (m := Runtime.Autograd.TypedGraph.GraphM.M α Γ)) vs
-  okOrThrow (Runtime.Autograd.Torch.lowerScalarToTypedGraph (α := α) (Γ := Γ) build)
 
 /--
 Lower a TorchLean program to a reusable `TypedGraph`.
@@ -97,6 +72,16 @@ def lowerToTypedGraph {α : Type} [TorchLean.Storage α] [Context α]
       (β := Runtime.Autograd.TypedGraph.GraphM.M α Γ (Runtime.Autograd.TypedGraph.GraphM.Var τ))
       (f (β := α) (m := Runtime.Autograd.TypedGraph.GraphM.M α Γ)) vs
   okOrThrow (Runtime.Autograd.Torch.lowerToTypedGraph (α := α) (Γ := Γ) (τ := τ) build)
+
+/-- Lower a scalar-valued TorchLean program to a reusable typed graph. -/
+def lowerScalarToTypedGraph {α : Type} [TorchLean.Storage α] [Context α]
+    {paramShapes inputShapes : List Shape}
+    (program :
+      ∀ {β : Type}, [TorchLean.Storage β] → [Context β] →
+        Runtime.Autograd.Model.Program β (paramShapes ++ inputShapes) Shape.scalar) :
+    IO (Runtime.Autograd.Torch.TypedScalarGraph α (paramShapes ++ inputShapes)) :=
+  lowerToTypedGraph (α := α) (paramShapes := paramShapes) (inputShapes := inputShapes)
+    program
 
 /-- Reverse Jacobian, with output axes prepended to each parameter tensor. -/
 def jacrevOutParams {α : Type} [TorchLean.Storage α] [Context α]
@@ -247,27 +232,15 @@ def Impl.dualGradients {α : Type} [TorchLean.Storage α] [Context α]
     IO (TorchLean.TensorPack (Dual α) (paramShapes ++ inputShapes)) := do
   let αD := Dual α
   let Γ : List Shape := paramShapes ++ inputShapes
-  let build : Runtime.Autograd.TypedGraph.GraphM.M αD Γ (Runtime.Autograd.TypedGraph.GraphM.Var
-    Shape.scalar) := do
-    let vs ← Runtime.Autograd.TypedGraph.GraphM.args (α := αD) (Γ := Γ)
-    CurriedRef.applyVarList (Γ := Γ)
-      (β := Runtime.Autograd.TypedGraph.GraphM.M αD Γ (Runtime.Autograd.TypedGraph.GraphM.Var
-        Shape.scalar))
-      (loss (β := αD) (m := Runtime.Autograd.TypedGraph.GraphM.M αD Γ)) vs
-
-  let graph ← okOrThrow (Runtime.Autograd.Torch.lowerScalarToTypedGraph (α := αD) (Γ := Γ) build)
+  let graph ← lowerScalarToTypedGraph (α := αD)
+    (paramShapes := paramShapes) (inputShapes := inputShapes) loss
   let ssFull : List Shape := graph.nodeShapes
   let fullGraph : Proofs.Autograd.Algebra.GraphData αD Unit Γ ssFull :=
     graph.data
 
   let (tape, _ctx) ← okOrThrow <|
     Runtime.Autograd.TypedGraph.lowerToTapeChecked fullGraph argsD ()
-  let gradsAny ← okOrThrow (Runtime.Autograd.TypedGraph.backwardDenseAllFrom (α := αD) (Γ := Γ)
-    (ss := ssFull) tape graph.output (Tensor.scalar (1 : αD)))
-  let gradsD : TorchLean.TensorPack αD Γ ←
-    okOrThrow (TorchLean.TensorPack.ofShapeErasedArray
-      (α := αD) gradsAny (shapes := Γ))
-  pure gradsD
+  okOrThrow <| graph.vjpFromTape tape (Tensor.scalar (1 : αD))
 
 /--
 Hessian-vector product (HVP) for a scalar loss w.r.t. *parameters*.

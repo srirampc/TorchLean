@@ -38,7 +38,7 @@ Ordering is row-major: for each `x` in `xCoordinates` (outer loop), we sweep all
 
 PyTorch analogue: `torch.cartesian_prod(xCoordinates, yCoordinates)` (up to shape).
 -/
-def cartesianGrid {α : Type} [TorchLean.Storage α] [Zero α] {m n : Nat}
+def cartesianGrid {α : Type} [TorchLean.Storage α] {m n : Nat}
     (xCoordinates : Tensor α [m]) (yCoordinates : Tensor α [n]) :
     Tensor α [m * n, 2] :=
   Tensor.stack 0 (fun ij =>
@@ -47,11 +47,7 @@ def cartesianGrid {α : Type} [TorchLean.Storage α] [Zero α] {m n : Nat}
     let x : α := xCoordinates[i]
     let y : α := yCoordinates[j]
     Tensor.stack 0 (fun k =>
-      Tensor.full [] <|
-        match k.val with
-        | 0 => x
-        | 1 => y
-        | _ => 0))
+      Tensor.full [] (if k.val = 0 then x else y)))
 
 /--
 Linearly spaced points including endpoints.
@@ -63,7 +59,7 @@ Linearly spaced points including endpoints.
 
 PyTorch analogue: `torch.linspace`.
 -/
-def linspace {α : Type} [TorchLean.Storage α] [Context α]
+def linspace {α : Type} [TorchLean.Storage α] [NatCast α] [Add α] [Sub α] [Mul α] [Div α]
     (lower upper : α) (count : Nat) :
     Tensor α [count] :=
   match count with
@@ -78,7 +74,7 @@ def linspace {α : Type} [TorchLean.Storage α] [Context α]
         Tensor.full [] (lower + t * (upper - lower)))
 
 /-- Square grid over `[lower, upper] x [lower, upper]`. -/
-def squareGrid {α : Type} [TorchLean.Storage α] [Context α]
+def squareGrid {α : Type} [TorchLean.Storage α] [NatCast α] [Add α] [Sub α] [Mul α] [Div α]
     (lower upper : α) (count : Nat) :
     Tensor α [count * count, 2] :=
   let axis := linspace lower upper count

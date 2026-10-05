@@ -7,11 +7,12 @@ Authors: TorchLean Team
 module
 
 public import Mathlib.Analysis.SpecialFunctions.Log.Deriv
+public import Mathlib.Analysis.SpecialFunctions.Sigmoid
 public import Mathlib.Analysis.SpecialFunctions.Sqrt
 public import Mathlib.Analysis.SpecialFunctions.Trigonometric.DerivHyp
 public import NN.Proofs.Utils.MathFunctions
-public import NN.Spec.Layers.Activation
 public import NN.Spec.Core.Context.Real
+public import NN.Spec.Layers.Activation
 
 /-!
 # `NN.Proofs.Gradients.Activation`
@@ -22,7 +23,6 @@ for TorchLean autograd correctness proofs.
 
 @[expose] public section
 
-open Complex
 open Real
 open Activation
 open Spec TorchLean
@@ -137,12 +137,7 @@ theorem leaky_relu_deriv_correct (x : ℝ) (h : x ≠ 0) (αₗ : ℝ) (_ : α�
 /-- Correctness of the square derivative spec: `d/dx x^2 = 2x`. -/
 theorem square_deriv_correct (x : ℝ) :
     HasDerivAt (fun y : ℝ => y * y) ((2 : ℝ) * x) x := by
-  have hid : HasDerivAt (fun y : ℝ => y) (1 : ℝ) x := hasDerivAt_id' x
-  have hmul := hid.mul hid
-  have hderiv : (1 : ℝ) * x + x * (1 : ℝ) = (2 : ℝ) * x := by
-    norm_num
-    ring
-  exact hmul.congr_deriv hderiv
+  simpa [pow_two] using hasDerivAt_pow 2 x
 
 /-- Correctness of the hyperbolic-sine derivative spec: `sinh' = cosh`. -/
 theorem sinh_deriv_correct (x : ℝ) :
@@ -203,6 +198,16 @@ theorem sigmoid_eq_inv_exp (x : ℝ) : Activation.Math.sigmoidSpec x = (1 + Real
     field_simp [hexp, hden]
     ring
 
+/-- The real sigmoid is nonnegative. -/
+theorem sigmoid_spec_nonneg (x : ℝ) :
+    0 ≤ Activation.Math.sigmoidSpec (α := ℝ) x := by
+  simpa only [sigmoid_eq_inv_exp, Real.sigmoid_def] using Real.sigmoid_nonneg x
+
+/-- The real sigmoid is at most `1`. -/
+theorem sigmoid_spec_le_one (x : ℝ) :
+    Activation.Math.sigmoidSpec (α := ℝ) x ≤ 1 := by
+  simpa only [sigmoid_eq_inv_exp, Real.sigmoid_def] using Real.sigmoid_le_one x
+
 /-- Sigmoid also equals `exp x / (1 + exp x)` over the reals.
 
 This form is the negative-input evaluation branch and the derivative obtained by differentiating
@@ -222,34 +227,9 @@ PyTorch correspondence: `torch.sigmoid`.
 -/
 theorem sigmoid_deriv_correct (x : ℝ) :
   HasDerivAt Activation.Math.sigmoidSpec (Activation.Math.sigmoidDerivSpec x) x := by
-  have h_denom_ne_zero : 1 + Real.exp (-x) ≠ 0 := by
-    linarith [Real.exp_pos (-x)]
-
-  -- Work with the smooth reciprocal expression; the branch identity transfers the result back.
-  have h_inner : HasDerivAt (fun y ↦ 1 + Real.exp (-y)) (-Real.exp (-x)) x := by
-    apply HasDerivAt.const_add
-    have h_neg : HasDerivAt (fun y ↦ -y) (-1) x := hasDerivAt_neg x
-    have h_comp := (Real.hasDerivAt_exp (-x)).comp x h_neg
-    simpa [Function.comp_def] using h_comp
-
-  have h_main : HasDerivAt (fun y ↦ (1 + Real.exp (-y))⁻¹)
-                          (-((1 + Real.exp (-x))^2)⁻¹ * (-Real.exp (-x))) x := by
-    exact (hasDerivAt_inv h_denom_ne_zero).comp x h_inner
-
-  have h_simplified : -((1 + Real.exp (-x))^2)⁻¹ * (-Real.exp (-x)) =
-                     Real.exp (-x) / (1 + Real.exp (-x))^2 := by
-    field_simp
-
-  rw [h_simplified] at h_main
-
-  -- The reciprocal derivative is the output-based formula used by the VJP.
-  have h_deriv_target :
-      Real.exp (-x) / (1 + Real.exp (-x)) ^ 2 = Activation.Math.sigmoidDerivSpec x := by
-    rw [Activation.Math.sigmoidDerivSpec, sigmoid_eq_inv_exp]
-    field_simp [h_denom_ne_zero]
-    ring
-  exact (h_main.congr_deriv h_deriv_target).congr_of_eventuallyEq
-    (Filter.Eventually.of_forall (fun y => by rw [sigmoid_eq_inv_exp]))
+  have hs : (Activation.Math.sigmoidSpec : ℝ → ℝ) = Real.sigmoid :=
+    funext fun y => by rw [sigmoid_eq_inv_exp, Real.sigmoid_def]
+  simpa only [Activation.Math.sigmoidDerivSpec, hs] using Real.hasDerivAt_sigmoid x
 
 /-- Differentiating `σ(x)(1 - σ(x))` gives `σ'(x)(1 - 2σ(x))`.
 
@@ -275,59 +255,29 @@ theorem sigmoid_deriv_spec_deriv_correct (x : ℝ) :
     ring
   exact hproduct.congr_deriv hderiv
 
+/-- Over the reals the logistic formula `exp x / (exp x + 1)` is the sigmoid; the two specs differ
+only in the order of the summands in the denominator. -/
+theorem logisticSpec_eq_sigmoidSpec (x : ℝ) :
+    Activation.Math.logisticSpec x = Activation.Math.sigmoidSpec x := by
+  unfold Activation.Math.logisticSpec
+  rw [sigmoid_eq_exp_div, mathfunc_exp_eq_rexp, add_comm (Real.exp x) 1]
+
 /--
 Correctness of the derivative spec for `Activation.Math.logisticSpec`.
 
 This is the scalar logistic formula `exp x / (exp x + 1)`. It is not named
 `softmax`: a one-entry softmax is always `1`, while TorchLean's actual axis-normalizing softmax is
-the tensor-level `Activation.softmaxSpec` in `NN/Spec/Layers/Activation.lean`.
+the tensor-level `Activation.softmaxSpec` in `NN/Spec/Layers/Activation.lean`. Over the reals it
+is the sigmoid (`logisticSpec_eq_sigmoidSpec`), and `logisticDerivSpec` is the same output-form
+expression as `sigmoidDerivSpec`, so the derivative is inherited from `sigmoid_deriv_correct`.
 -/
 theorem logistic_deriv_correct (x : ℝ) :
-  HasDerivAt Activation.Math.logisticSpec (Activation.Math.logisticDerivSpec x) x := by
-  -- Scalar logistic: `exp x / (exp x + 1)`.
-  have hdenom : MathFunctions.exp x + 1 ≠ 0 := by
-    -- reduce to `Real.exp_pos`
-    simpa [mathfunc_exp_eq_rexp] using (by linarith [Real.exp_pos x] : Real.exp x + 1 ≠ 0)
-  have hu : HasDerivAt (fun y : ℝ => MathFunctions.exp y) (MathFunctions.exp x) x := by
-    simpa [mathfunc_exp_eq_rexp] using (Real.hasDerivAt_exp x)
-  have hv : HasDerivAt (fun y : ℝ => MathFunctions.exp y + 1) (MathFunctions.exp x) x := by
-    simpa [mathfunc_exp_eq_rexp] using (Real.hasDerivAt_exp x).add_const 1
-  have hdiv := hu.div hv hdenom
-  have hdiv' :
-      HasDerivAt (fun y : ℝ => MathFunctions.exp y / (MathFunctions.exp y + 1))
-        ((MathFunctions.exp x * (MathFunctions.exp x + 1) - MathFunctions.exp x * MathFunctions.exp
-          x) /
-          ((MathFunctions.exp x + 1) * (MathFunctions.exp x + 1)))
-        x := by
-    change HasDerivAt
-      ((fun y : ℝ => MathFunctions.exp y) / fun y : ℝ => MathFunctions.exp y + 1)
-      ((MathFunctions.exp x * (MathFunctions.exp x + 1) - MathFunctions.exp x * MathFunctions.exp
-        x) /
-        ((MathFunctions.exp x + 1) * (MathFunctions.exp x + 1)))
-      x
-    simpa [pow_two] using hdiv
-  have hsimp :
-      (MathFunctions.exp x * (MathFunctions.exp x + 1) - MathFunctions.exp x * MathFunctions.exp x)
-        /
-          ((MathFunctions.exp x + 1) * (MathFunctions.exp x + 1))
-        =
-      (MathFunctions.exp x) / ((MathFunctions.exp x + 1) * (MathFunctions.exp x + 1)) := by
-    ring_nf
-  have hderiv :
-      Activation.Math.logisticDerivSpec x =
-        (MathFunctions.exp x) / ((MathFunctions.exp x + 1) * (MathFunctions.exp x + 1)) := by
-    unfold Activation.Math.logisticDerivSpec Activation.Math.logisticSpec
-    field_simp [hdenom]
-    ring
-  -- Replace the quotient-rule derivative by `logisticDerivSpec x`.
-  have hdiv'' :
-      HasDerivAt (fun y : ℝ => MathFunctions.exp y / (MathFunctions.exp y + 1))
-        (Activation.Math.logisticDerivSpec x) x := by
-    simpa [hsimp, hderiv] using hdiv'
-  -- Rewrite the function to `Activation.Math.logisticSpec`.
-  change HasDerivAt (fun y : ℝ => MathFunctions.exp y / (MathFunctions.exp y + 1))
-    (Activation.Math.logisticDerivSpec x) x
-  exact hdiv''
+    HasDerivAt Activation.Math.logisticSpec (Activation.Math.logisticDerivSpec x) x := by
+  have hfun : (Activation.Math.logisticSpec : ℝ → ℝ) = Activation.Math.sigmoidSpec :=
+    funext logisticSpec_eq_sigmoidSpec
+  unfold Activation.Math.logisticDerivSpec
+  rw [hfun]
+  exact sigmoid_deriv_correct x
 
 /-- Real tanh is smooth at every order because its cosh denominator never vanishes. -/
 @[fun_prop] theorem contDiff_tanh {n : WithTop ℕ∞} : ContDiff ℝ n Real.tanh := by
@@ -335,50 +285,14 @@ theorem logistic_deriv_correct (x : ℝ) :
   simp only [Real.tanh_eq_sinh_div_cosh]
   exact Real.contDiff_sinh.fun_div Real.contDiff_cosh (fun x => (Real.cosh_pos x).ne')
 
-/-- `tanh` in terms of `exp`, which is the form every derivative computation below wants.
+/-- `tanh` in terms of `exp`.
 
-Mathlib defines `Real.tanh` through the complex hyperbolic functions, so getting to this elementary
-identity means descending to `Complex.sinh`/`Complex.cosh` and taking real parts. The long `calc`
-below does exactly that, and it is worth doing once here rather than inside each proof. -/
+Mathlib states `Real.sinh` and `Real.cosh` in exponential form (`Real.sinh_eq`, `Real.cosh_eq`);
+the common factor `1 / 2` cancels in the quotient. -/
 theorem tanh_exp_eq (x : ℝ) :
-  Real.tanh x = (Real.exp x - Real.exp (-x)) / (Real.exp x + Real.exp (-x)) := by
-  calc
-    Real.tanh x = (Complex.sinh ↑x).re / (Complex.cosh ↑x).re := by
-      rw [Real.tanh_eq_sinh_div_cosh, Real.sinh, Real.cosh]
-    _ = ((cexp ↑x - cexp (-↑x)) / 2).re / ((cexp ↑x + cexp (-↑x)) / 2).re := by
-      dsimp only [Complex.sinh, Complex.cosh]
-    _ = ((rexp x * Real.cos 0 - rexp (-x) * Real.cos 0) * re 2 / normSq 2 +
-         (rexp x * Real.sin 0 - rexp (-x) * Real.sin 0) * im 2 / normSq 2) /
-        ((rexp x * Real.cos 0 + rexp (-x) * Real.cos 0) * re 2 / normSq 2 +
-         (rexp x * Real.sin 0 + rexp (-x) * Real.sin 0) * im 2 / normSq 2) := by
-      rw [Complex.div_re, Complex.sub_re, Complex.div_re, Complex.add_re, Complex.add_im,
-        Complex.sub_im]
-      rw [Complex.exp_im, Complex.exp_re]
-      rw [Complex.exp_im, Complex.exp_re]
-      rw [neg_re, neg_im]
-      rw [ofReal_re, ofReal_im, neg_zero]
-    _ = ((rexp x - rexp (-x)) * re 2 / normSq 2) /
-        ((rexp x + rexp (-x)) * re 2 / normSq 2) := by
-      simp only [Real.cos_zero, Real.sin_zero, mul_one, mul_zero, zero_mul, add_zero]
-      simp only [sub_zero, zero_mul, zero_div, add_zero]
-    _ = ((rexp x - rexp (-x)) * 2 / 4) /
-        ((rexp x + rexp (-x)) * 2 / 4) := by norm_num
-    _ = ((2 / 4) * ((rexp x - rexp (-x))) /
-        ((2 / 4) * (rexp x + rexp (-x)))) := by
-          rw [mul_div_assoc]
-          rw [mul_comm]
-          rw [mul_div_assoc]
-          rw [mul_div_assoc]
-          conv =>
-            pattern (rexp x + rexp (-x)) * (2 / 4)
-            rw [mul_comm]
-          rw [mul_div_assoc']
-    _ = (2 / 4) / (2 / 4) * ((rexp x - rexp (-x)) /
-        (rexp x + rexp (-x))) := by
-          rw [mul_div_mul_comm]
-    _ = 1 * ((rexp x - rexp (-x)) /
-        (rexp x + rexp (-x))) := by norm_num
-    _ = (rexp x - rexp (-x)) / (rexp x + rexp (-x)) := by simp
+    Real.tanh x = (Real.exp x - Real.exp (-x)) / (Real.exp x + Real.exp (-x)) := by
+  rw [Real.tanh_eq_sinh_div_cosh, Real.sinh_eq, Real.cosh_eq,
+    div_div_div_cancel_right₀ (two_ne_zero : (2 : ℝ) ≠ 0)]
 
 /--
 Correctness of the tanh derivative spec.
@@ -387,70 +301,20 @@ PyTorch correspondence: `torch.tanh`.
 -/
 theorem tanh_deriv_correct (x : ℝ) :
     HasDerivAt Activation.Math.tanhSpec (Activation.Math.tanhDerivSpec x) x := by
-  -- Unfold definitions
-  unfold Activation.Math.tanhSpec Activation.Math.tanhDerivSpec
-
-  -- Define numerator and denominator of tanh(x) = f(x)/g(x)
-  let f : ℝ → ℝ := fun t => Real.exp t - Real.exp (-t)
-  let g : ℝ → ℝ := fun t => Real.exp t + Real.exp (-t)
-
-  -- Derivative of f and g using chain rule and derivative rules
-  have h_exp_neg : HasDerivAt (fun t => Real.exp (-t)) (-Real.exp (-x)) x := by
-    have h_neg : HasDerivAt (fun t ↦ -t) (-1) x := hasDerivAt_neg x
-    have h_comp := (Real.hasDerivAt_exp (-x)).comp x h_neg
-    simpa [Function.comp_def] using h_comp
-
-  have hf : HasDerivAt f (Real.exp x + Real.exp (-x)) x := by
-    rw [← sub_neg_eq_add]
-    exact HasDerivAt.sub (hasDerivAt_exp x) h_exp_neg
-
-  have hg : HasDerivAt g (Real.exp x - Real.exp (-x)) x :=
-    HasDerivAt.add (hasDerivAt_exp x) h_exp_neg
-
-  -- Denominator is nonzero for all x
-  have h_denom_ne_zero : g x ≠ 0 :=
-    ne_of_gt (add_pos (exp_pos x) (exp_pos (-x)))
-
-  -- Show that tanhAct equals f/g in a neighborhood
-  have h_func_eq : ∀ᶠ y in 𝓝 x, Activation.Math.tanhSpec y = f y / g y := by
-    apply Filter.Eventually.of_forall
-    intro y
-    unfold Activation.Math.tanhSpec
-    rw [mathfunc_tanh_eq_rtanh, tanh_exp_eq]
-
-  -- Show that the derivative equals 1 - tanh²
-  have h_derivative_eq : ((Real.exp x + Real.exp (-x)) * g x - f x * (Real.exp x - Real.exp (-x))) /
-    g x ^ 2 =
-    1 - MathFunctions.tanh x * MathFunctions.tanh x := by
-    -- First establish the numerator identity
-    have h_num : (Real.exp x + Real.exp (-x)) * g x - f x * (Real.exp x - Real.exp (-x)) = 4 := by
-      simp only [f, g]
-      ring_nf
-      rw [← Real.exp_add x (-x)]
-      simp [Real.exp_zero]
-
-    -- Then show 1 - tanh²(x) = 4/(g x)²
-    have h_tanh_identity :
-      1 - MathFunctions.tanh x ^ 2 = 4 / (g x) ^ 2 := by
-      rw [mathfunc_tanh_eq_rtanh, tanh_exp_eq]
-      -- now tanh x = (exp x - exp (-x)) / (exp x + exp (-x))
-      simp only [g]
-      -- rewrite tanh squared explicitly
-      field_simp [add_pos (exp_pos x) (exp_pos (-x))] -- denominator nonzero
-      ring_nf
-      rw [← Real.exp_add x (-x)]
-      simp [Real.exp_zero]
-
-    rw [h_num, ← h_tanh_identity]
-    rw [pow_two]
-
-  -- Apply quotient rule and use the established equalities
-  have h_deriv := HasDerivAt.div hf hg h_denom_ne_zero
-
-  -- Use congr_of_eventuallyEq with the correct derivative
-  exact HasDerivAt.congr_of_eventuallyEq
-    (h_deriv.congr_deriv h_derivative_eq)
-    h_func_eq
+  have hcosh : Real.cosh x ≠ 0 := (Real.cosh_pos x).ne'
+  have hfun : (Activation.Math.tanhSpec : ℝ → ℝ) = fun y => Real.sinh y / Real.cosh y :=
+    funext fun y => Real.tanh_eq_sinh_div_cosh y
+  -- The quotient rule for `sinh / cosh` gives `(cosh² - sinh²) / cosh²`, which equals
+  -- `1 - tanh²` as a rational identity in `sinh` and `cosh`; no hyperbolic Pythagorean identity
+  -- is needed.
+  have hderiv :
+      (Real.cosh x * Real.cosh x - Real.sinh x * Real.sinh x) / Real.cosh x ^ 2 =
+        Activation.Math.tanhDerivSpec x := by
+    unfold Activation.Math.tanhDerivSpec
+    rw [mathfunc_tanh_eq_rtanh, Real.tanh_eq_sinh_div_cosh]
+    field_simp
+  rw [hfun, ← hderiv]
+  exact (Real.hasDerivAt_sinh x).div (Real.hasDerivAt_cosh x) hcosh
 
 /-- The real tanh chain rule, using the same derivative expression as the runtime. -/
 theorem _root_.HasDerivAt.tanh {f : ℝ → ℝ} {f' x : ℝ} (hf : HasDerivAt f f' x) :
@@ -671,15 +535,7 @@ theorem smooth_abs_deriv_correct (x ε : ℝ) (hε : 0 < ε) :
       linarith
     exact ne_of_gt this
   have h_inner : HasDerivAt (fun y : ℝ => y * y + ε) (2 * x) x := by
-    have hid : HasDerivAt (fun y : ℝ => y) (1 : ℝ) x := hasDerivAt_id' x
-    have hmul : HasDerivAt (fun y : ℝ => y * y) (x + x) x := by
-      -- product rule on `y ↦ y * y` gives derivative `x + x`
-      change HasDerivAt ((fun y : ℝ => y) * fun y : ℝ => y) (x + x) x
-      exact (hid.mul hid).congr_deriv (by ring)
-    have htwo : x + x = 2 * x := by ring
-    have hsq : HasDerivAt (fun y : ℝ => y * y) (2 * x) x :=
-      hmul.congr_deriv htwo
-    simpa using (hsq.const_add ε)
+    simpa using (square_deriv_correct x).const_add ε
   have h_comp := (hasDerivAt_sqrt hx0).comp x h_inner
   -- simplify `(1 / (2 * sqrt u)) * (2 * x)` to `x / sqrt u`
   have : (1 / (2 * Real.sqrt (x * x + ε))) * (2 * x) = x / Real.sqrt (x * x + ε) := by

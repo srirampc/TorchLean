@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
 from typing import Any
 
@@ -93,6 +94,14 @@ def main() -> None:
         default=Path("NN/Examples/Verification/Robustness/digits_test.json"),
     )
     args = parser.parse_args()
+    if args.epochs < 0 or args.batch <= 0:
+        parser.error("--epochs must be nonnegative and --batch positive")
+    if not math.isfinite(args.lr) or args.lr < 0:
+        parser.error("--lr must be finite and nonnegative")
+    if not 0 < args.test_size < 1:
+        parser.error("--test-size must lie strictly between zero and one")
+    if args.out_weights.resolve() == args.out_dataset.resolve():
+        parser.error("weights and dataset outputs must be distinct")
 
     set_seeds(args.seed)
 
@@ -142,8 +151,8 @@ def main() -> None:
     args.out_dataset.parent.mkdir(parents=True, exist_ok=True)
     weights_json = export_weights_json(model, in_dim=in_dim, out_dim=out_dim, normalize_div=normalize_div)
     dataset_json = export_dataset_json(x_test, y_test, in_dim=in_dim, out_dim=out_dim, normalize_div=normalize_div)
-    args.out_weights.write_text(json.dumps(weights_json, indent=2) + "\n")
-    args.out_dataset.write_text(json.dumps(dataset_json, indent=2) + "\n")
+    args.out_weights.write_text(json.dumps(weights_json, indent=2, allow_nan=False) + "\n")
+    args.out_dataset.write_text(json.dumps(dataset_json, indent=2, allow_nan=False) + "\n")
     print(f"Wrote: {args.out_weights}")
     print(f"Wrote: {args.out_dataset}")
 

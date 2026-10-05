@@ -140,8 +140,10 @@ The same constructor with fifteen exponent bits and 112 fraction bits selects bi
 Custom widths use that API too, subject to its width and bias constraints.
 {ref "tensors-shapes"}[Tensors And Shapes] carries a binary128 value through a typed model's
 parameters, output, and derivatives. That CPU path also supports `nn.sgdStep` in the selected
-type. The supervised trainer's data, reporting, and checkpoint boundary remains `Float`;
-its `.ieee` arithmetic setting selects binary32. It is not a width parameter.
+type. `trainer.openTyped` preserves the selected scalar through supervised samples, reports, and
+model-state checkpoints on CPU. Supply typed initial state to retain the extra digits from the
+start. The ordinary trainer's `.ieee` arithmetic setting still selects binary32; it is not a width
+parameter.
 
 There is also `Tensor ℝ`, used in specifications and proofs. Mathlib constructs real numbers from
 Cauchy sequences; its general real arithmetic and order are noncomputable. Although particular
@@ -836,7 +838,7 @@ dataset.
 -- before any optimizer step.
 def atTrainer : Trainer [2] [1] :=
   Trainer.new atSmall
-    { objective := .meanSquaredError
+    { objective := .mse
       optimizer := optim.adam { learningRate := 0.03 }
       seed := 2026 }
 
@@ -993,8 +995,8 @@ The executable tools have their own runner:
 ```terminal
 # List the available workflows, then run the small
 # model-to-IBP example.
-lake exe verify -- list
-lake exe verify -- torchlean-ibp
+scripts/lake.sh exe verify -- list
+scripts/lake.sh exe verify -- torchlean-ibp
 ```
 
 The objects that matter at this level are `NN.IR.Graph`, the parameter payload, the input region,
@@ -1051,7 +1053,7 @@ Hessian-vector product:
 ```terminal
 # Run the scalar-gradient and detach examples through the
 # public command-line entry point.
-lake exe torchlean quickstart_autograd
+scripts/lake.sh exe torchlean quickstart_autograd
 ```
 
 It also prints a loss and the same loss after `detach`: their forward values agree, but the
@@ -1067,8 +1069,8 @@ Command-specific help lists the runtime options for any example:
 ```terminal
 # Inspect the MLP flags first, then the list of runnable
 # examples.
-lake exe torchlean quickstart_mlp --help
-lake exe torchlean --help
+scripts/lake.sh exe torchlean quickstart_mlp --help
+scripts/lake.sh exe torchlean --help
 ```
 
 The top-level help lists the runnable model families and the common `--device`, `--arithmetic`,

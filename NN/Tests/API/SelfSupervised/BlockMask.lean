@@ -22,6 +22,11 @@ namespace NN.Tests.API.SelfSupervised.BlockMask
 
 open TorchLean
 
+example {α : Type} [Storage α] [Zero α] [One α] [NatCast α] [Div α]
+    {shape : Shape} (blocks : Tensor (Option Nat) [shape.rank]) :
+    Tensor α [shape.size] :=
+  ssl.BlockMAE.reconstructionWeights blocks 2 0
+
 def expect (tag : String) (ok : Bool) : IO Unit := do
   unless ok do
     throw <| IO.userError s!"block-mask check failed: {tag}"

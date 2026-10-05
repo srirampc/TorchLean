@@ -12,7 +12,8 @@ public import NN.Tactic.Autograd
 /-!
 # Differentiate three scalar functions
 
-Run `lake exe torchlean transcendentals` to compare autograd with hand-computed derivatives:
+Run `scripts/lake.sh exe torchlean transcendentals` to compare autograd with hand-computed
+derivatives:
 
 * `exp x` has derivative `exp x`;
 * `3 * x + 1` has derivative `3`;
@@ -143,7 +144,7 @@ def usage : String :=
     [ "TorchLean transcendental autograd checks"
     , ""
     , "Usage:"
-    , "  lake exe torchlean transcendentals"
+    , "  scripts/lake.sh exe torchlean transcendentals"
     , ""
     , "Checks derivatives of exp(x), 3x+1, and exp(-2x) at x=0.5 (Float tolerance 1e-6)."
     , "PASS-NEG means a deliberately wrong derivative was rejected. No data or GPU needed."

@@ -139,16 +139,6 @@ theorem vectorEquiv_reshape {α : Type u} [Storage α]
   intro flatIndex hFlatIndex
   rfl
 
-/--
-The array underlying a tensor's vector view has exactly the tensor's number
-of entries.
--/
-theorem vectorEquiv_toArray_size {α : Type u} [Storage α]
-    {shape : Shape}
-    (tensor : Rep α shape) :
-    (vectorEquiv α shape tensor).toArray.size = Shape.size shape :=
-  (vectorEquiv α shape tensor).size_toArray
-
 end Rep
 
 end TorchLean.Tensor.Internal

@@ -23,8 +23,3 @@ def main (args : List String) : IO UInt32 :=
   TorchLean.CLI.exitOnError do
     NN.Verification.CLI.dispatch args
     pure 0
-
-/-- C-exported wrapper used by native executable startup. -/
-@[export lean_main]
-def exportedMain (args : List String) : IO UInt32 :=
-  main args

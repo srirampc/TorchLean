@@ -26,13 +26,14 @@ This module proves the next runtime layer boundary:
 
 That is the exact post-norm sublayer shape used by classical Transformer encoder blocks
 (`LayerNorm(x + Sublayer(x))`). Attention and feed-forward sublayers reach the *same* boundary, so
-`postNorm_backpropVec_eq_adjoint_fderiv_at` serves both of them; there is no separate per-sublayer
-theorem to keep in sync.
+`postNorm_backpropVec_eq_adjoint_fderiv_at` serves both of them. The single-graph theorems
+`mhaPostNorm_backpropVec_eq_adjoint_fderiv_at` and `seqFfnPostNorm_backpropVec_eq_adjoint_fderiv_at`
+additionally fuse each residual prefix with its LayerNorm into one SSA graph.
 
 We deliberately keep this proof factored at the residual-stream interface. It avoids treating
-LayerNorm's pointwise domain hypotheses as globally smooth, and it gives later full-block proofs a
-clean seam: compose a globally smooth residual graph with this pointwise post-norm graph once the
-context-threading adapter for unused parameters is in place.
+LayerNorm's pointwise domain hypotheses as globally smooth, and it gives full-block proofs a clean
+seam: compose a globally smooth residual graph with this pointwise post-norm graph, threading the
+unused LayerNorm parameters through the residual prefix with `DGraph.weakenContext`.
 
 References:
 
@@ -65,7 +66,7 @@ abbrev ssPostNorm (seqLen dModel : Nat) : List Shape :=
 
 /-- MHA context extended with the affine parameters for the following LayerNorm. -/
 abbrev ΓMHAWithNorm (seqLen dModel numHeads headDim : Nat) : List Shape :=
-  MultiHeadAttention.ΓMHA seqLen dModel numHeads headDim ++
+  DirectReshapeAttention.ΓMHA seqLen dModel numHeads headDim ++
     [LayerNorm.VecShape dModel, LayerNorm.VecShape dModel]
 
 /-- Residual-MHA plus one whole-node post-norm output. -/
@@ -78,7 +79,7 @@ def idxMhaPostNormGamma {seqLen dModel numHeads headDim : Nat} {ss : List Shape}
   Proofs.Idx.weaken
     (Γ := ΓMHAWithNorm seqLen dModel numHeads headDim)
     (s := LayerNorm.VecShape dModel)
-    ⟨⟨5, by simp [ΓMHAWithNorm, MultiHeadAttention.ΓMHA]⟩,
+    ⟨⟨5, by simp [ΓMHAWithNorm, DirectReshapeAttention.ΓMHA]⟩,
       by simp⟩
     ss
 
@@ -88,7 +89,7 @@ def idxMhaPostNormBeta {seqLen dModel numHeads headDim : Nat} {ss : List Shape} 
   Proofs.Idx.weaken
     (Γ := ΓMHAWithNorm seqLen dModel numHeads headDim)
     (s := LayerNorm.VecShape dModel)
-    ⟨⟨6, by simp [ΓMHAWithNorm, MultiHeadAttention.ΓMHA]⟩,
+    ⟨⟨6, by simp [ΓMHAWithNorm, DirectReshapeAttention.ΓMHA]⟩,
       by simp⟩
     ss
 
@@ -97,10 +98,9 @@ def idxMhaResidualForPostNorm {seqLen dModel numHeads headDim : Nat} :
     Idx
       (ΓMHAWithNorm seqLen dModel numHeads headDim ++ ssMHAResidual seqLen dModel numHeads headDim)
       (LayerNorm.MatShape seqLen dModel) :=
-  ⟨⟨21, by
-      simp [ΓMHAWithNorm, MultiHeadAttention.ΓMHA, ssMHAResidual, MultiHeadAttention.ssMHA]⟩,
-    by
-      simp [LayerNorm.MatShape, MultiHeadAttention.XShape]⟩
+  Idx.last (Γ := ΓMHAWithNorm seqLen dModel numHeads headDim)
+    (ss := DirectReshapeAttention.ssMHA seqLen dModel numHeads headDim)
+    (τ := DirectReshapeAttention.XShape seqLen dModel)
 
 /-- LayerNorm input triple after the residual-MHA prefix has run. -/
 def mhaPostNormInputs {seqLen dModel numHeads headDim : Nat} :
@@ -168,7 +168,7 @@ def mhaPostNormGraphFDerivCorrectAt
   classical
   let dgPrefix := mhaResidualWithNormParamsDGraph (seqLen := seqLen) (dModel := dModel)
     (numHeads := numHeads) (headDim := headDim) c
-  refine ⟨DGraph.graphFDerivCorrectAtOfCorrect dgPrefix.hg xV, ?_⟩
+  refine ⟨GraphFDerivCorrect.at dgPrefix.hg xV, ?_⟩
   exact
     LayerNorm.wholeNodeFDerivCorrectAt
       (Γ := ΓMHAWithNorm seqLen dModel numHeads headDim ++
@@ -206,16 +206,15 @@ theorem mhaPostNorm_backpropVec_eq_adjoint_fderiv_at
           (ss := ssMHAWithPostNorm seqLen dModel numHeads headDim)
           (mhaPostNormGraph (seqLen := seqLen) (dModel := dModel) (numHeads := numHeads)
             (headDim := headDim) c ε))
-        xV).adjoint seedV := by
-  exact
-    Graph.backpropVec_eq_adjoint_fderiv_at
-      (Γ := ΓMHAWithNorm seqLen dModel numHeads headDim)
-      (ss := ssMHAWithPostNorm seqLen dModel numHeads headDim)
-      (g := mhaPostNormGraph (seqLen := seqLen) (dModel := dModel) (numHeads := numHeads)
-        (headDim := headDim) c ε)
-      xV seedV
-      (mhaPostNormGraphFDerivCorrectAt (seqLen := seqLen) (dModel := dModel)
-        (numHeads := numHeads) (headDim := headDim) c ε xV hε)
+        xV).adjoint seedV :=
+  Graph.backpropVec_eq_adjoint_fderiv_at
+    (Γ := ΓMHAWithNorm seqLen dModel numHeads headDim)
+    (ss := ssMHAWithPostNorm seqLen dModel numHeads headDim)
+    (g := mhaPostNormGraph (seqLen := seqLen) (dModel := dModel) (numHeads := numHeads)
+      (headDim := headDim) c ε)
+    xV seedV
+    (mhaPostNormGraphFDerivCorrectAt (seqLen := seqLen) (dModel := dModel)
+      (numHeads := numHeads) (headDim := headDim) c ε xV hε)
 
 /-!
 ## Sequence feed-forward plus post-norm
@@ -339,7 +338,7 @@ def seqFfnPostNormGraphFDerivCorrectAt
   classical
   let dgPrefix := seqFfnResidualWithNormParamsDGraph (seqLen := seqLen) (dModel := dModel)
     (dFF := dFF) fc1 b1 fc2 b2
-  refine ⟨DGraph.graphFDerivCorrectAtOfCorrect dgPrefix.hg xV, ?_⟩
+  refine ⟨GraphFDerivCorrect.at dgPrefix.hg xV, ?_⟩
   exact
     LayerNorm.wholeNodeFDerivCorrectAt
       (Γ := ΓSeqFFNWithNorm seqLen dModel ++ ssSeqFFNResidual seqLen dModel dFF)
@@ -380,16 +379,15 @@ theorem seqFfnPostNorm_backpropVec_eq_adjoint_fderiv_at
           (ss := ssSeqFFNWithPostNorm seqLen dModel dFF)
           (seqFfnPostNormGraph (seqLen := seqLen) (dModel := dModel) (dFF := dFF)
             fc1 b1 fc2 b2 ε))
-        xV).adjoint seedV := by
-  exact
-    Graph.backpropVec_eq_adjoint_fderiv_at
-      (Γ := ΓSeqFFNWithNorm seqLen dModel)
-      (ss := ssSeqFFNWithPostNorm seqLen dModel dFF)
-      (g := seqFfnPostNormGraph (seqLen := seqLen) (dModel := dModel) (dFF := dFF)
-        fc1 b1 fc2 b2 ε)
-      xV seedV
-      (seqFfnPostNormGraphFDerivCorrectAt (seqLen := seqLen) (dModel := dModel)
-        (dFF := dFF) fc1 b1 fc2 b2 ε xV hε)
+        xV).adjoint seedV :=
+  Graph.backpropVec_eq_adjoint_fderiv_at
+    (Γ := ΓSeqFFNWithNorm seqLen dModel)
+    (ss := ssSeqFFNWithPostNorm seqLen dModel dFF)
+    (g := seqFfnPostNormGraph (seqLen := seqLen) (dModel := dModel) (dFF := dFF)
+      fc1 b1 fc2 b2 ε)
+    xV seedV
+    (seqFfnPostNormGraphFDerivCorrectAt (seqLen := seqLen) (dModel := dModel)
+      (dFF := dFF) fc1 b1 fc2 b2 ε xV hε)
 
 /--
 The post-norm graph itself.
@@ -408,14 +406,14 @@ Pointwise correctness for the post-norm Transformer boundary.
 The only hypothesis is `0 < ε`. LayerNorm's differentiability side conditions at the runtime point
 (positive variance-plus-epsilon, nonzero standard deviation) follow from it.
 -/
-def postNormGraphFderivCorrectAt
+def postNormGraphFDerivCorrectAt
     {seqLen dModel : Nat} (ε : ℝ) (xV : CtxVec (ΓPostNorm seqLen dModel))
     (hε : 0 < ε) :
     GraphFDerivCorrectAt
       (Γ := ΓPostNorm seqLen dModel)
       (ss := ssPostNorm seqLen dModel)
       (postNormGraph (seqLen := seqLen) (dModel := dModel) ε) xV :=
-  LayerNorm.layerNormGraphFderivCorrectAt
+  LayerNorm.layerNormGraphFDerivCorrectAt
     (m := seqLen) (n := dModel) ε xV hε
 
 /--
@@ -488,7 +486,7 @@ theorem residualThenPostNorm_hasFDerivAt
         (Γ := ΓPostNorm seqLen dModel)
         (ss := ssPostNorm seqLen dModel)
         g (residualPack x) :=
-    postNormGraphFderivCorrectAt
+    postNormGraphFDerivCorrectAt
       (seqLen := seqLen) (dModel := dModel) ε (residualPack x) hε
   rcases Graph.hasFDerivAt_evalVec_and_jvp_at
       (Γ := ΓPostNorm seqLen dModel)

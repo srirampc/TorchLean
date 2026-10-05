@@ -7,7 +7,6 @@ module
 
 public meta import NN.Tactic.Einops.Report
 public import NN.Tactic.Einops.Proof
-import Mathlib.Algebra.Order.Field.Basic
 
 /-!
 # Verified tensor proof automation

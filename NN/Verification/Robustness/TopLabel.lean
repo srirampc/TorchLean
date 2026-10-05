@@ -6,7 +6,6 @@ Authors: TorchLean Team
 
 module
 
-import Mathlib.Tactic.Positivity.Finset
 public import NN.Spec.Core.Context
 public import NN.Spec.Core.Tensor.Core
 public import NN.Tensor.Internal.Elab.TensorLiteral

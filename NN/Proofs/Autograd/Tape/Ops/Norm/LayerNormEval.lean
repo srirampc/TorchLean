@@ -8,6 +8,7 @@ module
 
 public import NN.Proofs.Autograd.Tape.Ops.Norm.LayerNormGraph
 public import NN.Proofs.Autograd.Tape.Ops.Norm.CtxVecEval
+public import NN.Proofs.Autograd.Tape.Ops.Norm.RowNormalization
 
 /-!
 # Evaluating the LayerNorm graph
@@ -38,40 +39,36 @@ open TapeNodes TapeNodes.MatrixLinear
 
 variable {m n : Nat}
 
-/-- Flattened size of a length-`k` vector shape. -/
-theorem vecShape_size (k : Nat) : Spec.Shape.size (VecShape k) = k := by
-  simp [Spec.Shape.size]
-
 /-- Index of `X` in the bare LayerNorm context. -/
-def idxX0 : Idx (ΓLN m n) (MatShape m n) := ⟨⟨0, by simp [ΓLN]⟩, by simp [ΓLN]⟩
+def idxInputX : Idx (ΓLN m n) (MatShape m n) := ⟨⟨0, by simp [ΓLN]⟩, by simp [ΓLN]⟩
 
 /-- Index of `gamma` in the bare LayerNorm context. -/
-def idxGamma0 : Idx (ΓLN m n) (VecShape n) := ⟨⟨1, by simp [ΓLN]⟩, by simp [ΓLN]⟩
+def idxInputGamma : Idx (ΓLN m n) (VecShape n) := ⟨⟨1, by simp [ΓLN]⟩, by simp [ΓLN]⟩
 
 /-- Index of `beta` in the bare LayerNorm context. -/
-def idxBeta0 : Idx (ΓLN m n) (VecShape n) := ⟨⟨2, by simp [ΓLN]⟩, by simp [ΓLN]⟩
+def idxInputBeta : Idx (ΓLN m n) (VecShape n) := ⟨⟨2, by simp [ΓLN]⟩, by simp [ΓLN]⟩
 
 /-! ## Closed forms of the intermediates -/
 
 /-- The input matrix block. -/
 def valX (xV : CtxVec (ΓLN m n)) : Vec (Spec.Shape.size (MatShape m n)) :=
-  CtxVec.get (Γ := ΓLN m n) (s := MatShape m n) idxX0 xV
+  CtxVec.get (Γ := ΓLN m n) (s := MatShape m n) idxInputX xV
 
 /-- The scale vector block. -/
 def valGamma (xV : CtxVec (ΓLN m n)) : Vec n :=
-  getVec (Γ := ΓLN m n) (n := n) idxGamma0 xV
+  getVec (Γ := ΓLN m n) (n := n) idxInputGamma xV
 
 /-- The shift vector block. -/
 def valBeta (xV : CtxVec (ΓLN m n)) : Vec n :=
-  getVec (Γ := ΓLN m n) (n := n) idxBeta0 xV
+  getVec (Γ := ΓLN m n) (n := n) idxInputBeta xV
 
 /-- Row means of `X`. -/
 def valMean (xV : CtxVec (ΓLN m n)) : Vec (Spec.Shape.size (VecShape m)) :=
-  castVec (vecShape_size m).symm (rowMeanCLM (m := m) (n := n) (valX xV))
+  castVec (Matmul.vecSize_eq m).symm (rowMeanCLM (m := m) (n := n) (valX xV))
 
 /-- Row means broadcast back to the matrix shape. -/
 def valMeanB (xV : CtxVec (ΓLN m n)) : Vec (Spec.Shape.size (MatShape m n)) :=
-  broadcastRowCLM (m := m) (n := n) (castVec (vecShape_size m) (valMean xV))
+  broadcastRowCLM (m := m) (n := n) (castVec (Matmul.vecSize_eq m) (valMean xV))
 
 /-- Centered input `X - mean_b`. -/
 def valCentered (xV : CtxVec (ΓLN m n)) : Vec (Spec.Shape.size (MatShape m n)) :=
@@ -83,7 +80,7 @@ def valCenteredSq (xV : CtxVec (ΓLN m n)) : Vec (Spec.Shape.size (MatShape m n)
 
 /-- Row variances (means of the squared centered entries). -/
 def valVar (xV : CtxVec (ΓLN m n)) : Vec (Spec.Shape.size (VecShape m)) :=
-  castVec (vecShape_size m).symm (rowMeanCLM (m := m) (n := n) (valCenteredSq xV))
+  castVec (Matmul.vecSize_eq m).symm (rowMeanCLM (m := m) (n := n) (valCenteredSq xV))
 
 /-- Row variances shifted by `ε`. -/
 def valVarEps (xV : CtxVec (ΓLN m n)) (ε : ℝ) : Vec (Spec.Shape.size (VecShape m)) :=
@@ -99,7 +96,7 @@ def valInvStd (xV : CtxVec (ΓLN m n)) (ε : ℝ) : Vec (Spec.Shape.size (VecSha
 
 /-- Inverse standard deviation broadcast back to the matrix shape. -/
 def valInvStdB (xV : CtxVec (ΓLN m n)) (ε : ℝ) : Vec (Spec.Shape.size (MatShape m n)) :=
-  broadcastRowCLM (m := m) (n := n) (castVec (vecShape_size m) (valInvStd xV ε))
+  broadcastRowCLM (m := m) (n := n) (castVec (Matmul.vecSize_eq m) (valInvStd xV ε))
 
 /-- Normalized input `centered ⊙ inv_std_b`. -/
 def valNorm (xV : CtxVec (ΓLN m n)) (ε : ℝ) : Vec (Spec.Shape.size (MatShape m n)) :=
@@ -123,280 +120,286 @@ def valY (xV : CtxVec (ΓLN m n)) (ε : ℝ) : Vec (Spec.Shape.size (MatShape m 
 
 /-! ## Stage evaluations -/
 
-/-- Stage `g1`: the mean block. -/
-theorem get_g1 (xV : CtxVec (ΓLN m n)) :
+/-- Stage `graphMean`: the mean block. -/
+theorem get_graphMean (xV : CtxVec (ΓLN m n)) :
     CtxVec.get (Γ := ΓLN m n ++ [VecShape m]) (s := VecShape m) (idxMean (m := m) (n := n))
-      (Graph.evalVec (Γ := ΓLN m n) (ss := [VecShape m]) (g1 (m := m) (n := n)) xV) =
+      (Graph.evalVec (Γ := ΓLN m n) (ss := [VecShape m]) (graphMean (m := m) (n := n)) xV) =
       valMean xV := by
   refine (Graph.get_evalVec_snoc_last (Γ := ΓLN m n) (ss := []) (τ := VecShape m)
     Graph.nil (nodeMean (m := m) (n := n)) xV (idxMean (m := m) (n := n)) rfl).trans ?_
   simp only [nodeMean, rowMean, Node.forwardVec_ofFn]
   rw [Graph.get_evalVec_input (Γ := ΓLN m n) (ss := []) Graph.nil xV
-    (idxX (m := m) (n := n) (ss := [])) (idxX0 (m := m) (n := n)) rfl]
+    (idxX (m := m) (n := n) (ss := [])) (idxInputX (m := m) (n := n)) rfl]
   rfl
 
-/-- Stage `g2`: the broadcast mean block. -/
-theorem get_g2 (xV : CtxVec (ΓLN m n)) :
+/-- Stage `graphMeanBroadcast`: the broadcast mean block. -/
+theorem get_graphMeanBroadcast (xV : CtxVec (ΓLN m n)) :
     CtxVec.get (Γ := ΓLN m n ++ [VecShape m, MatShape m n]) (s := MatShape m n)
       (idxMeanB (m := m) (n := n))
-      (Graph.evalVec (Γ := ΓLN m n) (ss := [VecShape m, MatShape m n]) (g2 (m := m) (n := n)) xV) =
+      (Graph.evalVec (Γ := ΓLN m n) (ss := [VecShape m, MatShape m n])
+        (graphMeanBroadcast (m := m) (n := n)) xV) =
       valMeanB xV := by
   refine (Graph.get_evalVec_snoc_last (Γ := ΓLN m n) (ss := [VecShape m]) (τ := MatShape m n)
-    (g1 (m := m) (n := n)) (nodeMeanB (m := m) (n := n)) xV (idxMeanB (m := m) (n := n))
+    (graphMean (m := m) (n := n)) (nodeMeanB (m := m) (n := n)) xV (idxMeanB (m := m) (n := n))
     rfl).trans ?_
   simp only [nodeMeanB, broadcastRow, Node.forwardVec_ofFn, getVec]
-  rw [get_g1]
+  rw [get_graphMean]
   rfl
 
-/-- Stage `g3`: the centered block. -/
-theorem get_g3 (xV : CtxVec (ΓLN m n)) :
+/-- Stage `graphCentered`: the centered block. -/
+theorem get_graphCentered (xV : CtxVec (ΓLN m n)) :
     CtxVec.get (Γ := ΓLN m n ++ [VecShape m, MatShape m n, MatShape m n]) (s := MatShape m n)
       (idxCentered (m := m) (n := n))
       (Graph.evalVec (Γ := ΓLN m n) (ss := [VecShape m, MatShape m n, MatShape m n])
-        (g3 (m := m) (n := n)) xV) =
+        (graphCentered (m := m) (n := n)) xV) =
       valCentered xV := by
   refine (Graph.get_evalVec_snoc_last (Γ := ΓLN m n) (ss := [VecShape m, MatShape m n])
-    (τ := MatShape m n) (g2 (m := m) (n := n)) (nodeCentered (m := m) (n := n)) xV
+    (τ := MatShape m n) (graphMeanBroadcast (m := m) (n := n)) (nodeCentered (m := m) (n := n)) xV
     (idxCentered (m := m) (n := n)) rfl).trans ?_
   simp only [nodeCentered, sub, Node.forwardVec_ofFn]
   rw [Graph.get_evalVec_input (Γ := ΓLN m n) (ss := [VecShape m, MatShape m n])
-    (g2 (m := m) (n := n)) xV (idxX (m := m) (n := n) (ss := [VecShape m, MatShape m n]))
-    (idxX0 (m := m) (n := n)) rfl, get_g2]
+    (graphMeanBroadcast (m := m) (n := n)) xV
+    (idxX (m := m) (n := n) (ss := [VecShape m, MatShape m n]))
+    (idxInputX (m := m) (n := n)) rfl, get_graphMeanBroadcast]
   rfl
 
-/-- Stage `g4`: the squared centered block. -/
-theorem get_g4 (xV : CtxVec (ΓLN m n)) :
+/-- Stage `graphCenteredSq`: the squared centered block. -/
+theorem get_graphCenteredSq (xV : CtxVec (ΓLN m n)) :
     CtxVec.get (Γ := ΓLN m n ++ [VecShape m, MatShape m n, MatShape m n, MatShape m n])
       (s := MatShape m n) (idxCenteredSq (m := m) (n := n))
       (Graph.evalVec (Γ := ΓLN m n)
-        (ss := [VecShape m, MatShape m n, MatShape m n, MatShape m n]) (g4 (m := m) (n := n)) xV) =
+        (ss := [VecShape m, MatShape m n, MatShape m n, MatShape m n])
+        (graphCenteredSq (m := m) (n := n)) xV) =
       valCenteredSq xV := by
   refine (Graph.get_evalVec_snoc_last (Γ := ΓLN m n)
-    (ss := [VecShape m, MatShape m n, MatShape m n]) (τ := MatShape m n) (g3 (m := m) (n := n))
+    (ss := [VecShape m, MatShape m n, MatShape m n]) (τ := MatShape m n)
+    (graphCentered (m := m) (n := n))
     (nodeCenteredSq (m := m) (n := n)) xV (idxCenteredSq (m := m) (n := n)) rfl).trans ?_
   simp only [nodeCenteredSq, mul, Node.forwardVec_ofFn]
-  rw [get_g3]
+  rw [get_graphCentered]
   rfl
 
-/-- Stage `g5`: the variance block. -/
-theorem get_g5 (xV : CtxVec (ΓLN m n)) :
+/-- Stage `graphVar`: the variance block. -/
+theorem get_graphVar (xV : CtxVec (ΓLN m n)) :
     CtxVec.get
       (Γ := ΓLN m n ++ [VecShape m, MatShape m n, MatShape m n, MatShape m n, VecShape m])
       (s := VecShape m) (idxVar (m := m) (n := n))
       (Graph.evalVec (Γ := ΓLN m n)
         (ss := [VecShape m, MatShape m n, MatShape m n, MatShape m n, VecShape m])
-        (g5 (m := m) (n := n)) xV) =
+        (graphVar (m := m) (n := n)) xV) =
       valVar xV := by
   refine (Graph.get_evalVec_snoc_last (Γ := ΓLN m n)
     (ss := [VecShape m, MatShape m n, MatShape m n, MatShape m n]) (τ := VecShape m)
-    (g4 (m := m) (n := n)) (nodeVar (m := m) (n := n)) xV (idxVar (m := m) (n := n)) rfl).trans ?_
+    (graphCenteredSq (m := m) (n := n)) (nodeVar (m := m) (n := n)) xV (idxVar (m := m) (n := n))
+      rfl).trans ?_
   simp only [nodeVar, rowMean, Node.forwardVec_ofFn]
-  rw [get_g4]
+  rw [get_graphCenteredSq]
   rfl
 
-/-- Stage `layerNormPrefix6`: the shifted variance block. -/
-theorem get_prefix6 (ε : ℝ) (xV : CtxVec (ΓLN m n)) :
-    CtxVec.get (Γ := ΓLN m n ++ ssPrefix6 m n) (s := VecShape m) (idxVarEps (m := m) (n := n))
-      (Graph.evalVec (Γ := ΓLN m n) (ss := ssPrefix6 m n)
-        (layerNormPrefix6 (m := m) (n := n) ε) xV) =
+/-- Stage `graphVarEps`: the shifted variance block. -/
+theorem get_graphVarEps (ε : ℝ) (xV : CtxVec (ΓLN m n)) :
+    CtxVec.get (Γ := ΓLN m n ++ ssVarEps m n) (s := VecShape m) (idxVarEps (m := m) (n := n))
+      (Graph.evalVec (Γ := ΓLN m n) (ss := ssVarEps m n)
+        (graphVarEps (m := m) (n := n) ε) xV) =
       valVarEps xV ε := by
   refine (Graph.get_evalVec_snoc_last (Γ := ΓLN m n)
     (ss := [VecShape m, MatShape m n, MatShape m n, MatShape m n, VecShape m]) (τ := VecShape m)
-    (g5 (m := m) (n := n)) (nodeVarEps (m := m) (n := n) ε) xV (idxVarEps (m := m) (n := n))
+    (graphVar (m := m) (n := n)) (nodeVarEps (m := m) (n := n) ε) xV (idxVarEps (m := m) (n := n))
     rfl).trans ?_
   simp only [nodeVarEps, elemwise, Node.forwardVec_ofFn]
-  rw [get_g5]
+  rw [get_graphVar]
   rfl
 
-/-- Stage `layerNormPrefix7`: the standard deviation block. -/
-theorem get_prefix7 (ε : ℝ) (xV : CtxVec (ΓLN m n)) :
-    CtxVec.get (Γ := ΓLN m n ++ ssPrefix7 m n) (s := VecShape m) (idxStd (m := m) (n := n))
-      (Graph.evalVec (Γ := ΓLN m n) (ss := ssPrefix7 m n)
-        (layerNormPrefix7 (m := m) (n := n) ε) xV) =
+/-- Stage `graphStd`: the standard deviation block. -/
+theorem get_graphStd (ε : ℝ) (xV : CtxVec (ΓLN m n)) :
+    CtxVec.get (Γ := ΓLN m n ++ ssStd m n) (s := VecShape m) (idxStd (m := m) (n := n))
+      (Graph.evalVec (Γ := ΓLN m n) (ss := ssStd m n)
+        (graphStd (m := m) (n := n) ε) xV) =
       valStd xV ε := by
-  refine (Graph.get_evalVec_snoc_last (Γ := ΓLN m n) (ss := ssPrefix6 m n) (τ := VecShape m)
-    (layerNormPrefix6 (m := m) (n := n) ε) (nodeStd (m := m) (n := n)) xV
+  refine (Graph.get_evalVec_snoc_last (Γ := ΓLN m n) (ss := ssVarEps m n) (τ := VecShape m)
+    (graphVarEps (m := m) (n := n) ε) (nodeStd (m := m) (n := n)) xV
     (idxStd (m := m) (n := n)) rfl).trans ?_
   simp only [nodeStd, sqrtClamp, elemwise, Node.forwardVec_ofFn]
-  rw [get_prefix6]
+  rw [get_graphVarEps]
   rfl
 
-/-- Stage `g8`: the inverse standard deviation block. -/
-theorem get_g8 (ε : ℝ) (xV : CtxVec (ΓLN m n)) :
-    CtxVec.get (Γ := ΓLN m n ++ (ssPrefix7 m n ++ [VecShape m])) (s := VecShape m)
+/-- Stage `graphInvStd`: the inverse standard deviation block. -/
+theorem get_graphInvStd (ε : ℝ) (xV : CtxVec (ΓLN m n)) :
+    CtxVec.get (Γ := ΓLN m n ++ (ssStd m n ++ [VecShape m])) (s := VecShape m)
       (idxInvStd (m := m) (n := n))
-      (Graph.evalVec (Γ := ΓLN m n) (ss := ssPrefix7 m n ++ [VecShape m])
-        (g8 (m := m) (n := n) ε) xV) =
+      (Graph.evalVec (Γ := ΓLN m n) (ss := ssStd m n ++ [VecShape m])
+        (graphInvStd (m := m) (n := n) ε) xV) =
       valInvStd xV ε := by
-  refine (Graph.get_evalVec_snoc_last (Γ := ΓLN m n) (ss := ssPrefix7 m n) (τ := VecShape m)
-    (layerNormPrefix7 (m := m) (n := n) ε) (nodeInvStd (m := m) (n := n)) xV
+  refine (Graph.get_evalVec_snoc_last (Γ := ΓLN m n) (ss := ssStd m n) (τ := VecShape m)
+    (graphStd (m := m) (n := n) ε) (nodeInvStd (m := m) (n := n)) xV
     (idxInvStd (m := m) (n := n)) rfl).trans ?_
   simp only [nodeInvStd, inv, elemwise, Node.forwardVec_ofFn]
-  rw [get_prefix7]
+  rw [get_graphStd]
   rfl
 
-/-- Stage `g9`: the broadcast inverse standard deviation block. -/
-theorem get_g9 (ε : ℝ) (xV : CtxVec (ΓLN m n)) :
-    CtxVec.get (Γ := ΓLN m n ++ (ssPrefix7 m n ++ [VecShape m, MatShape m n]))
-      (s := MatShape m n) (idxInvStdB9 (m := m) (n := n))
-      (Graph.evalVec (Γ := ΓLN m n) (ss := ssPrefix7 m n ++ [VecShape m, MatShape m n])
-        (g9 (m := m) (n := n) ε) xV) =
+/-- Stage `graphInvStdBroadcast`: the broadcast inverse standard deviation block. -/
+theorem get_graphInvStdBroadcast (ε : ℝ) (xV : CtxVec (ΓLN m n)) :
+    CtxVec.get (Γ := ΓLN m n ++ (ssStd m n ++ [VecShape m, MatShape m n]))
+      (s := MatShape m n) (idxInvStdBroadcast (m := m) (n := n))
+      (Graph.evalVec (Γ := ΓLN m n) (ss := ssStd m n ++ [VecShape m, MatShape m n])
+        (graphInvStdBroadcast (m := m) (n := n) ε) xV) =
       valInvStdB xV ε := by
-  refine (Graph.get_evalVec_snoc_last (Γ := ΓLN m n) (ss := ssPrefix7 m n ++ [VecShape m])
-    (τ := MatShape m n) (g8 (m := m) (n := n) ε) (nodeInvStdB (m := m) (n := n)) xV
-    (idxInvStdB9 (m := m) (n := n)) rfl).trans ?_
+  refine (Graph.get_evalVec_snoc_last (Γ := ΓLN m n) (ss := ssStd m n ++ [VecShape m])
+    (τ := MatShape m n) (graphInvStd (m := m) (n := n) ε) (nodeInvStdB (m := m) (n := n)) xV
+    (idxInvStdBroadcast (m := m) (n := n)) rfl).trans ?_
   simp only [nodeInvStdB, broadcastRow, Node.forwardVec_ofFn, getVec]
-  rw [get_g8]
+  rw [get_graphInvStd]
   rfl
 
-/-- The centered block is still available at stage `g9`. -/
-theorem get_centered9 (ε : ℝ) (xV : CtxVec (ΓLN m n)) :
-    CtxVec.get (Γ := ΓLN m n ++ (ssPrefix7 m n ++ [VecShape m, MatShape m n]))
-      (s := MatShape m n) (idxCentered9 (m := m) (n := n))
-      (Graph.evalVec (Γ := ΓLN m n) (ss := ssPrefix7 m n ++ [VecShape m, MatShape m n])
-        (g9 (m := m) (n := n) ε) xV) =
+/-- The centered block is still available at stage `graphInvStdBroadcast`. -/
+theorem get_centeredForNorm (ε : ℝ) (xV : CtxVec (ΓLN m n)) :
+    CtxVec.get (Γ := ΓLN m n ++ (ssStd m n ++ [VecShape m, MatShape m n]))
+      (s := MatShape m n) (idxCenteredForNorm (m := m) (n := n))
+      (Graph.evalVec (Γ := ΓLN m n) (ss := ssStd m n ++ [VecShape m, MatShape m n])
+        (graphInvStdBroadcast (m := m) (n := n) ε) xV) =
       valCentered xV := by
-  refine (Graph.get_evalVec_snoc_of_lt (Γ := ΓLN m n) (ss := ssPrefix7 m n ++ [VecShape m])
-    (τ := MatShape m n) (g8 (m := m) (n := n) ε) (nodeInvStdB (m := m) (n := n)) xV
-    (idxCentered9 (m := m) (n := n))
+  refine (Graph.get_evalVec_snoc_of_lt (Γ := ΓLN m n) (ss := ssStd m n ++ [VecShape m])
+    (τ := MatShape m n) (graphInvStd (m := m) (n := n) ε) (nodeInvStdB (m := m) (n := n)) xV
+    (idxCenteredForNorm (m := m) (n := n))
     (Idx.weaken (idxCentered (m := m) (n := n))
       [MatShape m n, VecShape m, VecShape m, VecShape m, VecShape m]) rfl).trans ?_
-  refine (Graph.get_evalVec_snoc_of_lt (Γ := ΓLN m n) (ss := ssPrefix7 m n)
-    (τ := VecShape m) (layerNormPrefix7 (m := m) (n := n) ε) (nodeInvStd (m := m) (n := n)) xV _
+  refine (Graph.get_evalVec_snoc_of_lt (Γ := ΓLN m n) (ss := ssStd m n)
+    (τ := VecShape m) (graphStd (m := m) (n := n) ε) (nodeInvStd (m := m) (n := n)) xV _
     (Idx.weaken (idxCentered (m := m) (n := n))
       [MatShape m n, VecShape m, VecShape m, VecShape m]) rfl).trans ?_
-  refine (Graph.get_evalVec_snoc_of_lt (Γ := ΓLN m n) (ss := ssPrefix6 m n)
-    (τ := VecShape m) (layerNormPrefix6 (m := m) (n := n) ε) (nodeStd (m := m) (n := n)) xV _
+  refine (Graph.get_evalVec_snoc_of_lt (Γ := ΓLN m n) (ss := ssVarEps m n)
+    (τ := VecShape m) (graphVarEps (m := m) (n := n) ε) (nodeStd (m := m) (n := n)) xV _
     (Idx.weaken (idxCentered (m := m) (n := n)) [MatShape m n, VecShape m, VecShape m])
     rfl).trans ?_
   refine (Graph.get_evalVec_snoc_of_lt (Γ := ΓLN m n)
     (ss := [VecShape m, MatShape m n, MatShape m n, MatShape m n, VecShape m])
-    (τ := VecShape m) (g5 (m := m) (n := n)) (nodeVarEps (m := m) (n := n) ε) xV _
+    (τ := VecShape m) (graphVar (m := m) (n := n)) (nodeVarEps (m := m) (n := n) ε) xV _
     (Idx.weaken (idxCentered (m := m) (n := n)) [MatShape m n, VecShape m]) rfl).trans ?_
   refine (Graph.get_evalVec_snoc_of_lt (Γ := ΓLN m n)
     (ss := [VecShape m, MatShape m n, MatShape m n, MatShape m n])
-    (τ := VecShape m) (g4 (m := m) (n := n)) (nodeVar (m := m) (n := n)) xV _
+    (τ := VecShape m) (graphCenteredSq (m := m) (n := n)) (nodeVar (m := m) (n := n)) xV _
     (Idx.weaken (idxCentered (m := m) (n := n)) [MatShape m n]) rfl).trans ?_
   refine (Graph.get_evalVec_snoc_of_lt (Γ := ΓLN m n)
     (ss := [VecShape m, MatShape m n, MatShape m n])
-    (τ := MatShape m n) (g3 (m := m) (n := n)) (nodeCenteredSq (m := m) (n := n)) xV _
+    (τ := MatShape m n) (graphCentered (m := m) (n := n)) (nodeCenteredSq (m := m) (n := n)) xV _
     (idxCentered (m := m) (n := n)) rfl).trans ?_
-  exact get_g3 xV
+  exact get_graphCentered xV
 
-/-- Stage `g10`: the normalized block. -/
-theorem get_g10 (ε : ℝ) (xV : CtxVec (ΓLN m n)) :
-    CtxVec.get (Γ := ΓLN m n ++ (ssPrefix7 m n ++ [VecShape m, MatShape m n, MatShape m n]))
+/-- Stage `graphNormalized`: the normalized block. -/
+theorem get_graphNormalized (ε : ℝ) (xV : CtxVec (ΓLN m n)) :
+    CtxVec.get (Γ := ΓLN m n ++ (ssStd m n ++ [VecShape m, MatShape m n, MatShape m n]))
       (s := MatShape m n)
-      (Idx.last (Γ := ΓLN m n) (ss := ssPrefix7 m n ++ [VecShape m, MatShape m n])
+      (Idx.last (Γ := ΓLN m n) (ss := ssStd m n ++ [VecShape m, MatShape m n])
         (τ := MatShape m n))
       (Graph.evalVec (Γ := ΓLN m n)
-        (ss := ssPrefix7 m n ++ [VecShape m, MatShape m n, MatShape m n])
-        (g10 (m := m) (n := n) ε) xV) =
+        (ss := ssStd m n ++ [VecShape m, MatShape m n, MatShape m n])
+        (graphNormalized (m := m) (n := n) ε) xV) =
       valNorm xV ε := by
   refine (Graph.get_evalVec_snoc_last (Γ := ΓLN m n)
-    (ss := ssPrefix7 m n ++ [VecShape m, MatShape m n]) (τ := MatShape m n)
-    (g9 (m := m) (n := n) ε) (nodeNorm (m := m) (n := n)) xV _ rfl).trans ?_
+    (ss := ssStd m n ++ [VecShape m, MatShape m n]) (τ := MatShape m n)
+    (graphInvStdBroadcast (m := m) (n := n) ε) (nodeNorm (m := m) (n := n)) xV _ rfl).trans ?_
   simp only [nodeNorm, mul, Node.forwardVec_ofFn]
-  rw [get_centered9, get_g9]
+  rw [get_centeredForNorm, get_graphInvStdBroadcast]
   rfl
 
-/-- Stage `g11`: the broadcast scale block. -/
-theorem get_g11 (ε : ℝ) (xV : CtxVec (ΓLN m n)) :
+/-- Stage `graphGammaBroadcast`: the broadcast scale block. -/
+theorem get_graphGammaBroadcast (ε : ℝ) (xV : CtxVec (ΓLN m n)) :
     CtxVec.get
-      (Γ := ΓLN m n ++ (ssPrefix7 m n ++ [VecShape m, MatShape m n, MatShape m n, MatShape m n]))
-      (s := MatShape m n) (idxGammaB11 (m := m) (n := n))
+      (Γ := ΓLN m n ++ (ssStd m n ++ [VecShape m, MatShape m n, MatShape m n, MatShape m n]))
+      (s := MatShape m n) (idxGammaBroadcast (m := m) (n := n))
       (Graph.evalVec (Γ := ΓLN m n)
-        (ss := ssPrefix7 m n ++ [VecShape m, MatShape m n, MatShape m n, MatShape m n])
-        (g11 (m := m) (n := n) ε) xV) =
+        (ss := ssStd m n ++ [VecShape m, MatShape m n, MatShape m n, MatShape m n])
+        (graphGammaBroadcast (m := m) (n := n) ε) xV) =
       valGammaB xV := by
   refine (Graph.get_evalVec_snoc_last (Γ := ΓLN m n)
-    (ss := ssPrefix7 m n ++ [VecShape m, MatShape m n, MatShape m n]) (τ := MatShape m n)
-    (g10 (m := m) (n := n) ε) (nodeGammaB (m := m) (n := n)) xV
-    (idxGammaB11 (m := m) (n := n)) rfl).trans ?_
+    (ss := ssStd m n ++ [VecShape m, MatShape m n, MatShape m n]) (τ := MatShape m n)
+    (graphNormalized (m := m) (n := n) ε) (nodeGammaB (m := m) (n := n)) xV
+    (idxGammaBroadcast (m := m) (n := n)) rfl).trans ?_
   simp only [nodeGammaB, broadcastCol, Node.forwardVec_ofFn, getVec]
   rw [Graph.get_evalVec_input (Γ := ΓLN m n)
-    (ss := ssPrefix7 m n ++ [VecShape m, MatShape m n, MatShape m n]) (g10 (m := m) (n := n) ε)
-    xV _ (idxGamma0 (m := m) (n := n)) rfl]
+    (ss := ssStd m n ++ [VecShape m, MatShape m n, MatShape m n])
+    (graphNormalized (m := m) (n := n) ε) xV _ (idxInputGamma (m := m) (n := n)) rfl]
   rfl
 
-/-- The normalized block is still available at stage `g11`. -/
-theorem get_norm11 (ε : ℝ) (xV : CtxVec (ΓLN m n)) :
+/-- The normalized block is still available at stage `graphGammaBroadcast`. -/
+theorem get_normForScale (ε : ℝ) (xV : CtxVec (ΓLN m n)) :
     CtxVec.get
-      (Γ := ΓLN m n ++ (ssPrefix7 m n ++ [VecShape m, MatShape m n, MatShape m n, MatShape m n]))
-      (s := MatShape m n) (idxNorm11 (m := m) (n := n))
+      (Γ := ΓLN m n ++ (ssStd m n ++ [VecShape m, MatShape m n, MatShape m n, MatShape m n]))
+      (s := MatShape m n) (idxNormForScale (m := m) (n := n))
       (Graph.evalVec (Γ := ΓLN m n)
-        (ss := ssPrefix7 m n ++ [VecShape m, MatShape m n, MatShape m n, MatShape m n])
-        (g11 (m := m) (n := n) ε) xV) =
+        (ss := ssStd m n ++ [VecShape m, MatShape m n, MatShape m n, MatShape m n])
+        (graphGammaBroadcast (m := m) (n := n) ε) xV) =
       valNorm xV ε := by
   refine (Graph.get_evalVec_snoc_of_lt (Γ := ΓLN m n)
-    (ss := ssPrefix7 m n ++ [VecShape m, MatShape m n, MatShape m n]) (τ := MatShape m n)
-    (g10 (m := m) (n := n) ε) (nodeGammaB (m := m) (n := n)) xV (idxNorm11 (m := m) (n := n))
-    (Idx.last (Γ := ΓLN m n) (ss := ssPrefix7 m n ++ [VecShape m, MatShape m n])
+    (ss := ssStd m n ++ [VecShape m, MatShape m n, MatShape m n]) (τ := MatShape m n)
+    (graphNormalized (m := m) (n := n) ε) (nodeGammaB (m := m) (n := n)) xV
+    (idxNormForScale (m := m) (n := n))
+    (Idx.last (Γ := ΓLN m n) (ss := ssStd m n ++ [VecShape m, MatShape m n])
       (τ := MatShape m n)) rfl).trans ?_
-  exact get_g10 ε xV
+  exact get_graphNormalized ε xV
 
-/-- Stage `g12`: the scaled block. -/
-theorem get_g12 (ε : ℝ) (xV : CtxVec (ΓLN m n)) :
+/-- Stage `graphScaled`: the scaled block. -/
+theorem get_graphScaled (ε : ℝ) (xV : CtxVec (ΓLN m n)) :
     CtxVec.get
-      (Γ := ΓLN m n ++ (ssPrefix7 m n ++ [VecShape m, MatShape m n, MatShape m n, MatShape m n,
+      (Γ := ΓLN m n ++ (ssStd m n ++ [VecShape m, MatShape m n, MatShape m n, MatShape m n,
         MatShape m n]))
       (s := MatShape m n)
       (Idx.last (Γ := ΓLN m n)
-        (ss := ssPrefix7 m n ++ [VecShape m, MatShape m n, MatShape m n, MatShape m n])
+        (ss := ssStd m n ++ [VecShape m, MatShape m n, MatShape m n, MatShape m n])
         (τ := MatShape m n))
       (Graph.evalVec (Γ := ΓLN m n)
-        (ss := ssPrefix7 m n ++ [VecShape m, MatShape m n, MatShape m n, MatShape m n,
+        (ss := ssStd m n ++ [VecShape m, MatShape m n, MatShape m n, MatShape m n,
           MatShape m n])
-        (g12 (m := m) (n := n) ε) xV) =
+        (graphScaled (m := m) (n := n) ε) xV) =
       valScaled xV ε := by
   refine (Graph.get_evalVec_snoc_last (Γ := ΓLN m n)
-    (ss := ssPrefix7 m n ++ [VecShape m, MatShape m n, MatShape m n, MatShape m n])
-    (τ := MatShape m n) (g11 (m := m) (n := n) ε) (nodeScaled (m := m) (n := n)) xV _
-    rfl).trans ?_
+    (ss := ssStd m n ++ [VecShape m, MatShape m n, MatShape m n, MatShape m n])
+    (τ := MatShape m n) (graphGammaBroadcast (m := m) (n := n) ε) (nodeScaled (m := m) (n := n))
+    xV _ rfl).trans ?_
   simp only [nodeScaled, mul, Node.forwardVec_ofFn]
-  rw [get_norm11, get_g11]
+  rw [get_normForScale, get_graphGammaBroadcast]
   rfl
 
-/-- Stage `g13`: the broadcast shift block. -/
-theorem get_g13 (ε : ℝ) (xV : CtxVec (ΓLN m n)) :
+/-- Stage `graphBetaBroadcast`: the broadcast shift block. -/
+theorem get_graphBetaBroadcast (ε : ℝ) (xV : CtxVec (ΓLN m n)) :
     CtxVec.get
-      (Γ := ΓLN m n ++ (ssPrefix7 m n ++ [VecShape m, MatShape m n, MatShape m n, MatShape m n,
+      (Γ := ΓLN m n ++ (ssStd m n ++ [VecShape m, MatShape m n, MatShape m n, MatShape m n,
         MatShape m n, MatShape m n]))
-      (s := MatShape m n) (idxBetaB13 (m := m) (n := n))
+      (s := MatShape m n) (idxBetaBroadcast (m := m) (n := n))
       (Graph.evalVec (Γ := ΓLN m n)
-        (ss := ssPrefix7 m n ++ [VecShape m, MatShape m n, MatShape m n, MatShape m n,
+        (ss := ssStd m n ++ [VecShape m, MatShape m n, MatShape m n, MatShape m n,
           MatShape m n, MatShape m n])
-        (g13 (m := m) (n := n) ε) xV) =
+        (graphBetaBroadcast (m := m) (n := n) ε) xV) =
       valBetaB xV := by
   refine (Graph.get_evalVec_snoc_last (Γ := ΓLN m n)
-    (ss := ssPrefix7 m n ++ [VecShape m, MatShape m n, MatShape m n, MatShape m n, MatShape m n])
-    (τ := MatShape m n) (g12 (m := m) (n := n) ε) (nodeBetaB (m := m) (n := n)) xV
-    (idxBetaB13 (m := m) (n := n)) rfl).trans ?_
+    (ss := ssStd m n ++ [VecShape m, MatShape m n, MatShape m n, MatShape m n, MatShape m n])
+    (τ := MatShape m n) (graphScaled (m := m) (n := n) ε) (nodeBetaB (m := m) (n := n)) xV
+    (idxBetaBroadcast (m := m) (n := n)) rfl).trans ?_
   simp only [nodeBetaB, broadcastCol, Node.forwardVec_ofFn, getVec]
   rw [Graph.get_evalVec_input (Γ := ΓLN m n)
-    (ss := ssPrefix7 m n ++ [VecShape m, MatShape m n, MatShape m n, MatShape m n, MatShape m n])
-    (g12 (m := m) (n := n) ε) xV _ (idxBeta0 (m := m) (n := n)) rfl]
+    (ss := ssStd m n ++ [VecShape m, MatShape m n, MatShape m n, MatShape m n, MatShape m n])
+    (graphScaled (m := m) (n := n) ε) xV _ (idxInputBeta (m := m) (n := n)) rfl]
   rfl
 
-/-- The scaled block is still available at stage `g13`. -/
-theorem get_scaled13 (ε : ℝ) (xV : CtxVec (ΓLN m n)) :
+/-- The scaled block is still available at stage `graphBetaBroadcast`. -/
+theorem get_scaledForOutput (ε : ℝ) (xV : CtxVec (ΓLN m n)) :
     CtxVec.get
-      (Γ := ΓLN m n ++ (ssPrefix7 m n ++ [VecShape m, MatShape m n, MatShape m n, MatShape m n,
+      (Γ := ΓLN m n ++ (ssStd m n ++ [VecShape m, MatShape m n, MatShape m n, MatShape m n,
         MatShape m n, MatShape m n]))
-      (s := MatShape m n) (idxScaled13 (m := m) (n := n))
+      (s := MatShape m n) (idxScaledForOutput (m := m) (n := n))
       (Graph.evalVec (Γ := ΓLN m n)
-        (ss := ssPrefix7 m n ++ [VecShape m, MatShape m n, MatShape m n, MatShape m n,
+        (ss := ssStd m n ++ [VecShape m, MatShape m n, MatShape m n, MatShape m n,
           MatShape m n, MatShape m n])
-        (g13 (m := m) (n := n) ε) xV) =
+        (graphBetaBroadcast (m := m) (n := n) ε) xV) =
       valScaled xV ε := by
   refine (Graph.get_evalVec_snoc_of_lt (Γ := ΓLN m n)
-    (ss := ssPrefix7 m n ++ [VecShape m, MatShape m n, MatShape m n, MatShape m n, MatShape m n])
-    (τ := MatShape m n) (g12 (m := m) (n := n) ε) (nodeBetaB (m := m) (n := n)) xV
-    (idxScaled13 (m := m) (n := n))
+    (ss := ssStd m n ++ [VecShape m, MatShape m n, MatShape m n, MatShape m n, MatShape m n])
+    (τ := MatShape m n) (graphScaled (m := m) (n := n) ε) (nodeBetaB (m := m) (n := n)) xV
+    (idxScaledForOutput (m := m) (n := n))
     (Idx.last (Γ := ΓLN m n)
-      (ss := ssPrefix7 m n ++ [VecShape m, MatShape m n, MatShape m n, MatShape m n])
+      (ss := ssStd m n ++ [VecShape m, MatShape m n, MatShape m n, MatShape m n])
       (τ := MatShape m n)) rfl).trans ?_
-  exact get_g12 ε xV
+  exact get_graphScaled ε xV
 
 /-- The output block of the full LayerNorm graph. -/
 theorem get_idxY (ε : ℝ) (xV : CtxVec (ΓLN m n)) :
@@ -405,35 +408,22 @@ theorem get_idxY (ε : ℝ) (xV : CtxVec (ΓLN m n)) :
         (layerNormGraph (m := m) (n := n) ε) xV) =
       valY xV ε := by
   refine (Graph.get_evalVec_snoc_last (Γ := ΓLN m n)
-    (ss := ssPrefix7 m n ++ [VecShape m, MatShape m n, MatShape m n, MatShape m n, MatShape m n,
+    (ss := ssStd m n ++ [VecShape m, MatShape m n, MatShape m n, MatShape m n, MatShape m n,
       MatShape m n])
-    (τ := MatShape m n) (g13 (m := m) (n := n) ε) (nodeY (m := m) (n := n)) xV
+    (τ := MatShape m n) (graphBetaBroadcast (m := m) (n := n) ε) (nodeY (m := m) (n := n)) xV
     (idxY (m := m) (n := n)) rfl).trans ?_
   simp only [nodeY, add, Node.forwardVec_ofFn]
-  rw [get_scaled13, get_g13]
+  rw [get_scaledForOutput, get_graphBetaBroadcast]
   rfl
 
 /-! ## Positivity of the denominators -/
-
-/-- Coordinates of the row-sum map. -/
-theorem rowSumCLM_apply (x : Vec (Matmul.matSize m n)) (i : Fin m) :
-    rowSumCLM (m := m) (n := n) x i =
-      ∑ j : Fin (Matmul.vecSize n), x (finProdFinEquiv (i, j)) := by
-  rfl
-
-/-- Coordinates of the row-mean map. -/
-theorem rowMeanCLM_apply (x : Vec (Matmul.matSize m n)) (i : Fin m) :
-    rowMeanCLM (m := m) (n := n) x i =
-      ((1 : ℝ) / (n : ℝ)) * ∑ j : Fin (Matmul.vecSize n), x (finProdFinEquiv (i, j)) := by
-  show ((1 : ℝ) / (n : ℝ)) * rowSumCLM (m := m) (n := n) x i = _
-  rw [rowSumCLM_apply]
 
 /-- The variance block is a mean of squares, hence nonnegative. -/
 theorem valVar_nonneg (xV : CtxVec (ΓLN m n)) (i : Fin (Spec.Shape.size (VecShape m))) :
     0 ≤ valVar xV i := by
   simp only [valVar, castVec_apply]
-  rw [rowMeanCLM_apply]
-  refine mul_nonneg (by positivity) (Finset.sum_nonneg fun j _ => ?_)
+  rw [RowNorm.rowMeanCLM_eq, RowNorm.rowMean]
+  refine div_nonneg (Finset.sum_nonneg fun j _ => ?_) (Nat.cast_nonneg n)
   simp only [valCenteredSq]
   exact mul_self_nonneg _
 
@@ -454,21 +444,21 @@ theorem valStd_pos {ε : ℝ} (hε : 0 < ε) (xV : CtxVec (ΓLN m n))
 /-- The LayerNorm `sqrt` domain hypothesis follows from `0 < ε`. -/
 theorem varEps_pos_of_eps_pos {ε : ℝ} (hε : 0 < ε) (xV : CtxVec (ΓLN m n)) :
     ∀ i : Fin (Spec.Shape.size (VecShape m)),
-      0 < CtxVec.get (Γ := ΓLN m n ++ ssPrefix6 m n) (s := VecShape m) (idxVarEps (m := m) (n := n))
-        (Graph.evalVec (Γ := ΓLN m n) (ss := ssPrefix6 m n)
-          (layerNormPrefix6 (m := m) (n := n) ε) xV) i := by
+      0 < CtxVec.get (Γ := ΓLN m n ++ ssVarEps m n) (s := VecShape m) (idxVarEps (m := m) (n := n))
+        (Graph.evalVec (Γ := ΓLN m n) (ss := ssVarEps m n)
+          (graphVarEps (m := m) (n := n) ε) xV) i := by
   intro i
-  rw [get_prefix6]
+  rw [get_graphVarEps]
   exact valVarEps_pos hε xV i
 
 /-- The LayerNorm `inv` domain hypothesis follows from `0 < ε`. -/
 theorem std_ne_zero_of_eps_pos {ε : ℝ} (hε : 0 < ε) (xV : CtxVec (ΓLN m n)) :
     ∀ i : Fin (Spec.Shape.size (VecShape m)),
-      CtxVec.get (Γ := ΓLN m n ++ ssPrefix7 m n) (s := VecShape m) (idxStd (m := m) (n := n))
-        (Graph.evalVec (Γ := ΓLN m n) (ss := ssPrefix7 m n)
-          (layerNormPrefix7 (m := m) (n := n) ε) xV) i ≠ 0 := by
+      CtxVec.get (Γ := ΓLN m n ++ ssStd m n) (s := VecShape m) (idxStd (m := m) (n := n))
+        (Graph.evalVec (Γ := ΓLN m n) (ss := ssStd m n)
+          (graphStd (m := m) (n := n) ε) xV) i ≠ 0 := by
   intro i
-  rw [get_prefix7]
+  rw [get_graphStd]
   exact (valStd_pos hε xV i).ne'
 
 end LayerNorm

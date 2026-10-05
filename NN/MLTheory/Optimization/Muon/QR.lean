@@ -12,10 +12,15 @@ public import NN.Proofs.Tensor.Basic.FactorizationsOrthonormal
 public import NN.Proofs.Tensor.Basic.LinearAlgebra
 
 /-!
-# QR Muon Backend
+# QR Muon Backend and Real-Valued Certificates
 
 The real-valued QR orthogonalizer, its positive-pivot condition, and the exact certificates it
 supplies to Muon updates.
+
+The entrywise matrix API (`matrix_ext`, `get2_mat_mul_spec`) is stated over `ℝ`, so this module
+also holds the real-valued facts about `columnGram` and about one Newton-Schulz step at an exactly
+column-orthogonal matrix, which the generic `NN.MLTheory.Optimization.Muon.NewtonSchulz` module
+cannot prove.
 -/
 
 @[expose] public section
@@ -38,51 +43,6 @@ noncomputable def qrOrthogonalizer {m n : Nat} :
 def HasPositiveQRPivots {m n : Nat} (buffer : MatrixTensor ℝ m n) : Prop :=
   ∀ j : Fin n, 0 < get2 (qrRSpec buffer) j j
 
-/-- Entries of the identity matrix over `ℝ`, in the `get2` form the QR proofs consume. -/
-theorem get2_identityTensorSpec_real {n : Nat} (i j : Fin n) :
-    get2 (identityTensorSpec (α := ℝ) n) i j = if i = j then 1 else 0 := by
-  by_cases h : i = j
-  · subst j
-    simp [identityTensorSpec, get2, Tensor.getScalar, Spec.get, Tensor.unstack,
-      Tensor.item]
-  · have hval : i.val ≠ j.val := fun hval => h (Fin.ext hval)
-    simp [identityTensorSpec, get2, Tensor.getScalar, Spec.get, Tensor.unstack,
-      Tensor.item, h, hval]
-
-/-- Entry rule for matrix-shaped tensor addition over $\mathbb{R}$. -/
-theorem get2_addSpec_real {m n : Nat} (A B : MatrixTensor ℝ m n) (i : Fin m) (j : Fin n) :
-    get2 (addSpec A B) i j = get2 A i j + get2 B i j := by
-  simp [addSpec]
-
-/-- Entry rule for matrix-shaped tensor scaling over $\mathbb{R}$. -/
-theorem get2_scaleSpec_real {m n : Nat} (A : MatrixTensor ℝ m n) (c : ℝ)
-    (i : Fin m) (j : Fin n) :
-    get2 (scaleSpec A c) i j = get2 A i j * c := by
-  simp [scaleSpec]
-
-/-- Entry rule for matrix-shaped tensor subtraction over $\mathbb{R}$. -/
-theorem get2_subSpec_real {m n : Nat} (A B : MatrixTensor ℝ m n) (i : Fin m) (j : Fin n) :
-    get2 (subSpec A B) i j = get2 A i j - get2 B i j := by
-  simp [subSpec]
-
-/-- Right multiplication by the identity matrix leaves a real matrix unchanged. -/
-theorem matMul_right_identity_real {m n : Nat} (A : MatrixTensor ℝ m n) :
-    matMulSpec A (identityTensorSpec (α := ℝ) n) = A := by
-  classical
-  apply matrix_ext
-  intro i j
-  calc
-    get2 (matMulSpec A (identityTensorSpec (α := ℝ) n)) i j
-        = ∑ k : Fin n, get2 A i k * get2 (identityTensorSpec (α := ℝ) n) k j := by
-          simpa using
-            (get2_mat_mul_spec (A := A) (B := identityTensorSpec (α := ℝ) n) (i := i) (j := j))
-    _ = ∑ k : Fin n, get2 A i k * (if k = j then 1 else 0) := by
-          refine Finset.sum_congr rfl ?_
-          intro k _
-          rw [get2_identityTensorSpec_real]
-    _ = get2 A i j := by
-          simp
-
 /--
 Three scaled copies of the same real matrix combine into one scaled copy using the sum of the
 coefficients.
@@ -93,15 +53,8 @@ theorem add_scaled_three_eq_scale_sum {m n : Nat}
       scaleSpec Q (a + b + c) := by
   apply matrix_ext
   intro i j
-  calc
-    get2 (addSpec (addSpec (scaleSpec Q a) (scaleSpec Q b)) (scaleSpec Q c)) i j
-        = (get2 Q i j * a + get2 Q i j * b) + get2 Q i j * c := by
-          rw [get2_addSpec_real, get2_addSpec_real, get2_scaleSpec_real,
-            get2_scaleSpec_real, get2_scaleSpec_real]
-    _ = get2 Q i j * (a + b + c) := by
-          ring
-    _ = get2 (scaleSpec Q (a + b + c)) i j := by
-          rw [get2_scaleSpec_real]
+  simp only [get2_addSpec, get2_scaleSpec]
+  ring
 
 /--
 If three scaled copies of a matrix are added and the coefficients sum to one, the result is the
@@ -110,16 +63,26 @@ original matrix.
 theorem add_scaled_three_eq_self_of_coeff_sum_one {m n : Nat}
     (Q : MatrixTensor ℝ m n) (a b c : ℝ) (hsum : a + b + c = 1) :
     addSpec (addSpec (scaleSpec Q a) (scaleSpec Q b)) (scaleSpec Q c) = Q := by
-  rw [add_scaled_three_eq_scale_sum]
-  apply matrix_ext
-  intro i j
-  calc
-    get2 (scaleSpec Q (a + b + c)) i j = get2 Q i j * (a + b + c) := by
-      rw [get2_scaleSpec_real]
-    _ = get2 Q i j * 1 := by
-          rw [hsum]
-    _ = get2 Q i j := by
-      ring
+  rw [add_scaled_three_eq_scale_sum, hsum, scaleSpec_one]
+
+/-! ## Column Gram entries -/
+
+/-- Entries of the column Gram matrix are inner products of columns. -/
+theorem get2_columnGram {m n : Nat} (Q : MatrixTensor ℝ m n) (i j : Fin n) :
+    get2 (columnGram Q) i j = ∑ r : Fin m, get2 Q r i * get2 Q r j := by
+  unfold columnGram
+  rw [get2_mat_mul_spec]
+  exact Finset.sum_congr rfl fun r _ => by rw [get2_matrix_transpose_spec]
+
+/-- Scaling a matrix by `k` scales every column Gram entry by `k * k`. -/
+theorem get2_columnGram_scaleSpec {m n : Nat} (Q : MatrixTensor ℝ m n) (k : ℝ) (i j : Fin n) :
+    get2 (columnGram (scaleSpec Q k)) i j = get2 (columnGram Q) i j * (k * k) := by
+  rw [get2_columnGram, get2_columnGram, Finset.sum_mul]
+  refine Finset.sum_congr rfl fun r _ => ?_
+  rw [get2_scaleSpec, get2_scaleSpec]
+  ring
+
+/-! ## Scaling exactly column-orthogonal matrices -/
 
 /--
 Scaling an exact-column-orthogonal real matrix by a scalar whose square is one preserves exact
@@ -129,56 +92,11 @@ theorem scale_hasExactColumnGram_of_square_eq_one {m n : Nat}
     (Q : MatrixTensor ℝ m n) (k : ℝ)
     (hgram : HasExactColumnGram Q) (hk : k * k = 1) :
     HasExactColumnGram (scaleSpec Q k) := by
-  unfold HasExactColumnGram columnGram
+  have hgram' : columnGram Q = identityTensorSpec (α := ℝ) n := hgram
+  unfold HasExactColumnGram
   apply matrix_ext
   intro i j
-  have hgram' : matMulSpec (TorchLean.Tensor.swapAdjacentAxes Q 0) Q =
-      identityTensorSpec (α := ℝ) n := by
-    simpa [HasExactColumnGram, columnGram] using hgram
-  have hentry :
-      (∑ r : Fin m, get2 Q r i * get2 Q r j) =
-        get2 (identityTensorSpec (α := ℝ) n) i j := by
-    calc
-      (∑ r : Fin m, get2 Q r i * get2 Q r j)
-          = get2 (matMulSpec (TorchLean.Tensor.swapAdjacentAxes Q 0) Q) i j := by
-            symm
-            calc
-              get2 (matMulSpec (TorchLean.Tensor.swapAdjacentAxes Q 0) Q) i j
-                  = ∑ r : Fin m,
-                      get2 (TorchLean.Tensor.swapAdjacentAxes Q 0) i r * get2 Q r j := by
-                    simpa using
-                      (get2_mat_mul_spec
-                        (A := TorchLean.Tensor.swapAdjacentAxes Q 0) (B := Q) (i := i) (j := j))
-              _ = ∑ r : Fin m, get2 Q r i * get2 Q r j := by
-                    refine Finset.sum_congr rfl ?_
-                    intro r _
-                    rw [get2_matrix_transpose_spec]
-      _ = get2 (identityTensorSpec (α := ℝ) n) i j := by
-            exact congrArg (fun M => get2 M i j) hgram'
-  calc
-    get2
-        (matMulSpec (TorchLean.Tensor.swapAdjacentAxes (scaleSpec Q k) 0) (scaleSpec Q k)) i j
-        = ∑ r : Fin m,
-            get2 (TorchLean.Tensor.swapAdjacentAxes (scaleSpec Q k) 0) i r *
-              get2 (scaleSpec Q k) r j := by
-          simpa using
-            (get2_mat_mul_spec
-              (A := TorchLean.Tensor.swapAdjacentAxes (scaleSpec Q k) 0) (B := scaleSpec Q k)
-              (i := i) (j := j))
-    _ = ∑ r : Fin m, (get2 Q r i * k) * (get2 Q r j * k) := by
-          refine Finset.sum_congr rfl ?_
-          intro r _
-          rw [get2_matrix_transpose_spec, get2_scaleSpec_real, get2_scaleSpec_real]
-    _ = ∑ r : Fin m, (get2 Q r i * get2 Q r j) * (k * k) := by
-          refine Finset.sum_congr rfl ?_
-          intro r _
-          ring
-    _ = (∑ r : Fin m, get2 Q r i * get2 Q r j) * (k * k) := by
-          rw [Finset.sum_mul]
-    _ = (∑ r : Fin m, get2 Q r i * get2 Q r j) * 1 := by
-          rw [hk]
-    _ = get2 (identityTensorSpec (α := ℝ) n) i j := by
-          rw [mul_one, hentry]
+  rw [get2_columnGram_scaleSpec, hgram', hk, mul_one]
 
 /--
 Scaling an exact-column-orthogonal real matrix gives an approximate Gram certificate whenever
@@ -191,80 +109,20 @@ theorem scale_hasApproxColumnGram_of_exact_column_gram_of_square_error {m n : Na
     (heps : 0 ≤ eps) :
     HasApproxColumnGram eps (scaleSpec Q k) := by
   intro i j
-  have hgram' : matMulSpec (TorchLean.Tensor.swapAdjacentAxes Q 0) Q =
-      identityTensorSpec (α := ℝ) n := by
-    simpa [HasExactColumnGram, columnGram] using hgram
-  have hentry :
-      (∑ r : Fin m, get2 Q r i * get2 Q r j) =
-        get2 (identityTensorSpec (α := ℝ) n) i j := by
-    calc
-      (∑ r : Fin m, get2 Q r i * get2 Q r j)
-          = get2 (matMulSpec (TorchLean.Tensor.swapAdjacentAxes Q 0) Q) i j := by
-            symm
-            calc
-              get2 (matMulSpec (TorchLean.Tensor.swapAdjacentAxes Q 0) Q) i j
-                  = ∑ r : Fin m,
-                      get2 (TorchLean.Tensor.swapAdjacentAxes Q 0) i r * get2 Q r j := by
-                    simpa using
-                      (get2_mat_mul_spec
-                        (A := TorchLean.Tensor.swapAdjacentAxes Q 0) (B := Q) (i := i) (j := j))
-              _ = ∑ r : Fin m, get2 Q r i * get2 Q r j := by
-                    refine Finset.sum_congr rfl ?_
-                    intro r _
-                    rw [get2_matrix_transpose_spec]
-      _ = get2 (identityTensorSpec (α := ℝ) n) i j := by
-            exact congrArg (fun M => get2 M i j) hgram'
-  have hscaledGram :
-      get2 (columnGram (scaleSpec Q k)) i j =
-        get2 (identityTensorSpec (α := ℝ) n) i j * (k * k) := by
-    calc
-      get2 (columnGram (scaleSpec Q k)) i j
-          = get2
-              (matMulSpec (TorchLean.Tensor.swapAdjacentAxes (scaleSpec Q k) 0) (scaleSpec Q k))
-              i j := by
-            rfl
-      _ = ∑ r : Fin m,
-            get2 (TorchLean.Tensor.swapAdjacentAxes (scaleSpec Q k) 0) i r *
-              get2 (scaleSpec Q k) r j := by
-            simpa using
-              (get2_mat_mul_spec
-                (A := TorchLean.Tensor.swapAdjacentAxes (scaleSpec Q k) 0) (B := scaleSpec Q k)
-                (i := i) (j := j))
-      _ = ∑ r : Fin m, (get2 Q r i * k) * (get2 Q r j * k) := by
-            refine Finset.sum_congr rfl ?_
-            intro r _
-            rw [get2_matrix_transpose_spec, get2_scaleSpec_real, get2_scaleSpec_real]
-      _ = ∑ r : Fin m, (get2 Q r i * get2 Q r j) * (k * k) := by
-            refine Finset.sum_congr rfl ?_
-            intro r _
-            ring
-      _ = (∑ r : Fin m, get2 Q r i * get2 Q r j) * (k * k) := by
-            rw [Finset.sum_mul]
-      _ = get2 (identityTensorSpec (α := ℝ) n) i j * (k * k) := by
-            rw [hentry]
+  have hgram' : columnGram Q = identityTensorSpec (α := ℝ) n := hgram
+  -- The residual of the scaled matrix is `(k * k - 1)` times the identity entry.
+  have hresidual :
+      get2 (columnGramResidual (scaleSpec Q k)) i j =
+        get2 (identityTensorSpec (α := ℝ) n) i j * (k * k - 1) := by
+    unfold columnGramResidual
+    rw [get2_subSpec, get2_columnGram_scaleSpec, hgram']
+    ring
+  rw [hresidual, get2_identityTensorSpec]
   by_cases hij : i = j
-  · subst j
-    have hdiag : get2 (identityTensorSpec (α := ℝ) n) i i = 1 := by
-      simp [get2_identityTensorSpec_real]
-    calc
-      MathFunctions.abs (get2 (columnGramResidual (scaleSpec Q k)) i i)
-          = MathFunctions.abs (k * k - 1) := by
-            rw [show columnGramResidual (scaleSpec Q k) =
-              subSpec (columnGram (scaleSpec Q k)) (identityTensorSpec n) by rfl]
-            rw [get2_subSpec_real, hscaledGram, hdiag]
-            ring_nf
-      _ ≤ eps := herr
-  · have hoff : get2 (identityTensorSpec (α := ℝ) n) i j = 0 := by
-      rw [get2_identityTensorSpec_real]
-      simp [hij]
-    calc
-      MathFunctions.abs (get2 (columnGramResidual (scaleSpec Q k)) i j)
-          = 0 := by
-            rw [show columnGramResidual (scaleSpec Q k) =
-              subSpec (columnGram (scaleSpec Q k)) (identityTensorSpec n) by rfl]
-            rw [get2_subSpec_real, hscaledGram, hoff]
-            simp [MathFunctions.abs]
-      _ ≤ eps := heps
+  · simpa [hij] using herr
+  · simpa [hij, MathFunctions.abs] using heps
+
+/-! ## Newton-Schulz at an exactly column-orthogonal matrix -/
 
 /--
 If $Q^\mathsf{T}Q=I$, then one column-oriented Newton-Schulz step returns $(a+b+c)Q$.
@@ -273,18 +131,15 @@ theorem newtonSchulzStep_eq_scale_sum_of_exact_column_gram {m n : Nat}
     (coeffs : NewtonSchulzCoeffs ℝ) (Q : MatrixTensor ℝ m n)
     (hgram : HasExactColumnGram Q) :
     newtonSchulzStep coeffs Q = scaleSpec Q (coeffs.a + coeffs.b + coeffs.c) := by
+  have hgram' : columnGram Q = identityTensorSpec (α := ℝ) n := hgram
+  have hXG : matMulSpec Q (columnGram Q) = Q := by
+    rw [hgram']
+    exact matMulSpec_identityTensorSpec Q
+  have hXG2 : matMulSpec (matMulSpec Q (columnGram Q)) (columnGram Q) = Q := by
+    rw [hXG]
+    exact hXG
   unfold newtonSchulzStep
-  have hright : rightGram Q = identityTensorSpec (α := ℝ) n := by
-    simpa [HasExactColumnGram, columnGram, rightGram] using hgram
-  have hXG : matMulSpec Q (rightGram Q) = Q := by
-    rw [hright]
-    exact matMul_right_identity_real Q
-  have hXG2 : matMulSpec (matMulSpec Q (rightGram Q)) (rightGram Q) = Q := by
-    rw [hright]
-    rw [matMul_right_identity_real Q]
-    exact matMul_right_identity_real Q
-  simpa [hXG, hXG2] using
-    add_scaled_three_eq_scale_sum Q coeffs.a coeffs.b coeffs.c
+  simpa [hXG, hXG2] using add_scaled_three_eq_scale_sum Q coeffs.a coeffs.b coeffs.c
 
 /--
 For real coefficients whose sum is one, an exact-column-orthogonal matrix is a fixed point of one
@@ -296,15 +151,7 @@ theorem newtonSchulzFixedPoint_of_exact_column_gram_of_coeff_sum_one {m n : Nat}
     (hsum : coeffs.a + coeffs.b + coeffs.c = 1) :
     NewtonSchulzFixedPoint coeffs Q := by
   unfold NewtonSchulzFixedPoint
-  rw [newtonSchulzStep_eq_scale_sum_of_exact_column_gram coeffs Q hgram]
-  rw [hsum]
-  apply matrix_ext
-  intro i j
-  calc
-    get2 (scaleSpec Q 1) i j = get2 Q i j * 1 := by
-      rw [get2_scaleSpec_real]
-    _ = get2 Q i j := by
-      ring
+  rw [newtonSchulzStep_eq_scale_sum_of_exact_column_gram coeffs Q hgram, hsum, scaleSpec_one]
 
 /--
 If $Q^\mathsf{T}Q=I$ and $(a+b+c)^2=1$, then one column-oriented Newton-Schulz step still has exact
@@ -343,9 +190,8 @@ theorem newtonSchulzFixedPointCheckedExact_success_of_coeff_sum_one {m n : Nat}
     (hgram : HasExactColumnGram buffer)
     (hsum : coeffs.a + coeffs.b + coeffs.c = 1) :
     (newtonSchulzFixedPointCheckedExactOrthogonalizer
-      (α := ℝ) (m := m) (n := n) coeffs steps).Success buffer := by
-  exact ⟨hgram,
-    newtonSchulzFixedPoint_of_exact_column_gram_of_coeff_sum_one coeffs buffer hgram hsum⟩
+      (α := ℝ) (m := m) (n := n) coeffs steps).Success buffer :=
+  ⟨hgram, newtonSchulzFixedPoint_of_exact_column_gram_of_coeff_sum_one coeffs buffer hgram hsum⟩
 
 /--
 For real coefficients with $a+b+c=1$, exact column Gram of the fresh momentum buffer is
@@ -457,33 +303,21 @@ theorem init_has_exact_certified_step_newtonSchulz_exact_gram_checked {m n : Nat
           parameters)
         parameters gradients).optimizerState.momentumBuffer hgram hsum)
 
+/-! ## QR certificates -/
+
 /--
-The QR orthogonalizer satisfies the exact Muon direction contract whenever the executable QR pivots
-of the input buffer are positive.
+The QR orthogonalizer satisfies the exact Muon direction contract whenever the QR pivots of the
+input buffer are positive.
 -/
 theorem qrOrthogonalizer_exact_of_positive_pivots {m n : Nat}
     (buffer : MatrixTensor ℝ m n)
     (hpivots : HasPositiveQRPivots buffer) :
     ExactOrthogonalizesBuffer (qrOrthogonalizer (m := m) (n := n)) buffer := by
-  unfold ExactOrthogonalizesBuffer HasExactColumnGram columnGram qrOrthogonalizer
+  change columnGram (qrQSpec buffer) = identityTensorSpec (α := ℝ) n
   apply matrix_ext
   intro i j
-  calc
-    get2 (matMulSpec (TorchLean.Tensor.swapAdjacentAxes (qrQSpec buffer) 0) (qrQSpec buffer)) i j
-        = ∑ k : Fin m, get2 (TorchLean.Tensor.swapAdjacentAxes (qrQSpec buffer) 0) i k *
-            get2 (qrQSpec buffer) k j := by
-          simpa using
-            (get2_mat_mul_spec
-              (A := TorchLean.Tensor.swapAdjacentAxes (qrQSpec buffer) 0)
-              (B := qrQSpec buffer) (i := i) (j := j))
-    _ = ∑ k : Fin m, get2 (qrQSpec buffer) k i * get2 (qrQSpec buffer) k j := by
-          refine Finset.sum_congr rfl ?_
-          intro k _
-          rw [get2_matrix_transpose_spec]
-    _ = if i = j then 1 else 0 := by
-          exact Spec.Factorization.Reconstruction.qrSpec_orthonormal buffer hpivots i j
-    _ = get2 (identityTensorSpec (α := ℝ) n) i j := by
-          rw [get2_identityTensorSpec_real]
+  rw [get2_columnGram, get2_identityTensorSpec]
+  exact Spec.Factorization.Reconstruction.qrSpec_orthonormal buffer hpivots i j
 
 /-- QR packaged as a checked exact Muon backend. -/
 noncomputable def qrCheckedExactOrthogonalizer {m n : Nat} :

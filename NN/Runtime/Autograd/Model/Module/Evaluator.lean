@@ -38,8 +38,8 @@ structure Evaluator (α β : Type) [TorchLean.Storage α] [TorchLean.Storage β]
     (stateShapes inputShapes dataInputShapes : List Shape)
     (outputShape : Shape) where
   /-- Evaluate one input pack and return the program output. -/
-  evaluate : Torch.Curried.Fn α inputShapes
-    (Torch.Curried.Fn β dataInputShapes (IO (Tensor α outputShape)))
+  evaluate : Torch.Curried.Function α inputShapes
+    (Torch.Curried.Function β dataInputShapes (IO (Tensor α outputShape)))
 
 /-- Scalar-output specialization of `Evaluator`. -/
 abbrev ObjectiveEvaluator (α β : Type) [TorchLean.Storage α] [TorchLean.Storage β]
@@ -58,7 +58,7 @@ def run {α β : Type} [TorchLean.Storage α] [TorchLean.Storage β]
     (dataInputs : TorchLean.TensorPack β dataInputShapes) :
     IO (Tensor α outputShape) :=
   let withData := Torch.Curried.uncurry (α := α) (ss := inputShapes)
-    (β := Torch.Curried.Fn β dataInputShapes (IO (Tensor α outputShape)))
+    (β := Torch.Curried.Function β dataInputShapes (IO (Tensor α outputShape)))
     evaluator.evaluate xs
   Torch.Curried.uncurry (α := β) (ss := dataInputShapes)
     (β := IO (Tensor α outputShape)) withData dataInputs
@@ -86,15 +86,13 @@ def withState
     | some counter => { sess with rngCounter := counter }
     | none => sess
   let programEager := program (m := Torch.Internal.EagerM α)
-  let evaluate : Torch.Curried.Fn α inputShapes
-      (Torch.Curried.Fn β dataInputShapes (IO (Tensor α outputShape))) :=
+  let evaluate : Torch.Curried.Function α inputShapes
+      (Torch.Curried.Function β dataInputShapes (IO (Tensor α outputShape))) :=
     Torch.Curried.curry (α := α) (ss := inputShapes)
-      (β := Torch.Curried.Fn β dataInputShapes (IO (Tensor α outputShape))) (fun xs =>
+      (β := Torch.Curried.Function β dataInputShapes (IO (Tensor α outputShape))) (fun xs =>
         Torch.Curried.curry (α := β) (ss := dataInputShapes)
           (β := IO (Tensor α outputShape)) (fun dataInputs => do
-            match validateDataInputs dataInputs with
-            | .error message => throw <| IO.userError message
-            | .ok () => pure ()
+            Runtime.Autograd.okOrThrow (validateDataInputs dataInputs)
             sess.resetTape
             try
               let outRef ← (do
@@ -110,7 +108,7 @@ def withState
             finally
               sess.resetTape
               if options.usesCuda then
-                Runtime.Autograd.Cuda.Buffer.collectGarbage))
+                Runtime.Autograd.LibTorch.Buffer.collectGarbage))
   pure { evaluate := evaluate }
 
 end Evaluator

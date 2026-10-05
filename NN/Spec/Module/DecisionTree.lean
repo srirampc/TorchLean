@@ -38,7 +38,7 @@ inductive DecisionTree (α : Type) : Type
 | leaf (value : α) : DecisionTree α
 | node (feature : String) (left right : DecisionTree α) : DecisionTree α
 
-open DecisionTree
+namespace DecisionTree
 
 -- Function to traverse the decision tree given a feature evaluation function
 /-- Evaluate a decision tree using a Boolean predicate for each feature name. -/
@@ -48,3 +48,5 @@ def evaluate {α : Type} (tree : DecisionTree α) (decisionFn : String → Bool)
   | node feature left right =>
       if decisionFn feature then evaluate left decisionFn
       else evaluate right decisionFn
+
+end DecisionTree

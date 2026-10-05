@@ -171,8 +171,8 @@ def ieeeTensor : Tensor (Binary 8 23) [4] :=
     23) ]
 
 /--
-A rank-three binary32 tensor whose entries are divided by seven, guaranteeing a nonterminating
-binary expansion and therefore an interesting fraction field in every cell.
+A rank-three tensor built by adding `decimalTenth` to coordinate-derived values and dividing by
+seven in host `Float`, then converting to binary32. The viewer exposes the resulting rounded fields.
 -/
 def ieeeCube : Tensor (Binary 8 23) [2, 2, 3] :=
   Tensor.generate [2, 2, 3] fun coordinates =>

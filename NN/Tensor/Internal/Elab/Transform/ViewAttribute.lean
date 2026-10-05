@@ -42,6 +42,10 @@ The theorem should be oriented from the named function application to a
 supported `rearrange`, `expand`, `Rep.pull`, or `Rep.reindex`
 expression. The compiler applies only the tagged equality itself; it does not
 add the theorem to the global simplifier or inspect the named implementation.
+Registration checks the equality conclusion, not termination of a collection
+of rules. The consumer skips repeated expressions and bounds the whole search
+to 256 visits; a failed rewrite may try a later rule, while exhaustion leaves
+the ordinary tensor lowering available.
 -/
 public initialize einopsViewAttribute : TagAttribute ←
   registerTagAttribute `einops_view

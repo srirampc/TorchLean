@@ -6,7 +6,7 @@ Authors: TorchLean Team
 
 module
 
-public import NN.Runtime.Autograd.Engine.Cuda.Ops
+public import NN.Runtime.Autograd.Engine.LibTorch.Ops
 public import NN.Spec.Layers.PositionalEncoding
 public import NN.Tensor
 public import NN.Tests.Runtime.Cuda.Utils
@@ -72,24 +72,27 @@ def run : IO Unit := do
   let dxCpu ← Utils.cpuGrad (s := sX) gradsCpu xId
 
   -- CUDA tape
-  let t0c : Runtime.Autograd.Cuda.Tape := Runtime.Autograd.Cuda.Tape.empty
+  let t0c : Runtime.Autograd.LibTorch.Tape := Runtime.Autograd.LibTorch.Tape.empty
   let (t1c, xIdc) :=
-    Runtime.Autograd.Cuda.Tape.leaf (t := t0c) (Utils.tensorToAnyBuffer x) (name := some "x")
+    Runtime.Autograd.LibTorch.Tape.leaf (t := t0c) (Utils.tensorToAnyBuffer x) (name := some "x")
   let (t2c, peIdc) :=
-    Runtime.Autograd.Cuda.Tape.leaf (t := t1c) (Utils.tensorToAnyBuffer pe) (name := some "pe")
+    Runtime.Autograd.LibTorch.Tape.leaf (t := t1c) (Utils.tensorToAnyBuffer pe) (name := some "pe")
       (requiresGrad := false)
   let (t3c, peBIdc) ← Utils.okOrThrow
-    (Runtime.Autograd.Cuda.Tape.broadcastTo (t := t2c) (s₁ := sPE) (s₂ := sX) cbPE peIdc)
+    (Runtime.Autograd.LibTorch.Tape.broadcastTo (t := t2c) (s₁ := sPE) (s₂ := sX) cbPE peIdc)
   let (t4c, yIdc) ← Utils.okOrThrow
-    (Runtime.Autograd.Cuda.Tape.add (t := t3c) (s := sX) xIdc peBIdc)
-  let (t5c, outIdc) ← Utils.okOrThrow (Runtime.Autograd.Cuda.Tape.sum (t := t4c) (s := sX) yIdc)
+    (Runtime.Autograd.LibTorch.Tape.add (t := t3c) (s := sX) xIdc peBIdc)
+  let (t5c, outIdc) ← Utils.okOrThrow (Runtime.Autograd.LibTorch.Tape.sum (t := t4c) (s := sX) yIdc)
   let outCuda ← Utils.cudaValue (s := Shape.scalar) t5c outIdc
-  let seedCuda : Runtime.Autograd.Cuda.AnyBuffer :=
-    { s := Shape.scalar, buf := Runtime.Autograd.Cuda.Buffer.full 1 1.0 }
+  let seedCuda : Runtime.Autograd.LibTorch.AnyBuffer :=
+    { s := Shape.scalar, buf := Runtime.Autograd.LibTorch.Buffer.full 1 1.0 }
   let gradsCuda ← Utils.okOrThrow
-    (Runtime.Autograd.Cuda.Tape.backwardDenseAll (t := t5c) outIdc seedCuda)
+    (Runtime.Autograd.LibTorch.Tape.backwardDenseAll (t := t5c) outIdc seedCuda)
   let dxCuda ← Utils.cudaGrad (s := sX) gradsCuda xIdc
 
+  let yCpu ← Utils.cpuValue (s := sX) t4 yId
+  let yCuda ← Utils.cudaValue (s := sX) t4c yIdc
+  Utils.assertTensorApprox (s := sX) "sinusoidal full-vector forward" yCuda yCpu (tol := 2e-3)
   Utils.assertTensorApprox (s := Shape.scalar) "sinusoidal forward" outCuda outCpu (tol := 2e-3)
   Utils.assertTensorApprox (s := sX) "sinusoidal backward dx" dxCuda dxCpu (tol := 2e-3)
 
@@ -197,73 +200,79 @@ def run : IO Unit := do
     (Tape.add (α := Float) (t := t17r) (s := sR) xCosIdr rotSinIdr)
   let (t19r, outRIdr) ← Utils.okOrThrow (Tape.sum (α := Float) (t := t18r) (s := sR) yRIdr)
 
+  let yRCpu ← Utils.cpuValue (s := sR) t18r yRIdr
   let outRCpu ← Utils.cpuValue (s := Shape.scalar) t19r outRIdr
   let seedRCpu : Spec.SomeTensor Float := Spec.SomeTensor.ofTensor (Tensor.scalar 1.0)
   let gradsRCpu ← Utils.okOrThrow (Tape.backwardDenseAll (α := Float) (t := t19r) outRIdr seedRCpu)
   let dxRCpu ← Utils.cpuGrad (s := sR) gradsRCpu xIdr
 
   -- CUDA tape
-  let t0rc : Runtime.Autograd.Cuda.Tape := Runtime.Autograd.Cuda.Tape.empty
+  let t0rc : Runtime.Autograd.LibTorch.Tape := Runtime.Autograd.LibTorch.Tape.empty
   let (t1rc, xIdrc) :=
-    Runtime.Autograd.Cuda.Tape.leaf (t := t0rc) (Utils.tensorToAnyBuffer xR) (name := some "x")
+    Runtime.Autograd.LibTorch.Tape.leaf (t := t0rc) (Utils.tensorToAnyBuffer xR) (name := some "x")
   let (t2rc, cosIdrc) :=
-    Runtime.Autograd.Cuda.Tape.leaf (t := t1rc) (Utils.tensorToAnyBuffer cosT) (name := some "cos")
+    Runtime.Autograd.LibTorch.Tape.leaf (t := t1rc) (Utils.tensorToAnyBuffer cosT) (name
+      := some "cos")
       (requiresGrad := false)
   let (t3rc, sinIdrc) :=
-    Runtime.Autograd.Cuda.Tape.leaf (t := t2rc) (Utils.tensorToAnyBuffer sinT) (name := some "sin")
+    Runtime.Autograd.LibTorch.Tape.leaf (t := t2rc) (Utils.tensorToAnyBuffer sinT) (name
+      := some "sin")
       (requiresGrad := false)
   let (t4rc, signIdrc) :=
-    Runtime.Autograd.Cuda.Tape.leaf (t := t3rc) (Utils.tensorToAnyBuffer signRow)
+    Runtime.Autograd.LibTorch.Tape.leaf (t := t3rc) (Utils.tensorToAnyBuffer signRow)
       (name := some "sign") (requiresGrad := false)
 
   let (t5rc, cos4Idrc) ← Utils.okOrThrow
-    (Runtime.Autograd.Cuda.Tape.reshape (t := t4rc) (s₁ := sCS) (s₂ := sCS4) cosIdrc
+    (Runtime.Autograd.LibTorch.Tape.reshape (t := t4rc) (s₁ := sCS) (s₂ := sCS4) cosIdrc
       (by simp [sCS, sCS4, Spec.Shape.size]))
   let (t6rc, sin4Idrc) ← Utils.okOrThrow
-    (Runtime.Autograd.Cuda.Tape.reshape (t := t5rc) (s₁ := sCS) (s₂ := sCS4) sinIdrc
+    (Runtime.Autograd.LibTorch.Tape.reshape (t := t5rc) (s₁ := sCS) (s₂ := sCS4) sinIdrc
       (by simp [sCS, sCS4, Spec.Shape.size]))
   let (t7rc, cosBIdrc) ← Utils.okOrThrow
-    (Runtime.Autograd.Cuda.Tape.broadcastTo (t := t6rc) (s₁ := sCS4) (s₂ := sR) cbCS4 cos4Idrc)
+    (Runtime.Autograd.LibTorch.Tape.broadcastTo (t := t6rc) (s₁ := sCS4) (s₂ := sR) cbCS4 cos4Idrc)
   let (t8rc, sinBIdrc) ← Utils.okOrThrow
-    (Runtime.Autograd.Cuda.Tape.broadcastTo (t := t7rc) (s₁ := sCS4) (s₂ := sR) cbCS4 sin4Idrc)
+    (Runtime.Autograd.LibTorch.Tape.broadcastTo (t := t7rc) (s₁ := sCS4) (s₂ := sR) cbCS4 sin4Idrc)
   let (t9rc, xCosIdrc) ← Utils.okOrThrow
-    (Runtime.Autograd.Cuda.Tape.mul (t := t8rc) (s := sR) xIdrc cosBIdrc)
+    (Runtime.Autograd.LibTorch.Tape.mul (t := t8rc) (s := sR) xIdrc cosBIdrc)
 
   let (t10rc, x2dIdrc) ← Utils.okOrThrow
-    (Runtime.Autograd.Cuda.Tape.reshape (t := t9rc) (s₁ := sR) (s₂ := sFlat) xIdrc
+    (Runtime.Autograd.LibTorch.Tape.reshape (t := t9rc) (s₁ := sR) (s₂ := sFlat) xIdrc
       (by simp [sR, sFlat, rowsFold, Spec.Shape.size, Nat.mul_assoc]))
   let (t11rc, xTIdrc) ← Utils.okOrThrow
-    (Runtime.Autograd.Cuda.Tape.swapAdjacentAtDepth (t := t10rc)
+    (Runtime.Autograd.LibTorch.Tape.swapAdjacentAtDepth (t := t10rc)
       (s := [rowsFold, headDim]) 0 x2dIdrc)
   let (t12rc, xPermIdrc) ← Utils.okOrThrow
-    (Runtime.Autograd.Cuda.Tape.indexSelect (s := [headDim, rowsFold])
+    (Runtime.Autograd.LibTorch.Tape.indexSelect (s := [headDim, rowsFold])
       (t := t11rc) xTIdrc 0 headDim permIdx)
   let (t13rc, xBackIdrc) ← Utils.okOrThrow
-    (Runtime.Autograd.Cuda.Tape.swapAdjacentAtDepth (t := t12rc)
+    (Runtime.Autograd.LibTorch.Tape.swapAdjacentAtDepth (t := t12rc)
       (s := [headDim, rowsFold]) 0 xPermIdrc)
   let (t14rc, signBIdrc) ← Utils.okOrThrow
-    (Runtime.Autograd.Cuda.Tape.broadcastTo (t := t13rc) (s₁ := [1, headDim]) (s₂ := sFlat) cbSign
+    (Runtime.Autograd.LibTorch.Tape.broadcastTo (t := t13rc) (s₁ := [1, headDim]) (s₂ :=
+      sFlat) cbSign
       signIdrc)
   let (t15rc, xRot2dIdrc) ← Utils.okOrThrow
-    (Runtime.Autograd.Cuda.Tape.mul (t := t14rc) (s := sFlat) xBackIdrc signBIdrc)
+    (Runtime.Autograd.LibTorch.Tape.mul (t := t14rc) (s := sFlat) xBackIdrc signBIdrc)
   let (t16rc, xRotIdrc) ← Utils.okOrThrow
-    (Runtime.Autograd.Cuda.Tape.reshape (t := t15rc) (s₁ := sFlat) (s₂ := sR) xRot2dIdrc
+    (Runtime.Autograd.LibTorch.Tape.reshape (t := t15rc) (s₁ := sFlat) (s₂ := sR) xRot2dIdrc
       (by simp [sR, sFlat, rowsFold, Spec.Shape.size, Nat.mul_assoc]))
 
   let (t17rc, rotSinIdrc) ← Utils.okOrThrow
-    (Runtime.Autograd.Cuda.Tape.mul (t := t16rc) (s := sR) xRotIdrc sinBIdrc)
+    (Runtime.Autograd.LibTorch.Tape.mul (t := t16rc) (s := sR) xRotIdrc sinBIdrc)
   let (t18rc, yRIdrc) ← Utils.okOrThrow
-    (Runtime.Autograd.Cuda.Tape.add (t := t17rc) (s := sR) xCosIdrc rotSinIdrc)
+    (Runtime.Autograd.LibTorch.Tape.add (t := t17rc) (s := sR) xCosIdrc rotSinIdrc)
   let (t19rc, outRIdrc) ← Utils.okOrThrow
-    (Runtime.Autograd.Cuda.Tape.sum (t := t18rc) (s := sR) yRIdrc)
+    (Runtime.Autograd.LibTorch.Tape.sum (t := t18rc) (s := sR) yRIdrc)
 
+  let yRCuda ← Utils.cudaValue (s := sR) t18rc yRIdrc
   let outRCuda ← Utils.cudaValue (s := Shape.scalar) t19rc outRIdrc
-  let seedRCuda : Runtime.Autograd.Cuda.AnyBuffer :=
-    { s := Shape.scalar, buf := Runtime.Autograd.Cuda.Buffer.full 1 1.0 }
+  let seedRCuda : Runtime.Autograd.LibTorch.AnyBuffer :=
+    { s := Shape.scalar, buf := Runtime.Autograd.LibTorch.Buffer.full 1 1.0 }
   let gradsRCuda ← Utils.okOrThrow
-    (Runtime.Autograd.Cuda.Tape.backwardDenseAll (t := t19rc) outRIdrc seedRCuda)
+    (Runtime.Autograd.LibTorch.Tape.backwardDenseAll (t := t19rc) outRIdrc seedRCuda)
   let dxRCuda ← Utils.cudaGrad (s := sR) gradsRCuda xIdrc
 
+  Utils.assertTensorApprox (s := sR) "rope full output" yRCuda yRCpu (tol := 3e-3)
   Utils.assertTensorApprox (s := Shape.scalar) "rope forward" outRCuda outRCpu (tol := 3e-3)
   Utils.assertTensorApprox (s := sR) "rope backward dx" dxRCuda dxRCpu (tol := 3e-3)
 

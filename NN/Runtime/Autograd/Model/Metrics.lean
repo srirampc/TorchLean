@@ -35,6 +35,17 @@ structure Accuracy where
   total : Nat
 deriving Repr, DecidableEq
 
+/-- Shared first-maximum scan over host storage; equal values keep the earlier index. -/
+def Internal.maxIndex? {α : Type} [LT α]
+    [DecidableRel ((· > ·) : α → α → Prop)] (values : Array α) : Option Nat :=
+  match values[0]? with
+  | none => none
+  | some first =>
+      let (_, bestIndex, _) := values.foldl (fun (index, bestIndex, bestValue) value =>
+        if value > bestValue then (index + 1, index, value)
+        else (index + 1, bestIndex, bestValue)) (0, 0, first)
+      some bestIndex
+
 /--
 Index of the first maximum in row-major storage order.
 
@@ -44,13 +55,9 @@ entries; ties are resolved in favor of the first index.
 def argmax? {α : Type} [TorchLean.Storage α]
     [LT α] [DecidableRel ((· > ·) : α → α → Prop)]
     {s : Shape} (values : Tensor α s) : Option (Fin (Shape.size s)) :=
-  let data := Tensor.to values (Array α)
-  match data[0]? with
+  match Internal.maxIndex? (Tensor.to values (Array α)) with
   | none => none
-  | some x0 =>
-      let (_, bestIndex, _) := data.foldl (fun (index, bestIndex, bestValue) value =>
-        if value > bestValue then (index + 1, index, value)
-        else (index + 1, bestIndex, bestValue)) (0, 0, x0)
+  | some bestIndex =>
       if h : bestIndex < Shape.size s then some ⟨bestIndex, h⟩ else none
 
 /--
@@ -64,14 +71,6 @@ def argmaxAxis? {α : Type} [TorchLean.Storage α]
     [LT α] [DecidableRel ((· > ·) : α → α → Prop)]
     {s : Shape} (axis : Nat) [Shape.AxisInBounds axis s] (values : Tensor α s) :
     Array (Option Nat) :=
-  let argmaxChunk (xs : Array α) : Option Nat :=
-    match xs[0]? with
-    | none => none
-    | some x0 =>
-        let (_, bestIndex, _) := xs.foldl (fun (index, bestIndex, bestValue) value =>
-          if value > bestValue then (index + 1, index, value)
-          else (index + 1, bestIndex, bestValue)) (0, 0, x0)
-        some bestIndex
   let axisExtent := Shape.axisSize s axis
   if axisExtent = 0 then
     Array.replicate (Shape.size (Tensor.shapeAfterSum s axis)) none
@@ -81,7 +80,7 @@ def argmaxAxis? {α : Type} [TorchLean.Storage α]
     let data := Tensor.to moved (Array α)
     (Array.finRange (Shape.size (Tensor.shapeAfterSum s axis))).map fun slice =>
       let start := slice.val * axisExtent
-      argmaxChunk (data.extract start (start + axisExtent))
+      Internal.maxIndex? (data.extract start (start + axisExtent))
 
 /--
 Compare logits with one-hot targets along `axis`, once for every slice orthogonal to that axis.

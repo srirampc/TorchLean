@@ -29,11 +29,11 @@ namespace Runtime.Autograd.Model.Dual
 variable {E : Type*} [NormedAddCommGroup E] [NormedSpace ℝ E]
 
 /-- Runtime comparisons inspect the primal value, not its derivative coefficients. -/
-theorem jet_beq_zero {n : Nat} (ds : Fin n → E) (f : E → ℝ) (x : E) :
-    (jet ds f x == 0) = (f x == 0) := by
+theorem jet_beq_zero {n : Nat} (directions : Fin n → E) (f : E → ℝ) (x : E) :
+    (jet directions f x == 0) = (f x == 0) := by
   induction n with
   | zero => rfl
-  | succ n ih => exact ih (Fin.init ds)
+  | succ n ih => exact ih (Fin.init directions)
 
 private theorem nested_unsupported (n : Nat) :
     TorchLean.Numeric.QuotientArithmetic.supported (α := Nested ℝ n) = false := by
@@ -155,11 +155,11 @@ theorem jet_one_div {n : Nat} (directions : Fin n → ℝ) {x : ℝ} (hx : x ≠
     (f := fun _ : ℝ => 1) (g := fun y => y) contDiffAt_const contDiffAt_id hx
 
 /-- The square-root branch depends only on the primal input. -/
-theorem jet_pos {n : Nat} (ds : Fin n → E) (f : E → ℝ) (x : E) :
-    0 < jet ds f x ↔ 0 < f x := by
+theorem jet_pos {n : Nat} (directions : Fin n → E) (f : E → ℝ) (x : E) :
+    0 < jet directions f x ↔ 0 < f x := by
   induction n with
   | zero => rfl
-  | succ n ih => exact ih (Fin.init ds)
+  | succ n ih => exact ih (Fin.init directions)
 
 private theorem ofPrimal_natCast (n k : Nat) :
     Nested.ofPrimal n (k : ℝ) = (k : Nested ℝ n) := by

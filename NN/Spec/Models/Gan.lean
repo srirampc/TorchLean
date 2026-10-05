@@ -41,21 +41,21 @@ namespace Generative.GAN
 open Spec TorchLean
 open TorchLean TorchLean.Tensor
 
-variable {α : Type} [TorchLean.Storage α] [Context α]
+variable {α : Type} [TorchLean.Storage α]
 variable {latent obs : Shape}
 
 /-- Generator `G_θ : z ↦ x_fake`. -/
-structure Generator (α : Type) (latent obs : Shape) [TorchLean.Storage α] [Context α] where
+structure Generator (α : Type) (latent obs : Shape) [TorchLean.Storage α] where
   /-- Produce a synthetic observation from latent noise. -/
   forward : Tensor α latent → Tensor α obs
 
 /-- Discriminator/critic `D_φ : x ↦ score`, represented as a scalar tensor. -/
-structure Discriminator (α : Type) (obs : Shape) [TorchLean.Storage α] [Context α] where
+structure Discriminator (α : Type) (obs : Shape) [TorchLean.Storage α] where
   /-- Score an observation.  For LSGAN, scores are regressed toward `0` or `1`. -/
   forward : Tensor α obs → Tensor α .scalar
 
 /-- Pair of generator and discriminator components forming a GAN-style model. -/
-structure Model (α : Type) (latent obs : Shape) [TorchLean.Storage α] [Context α] where
+structure Model (α : Type) (latent obs : Shape) [TorchLean.Storage α] where
   /-- Latent-to-observation generator. -/
   generator : Generator α latent obs
   /-- Observation-to-score discriminator. -/
@@ -74,12 +74,20 @@ def realScore (model : Model α latent obs) (x : Tensor α obs) : Tensor α .sca
   model.discriminator.forward x
 
 /-- Scalar tensor filled with `1`, the LSGAN "real" target. -/
-def realTarget : Tensor α .scalar :=
+def realTarget [One α] : Tensor α .scalar :=
   Tensor.full (α := α) .scalar (1 : α)
 
 /-- Scalar tensor filled with `0`, the LSGAN "fake" target. -/
-def fakeTarget : Tensor α .scalar :=
+def fakeTarget [Zero α] : Tensor α .scalar :=
   Tensor.full (α := α) .scalar (0 : α)
+
+/-- Fake scoring expands to discriminator-after-generator. -/
+@[simp] theorem fakeScore_eq_discriminator_generate
+    (model : Model α latent obs) (z : Tensor α latent) :
+    fakeScore model z = model.discriminator.forward (model.generator.forward z) := by
+  rfl
+
+variable [Context α]
 
 /--
 Least-squares discriminator loss:
@@ -100,12 +108,6 @@ Least-squares generator loss:
 def generatorLoss
     (model : Model α latent obs) (z : Tensor α latent) : α :=
   Spec.mseSpec (s := .scalar) (fakeScore model z) (realTarget (α := α))
-
-/-- Fake scoring expands to discriminator-after-generator. -/
-@[simp] theorem fakeScore_eq_discriminator_generate
-    (model : Model α latent obs) (z : Tensor α latent) :
-    fakeScore model z = model.discriminator.forward (model.generator.forward z) := by
-  rfl
 
 /--
 The LSGAN discriminator objective is the sum of real and fake score-regression terms.

@@ -27,37 +27,35 @@ open TorchLean TorchLean.Tensor
 
 noncomputable section
 
-open scoped BigOperators
-
 /-!
 ### Coordinate lemmas for the Euclidean identification
 
-Mathlib's `EuclideanSpace` is `PiLp 2`, a type synonym carrying a `WithLp` wrapper. The four lemmas
-below are the plumbing that lets us forget the wrapper: each says that reading coordinate `i` of a
-vector built from `f` gives `f i`, for the various shapes the wrapper takes. They are boring on
-purpose, and having them as `simp` lemmas is what keeps the real proofs in this file readable.
+Mathlib's `EuclideanSpace` is `PiLp 2`, a type synonym carrying a `WithLp` wrapper. The four named
+coordinate identities below say that reading coordinate `i` of a vector built from `f` gives
+`f i`, for the different forms of the wrapper. Mathlib's existing `simp` rules prove these
+identities, so they need no additional `simp` registrations here.
 -/
 
 /-- Coordinates of the inverse `PiLp` equivalence are the values of the underlying function. -/
-@[simp] theorem piLpContinuousLinearEquiv2_symm_apply {n : Nat} (f : Fin n → ℝ) (i : Fin n) :
+theorem piLpContinuousLinearEquiv2_symm_apply {n : Nat} (f : Fin n → ℝ) (i : Fin n) :
     ((PiLp.continuousLinearEquiv 2 ℝ (fun _ : Fin n => ℝ)).symm f) i = f i := by
   simp
 
 /-- The same, applied through the bundled continuous linear map. -/
-@[simp] theorem piLpContinuousLinearEquiv2_symm_clm_apply {n : Nat} (f : Fin n → ℝ) (i : Fin n) :
+theorem piLpContinuousLinearEquiv2_symm_clm_apply {n : Nat} (f : Fin n → ℝ) (i : Fin n) :
     (((PiLp.continuousLinearEquiv 2 ℝ (fun _ : Fin n => ℝ)).symm.toContinuousLinearMap) f) i = f i
       := by
   simp
 
 /-- The same again, with the `ofLp` projection made explicit. -/
-@[simp] theorem piLpContinuousLinearEquiv2_symm_clm_apply_ofLp {n : Nat} (f : Fin n → ℝ)
+theorem piLpContinuousLinearEquiv2_symm_clm_apply_ofLp {n : Nat} (f : Fin n → ℝ)
     (i : Fin n) :
     (((PiLp.continuousLinearEquiv 2 ℝ (fun _ : Fin n => ℝ)).symm.toContinuousLinearMap) f).ofLp i =
       f i := by
   simp
 
 /-- And once more for `EuclideanSpace.equiv`, the spelling used by `vecOfFun`. -/
-@[simp] theorem euclideanEquiv_symm_ofLp {n : Nat} (f : Fin n → ℝ) (i : Fin n) :
+theorem euclideanEquiv_symm_ofLp {n : Nat} (f : Fin n → ℝ) (i : Fin n) :
     ((EuclideanSpace.equiv (𝕜 := ℝ) (ι := Fin n)).symm f).ofLp i = f i := by
   simp [EuclideanSpace.equiv]
 
@@ -374,6 +372,20 @@ def getCLM {Γ : List Shape} {s : Shape} (idx : Idx Γ s) : CtxVec Γ →L[ℝ] 
   exact congrArg (castVec (congrArg Spec.Shape.size idx.h))
     (getBlockCLM_apply (Γ := Γ) (i := idx.i) (x := x))
 
+/-- The adjoint of block projection is block injection. -/
+theorem adjoint_getCLM {Γ : List Shape} {s : Shape} (idx : Idx Γ s)
+    (v : Vec (Spec.Shape.size s)) :
+    (CtxVec.getCLM idx).adjoint v = CtxVec.single idx v := by
+  apply ext_inner_left ℝ
+  intro x
+  rw [ContinuousLinearMap.adjoint_inner_right, CtxVec.getCLM_apply, CtxVec.inner_get_single]
+
+/-- Reading a context slot is differentiable, with derivative the bundled projection. -/
+theorem hasFDerivAt_get {Γ : List Shape} {s : Shape} (idx : Idx Γ s) (x : CtxVec Γ) :
+    HasFDerivAt (fun y : CtxVec Γ => get idx y) (getCLM idx) x :=
+  (getCLM idx).hasFDerivAt.congr_of_eventuallyEq
+    (Filter.Eventually.of_forall fun y => (getCLM_apply idx y).symm)
+
 end CtxVec
 
 -- ---------------------------------------------------------------------------
@@ -454,8 +466,6 @@ end Node
 -- ---------------------------------------------------------------------------
 
 namespace OpSpecFDerivCorrect
-
-open scoped BigOperators
 
 /--
 `OpSpecFDerivCorrect` instance for a linear layer.

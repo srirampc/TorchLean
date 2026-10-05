@@ -115,10 +115,7 @@ def sum {Γ : List Shape} {s : Shape} (idx : Idx Γ s) : Node Γ Shape.scalar :=
             =
           (sumCLM (n := Spec.Shape.size s)) (CtxVec.get (Γ := Γ) (s := s) idx dx) * δ0 := by
         classical
-        -- expand `inner` and pull out the constant factor
-        -- `inner` expands to `∑ i, (CtxVec.get .. dx i) * δ0`
-        -- and `sumCLM` is the coordinate sum.
-        -- Expand `inner` and pull out the constant factor.
+        -- Expand `inner` to `∑ j, dx_j * δ0`, pull out the constant, and recognise `sumCLM`.
         have hsum :
             (∑ j : Fin (Spec.Shape.size s), CtxVec.get (Γ := Γ) (s := s) idx dx j * δ0)
               =
@@ -243,10 +240,9 @@ def broadcastToCLM {s₁ s₂ : Shape} (cb : Shape.CanBroadcastTo s₁ s₂) :
   exact LinearMap.continuous_of_finiteDimensional (f := fLin)
 
 /-- The bundled broadcast map computes `broadcastToVec`. Broadcasting is linear, so nothing about
-the
-shape relation `cb` needs to reappear in the derivative. -/
-@[simp] theorem broadcastToCLM_apply {s₁ s₂ : Shape} (cb : Shape.CanBroadcastTo s₁ s₂) (v : Vec
-  (Spec.Shape.size s₁)) :
+the shape relation `cb` needs to reappear in the derivative. -/
+@[simp] theorem broadcastToCLM_apply {s₁ s₂ : Shape} (cb : Shape.CanBroadcastTo s₁ s₂)
+    (v : Vec (Spec.Shape.size s₁)) :
     broadcastToCLM (s₁ := s₁) (s₂ := s₂) cb v = broadcastToVec (s₁ := s₁) (s₂ := s₂) cb v := rfl
 
 /-- Source index obtained by deleting coordinate `axis` from an index into `s`. -/
@@ -285,8 +281,7 @@ def afterSumCLM (s : Shape) (axis : Nat) :
 /-- The bundled repeat-along-the-summed-axis map computes `afterSumVec`.
 
 This map is the adjoint of summation over `axis`, which is why the backward pass for a reduction is
-a
-broadcast: each output coordinate contributed to exactly one sum. -/
+a broadcast: each output coordinate contributed to exactly one sum. -/
 @[simp] theorem afterSumCLM_apply (s : Shape) (axis : Nat)
     (v : Vec (Spec.Shape.size (shapeAfterSum s axis))) :
     afterSumCLM s axis v = afterSumVec s axis v := rfl
@@ -294,9 +289,8 @@ broadcast: each output coordinate contributed to exactly one sum. -/
 end Broadcast
 
 /-- General shape broadcast node `s₁ → s₂` (linear). -/
-def broadcastTo {Γ : List Shape} {s₁ s₂ : Shape} (idx : Idx Γ s₁) (cb : Shape.CanBroadcastTo s₁ s₂)
-  :
-    Node Γ s₂ :=
+def broadcastTo {Γ : List Shape} {s₁ s₂ : Shape} (idx : Idx Γ s₁)
+    (cb : Shape.CanBroadcastTo s₁ s₂) : Node Γ s₂ :=
   Node.ofFn (Γ := Γ) (τ := s₂)
     (f := fun xV => Broadcast.broadcastToVec (s₁ := s₁) (s₂ := s₂) cb (CtxVec.get (Γ := Γ) (s := s₁)
       idx xV))
@@ -327,8 +321,8 @@ def broadcastTo {Γ : List Shape} {s₁ s₂ : Shape} (idx : Idx Γ s₁) (cb : 
       exact hadj.trans hctx.symm)
 
 /-- `NodeFDerivCorrect` for `broadcastTo` (broadcasting is linear). -/
-def broadcastToFderiv {Γ : List Shape} {s₁ s₂ : Shape} (idx : Idx Γ s₁) (cb : Shape.CanBroadcastTo
-  s₁ s₂) :
+def broadcastToFderiv {Γ : List Shape} {s₁ s₂ : Shape} (idx : Idx Γ s₁)
+    (cb : Shape.CanBroadcastTo s₁ s₂) :
     NodeFDerivCorrect (broadcastTo (Γ := Γ) (s₁ := s₁) (s₂ := s₂) idx cb) :=
 { deriv := fun _ =>
     (Broadcast.broadcastToCLM (s₁ := s₁) (s₂ := s₂) cb).comp (CtxVec.getCLM (Γ := Γ) (s := s₁) idx)
@@ -376,11 +370,9 @@ def reduceSum {Γ : List Shape} {s : Shape} (axis : Nat)
       exact hadj.trans hctx.symm)
 
 /-- `NodeFDerivCorrect` for `reduceSum`. -/
-def reduceSumFderiv {Γ : List Shape} {s : Shape} (axis : Nat) [valid : Shape.HasNonemptyAxis axis
-  s] [wf : Shape.WellFormed s]
-    (idx : Idx Γ s) :
-    NodeFDerivCorrect (reduceSum (Γ := Γ) (s := s) axis idx) :=
-by
+def reduceSumFderiv {Γ : List Shape} {s : Shape} (axis : Nat)
+    [Shape.HasNonemptyAxis axis s] [Shape.WellFormed s] (idx : Idx Γ s) :
+    NodeFDerivCorrect (reduceSum (Γ := Γ) (s := s) axis idx) := by
   classical
   let B := Broadcast.afterSumCLM s axis
   let D : CtxVec Γ →L[ℝ] Vec (Spec.Shape.size (shapeAfterSum s axis)) :=
@@ -436,11 +428,9 @@ def reduceMean {Γ : List Shape} {s : Shape} (axis : Nat)
       exact hadj.trans hctx.symm)
 
 /-- `NodeFDerivCorrect` for `reduceMean`. -/
-def reduceMeanFderiv {Γ : List Shape} {s : Shape} (axis : Nat) [valid : Shape.HasNonemptyAxis axis
-  s] [wf : Shape.WellFormed s]
-    (idx : Idx Γ s) :
-    NodeFDerivCorrect (reduceMean (Γ := Γ) (s := s) axis idx) :=
-by
+def reduceMeanFderiv {Γ : List Shape} {s : Shape} (axis : Nat)
+    [valid : Shape.HasNonemptyAxis axis s] [Shape.WellFormed s] (idx : Idx Γ s) :
+    NodeFDerivCorrect (reduceMean (Γ := Γ) (s := s) axis idx) := by
   classical
   let B := Broadcast.afterSumCLM s axis
   letI : Shape.AxisInBounds axis s := valid.proof.toAxisInBounds
@@ -477,18 +467,17 @@ def takeLeftVec {m n : Nat} (v : Vec (m + n)) : Vec m :=
 def takeRightVec {m n : Nat} (v : Vec (m + n)) : Vec n :=
   vecOfFun (n := n) fun i : Fin n => v (Fin.natAdd m i)
 
-/-- Splitting then appending recovers the original vector: `append (takeLeft v) (takeRight v) = v`.
-  -/
+/-- Splitting then appending recovers the original vector:
+`append (takeLeft v) (takeRight v) = v`. -/
 private theorem append_takeLeft_takeRight {m n : Nat} (v : Vec (m + n)) :
     appendVec (m := m) (n := n) (takeLeftVec (m := m) (n := n) v) (takeRightVec (m := m) (n := n) v)
       = v := by
-  classical
   ext i
   cases i using Fin.addCases <;>
-    simp [appendVec, takeLeftVec, takeRightVec, vecOfFun, Fin.append, Fin.addCases]
+    simp [appendVec, takeLeftVec, takeRightVec, Fin.append_left, Fin.append_right]
 
 /-- Concatenate two tensors along dimension 0 (dim-0 concat), using flattened vectors internally. -/
-def concatLeadingAxis {Γ : List Shape} {n m : Nat} {s : Shape}
+def concat {Γ : List Shape} {n m : Nat} {s : Shape}
     (a : Idx Γ (.dim n s)) (b : Idx Γ (.dim m s)) :
     Node Γ (.dim (n + m) s) :=
   let hsz :
@@ -584,10 +573,10 @@ def concatLeadingAxis {Γ : List Shape} {n m : Nat} {s : Shape}
               simp [inner_add_right]
     )
 
-/-- `NodeFDerivCorrect` for `concatLeadingAxis` (concat is linear). -/
-def concatLeadingAxisFderiv {Γ : List Shape} {n m : Nat} {s : Shape}
+/-- `NodeFDerivCorrect` for `concat` (concat is linear). -/
+def concatFderiv {Γ : List Shape} {n m : Nat} {s : Shape}
     (a : Idx Γ (.dim n s)) (b : Idx Γ (.dim m s)) :
-    NodeFDerivCorrect (concatLeadingAxis (Γ := Γ) (n := n) (m := m) (s := s) a b) := by
+    NodeFDerivCorrect (concat (Γ := Γ) (n := n) (m := m) (s := s) a b) := by
   classical
   let szA : Nat := Spec.Shape.size (.dim n s)
   let szB : Nat := Spec.Shape.size (.dim m s)
@@ -595,21 +584,7 @@ def concatLeadingAxisFderiv {Γ : List Shape} {n m : Nat} {s : Shape}
     simp [szA, szB, Spec.Shape.size, Nat.add_mul]
   let Dcast : Vec (szA + szB) →L[ℝ] Vec (Spec.Shape.size (.dim (n + m) s)) :=
     Graph.castCLM (h := hsz)
-  let Dapp : (Vec szA × Vec szB) →L[ℝ] Vec (szA + szB) := by
-    classical
-    let fLin : (Vec szA × Vec szB) →ₗ[ℝ] Vec (szA + szB) :=
-      { toFun := fun p => appendVec (m := szA) (n := szB) p.1 p.2
-        map_add' := by
-          intro p q
-          ext i
-          cases i using Fin.addCases <;>
-            simp [appendVec, Fin.append, Fin.addCases]
-        map_smul' := by
-          intro r p
-          ext i
-          cases i using Fin.addCases <;>
-            simp [appendVec, Fin.append, Fin.addCases, Prod.smul_fst, Prod.smul_snd] }
-    exact ⟨fLin, LinearMap.continuous_of_finiteDimensional (f := fLin)⟩
+  let Dapp : (Vec szA × Vec szB) →L[ℝ] Vec (szA + szB) := Graph.appendCLM szA szB
   let Dpair : CtxVec Γ →L[ℝ] (Vec szA × Vec szB) :=
     ContinuousLinearMap.prod (CtxVec.getCLM (Γ := Γ) (s := .dim n s) a) (CtxVec.getCLM (Γ := Γ) (s
       := .dim m s) b)
@@ -622,19 +597,19 @@ def concatLeadingAxisFderiv {Γ : List Shape} {n m : Nat} {s : Shape}
     have hD : HasFDerivAt (fun x : CtxVec Γ => D x) D xV := D.hasFDerivAt (x := xV)
     have hEq :
         (Node.forwardVec (Γ := Γ) (τ := .dim (n + m) s)
-          (concatLeadingAxis (Γ := Γ) (n := n) (m := m) (s := s) a b))
+          (concat (Γ := Γ) (n := n) (m := m) (s := s) a b))
           =
         fun x : CtxVec Γ => D x := by
       funext x
       -- Unfold and normalize casts/append.
-      simp [concatLeadingAxis, Node.forwardVec_ofFn, D, Dcast, Dapp, Dpair,
-        Graph.castCLM, ContinuousLinearMap.comp_apply, ContinuousLinearMap.prod_apply,
+      simp [concat, Node.forwardVec_ofFn, D, Dcast, Dapp, Dpair, Graph.castCLM,
+        Graph.appendCLM, ContinuousLinearMap.comp_apply, ContinuousLinearMap.prod_apply,
         CtxVec.getCLM_apply, hsz, szA, szB, ShapeOps.castVec_proof_irrel]
     exact hD.congr_of_eventuallyEq hEq.eventuallyEq
   · intro xV dxV
     -- `concat_leading_axis` is linear, so its JVP matches the (constant) derivative.
-    simp [concatLeadingAxis, Node.jvpVec_ofFn, D, Dcast, Dapp, Dpair,
-      Graph.castCLM, ContinuousLinearMap.comp_apply, ContinuousLinearMap.prod_apply,
+    simp [concat, Node.jvpVec_ofFn, D, Dcast, Dapp, Dpair, Graph.castCLM,
+      Graph.appendCLM, ContinuousLinearMap.comp_apply, ContinuousLinearMap.prod_apply,
       CtxVec.getCLM_apply, hsz, szA, szB, ShapeOps.castVec_proof_irrel]
 
 

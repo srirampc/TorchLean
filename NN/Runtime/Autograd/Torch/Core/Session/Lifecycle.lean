@@ -29,7 +29,7 @@ def new {α : Type} [Storage α] (options : Config := {}) : IO (EagerSession α)
   catch e =>
     throw <| IO.userError s!"torch eager session: {e.toString}"
   let tape ← IO.mkRef Runtime.Autograd.Tape.empty
-  let cudaTape ← IO.mkRef Runtime.Autograd.Cuda.Tape.empty
+  let cudaTape ← IO.mkRef Runtime.Autograd.LibTorch.Tape.empty
   let paramsByLeaf ← IO.mkRef (Std.HashMap.emptyWithCapacity)
   let parameterStorageByLeaf ← IO.mkRef (Std.HashMap.emptyWithCapacity)
   let nats ← IO.mkRef #[]
@@ -52,16 +52,16 @@ def new {α : Type} [Storage α] (options : Config := {}) : IO (EagerSession α)
       refGeneration := refGeneration }
 
 /-- Force-free a CUDA buffer allocation; the external finalizer is safe to call twice. -/
-def releaseCudaBuffer (b : Runtime.Autograd.Cuda.Buffer) : IO Unit := do
-  let released ← Runtime.Autograd.Cuda.Buffer.releaseIO b
+def releaseCudaBuffer (b : Runtime.Autograd.LibTorch.Buffer) : IO Unit := do
+  let released ← Runtime.Autograd.LibTorch.Buffer.releaseIO b
   AnyParam.observeCudaCleanupFlag released
 
 /-- Force-release a shape-erased CUDA buffer. -/
-def releaseCudaAnyBuffer (b : Runtime.Autograd.Cuda.AnyBuffer) : IO Unit :=
+def releaseCudaAnyBuffer (b : Runtime.Autograd.LibTorch.AnyBuffer) : IO Unit :=
   releaseCudaBuffer b.buf
 
 /-- Device-resident gradients keyed by parameter leaf ids, with each leaf's shape. -/
-abbrev CudaGradMap := Std.HashMap Nat Runtime.Autograd.Cuda.AnyBuffer
+abbrev CudaGradMap := Std.HashMap Nat Runtime.Autograd.LibTorch.AnyBuffer
 
 /-- Release owned intermediates while leaving shared parameter snapshots to reference counting. -/
 private def releaseCudaTapeValues {α : Type} [Storage α]
@@ -96,10 +96,10 @@ def withCudaGradMap {β : Type} (xs : CudaGradMap) (action : CudaGradMap → IO 
 
 /-- Check that a shape-erased CUDA buffer has the number of elements promised by its shape. -/
 def checkCudaAnyBufferSize (where_ : String)
-    (x : Runtime.Autograd.Cuda.AnyBuffer) : IO Unit := do
+    (x : Runtime.Autograd.LibTorch.AnyBuffer) : IO Unit := do
   let expected := Spec.Shape.size x.s
   if _hExpected : expected < UInt32.size then
-    let got := Runtime.Autograd.Cuda.Buffer.size x.buf
+    let got := Runtime.Autograd.LibTorch.Buffer.size x.buf
     let expectedU32 : UInt32 := UInt32.ofNat expected
     if got != expectedU32 then
       throw <| IO.userError
@@ -114,13 +114,13 @@ Discard the current forward pass and invalidate its handles. Keep parameters and
 Owned CUDA intermediates are released before the tape drops its references. Parameter leaves can
 refer to the current mirror or an older recorded value, so their snapshots follow Lean reference
 counting and remain valid in any other session that still uses them. Resetting the tape neither
-drains the reuse cache nor changes optimizer history.
+empties LibTorch's allocator cache nor changes optimizer history.
 -/
 def resetTape {α : Type} [Storage α] (s : EagerSession α) : IO Unit := do
   if Config.device s.options == .cuda then
     releaseCudaTapeValues s
   s.tape.set Runtime.Autograd.Tape.empty
-  s.cudaTape.set Runtime.Autograd.Cuda.Tape.empty
+  s.cudaTape.set Runtime.Autograd.LibTorch.Tape.empty
   s.paramsByLeaf.set (Std.HashMap.emptyWithCapacity)
   s.parameterStorageByLeaf.set (Std.HashMap.emptyWithCapacity)
   s.nats.set #[]

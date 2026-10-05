@@ -211,13 +211,17 @@ def loss := Tensor.meanSquaredError reconstructed matrix
 
 `Tensor.qr` computes both factors once and returns named `.q` and `.r` fields. For an
 `m × n` input, their reduced shapes are `m × min m n` and `min m n × n`. Tall and square inputs use
-the theorem-backed reference factorization. The wide path retains independent basis columns, so an
+the reference factorization, whose reconstruction and orthonormality theorems apply to real scalars
+with positive diagonal pivots. The wide path retains independent basis columns, so an
 early dependent source column does not prevent a later independent column from entering the basis.
 `Tensor.cholesky` returns the lower-triangular factor candidate, while
 `Tensor.solveRidge` solves a regularized symmetric system through the same
-Cholesky path. These are executable, generic reference algorithms shared with
-the proof layer. They are not replacements for blocked, vectorized LAPACK or
-backend kernels on large matrices.
+Cholesky path. The Cholesky reconstruction theorem concerns the logical computation over real
+scalars, for symmetric inputs with positive pivots. Compiled Cholesky and ridge solving use
+array implementations substituted through `implemented_by`; their equivalence to the logical
+definitions is not proved. These results do not assert exact reconstruction for floating-point
+arithmetic. The executable algorithms support generic scalar backends; large matrices call for
+blocked, vectorized LAPACK or backend kernels.
 
 ## Runtime Relationship
 

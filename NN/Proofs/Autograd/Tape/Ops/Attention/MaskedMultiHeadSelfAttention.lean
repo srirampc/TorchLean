@@ -33,7 +33,7 @@ open scoped BigOperators
 
 noncomputable section
 
-namespace MultiHeadAttention
+namespace DirectReshapeAttention
 
 open TapeNodes
 open DGraph
@@ -194,7 +194,7 @@ def maskedCoreDGraph {n numHeads headDim : Nat}
           (ss := [ScoresShape n numHeads, ScoresShape n numHeads, ScoresShape n numHeads,
             ScoresShape n numHeads])))
 
-  simpa using dg5
+  exact dg5
 
 /-- Reverse-mode theorem for the fixed-bias multi-head attention core. -/
 theorem maskedCore_backpropVec_eq_adjoint_fderiv
@@ -258,22 +258,10 @@ theorem maskedCoreAfterProjection_hasFDerivAt
           (Γ := ΓMaskedCore n numHeads headDim)
           (ss := ssMaskedCore n numHeads headDim)
           core.g)
-        (projectPack x) = Dcore := by
-    simpa using hDcore.fderiv
+        (projectPack x) = Dcore :=
+    hDcore.fderiv
   rw [hFderiv]
-  have hfun :
-      (fun z : E =>
-        Graph.evalVec
-          (Γ := ΓMaskedCore n numHeads headDim)
-          (ss := ssMaskedCore n numHeads headDim)
-          core.g
-          (projectPack z)) =
-        (Graph.evalVec
-          (Γ := ΓMaskedCore n numHeads headDim)
-          (ss := ssMaskedCore n numHeads headDim)
-          core.g ∘ projectPack) := by
-    rfl
-  exact (hDcore.comp x hProject).congr_of_eventuallyEq hfun.eventuallyEq
+  exact hDcore.comp x hProject
 
 /--
 Full masked-attention composition contract.
@@ -327,7 +315,7 @@ theorem projectedMaskedAttention_hasFDerivAt
       (n := n) (numHeads := numHeads) (headDim := headDim)
       c bias projectPack DprojectPack x hProject)
 
-end MultiHeadAttention
+end DirectReshapeAttention
 
 end
 

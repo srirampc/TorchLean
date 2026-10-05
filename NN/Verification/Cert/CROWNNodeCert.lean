@@ -14,8 +14,8 @@ public import NN.Verification.Cert.IBPNodeCert
 
 Per-node α-CROWN certificate checking (graph dialect).
 
-This mirrors `NN.Verification.IBPNodeCert`, but for affine bounds produced by a CROWN/DeepPoly pass
-with optional α-parameters for the ReLU lower relaxation (α-CROWN).
+This mirrors `NN.Verification.Cert.IBPNodeCert`, but for affine bounds produced by a CROWN/DeepPoly
+pass with optional α-parameters for the ReLU lower relaxation (α-CROWN).
 
 Certificate JSON format:
 
@@ -48,17 +48,17 @@ open FloatLib.Floats (ExecFloat)
 open FloatLib.Floats.Formats.BinaryInterchange (Model FloatFormat)
 
 
-namespace NN.Verification.CROWNNodeCert
+namespace NN.Verification.Cert.CROWNNodeCert
 
 open NN.MLTheory.CROWN
 open NN.MLTheory.CROWN.Graph
 open NN.MLTheory.CROWN.Cert
 open NN.Verification.Json
 open NN.Verification.Cert.NodeReplay
-open Import.PyTorch
 open Spec TorchLean
 open TorchLean.Tensor
-open Lean Data Json
+open Lean Json
+
 /-!
 The helpers below are the JSON-facing boundary for the CROWN certificate checkers. They parse the
 artifact, require exact binary32 agreement for affine replay data, and check parent and shape
@@ -70,19 +70,23 @@ def readCROWNNodeCertificate (g : Graph) (path : String) : IO CROWNNodeCoreCerti
   let topObj ← readJsonObjectFile path
   parseCROWNNodeCoreCertificate g topObj
 
-/-- Check the local CROWN enclosure condition for one node against a certificate entry. -/
-def checkCROWNNode (g : Graph) (ps : ParamStore (ExecFloat.Binary 8 23))
+/--
+Check the local CROWN enclosure condition for one node against a certificate entry.
+
+`step` recomputes the candidate affine bound from the bounds replayed so far.
+`checkCROWNNodeCertificate` passes `replayStep`, the function whose acceptance theorem is proved
+below, so the diagnostic loop and the pure acceptance decision replay the same rule.
+-/
+def checkCROWNNode (g : Graph)
     (authoritativeIbp : Array (Option (FlatBox (ExecFloat.Binary 8 23))))
-    (certAlpha : Array (Option (FlatTensor (ExecFloat.Binary 8 23))))
+    (cert : CROWNNodeCoreCertificate)
+    (step : Array (Option (FlatAffineBounds (ExecFloat.Binary 8 23))) → Nat →
+      Option (FlatAffineBounds (ExecFloat.Binary 8 23)))
     (authoritativeCrown : Array (Option (FlatAffineBounds (ExecFloat.Binary 8 23))))
-    (certCrown : Array (Option (FlatAffineBounds (ExecFloat.Binary 8 23))))
-    (ctx : AffineCtx)
     (id : Nat) : IO (Bool × Option (FlatAffineBounds (ExecFloat.Binary 8 23))) := do
-  let computed? :=
-    alphaCrownStepNode? (α := (ExecFloat.Binary 8 23)) g.nodes ps authoritativeIbp certAlpha
-      authoritativeCrown ctx id
+  let computed? := step authoritativeCrown id
   let ok ←
-    checkCROWNLikeNode "CROWNNodeCert" g authoritativeIbp authoritativeCrown certCrown ctx id
+    checkCROWNLikeNode "CROWNNodeCert" g authoritativeIbp authoritativeCrown cert.crown cert.ctx id
       computed?
   pure (ok, computed?)
 
@@ -116,8 +120,8 @@ theorem certificateAccepts_eq_true
     (diagnosticsOk : Bool)
     (haccept : certificateAccepts cert g ps authoritativeIbp diagnosticsOk = true) :
     NN.MLTheory.CROWN.Graph.CrownCertSoundness.CrownCertLocalOK
-      (g := g) (step := replayStep g ps authoritativeIbp cert) cert.crown := by
-  exact crownCertificateAccepts_eq_true g (replayStep g ps authoritativeIbp cert) cert.crown
+      (g := g) (step := replayStep g ps authoritativeIbp cert) cert.crown :=
+  crownCertificateAccepts_eq_true g (replayStep g ps authoritativeIbp cert) cert.crown
     diagnosticsOk haccept
 
 /--
@@ -125,19 +129,23 @@ Check a per-node α-CROWN certificate against Lean's propagation rules.
 
 Returns `true` iff every supplied IBP box contains Lean's authoritative recomputation and every
 node's affine replay data agrees exactly with Lean's CROWN step.
+
+The per-node loop is part of the verdict: it checks IBP containment, parent coverage, shape and
+domain preconditions, and dimensions, which the pure replay in `certificateAccepts` does not. The
+pure replay runs only when the loop passes. The certificate's `ibp` boxes are only checked for
+containment; replay uses Lean's own IBP pass, so they add no information to the affine check.
 -/
-def checkCROWNNodeCertificate (g : Graph) (ps : ParamStore (ExecFloat.Binary 8 23)) (path : String)
-  :
-    IO Bool := do
+def checkCROWNNodeCertificate (g : Graph) (ps : ParamStore (ExecFloat.Binary 8 23))
+    (path : String) : IO Bool := do
   let cert ← readCROWNNodeCertificate g path
   let authoritativeIbp := runIBP (α := (ExecFloat.Binary 8 23)) g ps
+  let step := replayStep g ps authoritativeIbp cert
   let mut authoritativeCrown : Array (Option (FlatAffineBounds (ExecFloat.Binary 8 23))) :=
     Array.replicate g.nodes.size none
   let mut ok := true
   for id in [0:g.nodes.size] do
-    let okIbp ← NN.Verification.IBPNodeCert.checkIBPNode g authoritativeIbp cert.ibp id
-    let (okCrown, computed?) ←
-      checkCROWNNode g ps authoritativeIbp cert.alpha authoritativeCrown cert.crown cert.ctx id
+    let okIbp ← NN.Verification.Cert.IBPNodeCert.checkIBPNode g authoritativeIbp cert.ibp id
+    let (okCrown, computed?) ← checkCROWNNode g authoritativeIbp cert step authoritativeCrown id
     authoritativeCrown := authoritativeCrown.set! id computed?
     ok := ok && okIbp && okCrown
   let accepted := certificateAccepts cert g ps authoritativeIbp ok
@@ -145,4 +153,4 @@ def checkCROWNNodeCertificate (g : Graph) (ps : ParamStore (ExecFloat.Binary 8 2
     IO.println "[CROWNNodeCert] artifact matched an authoritative Lean IBP and alpha-CROWN replay."
   pure accepted
 
-end NN.Verification.CROWNNodeCert
+end NN.Verification.Cert.CROWNNodeCert

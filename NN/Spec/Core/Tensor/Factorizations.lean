@@ -12,11 +12,12 @@ public import NN.Spec.Core.Tensor.Constructors
 /-!
 # Matrix factorizations (spec layer)
 
-This file provides **real**, shape-indexed reference implementations of the two *exact, finite*
-matrix factorizations used by Gaussian processes, kernel ridge regression, PCA, and least squares:
+This file provides shape-indexed scalar-backend recurrences for two matrix factorizations used by
+Gaussian processes, kernel ridge regression, PCA, and least squares. The factorization theorems
+apply over `ℝ`; floating-point execution follows the same operations with the backend's rounding:
 
 - `choleskySpec`: Cholesky factorization $A=LL^\mathsf{T}$ (lower-triangular $L$), proved for
-                     matrices with positive executable Cholesky pivots.
+                     symmetric real matrices with positive executable Cholesky pivots.
 - `qrSpec`: QR factorization $A=QR$ via classical Gram–Schmidt; under positive executable
                      $R$ pivots, $Q$ has orthonormal columns and $R$ is upper-triangular.
 
@@ -30,13 +31,11 @@ It also provides the linear solves that ride on the Cholesky factor:
 
 The **verified** contribution is the factorizations: `choleskySpec` / `qrSpec` come with
 reconstruction and structural theorems (`IsCholesky` / `IsQR`, lower- and upper-triangularity,
-orthonormality) in `NN.Proofs.Tensor.Basic.Factorizations*`, under their stated positive-pivot
-success hypotheses. The triangular- and ridge-solve helpers above (`triSolveLowerFn`,
-`triSolveUpperFn`, `cholSolveFn`, `solveRidgeSpec`) are **executable APIs only**: their
-correctness has not been proved. They follow the standard substitution formulas over the
-readable function representation
-and are exercised by `#eval` examples, but should not be read as carrying a verified-correctness
-guarantee.
+orthonormality) in `NN.Proofs.Tensor.Basic.Factorizations*`, over `ℝ` under positive-pivot
+success hypotheses and, for Cholesky reconstruction, symmetry. The triangular- and ridge-solve
+helpers are **executable APIs only**: their correctness has not been proved. They follow the
+standard substitution formulas over the function representation and are exercised by `#eval`
+examples.
 
 ## Intent / tradeoffs
 
@@ -68,14 +67,11 @@ variable {α : Type} [TorchLean.Storage α] [Context α]
 def toMatFn {m n : Nat} (A : Tensor α [m, n]) : Fin m → Fin n → α :=
   fun i j => get2 A i j
 
-/-- View a vector tensor as a function `Fin n → α`. -/
-def getScalarFn {n : Nat} (v : Tensor α [n]) : Fin n → α :=
-  fun i => Tensor.item (get v i)
-
 /-! ## Small numeric helpers on the function representation -/
 
-/-- Dot product of two length-`p` vectors. -/
-def dotFn {p : Nat} (u v : Fin p → α) : α :=
+/-- Dot product in increasing index order, with a zero-seeded left fold. -/
+def dotFn {α : Type} [Add α] [Mul α] [Zero α]
+    {p : Nat} (u v : Fin p → α) : α :=
   (List.finRange p).foldl (fun s i => s + u i * v i) 0
 
 /-- Euclidean norm of a length-`p` vector. -/
@@ -84,9 +80,9 @@ def normFn {p : Nat} (v : Fin p → α) : α :=
 
 /-! ## Cholesky factorization
 
-For an input whose executable Cholesky pivots are positive, compute the lower-triangular `L` with
-$A=LL^\mathsf{T}$. Symmetric positive-definiteness is the standard sufficient condition, but the
-theorem in this file family is stated against the executable positive-pivot success condition.
+For a symmetric real input whose executable Cholesky pivots are positive, the lower-triangular
+result satisfies $A=LL^\mathsf{T}$. The reconstruction theorem assumes symmetry and the executable
+positive-pivot condition. On other scalar backends this definition specifies the recurrence only.
 
 The columns are computed left to right. Column `j` uses only columns `0 .. j-1`:
 
@@ -192,7 +188,9 @@ triangular substitutions: forward-solve $Lz=b$, then back-solve $L^\mathsf{T}x=z
 visits the unknowns in an order such that, when row `i` is reached, every unknown it depends on has
 already been computed; the accumulator `acc` holds those values and `0` everywhere else, so the dot
 `dotFn (row i) acc` is exactly the required partial sum (the not-yet-solved and structurally-zero
-terms drop out). -/
+terms drop out) over `ℝ`. Execution on every backend still evaluates the full `n`-term dot,
+including products with zero. Such terms cannot be skipped for IEEE inputs: `∞ * 0` produces NaN.
+-/
 
 /-- Forward substitution: solve $Ly=b$ for a lower-triangular $L$ with nonzero diagonal.
 Unknowns are visited $0,1,\ldots,n-1$; when row $i$ is reached, `acc` holds
@@ -248,15 +246,15 @@ def Internal.cholSolve {n : Nat} (L : Fin n → Fin n → α) (b : Fin n → α)
 $Lz=b$, then back-solve $L^\mathsf{T}x=z$.
 
 The runtime implementation is `Internal.cholSolve` (strict arrays); the closure form here is the
-one used by the correctness proofs. Their equivalence remains part of the trust boundary described
-above. -/
+logical definition. Neither solve correctness nor equivalence with the runtime implementation has
+been proved. -/
 @[implemented_by Internal.cholSolve]
 def cholSolveFn {n : Nat} (L : Fin n → Fin n → α) (b : Fin n → α) : Fin n → α :=
   triSolveUpperFn (fun i k => L k i) (triSolveLowerFn L b)
 
-/-- The regularized matrix $K+\gamma I$ as a function. For a symmetric PSD kernel $K$ and
-$\gamma>0$,
-this is symmetric positive-definite, so its Cholesky factorization succeeds. -/
+/-- The regularized matrix $K+\gamma I$ as a function. Over `ℝ`, a symmetric PSD kernel $K$ and
+$\gamma>0$ give a symmetric positive-definite matrix. This statement does not cover backend
+overflow or rounding. -/
 def addScaledIdFn {n : Nat} (K : Fin n → Fin n → α) (γ : α) : Fin n → Fin n → α :=
   fun i j => K i j + (if i = j then γ else 0)
 
@@ -276,9 +274,9 @@ def Internal.solveRidge {n : Nat} (K : Fin n → Fin n → α) (γ : α) (b : Fi
 /-- The Tikhonov-regularized (kernel-ridge) solve $(K+\gamma I)x=b$, via the Cholesky factorization
 of $K+\gamma I$.
 
-The runtime implementation is `Internal.solveRidge` (strict arrays); the closure form here is built
-from the `choleskyFn` and `triSolve*` definitions used by the correctness proofs. Their equivalence
-remains part of the trust boundary described above. -/
+The runtime implementation is `Internal.solveRidge` (strict arrays); the logical definition composes
+`choleskyFn` with the triangular solves. The factorization theorems do not establish solve
+correctness or equivalence with this runtime implementation. -/
 @[implemented_by Internal.solveRidge]
 def solveRidgeFn {n : Nat} (K : Fin n → Fin n → α) (γ : α) (b : Fin n → α) : Fin n → α :=
   cholSolveFn (choleskyFn (addScaledIdFn K γ)) b
@@ -288,7 +286,7 @@ def solveRidgeFn {n : Nat} (K : Fin n → Fin n → α) (γ : α) (b : Fin n →
 PyTorch analogue: `torch.linalg.solve(K + gamma * I, b)` (specialized to the SPD Cholesky path). -/
 def solveRidgeSpec {n : Nat} (K : Tensor α [n, n]) (γ : α)
     (b : Tensor α [n]) : Tensor α [n] :=
-  Tensor.ofFn (solveRidgeFn (toMatFn K) γ (getScalarFn b))
+  Tensor.ofFn (solveRidgeFn (toMatFn K) γ (Tensor.getScalar b))
 
 /-! ## QR factorization (classical Gram–Schmidt)
 

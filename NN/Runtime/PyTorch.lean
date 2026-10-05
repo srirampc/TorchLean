@@ -17,8 +17,7 @@ TorchLean’s reusable PyTorch interoperability layer.
 This umbrella contains the reusable bridge infrastructure:
 
 - export TorchLean IR / parameters to readable PyTorch source;
-- convert PyTorch `state_dict` checkpoints to Lean-readable JSON through a generated Python
-  adapter; and
+- load shape-checked tensors from caller-supplied `state_dict` JSON;
 - capture supported PyTorch `nn.Module` graphs into TorchLean IR JSON; and
 - parse those JSON artifacts into shape-checked TorchLean tensors, IR graphs, or verification
   parameter stores.

@@ -6,7 +6,7 @@ Authors: TorchLean Team
 
 module
 
-public import NN.Tests.Runtime.Floats.Utils
+public import NN.Tests.Utils
 public import NN.Verification.Builtin.ExecutableLowering
 public import NN.API.Seeded
 public import NN.MLTheory.CROWN.Graph.Engine.Derivatives -- shake: keep
@@ -27,11 +27,86 @@ We lower a small TorchLean model to `NN.IR.Graph` with its payload, then lower t
 open Spec TorchLean
 open TorchLean TorchLean.Tensor
 open Tests.Utils
-open Tests.Floats.Utils
 
 namespace Tests
 namespace Floats
 namespace TorchLeanIRExecEquivCheck
+
+private def checkValues (label : String) (actual expected : Array (Spec.SomeTensor Float)) :
+    IO Unit := do
+  unless actual.size == expected.size do
+    throw <| IO.userError s!"{label}: value-table lengths differ"
+  for i in [:expected.size] do
+    match actual[i]?, expected[i]? with
+    | some a, some b =>
+        unless a.shape == b.shape do
+          throw <| IO.userError s!"{label}: shape mismatch at node {i}"
+        let av := a.tensor.data
+        let bv := b.tensor.data
+        unless av.size == bv.size do
+          throw <| IO.userError s!"{label}: tensor lengths differ at node {i}"
+        for j in [:bv.size] do
+          unless (av[j]!.isNaN && bv[j]!.isNaN) || av[j]!.toBits == bv[j]!.toBits do
+            throw <| IO.userError s!"{label}: value mismatch at node {i}, entry {j}"
+    | _, _ => throw <| IO.userError s!"{label}: missing node {i}"
+
+/-- Array execution keeps every intermediate shape and value, including shared and older parents. -/
+@[no_expose] def checkForwardContextValues : IO Unit := do
+  let vector : Shape := [2]
+  let graph : NN.IR.Graph :=
+    { nodes := #[
+        { id := 0, parents := #[], kind := .input, outShape := vector },
+        { id := 1, parents := #[0], kind := .relu, outShape := vector },
+        { id := 2, parents := #[1], kind := .sum, outShape := .scalar },
+        { id := 3, parents := #[2], kind := .broadcastTo .scalar vector, outShape := vector },
+        { id := 4, parents := #[0, 3], kind := .add, outShape := vector },
+        { id := 5, parents := #[4], kind := .sum, outShape := .scalar },
+        { id := 6, parents := #[2, 5], kind := .add, outShape := .scalar },
+        { id := 7, parents := #[0], kind := .detach, outShape := vector }
+      ] }
+  let x : Tensor Float vector := [-3.0, 2.0]
+  let expected ←
+    match NN.IR.Graph.denoteAll graph {} (Spec.SomeTensor.ofTensor x) with
+    | .ok values => pure values
+    | .error error => throw <| IO.userError error
+  let exec ←
+    match Runtime.Autograd.IRExec.lowerToForwardGraph (α := Float) graph {} with
+    | .ok exec => pure exec
+    | .error error => throw <| IO.userError error
+  if h : vector = exec.inShape then
+    let input := Tensor.castShape x h
+    checkValues "mixed forward contexts" (exec.denoteAll input) expected
+    checkValues "typed forward contexts" (exec.eval input).toShapeErasedArray expected
+  else
+    throw <| IO.userError "mixed forward contexts: wrong input shape"
+
+/-- The executable raw logarithm stays total; only the dynamic IR evaluator rejects its domain. -/
+@[no_expose] def checkRawLogExecutionBoundary : IO Unit := do
+  let graph : NN.IR.Graph :=
+    { nodes := #[
+        { id := 0, parents := #[], kind := .input, outShape := .scalar },
+        { id := 1, parents := #[0], kind := .log, outShape := .scalar }
+      ] }
+  let exec ←
+    match Runtime.Autograd.IRExec.lowerToForwardGraph (α := Float) graph {} with
+    | .ok exec => pure exec
+    | .error error => throw <| IO.userError error
+  if h : Shape.scalar = exec.inShape then
+    for value in [-1.0, 0.0, 1.0, 2.0] do
+      let x := Tensor.scalar value
+      let expected := #[Spec.SomeTensor.ofTensor x,
+        Spec.SomeTensor.ofTensor (Tensor.logSpec x)]
+      checkValues "raw log context" (exec.denoteAll (Tensor.castShape x h)) expected
+      if value ≤ 0.0 then
+        match NN.IR.Graph.denoteAll graph {} (Spec.SomeTensor.ofTensor x) with
+        | .error _ => pure ()
+        | .ok _ => throw <| IO.userError "raw log IR unexpectedly accepted a nonpositive input"
+      else
+        match NN.IR.Graph.denoteAll graph {} (Spec.SomeTensor.ofTensor x) with
+        | .ok values => checkValues "positive raw log IR context" values expected
+        | .error error => throw <| IO.userError s!"positive raw log IR rejected: {error}"
+  else
+    throw <| IO.userError "raw log contexts: wrong input shape"
 
 /-- Hard-mask IBP keeps blocked entries exact and avoids uncertified transcendental rounding. -/
 def checkHardMaskedSoftmaxIbpBoundary : IO Unit := do
@@ -45,7 +120,8 @@ def checkHardMaskedSoftmaxIbpBoundary : IO Unit := do
     NN.MLTheory.CROWN.Graph.ibpHardMaskedSoftmaxLastTensor logitsLo logitsHi singletonMask
   let checkTensor (label : String) (actual expected : Tensor Float [3]) : IO Unit :=
     for i in List.finRange 3 do
-      assertApprox s!"{label}[{i.val}]" (vecVal actual i) (vecVal expected i) 0.0
+      assertApprox s!"{label}[{i.val}]"
+        (Tensor.getScalar actual i) (Tensor.getScalar expected i) 0.0
   let mixedExpectedLo : Tensor Float [3] := [0.0, 0.0, 0.0]
   let mixedExpectedHi : Tensor Float [3] := [1.0, 0.0, 1.0]
   let singletonExpected : Tensor Float [3] := [0.0, 1.0, 0.0]
@@ -72,8 +148,9 @@ def checkSoftmaxDerivativeShapeGuard : IO Unit := do
   let first := NN.MLTheory.CROWN.Graph.runScalarDerivative graph params values
   let directional :=
     NN.MLTheory.CROWN.Graph.runDirectionalDerivative graph params values inputBox
-  let second := NN.MLTheory.CROWN.Graph.runScalarSecondDerivative graph params values first
-  unless first[1]!.isNone && directional[1]!.isNone && second[1]!.isNone do
+  let second := NN.MLTheory.CROWN.Graph.runSecondDirectionalDerivative graph params values first
+  unless (first[1]?).any Option.isNone && (directional[1]?).any Option.isNone &&
+      (second[1]?).any Option.isNone do
     throw <| IO.userError "matrix softmax used the vector-only derivative transfer rule"
 
 /-- Finite-precision graph checks fail closed when no directed nonlinear enclosure is available. -/
@@ -90,7 +167,7 @@ def checkNonlinearBoundCapabilities : IO Unit := do
       ] }
 
   let expBoxes := NN.MLTheory.CROWN.Graph.runIBP (unaryGraph .exp) params
-  unless expBoxes[1]!.isNone do
+  unless (expBoxes[1]?).any Option.isNone do
     throw <| IO.userError "Float exp IBP accepted an uncertified host transcendental"
 
   let sqrtBoxes := NN.MLTheory.CROWN.Graph.runIBP (unaryGraph .sqrt) params
@@ -102,7 +179,7 @@ def checkNonlinearBoundCapabilities : IO Unit := do
   unless softmaxBoxes[1]!.isSome do
     throw <| IO.userError "Float softmax IBP failed to return its codomain enclosure"
   let softmaxDeriv := NN.MLTheory.CROWN.Graph.runScalarDerivative softmaxGraph params softmaxBoxes
-  unless softmaxDeriv[1]!.isNone do
+  unless (softmaxDeriv[1]?).any Option.isNone do
     throw <| IO.userError "Float softmax derivative used exact-scalar coupled arithmetic"
 
   let reluGraph := unaryGraph .relu
@@ -117,8 +194,8 @@ def checkNonlinearBoundCapabilities : IO Unit := do
         let affIn := NN.MLTheory.CROWN.Graph.castAffineIn (α := Float) hIn upper.aff
         let aff22 := NN.MLTheory.CROWN.Graph.castAffineOut (α := Float) hOut affIn
         assertApprox "ReLU constant affine coefficient"
-          (matVal aff22.A ⟨0, by decide⟩ ⟨0, by decide⟩) 0.0 0.0
-        let endpoint := vecVal aff22.c ⟨0, by decide⟩
+          (Tensor.get2 aff22.A ⟨0, by decide⟩ ⟨0, by decide⟩) 0.0 0.0
+        let endpoint := Tensor.getScalar aff22.c ⟨0, by decide⟩
         unless 2.0 ≤ endpoint && endpoint < 2.000001 do
           throw <| IO.userError "ReLU affine endpoint lost its directed enclosure"
       else
@@ -208,10 +285,10 @@ def checkBatchedAttentionLowering : IO Unit := do
     let prog :
         Runtime.Autograd.Model.Program Float (paramShapes ++ [inputShape]) inputShape :=
       fun {m} _ _ wqR wkR wvR woR xR =>
-        Runtime.Autograd.Torch.batchedMultiHeadAttention
-          (m := m) (α := Float) (batch := batch) (n := n)
+        Runtime.Autograd.Torch.attention
+          (m := m) (α := Float) (batch := some batch) (n := n)
           (numHeads := numHeads) (dModel := dModel) (headDim := headDim)
-          hBatch hSeq wqR wkR wvR woR xR mask
+          hSeq wqR wkR wvR woR xR mask (hBatch := hBatch)
 
     let lowered ←
       match NN.Verification.Builtin.lowerForwardToIR
@@ -250,7 +327,7 @@ def checkBatchedAttentionLowering : IO Unit := do
     let ySpecFlat := Tensor.flattenSpec ySpec
     for i in List.finRange (Spec.Shape.size inputShape) do
       assertApprox s!"{label} attention lowering[{i.val}]"
-        (vecVal yIRFlat i) (vecVal ySpecFlat i) 2e-5
+        (Tensor.getScalar yIRFlat i) (Tensor.getScalar ySpecFlat i) 2e-5
 
     -- An exact input box must remain evaluable by IBP.  In particular, a fully blocked mask may
     -- not leave an inverse whose interval contains zero.
@@ -263,6 +340,8 @@ def checkBatchedAttentionLowering : IO Unit := do
 
 def run : IO Unit := do
   IO.println "torchlean_ir_exec_equiv_check: begin"
+  checkForwardContextValues
+  checkRawLogExecutionBoundary
   checkHardMaskedSoftmaxIbpBoundary
   checkSoftmaxDerivativeShapeGuard
   checkNonlinearBoundCapabilities
@@ -339,7 +418,8 @@ def run : IO Unit := do
             throw <| IO.userError s!"torchlean_ir_exec_equiv_check: exec output shape mismatch: {e}"
 
   for i in List.finRange outputWidth do
-    assertApprox s!"ir/exec forward[{i.val}]" (vecVal yIR i) (vecVal yExec i) 1e-6
+    assertApprox s!"ir/exec forward[{i.val}]"
+      (Tensor.getScalar yIR i) (Tensor.getScalar yExec i) 1e-6
 
   checkBatchedAttentionLowering
 

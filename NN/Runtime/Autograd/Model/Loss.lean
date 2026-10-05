@@ -60,7 +60,7 @@ Reduce an elementwise loss tensor to a scalar according to `reduction`.
 
 This is the common final step for losses like MSE and cross-entropy.
 -/
-def reduceLoss {α : Type} [TorchLean.Storage α] [Context α]
+def «reduce» {α : Type} [TorchLean.Storage α] [Context α]
     {m : Type → Type} [Monad m] [Ops (m := m) (α := α)]
     {s : Shape} (x : RefTy (m := m) (α := α) s) (reduction : Reduction) :
     m (RefTy (m := m) (α := α) Shape.scalar) := by
@@ -93,8 +93,8 @@ def mse {α : Type} [TorchLean.Storage α] [Context α]
 Weighted mean-squared error.
 
 This returns `sum (weights * (prediction - target)^2)` without implicit normalization. Weights
-whose sum is one therefore define a weighted mean, and zero weights exclude coordinates without
-requiring a separate masking operation.
+whose sum is one therefore define a weighted mean. Zero weights exclude finite coordinate losses;
+they do not suppress NaN or infinity, because the loss is evaluated before multiplication.
 -/
 def mseWeighted {α : Type} [TorchLean.Storage α] [Context α]
     {m : Type → Type} [Monad m] [Ops (m := m) (α := α)]
@@ -118,11 +118,11 @@ def nllOneHot {α : Type} [TorchLean.Storage α] [Context α]
   match reduction with
   | .sum =>
       -- `sum` is already the correct reduction: `∑_{prefix,cls} -y * logp = ∑_{prefix} -logp_true`.
-      reduceLoss (m := m) (α := α) (s := s) negProd .sum
+      Loss.reduce (m := m) (α := α) (s := s) negProd .sum
   | .mean =>
       -- Mean over samples, not classes: undo the class-dimension factor introduced by averaging
       -- every tensor entry.
-      let avgAll ← reduceLoss (m := m) (α := α) (s := s) negProd .mean
+      let avgAll ← Loss.reduce (m := m) (α := α) (s := s) negProd .mean
       scale (m := m) (α := α) (s := Shape.scalar) avgAll (Shape.axisSize s axis)
 
 /--
@@ -227,14 +227,15 @@ def nll {α : Type} [TorchLean.Storage α] [Context α]
     (reduction : Reduction := .mean) :
     m (RefTy (m := m) (α := α) Shape.scalar) := do
   let losses ← nllUnreduced (m := m) (α := α) classAxis hClassAxis logProbs target
-  reduceLoss (m := m) (α := α) (s := leading.concat trailing) losses reduction
+  Loss.reduce (m := m) (α := α) (s := leading.concat trailing) losses reduction
 
 /--
 Weighted indexed negative log-likelihood along an arbitrary class axis.
 
 The logits, labels, weights, and output coordinates obey the `nllUnreduced` shape contract. This
 returns `sum (weights * losses)` without implicit normalization; normalized weights therefore give
-a weighted mean, while zero weights mask coordinates without a division-by-zero convention.
+a weighted mean. Zero weights suppress finite coordinate losses only: `0 * inf` and `0 * NaN`
+remain NaN. This function does not skip evaluation of zero-weight coordinates.
 -/
 def nllWeighted {α : Type} [TorchLean.Storage α] [Context α]
     {m : Type → Type} [Monad m] [Ops (m := m) (α := α)]
@@ -318,7 +319,7 @@ def bceWithLogits {α : Type} [TorchLean.Storage α] [Context α]
   let t1 ← mul (m := m) (α := α) (s := s) target spNeg
   let t2 ← mul (m := m) (α := α) (s := s) oneMinusY spPos
   let lossVec ← add (m := m) (α := α) (s := s) t1 t2
-  reduceLoss (m := m) (α := α) (s := s) lossVec reduction
+  Loss.reduce (m := m) (α := α) (s := s) lossVec reduction
 
 end Loss
 

@@ -6,7 +6,7 @@ This script is the producer-side bridge for TorchLean's
 it converts a small raw leaf/domain dump from an external verifier into the
 JSON schema consumed by:
 
-  lake exe verify -- abcrown-leaf <artifact.json>
+  scripts/lake.sh exe verify -- abcrown-leaf <artifact.json>
 
 For external integrations, import `write_abcrown_leaf_artifact` and pass the root
 box plus terminal leaves.  If `out_path` is omitted, the helper writes to the
@@ -37,7 +37,7 @@ class ArtifactExportError(ValueError):
 def _as_object(value: Any, ctx: str) -> Mapping[str, Any]:
     """Return `value` as a JSON object or raise a useful exporter error."""
 
-    if not isinstance(value, dict):
+    if not isinstance(value, Mapping):
         raise ArtifactExportError(f"{ctx}: expected JSON object")
     return value
 
@@ -70,7 +70,7 @@ def _float_list(value: Any, ctx: str) -> list[float]:
     for i, item in enumerate(value):
         try:
             x = float(item)
-        except (TypeError, ValueError) as exc:
+        except (TypeError, ValueError, OverflowError) as exc:
             raise ArtifactExportError(f"{ctx}[{i}]: expected number, got {item!r}") from exc
         if not math.isfinite(x):
             raise ArtifactExportError(f"{ctx}[{i}]: expected finite number, got {x!r}")
@@ -85,7 +85,7 @@ def _float_list_or_scalar(value: Any, dim: int, ctx: str) -> list[float]:
         return _float_list(value, ctx)
     try:
         x = float(value)
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError, OverflowError) as exc:
         raise ArtifactExportError(f"{ctx}: expected number or list of numbers") from exc
     if not math.isfinite(x):
         raise ArtifactExportError(f"{ctx}: expected finite number, got {x!r}")
@@ -112,6 +112,8 @@ def _best_witness(lb: Sequence[float], threshold: Sequence[float]) -> tuple[int,
     margins = [float(a) - float(b) for a, b in zip(lb, threshold)]
     idx = max(range(len(margins)), key=lambda i: margins[i])
     margin = margins[idx]
+    if not math.isfinite(margin):
+        raise ArtifactExportError("leaf: witness margin is not representable as a finite number")
     if not margin > 0.0:
         raise ArtifactExportError(
             "leaf: no verified witness found; expected some coordinate with lb > threshold"
@@ -215,10 +217,10 @@ def build_abcrown_leaf_artifact(
             "root override requires both bounds; pass root_lo and root_hi together"
         )
 
-    if isinstance(raw, dict) and raw.get("format") == FORMAT and root_lo is None:
+    if isinstance(raw, Mapping) and raw.get("format") == FORMAT and root_lo is None:
         return dict(raw)
 
-    if isinstance(raw, list):
+    if isinstance(raw, Sequence) and not isinstance(raw, (str, bytes)):
         leaves_raw = [_as_object(item, f"leaf[{i}]") for i, item in enumerate(raw)]
         top: Mapping[str, Any] = {}
     else:
@@ -250,21 +252,21 @@ def build_abcrown_leaf_artifact(
         else:
             root_lo_raw = _get_optional(top, ("root_lo", "input_lo", "x_L"))
             root_hi_raw = _get_optional(top, ("root_hi", "input_hi", "x_U"))
+            if (root_lo_raw is None) != (root_hi_raw is None):
+                raise ArtifactExportError("root requires both bounds")
             if root_lo_raw is not None and root_hi_raw is not None:
                 root_lo = _float_list(root_lo_raw, "root.lo")
                 root_hi = _float_list(root_hi_raw, "root.hi")
             else:
                 root_lo, root_hi = _box_root_from_leaves(leaves_raw)
 
-    root_lo = [float(x) for x in root_lo]
-    root_hi = [float(x) for x in root_hi]
+    root_lo = _float_list(list(root_lo), "root.lo")
+    root_hi = _float_list(list(root_hi), "root.hi")
     if len(root_lo) != len(root_hi):
         raise ArtifactExportError(
             f"root dimension mismatch; lo has {len(root_lo)} entries, hi has {len(root_hi)}"
         )
     for i, (a, b) in enumerate(zip(root_lo, root_hi)):
-        if not math.isfinite(a) or not math.isfinite(b):
-            raise ArtifactExportError(f"root coordinate {i}: expected finite bounds")
         if a > b:
             raise ArtifactExportError(f"root coordinate {i}: lo={a} > hi={b}")
 
@@ -300,12 +302,12 @@ def write_abcrown_leaf_artifact(
     call from an instrumented external verifier once it has terminal leaf boxes and lower bounds.
     """
 
-    out = Path(out_path or os.environ.get(ENV_OUT, ""))
-    if not str(out):
+    output = out_path or os.environ.get(ENV_OUT, "")
+    if not output:
         raise ArtifactExportError(f"no output path supplied; pass out_path or set {ENV_OUT}")
+    out = Path(output)
     artifact = build_abcrown_leaf_artifact(list(leaves), root_lo=root_lo, root_hi=root_hi)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(artifact, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    _write_json(out, artifact)
     return out
 
 
@@ -337,7 +339,8 @@ def _write_json(path: Path, obj: Mapping[str, Any]) -> None:
     """Write JSON to `path`."""
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(obj, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    text = json.dumps(obj, indent=2, sort_keys=True, allow_nan=False) + "\n"
+    path.write_text(text, encoding="utf-8")
 
 
 def _print_hook() -> None:
@@ -374,7 +377,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument(
         "--check",
         action="store_true",
-        help="Run `lake exe verify -- abcrown-leaf` on the exported artifact.",
+        help="Run `scripts/lake.sh exe verify -- abcrown-leaf` on the exported artifact.",
     )
     parser.add_argument(
         "--print-hook",
@@ -395,10 +398,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise ArtifactExportError("--input is required unless --print-hook is used")
 
     out = args.out or os.environ.get(ENV_OUT)
-    if out is None:
+    if not out:
         raise ArtifactExportError(f"missing --out; pass --out or set {ENV_OUT}")
-    root_lo = _parse_csv_floats(args.root_lo, "--root-lo") if args.root_lo else None
-    root_hi = _parse_csv_floats(args.root_hi, "--root-hi") if args.root_hi else None
+    root_lo = _parse_csv_floats(args.root_lo, "--root-lo") if args.root_lo is not None else None
+    root_hi = _parse_csv_floats(args.root_hi, "--root-hi") if args.root_hi is not None else None
 
     raw = _read_json(args.input)
     artifact = build_abcrown_leaf_artifact(raw, root_lo=root_lo, root_hi=root_hi)
@@ -407,8 +410,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(f"Wrote TorchLean alpha-beta-CROWN-style leaf artifact to {out_path}", flush=True)
 
     if args.check:
+        root = Path(__file__).resolve().parents[3]
         subprocess.run(
-            ["lake", "exe", "verify", "--", "abcrown-leaf", str(out_path)],
+            [str(root / "scripts/lake.sh"), "exe", "verify", "--",
+             "abcrown-leaf", str(out_path.resolve())],
+            cwd=root,
             check=True,
         )
     return 0

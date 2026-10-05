@@ -84,7 +84,7 @@ or ask the trainer to initialize and execute it:
 -- training step.
 def trainer :=
   Trainer.new model
-    { objective := .meanSquaredError
+    { objective := .mse
       optimizer := optim.adam
         { learningRate := 0.03 }
       seed := 2026 }
@@ -103,7 +103,7 @@ untrained prediction is a value we can reproduce with the same initialization an
 ```lean (name := untrainedPrediction)
 -- Observe the seeded model at one input before fitting any
 -- data.
-#eval trainer.predict [0.25, -0.75]
+#eval trainer.predict ([0.25, -0.75] : Tensor Float [2])
 ```
 ```leanOutput untrainedPrediction
 [-0.088261]
@@ -111,8 +111,9 @@ untrained prediction is a value we can reproduce with the same initialization an
 
 # Core Objects
 
-The declarations above let us inspect several stages of the model's lifecycle. `#check` prints the
-builder, initialized model, parameter state, prediction function, and lowering result types:
+The declarations above let us inspect several stages of the model's lifecycle. We print the
+builder, initialized model, parameter state, and lowering result types, and check the prediction
+function's single-input type:
 
 ```lean (name := ovSix)
 -- Inspect the types at each transition: builder, model,
@@ -120,7 +121,8 @@ builder, initialized model, parameter state, prediction function, and lowering r
 #check model
 #check initialized
 #check nn.initialState initialized
-#check trainer.predict
+example : Tensor Float [2] → IO (Tensor Float [1]) :=
+  trainer.predict
 #check Verification.lowerForwardToIR (α := Float)
   initialized (nn.initialState initialized)
 ```
@@ -131,15 +133,12 @@ model : nn.Builder (nn.Sequential [2] [1])
 initialized : nn.Sequential [2] [1]
 ```
 ```leanOutput ovSix (whitespace := lax)
-nn.initialState initialized : nn.State Float
+nn.initialState initialized Float : nn.State Float
   (Runtime.Autograd.Model.Layers.Seq.stateShapes initialized)
-```
-```leanOutput ovSix
-trainer.predict : Tensor Float [2] → IO (Tensor Float [1])
 ```
 ```leanOutput ovSix (whitespace := lax)
 Verification.lowerForwardToIR initialized
-  (nn.initialState initialized) : Except String (NN.Verification.Builtin.LoweredIR Float)
+  (nn.initialState initialized Float) : Except String (NN.Verification.Builtin.LoweredIR Float)
 ```
 
 `model` and `initialized` have different types. A builder is a recipe; a `nn.Sequential [2] [1]` is
@@ -411,15 +410,17 @@ inside the bound. Since the only nonlinearity in this network is a ReLU, the aff
 discarded at node `9` and everything after it is the interval answer again.
 
 Replacing an affine form with its enclosing interval can lose tightness; the validity of that
-interval still depends on the arithmetic and enclosure hypotheses. Tighter bounds in this library
-come from two places, neither of them a floating-point CROWN slope computed
-on the fly. The real-valued relaxation is available as a theorem, and
-{ref "motivation"}[the motivation chapter] proves the smallest instance of it by hand. Sharper
-executable bounds arrive as certificates from an outside search, which Lean then checks; that is
-the arrangement {ref "certificates"}[the certificates chapter] uses for α,β-CROWN leaves
-({Informal.citep betacrown2021}[]). Graphs with products or softmax do use the relaxations above,
-because `mulElem` and two-argument `matmul` have McCormick transfers, so the agreement seen here is
-a fact about ReLU networks rather than about the pass.
+interval still depends on the arithmetic and enclosure hypotheses. The real-valued ReLU relaxation
+is available as a theorem, and {ref "motivation"}[the motivation chapter] proves the smallest
+instance of it by hand. Executable `mulElem` and two-argument `matmul` transfers use McCormick
+relaxations, while supported softmax nodes fall back to IBP enclosures. The agreement displayed
+here therefore describes this particular network and input box, not every graph accepted by the
+pass.
+
+External verifiers can also propose sharper bounds. Their artifacts need separate checks:
+{ref "certificates"}[the certificates chapter] distinguishes recomputing an enclosure from checking
+an α,β-CROWN leaf artifact's consistency ({Informal.citep betacrown2021}[]). Accepting the latter
+does not by itself prove the proposed numerical bound.
 
 Reading an interval also requires a property to compare it with. Suppose we wanted to establish
 that the output stays below zero throughout this input box. The displayed upper endpoint,
@@ -691,13 +692,14 @@ Now compute $`a \cdot a + b` with separate operations and with a fused operation
 -- Compare two rounding schedules by equality, encoded
 -- words, and their scaled difference.
 #eval (ovA * ovA + ovB) ==
-  ExecFloat.Binary.fma ovA ovA ovB .nearestEven
+  ExecFloat.Binary.fmaWithRounding ovA ovA ovB .nearestEven
 #eval (ExecFloat.Binary.toBits32 (ovA * ovA + ovB),
   ExecFloat.Binary.toBits32
-    (ExecFloat.Binary.fma ovA ovA ovB .nearestEven))
+    (ExecFloat.Binary.fmaWithRounding
+      ovA ovA ovB .nearestEven))
 #eval
   ((ExecFloat.Binary.toFloat32
-      (ExecFloat.Binary.fma
+      (ExecFloat.Binary.fmaWithRounding
         ovA ovA ovB .nearestEven)).toFloat
     - (ExecFloat.Binary.toFloat32
       (ovA * ovA + ovB)).toFloat) * 1000000000.0
@@ -768,7 +770,7 @@ function in the library, and its type lists the same ingredients:
 ```leanOutput ovDenote (whitespace := lax)
 @NN.IR.Graph.denote : {α : Type} →
   [inst : Storage α] →
-    [inst_1 : Context α] → NN.IR.Graph → NN.IR.Payload α →
+    [Context α] → NN.IR.Graph → NN.IR.Payload α →
       Spec.SomeTensor α → ℕ → Except String (Spec.SomeTensor α)
 ```
 
@@ -822,8 +824,8 @@ property we actually care about.
 The numerical work can still use established native kernels. PyTorch provides operator coverage,
 distributed training, compilers, and pretrained models that a project may already depend on.
 
-TorchLean can call native CUDA or LibTorch for expensive operations while the source model,
-parameter layout, and graph remain TorchLean objects.
+TorchLean calls LibTorch's ATen operators for CUDA computation while retaining its own model,
+parameter layout, tape, and backward traversal.
 {ref "backend-selection"}[Backend Selection]
 explains how each operation acquires an implementation and a contract stating the assumptions
 that connect it to graph semantics.

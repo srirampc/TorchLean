@@ -22,7 +22,7 @@ semantics. Every transfer and final query check is proved here, with no external
 
 @[expose] public section
 
-namespace NN.Verification.CROWNQuery
+namespace NN.Verification.Cert.CROWNQuery
 
 open _root_.Spec TorchLean TorchLean.Tensor
 open NN.MLTheory.CROWN NN.MLTheory.CROWN.Graph
@@ -40,106 +40,7 @@ def checkUpper {n m : Nat} (strict : Bool) (upper : AffineVec ℚ n m)
     if strict then decide (bounds.hi.getScalar i < 0)
     else decide (bounds.hi.getScalar i ≤ 0)
 
-/-- Every accepted upper form is below zero throughout the real input box. -/
-theorem checkUpper_sound {n m : Nat} (strict : Bool) (upper : AffineVec ℚ n m)
-    (input : Box ℚ [n]) (h : checkUpper strict upper input = true)
-    (x : Tensor ℝ [n])
-    (hx : Theorems.Semantics.encloses
-      ⟨n, realTensor input.lo, realTensor input.hi⟩ x) (i : Fin m) :
-    if strict then (affineEvalAt (realAffine upper) x).getScalar i < 0
-    else (affineEvalAt (realAffine upper) x).getScalar i ≤ 0 := by
-  have hbound := Theorems.ibp_linear_sound_real
-    (realTensor upper.A) (realBox input) (Box.point (realTensor upper.c))
-    x (realTensor upper.c) hx (Box.contains_point_self _)
-  have hi := (hbound i).2
-  change (affineEvalAt (realAffine upper) x).getScalar i ≤
-    (IBP.linear (realTensor upper.A) (realBox input)
-      (realBox ⟨upper.c, upper.c⟩)).hi.getScalar i at hi
-  have hcheck := (List.all_eq_true.mp h) i (List.mem_finRange i)
-  have hmap := congrArg (fun b : Box ℝ [m] => b.hi.getScalar i)
-    (realBox_linear upper.A input ⟨upper.c, upper.c⟩)
-  simp only [realBox, realTensor_getScalar] at hmap
-  change (affineEvalAt (realAffine upper) x).getScalar i ≤ _ at hi
-  simp only [realBox] at hi
-  rw [← hmap] at hi
-  cases strict with
-  | false =>
-      simp only [Bool.false_eq_true, ↓reduceIte] at hcheck ⊢
-      have hq := of_decide_eq_true hcheck
-      have hr : (((IBP.linear upper.A input ⟨upper.c, upper.c⟩).hi.getScalar i : ℚ)
-        : ℝ) ≤ 0 := by exact_mod_cast hq
-      exact hi.trans hr
-  | true =>
-      simp only [↓reduceIte] at hcheck ⊢
-      have hq := of_decide_eq_true hcheck
-      have hr : (((IBP.linear upper.A input ⟨upper.c, upper.c⟩).hi.getScalar i : ℚ)
-        : ℝ) < 0 := by exact_mod_cast hq
-      exact hi.trans_lt hr
-
-/-- Affine bounds with their input and output dimensions checked by Lean. -/
-structure Bounds (n m : Nat) where
-  lo : AffineVec ℚ n m
-  hi : AffineVec ℚ n m
-
-def Bounds.flat {n m : Nat} (b : Bounds n m) : FlatAffineBounds ℚ :=
-  ⟨n, m, b.lo, b.hi⟩
-
-/-- The bounds enclose a value at a particular real input. -/
-def Bounds.Encloses {n m : Nat} (b : Bounds n m) (x : Tensor ℝ [n])
-    (y : Tensor ℝ [m]) : Prop :=
-  ∀ i, (affineEvalAt (realAffine b.lo) x).getScalar i ≤ y.getScalar i ∧
-    y.getScalar i ≤ (affineEvalAt (realAffine b.hi) x).getScalar i
-
-def Bounds.identity (n : Nat) : Bounds n n :=
-  ⟨NN.MLTheory.CROWN.Cert.affIdentity n, NN.MLTheory.CROWN.Cert.affIdentity n⟩
-
-def Bounds.linear {n m k : Nat} (b : Bounds n m) (w : Tensor ℚ [k, m])
-    (bias : Tensor ℚ [k]) : Bounds n k :=
-  let out := NN.MLTheory.CROWN.Cert.linearBoundsFromAffine w bias b.flat rfl
-  ⟨out.loAff, out.hiAff⟩
-
-/-- Bound each affine form over the original input box. -/
-def Bounds.interval {n m : Nat} (b : Bounds n m) (input : Box ℚ [n]) : Box ℚ [m] :=
-  ⟨(IBP.linear b.lo.A input ⟨b.lo.c, b.lo.c⟩).lo,
-   (IBP.linear b.hi.A input ⟨b.hi.c, b.hi.c⟩).hi⟩
-
-def Bounds.relu {n m : Nat} (b : Bounds n m) (input : Box ℚ [n])
-    (alpha : Tensor ℚ [m]) : Bounds n m :=
-  let pre := b.interval input
-  ⟨Runtime.Ops.ReLU.propagateAffine
-      (NN.MLTheory.CROWN.Cert.alphaRelaxLowerVec pre.lo pre.hi alpha) b.lo,
-   Runtime.Ops.ReLU.propagateAffine (Runtime.Ops.ReLU.relaxVector pre.lo pre.hi) b.hi⟩
-
-theorem Bounds.identity_encloses {n : Nat} (x : Tensor ℝ [n]) :
-    (Bounds.identity n).Encloses x x := by
-  have h := boundsEvalAt_bounds_identity x
-  have hr := realAffineBounds_identity n
-  simp only [realAffineBounds, NN.MLTheory.CROWN.Cert.boundsIdentity] at hr
-  injection hr with _ _ hloAff hhiAff
-  simp only [boundsEvalAt, NN.MLTheory.CROWN.Cert.boundsIdentity] at h
-  injection h with _ hlo hhi
-  intro i
-  constructor
-  · simpa [identity, ← hloAff] using le_of_eq (congrArg (fun t => t.getScalar i) hlo)
-  · simpa [identity, ← hhiAff] using le_of_eq (congrArg (fun t => t.getScalar i) hhi).symm
-
-theorem Bounds.linear_encloses {n m k : Nat} (b : Bounds n m)
-    (w : Tensor ℚ [k, m]) (bias : Tensor ℚ [k]) (x : Tensor ℝ [n])
-    (y : Tensor ℝ [m]) (h : b.Encloses x y) :
-    (b.linear w bias).Encloses x
-      (Tensor.addSpec (matVecMulSpec (realTensor w) y) (realTensor bias)) := by
-  have hbox := (encloses_iff_getScalar _ _ _).mpr h
-  have hs := encloses_linear_signSplit (realTensor w) (realTensor bias) _ _ y hbox
-  have hs' := (encloses_iff_getScalar _ _ _).mp hs
-  rw [← affineEvalAt_linear_pair (IBP.matPos (realTensor w)) (IBP.matNeg (realTensor w))
-    (realAffine b.lo) (realAffine b.hi) (realTensor bias) x] at hs'
-  rw [← affineEvalAt_linear_pair (IBP.matPos (realTensor w)) (IBP.matNeg (realTensor w))
-    (realAffine b.hi) (realAffine b.lo) (realTensor bias) x] at hs'
-  simp only [Encloses, linear, flat, NN.MLTheory.CROWN.Cert.linearBoundsFromAffine,
-    realAffine, realTensor_add, realTensor_matMul,
-    realTensor_matVecMul, realTensor_matPos, realTensor_matNeg]
-  exact hs'
-
+/-- Interval bounds of an exact affine form over the input box enclose its real evaluation. -/
 theorem affine_interval_encloses {n m : Nat} (a : AffineVec ℚ n m)
     (input : Box ℚ [n]) (x : Tensor ℝ [n])
     (hx : Theorems.Semantics.encloses
@@ -165,6 +66,97 @@ theorem affine_interval_encloses {n m : Nat} (a : AffineVec ℚ n m)
   rw [← hlo, ← hhi] at hi
   exact hi
 
+/-- Every accepted upper form is below zero throughout the real input box. -/
+theorem checkUpper_sound {n m : Nat} (strict : Bool) (upper : AffineVec ℚ n m)
+    (input : Box ℚ [n]) (h : checkUpper strict upper input = true)
+    (x : Tensor ℝ [n])
+    (hx : Theorems.Semantics.encloses
+      ⟨n, realTensor input.lo, realTensor input.hi⟩ x) (i : Fin m) :
+    if strict then (affineEvalAt (realAffine upper) x).getScalar i < 0
+    else (affineEvalAt (realAffine upper) x).getScalar i ≤ 0 := by
+  have hi := (affine_interval_encloses upper input x hx i).2
+  simp only [realTensor_getScalar] at hi
+  have hcheck := (List.all_eq_true.mp h) i (List.mem_finRange i)
+  cases strict with
+  | false =>
+      simp only [Bool.false_eq_true, ↓reduceIte] at hcheck ⊢
+      have hr : (((IBP.linear upper.A input ⟨upper.c, upper.c⟩).hi.getScalar i : ℚ)
+        : ℝ) ≤ 0 := by exact_mod_cast of_decide_eq_true hcheck
+      exact hi.trans hr
+  | true =>
+      simp only [↓reduceIte] at hcheck ⊢
+      have hr : (((IBP.linear upper.A input ⟨upper.c, upper.c⟩).hi.getScalar i : ℚ)
+        : ℝ) < 0 := by exact_mod_cast of_decide_eq_true hcheck
+      exact hi.trans_lt hr
+
+/-- Affine bounds with their input and output dimensions checked by Lean. -/
+structure Bounds (n m : Nat) where
+  lo : AffineVec ℚ n m
+  hi : AffineVec ℚ n m
+
+/-- Forget the static dimensions to reuse the dimension-carrying CROWN transfer functions. -/
+def Bounds.flat {n m : Nat} (b : Bounds n m) : FlatAffineBounds ℚ :=
+  ⟨n, m, b.lo, b.hi⟩
+
+/-- The bounds enclose a value at a particular real input. -/
+def Bounds.Encloses {n m : Nat} (b : Bounds n m) (x : Tensor ℝ [n])
+    (y : Tensor ℝ [m]) : Prop :=
+  ∀ i, (affineEvalAt (realAffine b.lo) x).getScalar i ≤ y.getScalar i ∧
+    y.getScalar i ≤ (affineEvalAt (realAffine b.hi) x).getScalar i
+
+/-- The identity affine bounds at the network input. -/
+def Bounds.identity (n : Nat) : Bounds n n :=
+  ⟨NN.MLTheory.CROWN.Graph.affIdentity n, NN.MLTheory.CROWN.Graph.affIdentity n⟩
+
+/-- Push affine bounds through an exact linear layer with the sign-split CROWN transfer. -/
+def Bounds.linear {n m k : Nat} (b : Bounds n m) (w : Tensor ℚ [k, m])
+    (bias : Tensor ℚ [k]) : Bounds n k :=
+  let out := NN.MLTheory.CROWN.Graph.propagateLinearBounds w bias b.flat rfl
+  ⟨out.loAff, out.hiAff⟩
+
+/-- Bound each affine form over the original input box. -/
+def Bounds.interval {n m : Nat} (b : Bounds n m) (input : Box ℚ [n]) : Box ℚ [m] :=
+  ⟨(IBP.linear b.lo.A input ⟨b.lo.c, b.lo.c⟩).lo,
+   (IBP.linear b.hi.A input ⟨b.hi.c, b.hi.c⟩).hi⟩
+
+/-- Push affine bounds through ReLU using the α lower and triangle upper relaxations. -/
+def Bounds.relu {n m : Nat} (b : Bounds n m) (input : Box ℚ [n])
+    (alpha : Tensor ℚ [m]) : Bounds n m :=
+  let pre := b.interval input
+  ⟨Runtime.Ops.ReLU.propagateAffine
+      (NN.MLTheory.CROWN.Cert.alphaRelaxLowerVec pre.lo pre.hi alpha) b.lo,
+   Runtime.Ops.ReLU.propagateAffine (Runtime.Ops.ReLU.relaxVector pre.lo pre.hi) b.hi⟩
+
+theorem Bounds.identity_encloses {n : Nat} (x : Tensor ℝ [n]) :
+    (Bounds.identity n).Encloses x x := by
+  have h := boundsEvalAt_bounds_identity x
+  have hr := realAffineBounds_identity n
+  simp only [realAffineBounds, NN.MLTheory.CROWN.Graph.boundsIdentity] at hr
+  injection hr with _ _ hloAff hhiAff
+  simp only [boundsEvalAt, NN.MLTheory.CROWN.Graph.boundsIdentity] at h
+  injection h with _ hlo hhi
+  intro i
+  constructor
+  · simpa [identity, ← hloAff] using le_of_eq (congrArg (fun t => t.getScalar i) hlo)
+  · simpa [identity, ← hhiAff] using le_of_eq (congrArg (fun t => t.getScalar i) hhi).symm
+
+theorem Bounds.linear_encloses {n m k : Nat} (b : Bounds n m)
+    (w : Tensor ℚ [k, m]) (bias : Tensor ℚ [k]) (x : Tensor ℝ [n])
+    (y : Tensor ℝ [m]) (h : b.Encloses x y) :
+    (b.linear w bias).Encloses x
+      (Tensor.addSpec (matVecMulSpec (realTensor w) y) (realTensor bias)) := by
+  have hbox := (encloses_iff_getScalar _ _ _).mpr h
+  have hs := encloses_linear_signSplit (realTensor w) (realTensor bias) _ _ y hbox
+  have hs' := (encloses_iff_getScalar _ _ _).mp hs
+  rw [← affineEvalAt_linear_pair (IBP.matPos (realTensor w)) (IBP.matNeg (realTensor w))
+    (realAffine b.lo) (realAffine b.hi) (realTensor bias) x] at hs'
+  rw [← affineEvalAt_linear_pair (IBP.matPos (realTensor w)) (IBP.matNeg (realTensor w))
+    (realAffine b.hi) (realAffine b.lo) (realTensor bias) x] at hs'
+  simp only [Encloses, linear, flat, NN.MLTheory.CROWN.Graph.propagateLinearBounds,
+    realAffine, realTensor_add, realTensor_matMul,
+    realTensor_matVecMul, realTensor_matPos, realTensor_matNeg]
+  exact hs'
+
 theorem Bounds.interval_encloses {n m : Nat} (b : Bounds n m) (input : Box ℚ [n])
     (x : Tensor ℝ [n]) (y : Tensor ℝ [m])
     (hx : Theorems.Semantics.encloses
@@ -175,6 +167,7 @@ theorem Bounds.interval_encloses {n m : Nat} (b : Bounds n m) (input : Box ℚ [
   exact ⟨((affine_interval_encloses b.lo input x hx i).1).trans (hy i).1,
     (hy i).2 |>.trans (affine_interval_encloses b.hi input x hx i).2⟩
 
+/-- Every proposed ReLU lower slope lies in `[0, 1]`, as the relaxation soundness requires. -/
 def checkAlpha {m : Nat} (alpha : Tensor ℚ [m]) : Bool :=
   (List.finRange m).all fun i => decide (0 ≤ alpha.getScalar i ∧ alpha.getScalar i ≤ 1)
 
@@ -267,10 +260,13 @@ structure Query (n m : Nat) where
   inequalities : LinearSpec ℚ m numConstraints
   strict : Bool
 
+/-- Every lower endpoint is at most its upper endpoint; a reversed box has no real members. -/
+def boxOrdered {n : Nat} (input : Box ℚ [n]) : Bool :=
+  (List.finRange n).all fun i => decide (input.lo.getScalar i ≤ input.hi.getScalar i)
+
 /-- Reject reversed boxes and empty input, output, or query dimensions. -/
 def Query.wellFormed {n m : Nat} (q : Query n m) : Bool :=
-  decide (0 < n ∧ 0 < m ∧ 0 < q.numConstraints) &&
-    (List.finRange n).all fun i => decide (q.input.lo.getScalar i ≤ q.input.hi.getScalar i)
+  decide (0 < n ∧ 0 < m ∧ 0 < q.numConstraints) && boxOrdered q.input
 
 /-- An executable safety check; no externally supplied affine bounds are trusted. -/
 def Query.check {n m : Nat} (q : Query n m) : Bool :=
@@ -310,4 +306,4 @@ def Query.Safe {n m : Nat} (q : Query n m) : Prop :=
       · exact hi.trans hu
       · exact hi.trans_lt hu
 
-end NN.Verification.CROWNQuery
+end NN.Verification.Cert.CROWNQuery

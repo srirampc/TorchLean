@@ -8,6 +8,7 @@ module
 
 public import NN.Spec.Layers.Normalization.Core
 public import NN.Proofs.Autograd.Tape.Nodes.Matrix
+public import NN.Proofs.Autograd.Tape.Ops.Norm.RowNormalization
 
 /-!
 # Entrywise formulas for row-normalization tensors
@@ -15,7 +16,8 @@ public import NN.Proofs.Autograd.Tape.Nodes.Matrix
 The normalization specs are written with `reduceMean`, `reduceVar`, `broadcastAfterSum`,
 `broadcastTo`, and pointwise tensor arithmetic on `[m, n]` matrices. This file records what each
 of those operations does to a single entry `get2 t i j`, and how `tensorToVec` indexes a matrix,
-so that the LayerNorm and BatchNorm proofs can work with plain real sums.
+so that the LayerNorm and BatchNorm proofs can work with plain real sums. Entries of filled
+tensors are `TorchLean.Tensor.getScalar_full` and `Spec.get2_full`.
 -/
 
 @[expose] public section
@@ -69,18 +71,6 @@ theorem tensorToVec_idxMN (A : Tensor ℝ [m, n]) (i : Fin m) (j : Fin n) :
   rw [hlinearize]
   simp [TapeNodes.Matmul.idxMN, finProdFinEquiv_apply_val]
 
-/-- Every flattened matrix index is `idxMN` of its row and column. -/
-theorem idxMN_divNat_modNat (ip : Fin (TapeNodes.Matmul.matSize m n)) :
-    TapeNodes.Matmul.idxMN (m := m) (n := n)
-      (ip.divNat (m := m) (n := TapeNodes.Matmul.vecSize n))
-      (Fin.cast (TapeNodes.Matmul.vecSize_eq n)
-        (ip.modNat (m := m) (n := TapeNodes.Matmul.vecSize n))) = ip := by
-  apply Fin.ext
-  change (ip.modNat (m := m) (n := TapeNodes.Matmul.vecSize n)).val +
-      TapeNodes.Matmul.vecSize n * (ip.divNat (m := m) (n := TapeNodes.Matmul.vecSize n)).val =
-        ip.val
-  exact Nat.mod_add_div _ _
-
 /-- Two flattened matrices agree once they agree at every `idxMN i j`. -/
 theorem vec_ext_idxMN {u v : Vec (TapeNodes.Matmul.matSize m n)}
     (h : ∀ (i : Fin m) (j : Fin n),
@@ -89,20 +79,14 @@ theorem vec_ext_idxMN {u v : Vec (TapeNodes.Matmul.matSize m n)}
     u = v := by
   apply PiLp.ext
   intro ip
-  rw [← idxMN_divNat_modNat ip]
+  rw [← RowNorm.idxMN_rowOf_colOf ip]
   exact h _ _
 
 /-! ## Vector and matrix entries of pointwise operations -/
 
-/-- Entries of a filled vector. -/
-theorem getScalar_full {k : Nat} (v : ℝ) (i : Fin k) :
-    getScalar (Tensor.full (.dim k .scalar) v) i = v := by
-  simp [Tensor.full]
-
-/-- Entries of a filled matrix. -/
-theorem get2_full (v : ℝ) (i : Fin m) (j : Fin n) :
-    Spec.get2 (Tensor.full (.dim m (.dim n .scalar)) v) i j = v := by
-  simp [Tensor.full, Spec.get2, Spec.get, getScalar_eq_apply, TorchLean.Tensor.unstack]
+/-- Row broadcast of a length-`m` vector to an `m × n` matrix. -/
+abbrev rowBroadcast (v : Tensor ℝ [m]) : Tensor ℝ [m, n] :=
+  broadcastAfterSum (.dim m (.dim n .scalar)) 1 v
 
 /-- Entries of a row broadcast: every column of row `i` reads the vector entry `i`. -/
 theorem get2_broadcastAfterSum_one (v : Tensor ℝ [m]) (i : Fin m) (j : Fin n) :
@@ -136,11 +120,6 @@ theorem getScalar_reduceMean_one (x : Tensor ℝ [m, n])
     getScalar (reduceMean 1 x h) i = (∑ j : Fin n, Spec.get2 x i j) / n := by
   simp only [reduceMean, getScalar_mapSpec, Shape.axisSize_succ, Shape.axisSize_zero]
   rw [getScalar_reduceSum_one]
-
-/-- Scalar entry of a pointwise binary operation on rank-zero tensors. -/
-theorem item_map2Spec (f : ℝ → ℝ → ℝ) (a b : Tensor ℝ .scalar) :
-    (map2Spec f a b).item = f a.item b.item := by
-  simp [map2Spec, Tensor.item]
 
 /-- Population variance of a vector, as the scalar entry of `reduceVar 0`. -/
 theorem item_reduceVar_zero (row : Tensor ℝ [n]) (h : Shape.NonemptyAxis 0 (.dim n .scalar)) :
@@ -184,7 +163,7 @@ theorem tensorToVec_vec {k : Nat} (v : Tensor ℝ [k]) (p : Fin (Spec.Shape.size
     rw [finProdFinEquiv_apply_val]
     simp [Spec.Shape.size]
   conv_lhs => rw [← Tensor.dim_unstack v, hp]
-  rw [tensorToVec_dim_apply (by simp [Spec.Shape.size])]
+  rw [tensorToVec_dim_apply]
   rw [← Tensor.scalar_item (Tensor.unstack v _), tensorToVec_scalar]
   rfl
 
@@ -211,7 +190,7 @@ theorem get2_divSpec (a b : Tensor ℝ [m, n]) (i : Fin m) (j : Fin n) :
   simp [divSpec]
 
 /-- Entries of a vector sum. -/
-theorem getScalar_addSpec' {k : Nat} (a b : Tensor ℝ [k]) (i : Fin k) :
+theorem getScalar_addSpec {k : Nat} (a b : Tensor ℝ [k]) (i : Fin k) :
     getScalar (addSpec a b) i = getScalar a i + getScalar b i := by
   simp [addSpec]
 
@@ -312,7 +291,7 @@ theorem get2_lnCentered (x : Tensor ℝ [m, n])
 theorem getScalar_lnStd (hn : 0 < n) (x : Tensor ℝ [m, n])
     (h1 : Shape.NonemptyAxis 1 (.dim m (.dim n .scalar))) (ε : ℝ) (i : Fin m) :
     getScalar (lnStd x h1 ε) i = Real.sqrt (max (rowVarE x i + ε) 0) := by
-  rw [lnStd, getScalar_sqrtSpec, getScalar_addSpec', getScalar_maxSpec, getScalar_full,
+  rw [lnStd, getScalar_sqrtSpec, getScalar_addSpec, getScalar_maxSpec, getScalar_full,
     getScalar_full, getScalar_reduceVar_one]
   simp only [get2_lnCentered]
   have h0 : (∑ k : Fin n, (Spec.get2 x i k - rowMeanE x i)) / n = 0 := by

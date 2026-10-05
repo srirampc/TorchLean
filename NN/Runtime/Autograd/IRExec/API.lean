@@ -32,7 +32,9 @@ Lower an op-tagged IR graph into an executable `ForwardGraph`.
 Requirements:
 - Node id 0 must be `.input`.
 - The graph must satisfy `Graph.checkWellFormed`.
-- The external payload must contain entries for every `.const`/`.linear`/`.conv` node id.
+- The external payload must contain entries for every `.const`, `.linear`, `.conv`,
+  and `.batchNormEval` node id. Layer normalization accepts an optional affine payload
+  and otherwise uses unit scale and zero bias.
 
 This returns a `ForwardGraph` whose `eval` computes all node values in topological order. The
 artifact is intentionally forward-only; it is distinct from the differentiable `Torch.TypedGraph`
@@ -62,6 +64,11 @@ def lowerToForwardGraph
 Structural, declared-shape, payload, and lowering errors are returned to the caller. The input
 shape is checked against node zero before execution. This evaluates the forward graph; it does
 not compare floating-point results with a second semantics or assert numerical equivalence.
+
+Each call lowers the graph again. For repeated execution, call `lowerToForwardGraph` once and
+reuse the resulting `ForwardGraph.eval` or `ForwardGraph.denoteAll`. The array execution
+optimization applies to that already-lowered artifact. Lowering also uses array parent checks
+and shared shape prefixes, with linear context bookkeeping in the number of nodes and edges.
 -/
 def evaluate
     {α : Type} [Storage α] [Context α] {σ : Shape}

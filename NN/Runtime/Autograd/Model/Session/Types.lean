@@ -6,7 +6,9 @@ Authors: TorchLean Team
 
 module
 
-public import NN.Runtime.Autograd.Model.Session.Eager
+public import NN.Runtime.Autograd.Model.Functional.ShapeOps
+public import NN.Runtime.Autograd.Torch.Core.Trainer.EagerOps
+public import NN.Runtime.Autograd.Torch.Core.BackwardOptim
 public import NN.Runtime.Autograd.Torch.TypedGraphSession.GraphOps
 
 /-!
@@ -23,6 +25,7 @@ namespace Autograd
 namespace Model
 
 open Spec TorchLean
+open Runtime.Autograd.Torch.Internal (EagerSession)
 open TorchLean TorchLean.Tensor
 
 /-- Active execution state owned by a `Session`. -/

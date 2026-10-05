@@ -45,7 +45,8 @@ def init_deterministic_weights(model: TestMLP) -> None:
         for p in model.parameters():
             p.uniform_(-0.1, 0.1)
 
-def save_mlp_to_json(model: TestMLP, json_path: str):
+
+def save_mlp_to_json(model: TestMLP, json_path: str | Path) -> None:
     """Save MLP weights to JSON.
 
     Notes:
@@ -57,11 +58,13 @@ def save_mlp_to_json(model: TestMLP, json_path: str):
     state_dict = model.state_dict()
 
     # Convert PyTorch state dict to the TorchLean import key format (layers.X.weight/bias)
-    new_format = {}
-    new_format['layers.0.weight'] = state_dict['fc1.weight'].tolist()
-    new_format['layers.0.bias'] = state_dict['fc1.bias'].tolist()
-    new_format['layers.2.weight'] = state_dict['fc2.weight'].tolist()
-    new_format['layers.2.bias'] = state_dict['fc2.bias'].tolist()
+    key_mapping = {
+        "layers.0.weight": "fc1.weight",
+        "layers.0.bias": "fc1.bias",
+        "layers.2.weight": "fc2.weight",
+        "layers.2.bias": "fc2.bias",
+    }
+    new_format = {key: state_dict[source].tolist() for key, source in key_mapping.items()}
 
     payload = {
         # `Import.PyTorch.loadWeights?` accepts `{...}` or `{ "params": {...} }`.
@@ -76,7 +79,8 @@ def save_mlp_to_json(model: TestMLP, json_path: str):
     with open(json_path, "w") as f:
         json.dump(payload, f, indent=2)
 
-def main():
+
+def main() -> None:
     model = TestMLP()
     init_deterministic_weights(model)
 
@@ -113,6 +117,7 @@ def main():
     original_output = test_model(x_train)
     print(f"Original (fresh init) output: {original_output}")
     print(f"Output change from initialization: {abs(model(x_train).item() - original_output.item()):.6f}")
+
 
 if __name__ == "__main__":
     main()

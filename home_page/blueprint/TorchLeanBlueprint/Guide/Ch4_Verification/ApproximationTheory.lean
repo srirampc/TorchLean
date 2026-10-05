@@ -1,12 +1,10 @@
 import VersoManual
-import NN.MLTheory.Proofs.Approximation.FloatInterval.ConstantTarget
-import NN.MLTheory.Proofs.Approximation.FloatInterval.ExactImageTheorem
-import NN.MLTheory.Proofs.Approximation.FloatInterval.Semantics
+import NN.MLTheory.Proofs.Approximation.FloatInterval
 import NN.MLTheory.Proofs.Approximation.Universal.StoneWeierstrass
 import NN.MLTheory.Proofs.Approximation.Universal.UniversalApproximation
-import NN.MLTheory.Proofs.Approximation.Universal.UniversalApproximationFP32
-import NN.MLTheory.Proofs.Approximation.Universal.UniversalApproximationIEEE32Exec
-import NN.MLTheory.Proofs.Approximation.Universal.UniversalApproximationIEEE32ExecTwoLayerMlp
+import NN.MLTheory.Proofs.Approximation.Universal.UniversalApproximationRounded
+import NN.MLTheory.Proofs.Approximation.Universal.UniversalApproximationBinaryExec
+import NN.MLTheory.Proofs.Approximation.Universal.UniversalApproximationBinaryExecTwoLayerMlp
 import NN.MLTheory.Proofs.Approximation.Universal.UniversalApproximationRate
 -- The worked mesh uses FloatLib scalar construction and bit observations directly.
 import FloatLib
@@ -16,19 +14,14 @@ import TorchLeanBlueprint.Roles
 open Verso.Genre Manual
 open Verso.Genre.Manual.InlineLean
 
--- The approximation results are spread over one shared namespace and four sub-namespaces: the
--- rounded-real and executable hinge theorems, the two-layer executable bridge, and the finite
--- interval domain. Opening them here keeps every displayed `#check` on one line, which is what
--- Verso's narrow code column allows. The printed signatures still name everything in full.
+-- Opening the approximation namespaces keeps displayed declarations within Verso's narrow code
+-- column. The printed signatures still name everything in full.
 open NN.MLTheory.Proofs.UniversalApproximation
-open NN.MLTheory.Proofs.UniversalApproximation.IEEE32ExecReLUApprox
-open NN.MLTheory.Proofs.UniversalApproximation.IEEE32ExecTwoLayerMLP
+open NN.MLTheory.Proofs.UniversalApproximation.BinaryExecReLUApprox
+open NN.MLTheory.Proofs.UniversalApproximation.BinaryExecTwoLayerMLP
 open NN.MLTheory.Proofs.UniversalApproximation.FloatIntervalApprox
-open NN.MLTheory.Proofs.UniversalApproximation.FloatIntervalApprox.ConstantTarget
 open NN.MLTheory.Proofs.UniversalApproximation.FloatIntervalApprox.TwoLayerMLPExact
-
--- The retained approximation bridges share this theorem namespace.
-open TorchLean.Floats.IEEE754
+open PaperStatements.ExactImageFromSeparability
 
 -- Several of these signatures print wider than this file's 100-column limit, so their `leanOutput`
 -- blocks ask for `whitespace := lax` and are wrapped in the source. The rendered page still shows
@@ -142,9 +135,10 @@ $$`N(L,a,b,\varepsilon)
   = \left\lceil\frac{2L(b-a)}{\varepsilon}\right\rceil+1.`
 
 In Lean this is
-{src "NN/MLTheory/Proofs/Approximation/Universal/UniversalApproximationRate.lean"}[
-`reluApproximationWidth`], and `relu_universal_approximation_Icc_rate` uses exactly that hidden
-dimension. The arithmetic lemma underneath it proves
+{src "NN/MLTheory/Proofs/Approximation/Universal/UniversalApproximation.lean"}[
+`reluApproximationWidth`]. The qualitative theorem uses it as its witness, and
+`relu_universal_approximation_Icc_rate` states the same hidden dimension explicitly. The
+arithmetic lemma underneath it proves
 
 $$`\frac{2L(b-a)}{N}<\varepsilon.`
 
@@ -299,7 +293,7 @@ active: their coefficients add to the second chord's slope. This cumulative addi
 
 At $`x=3/8`, only the knots at zero and one quarter contribute. Their terms are
 $`(1/4)(3/8)=3/32` and $`(1/2)(1/8)=1/16`, giving $`H(x)=5/32`.
-The target is $`9/64`, so the difference is $`1/64`, the `0.015625` seen in the table.
+The target is $`9/64`, so the difference is $`1/64`, the `0.015625` in the table below.
 This also explains the tensor layout in the PyTorch transcription below: each hidden coordinate
 stores one distance from a knot, and the output weight on that coordinate stores a slope change.
 The four coefficients are not four independent chord slopes. Copying the printed slope list into
@@ -318,7 +312,7 @@ points between them appear:
       (ExecFloat.Binary.ofFloat32 ∘ Float.toFloat32) x
     let hv :=
       (ExecFloat.Binary.toFloat32
-        (hingeFunIeee knot coeff 0 xe)).toFloat
+        (hingeFunBinary knot coeff 0 xe)).toFloat
     IO.println s!"x={x}  f={target x}  H={hv}"
 ```
 
@@ -341,7 +335,8 @@ $`0.015625` at every midpoint: the midpoint error of a
 chord interpolant of this quadratic is $`\tfrac18 f''h^2=\tfrac18\cdot 2\cdot(1/4)^2`.
 
 Compare that with what the rate theorem certifies at this width. Since $`x^2` is $`2`-Lipschitz on
-$`[0,1]`, the formula reaches four hidden units only once $`\varepsilon` is at least $`4/3`:
+$`[0,1]`, the formula reaches four or fewer hidden units only once $`\varepsilon` is at least
+$`4/3`:
 
 ```lean
 -- Compare the prescribed widths for the same Lipschitz
@@ -400,7 +395,7 @@ def waveCoeff (i : Fin waveN) : (ExecFloat.Binary 8 23) :=
 
 def waveHinge (x : Float) : Float :=
   (ExecFloat.Binary.toFloat32
-    (hingeFunIeee waveKnot waveCoeff 0
+    (hingeFunBinary waveKnot waveCoeff 0
       ((ExecFloat.Binary.ofFloat32 ∘ Float.toFloat32)
         x))).toFloat
 
@@ -489,12 +484,13 @@ with torch.no_grad():
     ys = net(xs).squeeze(1)
 ```
 
-On the same grid, the PyTorch network produces the nine `H` values printed above. The inputs,
-parameters, intermediate products, and partial sums in this small example are all exactly
-representable in binary32, so neither evaluation accumulates rounding error
+The transcription is intended to produce the nine `H` values printed above. The inputs,
+parameters, intermediate products, and partial sums of the displayed hinge computation are all
+exactly representable in binary32. This explains why that computation has no rounding error;
+checking the PyTorch execution remains a separate runtime comparison
 ({Informal.citep pytorch2019}[]).
 
-The Lean table evaluates `hingeFunIeee`, the function used in the three-term executable
+The Lean table evaluates `hingeFunBinary`, the function used in the three-term executable
 approximation theorem below. Applying that theorem still requires proofs of its
 approximation, quantization, and finiteness premises for these parameters. A
 transcription into another framework is a claim that has to be checked separately, which is exactly
@@ -515,7 +511,7 @@ patterns of the two positive outputs, exposing differences hidden by decimal for
     let x := Nat.toFloat k * meshStep
     let xe :=
       (ExecFloat.Binary.ofFloat32 ∘ Float.toFloat32) x
-    let hx := hingeFunIeee knot coeff 0 xe
+    let hx := hingeFunBinary knot coeff 0 xe
     let fx := (ExecFloat.Binary.ofFloat32 ∘ Float.toFloat32)
       (target x)
     let distance :=
@@ -556,7 +552,7 @@ def coeff3 (i : Fin 3) : (ExecFloat.Binary 8 23) :=
     let x := Nat.toFloat k * thirds
     let xe :=
       (ExecFloat.Binary.ofFloat32 ∘ Float.toFloat32) x
-    let hx := hingeFunIeee knot3 coeff3 0 xe
+    let hx := hingeFunBinary knot3 coeff3 0 xe
     let fx := (ExecFloat.Binary.ofFloat32 ∘ Float.toFloat32)
       (target x)
     let distance :=
@@ -580,10 +576,13 @@ evaluation of the hinge sum, and conversion of the reference target value. The t
 separate parameter conversion from evaluation error. They also require finite executable
 intermediates so that each arithmetic step can be related to a real-valued expression.
 
-# From Real Parameters To Binary32
+# From Real Parameters To A Floating-Point Format
 
-The real theorem is only the first leg of a finite-precision result. Once knots, coefficients, and
-the bias are stored in binary32, the total error naturally splits into
+The worked examples use binary32, but the proof takes the format as a parameter. An executable
+value also specifies its storage plan and a FloatLib codec relating stored values to the model.
+The arithmetic refinement assumes `format.isIEEE = true`; binary16, binary32, binary64, and
+binary128 can use the same theorem. Once knots, coefficients, and the bias are stored in the chosen
+format, the total error naturally splits into
 
 $$`\begin{aligned}
 |f(x)-H_{\mathrm{IEEE}}(x)|
@@ -600,9 +599,9 @@ These are, respectively:
 3. rounded evaluation error.
 
 The distinction is visible in
-{src "NN/MLTheory/Proofs/Approximation/Universal/UniversalApproximationIEEE32Exec.lean"}[
+{src "NN/MLTheory/Proofs/Approximation/Universal/UniversalApproximationBinaryExec.lean"}[
 the three-term approximation theorem]. It takes real hinge parameters `tR` and `cR`,
-executable FloatLib binary32 parameters `t`, `c`, and `b0`, and separate assumptions for the real
+executable parameters `t`, `c`, and `b0` in that format, and separate assumptions for the real
 approximation and quantization terms. It also requires finiteness witnesses for the intermediate
 hinge sum and output. Its conclusion adds `hingeFunErrorBound` to the two supplied tolerances.
 
@@ -616,68 +615,58 @@ arithmetic:
 ```lean (name := ieeeThree)
 -- Inspect the separate approximation,
 -- parameter-quantization, and finite-execution obligations.
-#check @reluApproximationIccIEEE32Exec_threeTerm
+#check @relu_approximation_Icc_binary_three_term
 ```
 
 ```leanOutput ieeeThree (whitespace := lax)
-@reluApproximationIccIEEE32Exec_threeTerm : ∀ {f : ℝ → ℝ} {a b : ℝ} {hidDim : ℕ} (tR cR : Fin hidDim
-  → ℝ)
-  (t c :
-    Fin hidDim →
-      ExecFloat.Binary 8 23 FloatFormat.Encoding.ieee (FloatFormat.Encoding.ieee.defaultBias 8)
-        embed._proof_1
-        embed._proof_2 embed._proof_3 embed._proof_4)
-  (b0 :
-    ExecFloat.Binary 8 23 FloatFormat.Encoding.ieee (FloatFormat.Encoding.ieee.defaultBias 8)
-      embed._proof_1
-      embed._proof_2 embed._proof_3 embed._proof_4),
-  (∀ (i : Fin hidDim), ExecFloat.Binary.isFinite (t i) = true) →
-    (∀ (i : Fin hidDim), ExecFloat.Binary.isFinite (c i) = true) →
-      ∀ (εApprox εQ : ℝ),
-        (∀
-            (x :
-              ExecFloat.Binary 8 23 FloatFormat.Encoding.ieee (FloatFormat.Encoding.ieee.defaultBias
-                8) embed._proof_1
-                embed._proof_2 embed._proof_3 embed._proof_4),
-            ExecFloat.Binary.isFinite x = true →
-              (ExecFloat.Binary.toModel x).toReal ∈ Set.Icc a b →
-                HingeSumFinite t c x 0 (List.finRange hidDim) ∧
-                  ExecFloat.Binary.isFinite (hingeFunIeee t c b0 x) = true) →
-          (∀
-              (x :
-                ExecFloat.Binary 8 23 FloatFormat.Encoding.ieee
-                  (FloatFormat.Encoding.ieee.defaultBias 8) embed._proof_1
-                  embed._proof_2 embed._proof_3 embed._proof_4),
-              ExecFloat.Binary.isFinite x = true →
-                (ExecFloat.Binary.toModel x).toReal ∈ Set.Icc a b →
-                  |f (ExecFloat.Binary.toModel x).toReal -
-                        hingeFun hidDim tR cR (f a) (ExecFloat.Binary.toModel x).toReal| <
-                    εApprox) →
-            (∀
-                (x :
-                  ExecFloat.Binary 8 23 FloatFormat.Encoding.ieee
-                    (FloatFormat.Encoding.ieee.defaultBias 8)
-                    embed._proof_1 embed._proof_2 embed._proof_3 embed._proof_4),
+@relu_approximation_Icc_binary_three_term : ∀ {format : FloatFormat}
+  {plan : FloatLib.Floats.Formats.BinaryInterchange.Configured.StoragePlan format} {code : Type}
+  [inst : ExecFloat.ModelCodec plan (Model format) code],
+  format.isIEEE = true →
+    ∀ {f : ℝ → ℝ} {a b : ℝ} {hidDim : ℕ} (tR cR : Fin hidDim → ℝ)
+      (t c : Fin hidDim → ExecFloat (FloatLib.Floats.Formats.BinaryInterchange.Configured.Family
+    format code plan))
+      (b0 : ExecFloat (FloatLib.Floats.Formats.BinaryInterchange.Configured.Family format code
+    plan)),
+      (∀ (i : Fin hidDim), ExecFloat.Binary.isFinite (t i) = true) →
+        (∀ (i : Fin hidDim), ExecFloat.Binary.isFinite (c i) = true) →
+          ∀ (εApprox εQ : ℝ),
+            (∀ (x : ExecFloat (FloatLib.Floats.Formats.BinaryInterchange.Configured.Family format
+    code plan)),
                 ExecFloat.Binary.isFinite x = true →
                   (ExecFloat.Binary.toModel x).toReal ∈ Set.Icc a b →
-                    |hingeFun hidDim tR cR (f a) (ExecFloat.Binary.toModel x).toReal -
-                          hingeFunReal (embedVec t) (embedVec c) (embed b0) (embed x)| ≤
-                      εQ) →
-              ∀
-                (x :
-                  ExecFloat.Binary 8 23 FloatFormat.Encoding.ieee
-                    (FloatFormat.Encoding.ieee.defaultBias 8)
-                    embed._proof_1 embed._proof_2 embed._proof_3 embed._proof_4),
-                ExecFloat.Binary.isFinite x = true →
-                  (ExecFloat.Binary.toModel x).toReal ∈ Set.Icc a b →
-                    |f (ExecFloat.Binary.toModel x).toReal -
-                          (ExecFloat.Binary.toModel (hingeFunIeee t c b0 x)).toReal| <
-                      εApprox + εQ + hingeFunErrorBound (embedVec t) (embedVec c) (embed b0) (embed
-                        x)
+                    HingeSumFinite t c x 0 (List.finRange hidDim) ∧
+                      ExecFloat.Binary.isFinite (hingeFunBinary t c b0 x) = true) →
+              (∀ (x : ExecFloat (FloatLib.Floats.Formats.BinaryInterchange.Configured.Family
+    format code plan)),
+                  ExecFloat.Binary.isFinite x = true →
+                    (ExecFloat.Binary.toModel x).toReal ∈ Set.Icc a b →
+                      |f (ExecFloat.Binary.toModel x).toReal -
+                            hingeFun hidDim tR cR (f a) (ExecFloat.Binary.toModel x).toReal| <
+                        εApprox) →
+                (∀ (x : ExecFloat (FloatLib.Floats.Formats.BinaryInterchange.Configured.Family
+    format code plan)),
+                    ExecFloat.Binary.isFinite x = true →
+                      (ExecFloat.Binary.toModel x).toReal ∈ Set.Icc a b →
+                        |hingeFun hidDim tR cR (f a) (ExecFloat.Binary.toModel x).toReal -
+                              RoundedReLUApprox.hingeFunReal format (embedVec t) (embedVec c)
+    (embed b0) (embed x)| ≤
+                          εQ) →
+                  ∀ (x : ExecFloat (FloatLib.Floats.Formats.BinaryInterchange.Configured.Family
+    format code plan)),
+                    ExecFloat.Binary.isFinite x = true →
+                      (ExecFloat.Binary.toModel x).toReal ∈ Set.Icc a b →
+                        |f (ExecFloat.Binary.toModel x).toReal -
+                              (ExecFloat.Binary.toModel (hingeFunBinary t c b0 x)).toReal| <
+                          εApprox + εQ +
+                            RoundedReLUApprox.hingeFunErrorBound format (embedVec t) (embedVec c)
+    (embed b0) (embed x)
 ```
 
+
+
 Read it from the top. The two parameter vectors come in pairs, `tR cR` over the reals and `t c` over
-FloatLib binary32, because the theorem has to talk about both to relate them. The two `isFinite`
+the configured format, because the theorem has to talk about both to relate them. The two `isFinite`
 hypotheses on `t` and `c` rule out NaN and infinite parameters, which is a condition a real-valued
 statement could not even express. The `HingeSumFinite` conjunct is the one to notice: it demands
 that *every intermediate* of the fold stay finite, not merely the result. The proof uses finite
@@ -689,10 +678,12 @@ rounding of the evaluation itself.
 
 For a particular checkpoint, each premise must be proved for its stored parameters and the stated
 input domain. `instDecHingeSumFinite` makes the `HingeSumFinite` predicate decidable for a fixed
-input and concrete parameters. When it holds, `decide` can prove that instance. A premise
+input and concrete parameters. After installing it with `haveI`, `decide` can prove a true concrete
+instance. A premise
 quantified over all inputs in an interval still needs an argument covering that whole domain.
 
-Notice that the final input is a FloatLib binary32, and interval membership is tested on its decoded
+Notice that the final input is a stored value in the chosen format, and interval membership is
+tested on its decoded
 real value `Model.toReal (ExecFloat.Binary.toModel x)`. The target is therefore evaluated at the
 real number represented by that
 stored input. If an application starts with an ideal real measurement and rounds it before model
@@ -703,7 +694,9 @@ makes the three terms correspond to three identifiable functions.
 
 A companion theorem for dyadic parameters replaces the supplied
 $`\varepsilon_Q` with a half-ULP bound derived from dyadic parameters. It is the more usable form
-when reference parameters are given as dyadics. The finite-evaluation witnesses remain necessary
+when reference parameters are given as dyadics. It assumes knots in $`[a,b]` and finite rounded
+parameters; the per-parameter half-ULP errors are propagated through the hinge sensitivities,
+including the interval length $`|b-a|`. The finite-evaluation witnesses remain necessary
 because finite stored parameters can still produce an overflowing intermediate.
 
 For example, the output accumulation can overflow even if every weight, bias, and input was
@@ -716,53 +709,58 @@ The dyadic specialization exposes those witnesses in its signature:
 -- Dyadic reference parameters supply the quantization
 -- estimate; finite evaluation is still
 -- required.
-#check @reluApproximationIccIEEE32Exec_dyadicHalfUlp
+#check @relu_approximation_Icc_binary_dyadic_half_ulp
 ```
 
 TorchLean also has an intermediate
-{src "NN/MLTheory/Proofs/Approximation/Universal/UniversalApproximationFP32.lean"}[`FP32` theorem].
-`relu_universal_approximation_Icc_fp32` evaluates the hinge construction in the clean finite
-rounding model and proves a pointwise bound of the form
+{src "NN/MLTheory/Proofs/Approximation/Universal/UniversalApproximationRounded.lean"}[
+rounded-real theorem].
+`RoundedReLUApprox.relu_universal_approximation_Icc format` evaluates the hinge construction with
+rounding at each operation and proves a pointwise bound of the form
 
-$$`|f(x)-H_{\mathrm{FP32}}(x)|
+$$`|f(x)-H_{\mathrm{rounded}}(x)|
   < \varepsilon+\operatorname{hingeFunErrorBound}(x).`
 
-```lean (name := fp32Uat)
+```lean (name := roundedUat)
 -- This bound concerns the rounded-real carrier and reads
 -- its result through the val field.
-#check @relu_universal_approximation_Icc_fp32
+#check @RoundedReLUApprox.relu_universal_approximation_Icc
 ```
 
-```leanOutput fp32Uat (whitespace := lax)
-@relu_universal_approximation_Icc_fp32 : ∀ {f : ℝ → ℝ} {a b L : ℝ},
+```leanOutput roundedUat (whitespace := lax)
+RoundedReLUApprox.relu_universal_approximation_Icc : ∀ (format : FloatFormat)
+  {f : ℝ → ℝ} {a b L : ℝ},
   a < b →
     0 < L →
       (∀ x ∈ Set.Icc a b, ∀ y ∈ Set.Icc a b, |f x - f y| ≤ L * |x - y|) →
         ∀ ε > 0,
           ∃ hidDim t c b0,
             ∀ x ∈ Set.Icc a b,
-              |f x - (hingeFunFp32 t c b0 { val := x }).val| <
-                ε + hingeFunErrorBound t c b0 { val := x }
+              |f x - (RoundedReLUApprox.hingeFun format t c b0 { val := x }).val| <
+                ε + RoundedReLUApprox.hingeFunErrorBound format t c b0 { val := x }
 ```
+
+
 
 Compare that conclusion with the real one printed earlier. The hypotheses are identical, the
 existential now produces hinge parameters rather than a `LinearSpec` pair, and the bound has grown a
 second summand. That summand bounds evaluation in this model. It does not include a separate
 conversion of
-arbitrary real parameters into finite binary32 storage.
+arbitrary real parameters into finite storage.
 
-`FP32` is convenient for error analysis because values are represented by reals rounded at
-binary32 precision with gradual underflow and no upper exponent cutoff. FloatLib binary32 is the
-explicit bit-level model with overflow, signed zero, subnormals, infinities, and NaNs. A proof in
-the former is not silently promoted to the latter.
+`Rounded format` values carry arbitrary reals; each primitive operation rounds its result to the
+format's precision and underflow grid, with no upper exponent cutoff. This carrier is FloatLib's
+`NF`, specialized by the format descriptor. The executable bridge connects it to stored values
+under the IEEE-format and finite-intermediate hypotheses. Changing `format` changes the grid and
+the error bounds without selecting a different proof file.
 
 # Exact Finite Interval Images
 
 Approximation theory also appears in a finite semantic form. The module
 {src "NN/MLTheory/Proofs/Approximation/FloatInterval/Semantics.lean"}[`FloatInterval.Semantics`]
-defines intervals of FloatLib binary32 values and computes abstract operations by enumerating the
-finite
-concrete image and taking its hull. For addition, the central theorem is:
+defines intervals of FloatLib binary32 values. Its exact abstract operations take the hull of
+the finite concrete image; these are noncomputable specifications. For addition, the central
+theorem is:
 
 ```lean (name := addSound)
 -- The conclusion is enclosure of the executable sum for
@@ -771,7 +769,7 @@ concrete image and taking its hull. For addition, the central theorem is:
 ```
 
 ```leanOutput addSound (whitespace := lax)
-OpsExact.add_sound : ∀ (A B : FloatIntervalApprox.I) {x y : F},
+OpsExact.add_sound : ∀ (A B : I) {x y : F},
   x ∈ A → y ∈ B → ExecFloat.add x y ∈ OpsExact.addSharp A B
 ```
 
@@ -790,17 +788,16 @@ layer and a two-layer ReLU network. Hover the two signatures to read the hypothe
 #check @eval_sound
 ```
 
-The four hypotheses on `eval_sound` are the `isNaN ... = false` conditions on the two weight
-matrices and two bias vectors. They are stated per entry rather than as one predicate on the
+The four explicit hypotheses on `eval_sound` are the `isNaN ... = false` conditions on the two
+weight matrices and two bias vectors. They are stated per entry rather than as one predicate on the
 network, which is slightly more verbose to supply and considerably easier to discharge from a
-concrete checkpoint.
+concrete checkpoint. The implicit `OpsExact.Sound` argument is supplied by the soundness
+instance proved in the same file.
 
-The weight and bias hypotheses rule out NaN parameters. The conclusion is about the explicit
-FloatLib binary32 evaluation, not an ideal real network. Because binary32 is finite, the exact
-abstract
-operators can in principle enumerate every concrete pair in an interval. This gives us a reference
-semantics, but its cost grows with the number of represented values. Enumerating those pairs is
-expensive even when the interval has a compact description.
+The weight and bias hypotheses rule out NaN parameters. The conclusion concerns executable
+FloatLib binary32 evaluation. The finite carrier lets the exact operators describe every concrete
+pair in an interval using classical finite sets. This gives a reference semantics for enclosure
+proofs; it does not supply an efficient interval evaluator.
 
 There is also a difference between an exact concrete image and its interval hull. For a set of
 executable results with gaps, the smallest containing interval can include values the operation
@@ -815,10 +812,10 @@ Run the proof modules directly:
 ```terminal
 # Check the scalar interval semantics and its finite-image
 # theorem as separate modules.
-lake env lean \
+scripts/lake.sh env lean \
   NN/MLTheory/Proofs/Approximation/FloatInterval/Semantics.lean
 
-lake env lean \
+scripts/lake.sh env lean \
   NN/MLTheory/Proofs/Approximation/FloatInterval/ExactImageTheorem.lean
 ```
 
@@ -878,25 +875,36 @@ complementary:
 # Approximation And Enclosure Guarantees
 
 The scalar hinge construction also has a theorem for the corresponding two-layer network. The
-{src "NN/MLTheory/Proofs/Approximation/Universal/UniversalApproximationIEEE32ExecTwoLayerMlp.lean"}[
-two-layer binary32 approximation API] packages representation, parameter-rounding, and
-executable-rounding error in `relu_twoLayerMlp_ieee32exec_threeTerm`. For finite interval semantics,
-the
-{src "NN/MLTheory/Proofs/Approximation/FloatInterval/ConstantTarget.lean"}[constant-target API]
-proves `exactIntervalImage_constant`: a finite constant has the exact singleton interval image. The
-latter is a useful base case for certificate composition, not a claim that an arbitrary nonconstant
-network has an exact interval image.
+{src "NN/MLTheory/Proofs/Approximation/Universal/UniversalApproximationBinaryExecTwoLayerMlp.lean"}[
+two-layer configured binary approximation API] packages representation, parameter-rounding, and
+executable-rounding error in `relu_mlp_approximation_three_term`. Unlike the hinge theorem,
+this theorem takes all three budgets, including the execution bound, as hypotheses and composes
+them by the triangle inequality.
 
-Both are checked as this page builds; hover to read them:
+For finite interval semantics, the
+{src "NN/MLTheory/Proofs/Approximation/FloatInterval/ConstantTarget.lean"}[constant-target API]
+proves `exactIntervalImage_constant`: a finite constant has the exact singleton interval image.
+This gives a base case for reasoning about interval images.
+
+Both results are checked as this page builds; hover to read their hypotheses:
 
 ```lean (name := endpoints)
 -- Compare the three-budget network theorem with the exact
 -- constant-image base case.
-#check @relu_twoLayerMlp_ieee32exec_threeTerm
-#check @exactIntervalImage_constant
+#check @relu_mlp_approximation_three_term
+#check @ConstantTarget.exactIntervalImage_constant
 ```
 
-After these layers are composed, one can make a statement with all errors visible:
+The original binary32 interval theorem packages the remaining construction obligations explicitly.
+`roundedTargetExactIntervalImage_of_correctRounding` takes a correct-rounding bridge, real
+activation conditions, a threshold-network construction, and an exact interval-semantics
+construction. Supplying those premises gives the exact-image conclusion for rounded targets.
+
+```lean (name := roundedIntervalImage)
+#check @roundedTargetExactIntervalImage_of_correctRounding
+```
+
+For the quantitative two-layer approximation theorem introduced earlier, the error budgets give:
 
 $$`\text{target error}
 \leq
@@ -904,15 +912,16 @@ $$`\text{target error}
 +\text{parameter rounding error}
 +\text{execution error}.`
 
-A CROWN or interval certificate can then add a fourth component: a sound enclosure over an input
-region for the chosen network. Each term comes from a different argument: model construction,
-parameter conversion, runtime arithmetic, and regional verification. Writing the sum explicitly
-lets an application decide where to spend its error budget.
+The three terms come from representation, parameter conversion, and executable arithmetic.
+Writing the sum explicitly lets an application decide where to spend its error budget. A CROWN
+or interval certificate can separately supply a sound enclosure over an input region for the
+chosen network. That enclosure is a regional property, not automatically another additive error
+term in this inequality.
 
 The constructions follow the classical universal-approximation tradition.
 {Informal.citet cybenko1989}[] proved density for superpositions of a sigmoidal function, and
 {Informal.citet hornik1991}[] removed the sigmoid-specific hypothesis for multilayer feedforward
 networks. Both are density results: they say an approximant exists and are silent about its size.
 The explicit ReLU construction obtains a width formula by choosing a mesh and computing its
-slope increments. The finite interval development instead encloses the outputs of a fixed
-executable binary32 network by abstract interpretation.
+slope increments. The finite interval development proves enclosure for executable binary32
+networks and states the construction premises needed for its rounded-target exact-image theorem.

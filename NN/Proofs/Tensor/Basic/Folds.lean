@@ -45,13 +45,6 @@ theorem add_spec_comm {s : Shape}
   intro coordinate
   simp [addSpec, map2Spec, add_comm]
 
-/-- Elementwise multiplication of two all-zero tensors is the all-zero tensor. -/
-theorem mul_spec_full_zero {s : Shape} :
-    mulSpec (Tensor.full s (0 : ℝ)) (Tensor.full s (0 : ℝ)) = Tensor.full s (0 : ℝ) := by
-  apply TorchLean.Tensor.Internal.Rep.ext
-  intro coordinate
-  simp [mulSpec, map2Spec, Tensor.full]
-
 /-! ## Real dot product and fold bridges -/
 
 /--
@@ -94,48 +87,6 @@ theorem foldlSpec_go_of_not_lt {α β : Type} [TorchLean.Storage α]
     simpa using Nat.le_of_not_gt hk
   rw [foldlSpec.go, List.drop_eq_nil_of_le hLength]
   rfl
-
-/--
-Accumulator lemma for `foldlSpec` specialized to addition.
-
-Informally: folding with `(+)` over a tensor adds `sum_spec t` to the initial accumulator.
-This is frequently used to move between “fold-style” specs and “sum-style” algebra.
--/
-theorem foldlSpec_add_init {s : Shape} (acc : ℝ) (t : Tensor ℝ s) :
-    foldlSpec (· + ·) acc t = acc + sumSpec t := by
-  change t.foldl (· + ·) acc = acc + t.foldl (· + ·) 0
-  rw [TorchLean.Tensor.Internal.Rep.foldl_eq_data_foldl,
-    TorchLean.Tensor.Internal.Rep.foldl_eq_data_foldl,
-    ← Array.foldl_toList, ← Array.foldl_toList]
-  exact List.foldl_add_init _ _ _
-
-
--- Rewriting lemma under dot using associativity/commutativity
-/-- Reassociate a `dot` over a pointwise product, using commutativity/associativity of `mulSpec`.
-  -/
-theorem dot_mul_reassoc {s : Shape}
-  (dLdy m dx : Tensor ℝ s) :
-  dot dLdy (mulSpec m dx) = dot (mulSpec m dLdy) dx := by
-  have hAssoc := mul_spec_assoc (a := dLdy) (b := m) (c := dx)
-  have hComm := mul_spec_comm (a := dLdy) (b := m)
-  -- `mul_spec dLdy (mul_spec m dx) = mul_spec (mul_spec dLdy m) dx`
-  -- and `mul_spec (mul_spec dLdy m) dx = mul_spec (mul_spec m dLdy) dx`.
-  simp [dot, hAssoc, hComm]
-
-/--
-Coordinate formula for `matVecMulSpec`, converted from the spec's `List.finRange` fold to a
-`Finset.univ.sum`.
-
-This is the “PyTorch-looking” statement of matvec: each output entry is a dot product of the
-corresponding row with the input vector.
--/
-theorem getScalar_mat_vec_mul_spec {m n : Nat}
-  (A : Tensor ℝ [m, n])
-  (v : Tensor ℝ [n]) (i : Fin m) :
-  getScalar (matVecMulSpec A v) i = ∑ k : Fin n, (get2 A i k) * (getScalar v k) := by
-  -- Reuse the backend-generic lemma from `NN/Proofs/Tensor/Algebra.lean` (instantiated at `ℝ`).
-  simpa using
-    (Proofs.TensorAlgebra.getScalar_mat_vec_mul_spec (α := ℝ) (A := A) (v := v) (i := i))
 
 /--
 Coordinate formula for `matMulSpec` (matrix-matrix multiplication).

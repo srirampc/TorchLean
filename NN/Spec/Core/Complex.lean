@@ -21,7 +21,7 @@ Mathlib’s `ℂ` is specialized to `ℝ` and intentionally has no order instanc
 To avoid changing mathlib’s global behavior (and to support runtime-friendly backends like
 `ExecFloat.Binary 8 23`), we provide a small parametric complex scalar:
 
-`TorchLean.Complex α := α × α` with fields `re` and `im`.
+`TorchLean.Complex α` stores two coordinates with fields `re` and `im`.
 
 Complex square roots use the principal branch. Complex logarithms retain the polar angle through
 `Atan2 α`; a backend must supply that real-coordinate operation to obtain the complex `Context`.
@@ -106,7 +106,8 @@ instance [BEq α] : BEq (Complex α) :=
 Order is only used in TorchLean for branchy ops like ReLU/max/min. Complex numbers do not have a
 canonical order, so we pick a simple *real-part* order: compare `re` and ignore `im`.
 
-This instance is local to TorchLean’s branchy tensor operations and does not change mathlib’s `ℂ`.
+These instances apply to `TorchLean.Complex α` throughout the program and do not change mathlib’s
+`ℂ`. They do not form a linear order: distinct imaginary coordinates can have equal real parts.
 -/
 instance [LT α] : LT (Complex α) := ⟨fun x y => x.re < y.re⟩
 instance [LE α] : LE (Complex α) := ⟨fun x y => x.re ≤ y.re⟩

@@ -22,7 +22,7 @@ candidate weights; having exported weights does not make their corridor certifie
 Check a bundled certificate directly with:
 
 ```bash
-lake exe verify -- ode --cert=NN/Examples/Verification/ODE/sample_ode_cert.json
+scripts/lake.sh exe verify -- ode --cert=NN/Examples/Verification/ODE/sample_ode_cert.json
 ```
 
 When a certificate declares `settings.arithmetic`, the verifier uses that setting unless the
@@ -31,9 +31,9 @@ command supplies `--arithmetic` explicitly.
 The additional passing checks are:
 
 ```bash
-lake exe verify -- ode --arithmetic ieee \
+scripts/lake.sh exe verify -- ode --arithmetic ieee \
   --cert=NN/Examples/Verification/ODE/sin_cert.json
-lake exe verify -- ode --model=direct --arithmetic ieee \
+scripts/lake.sh exe verify -- ode --model=direct --arithmetic ieee \
   --cert=NN/Examples/Verification/ODE/logistic_trivial_cert.json
 ```
 
@@ -51,5 +51,5 @@ subdividing later time intervals cannot repair them.
 Recheck the curated passing fixture with:
 
 ```bash
-lake exe verify -- ode --cert=NN/Examples/Verification/ODE/sample_ode_cert.json
+scripts/lake.sh exe verify -- ode --cert=NN/Examples/Verification/ODE/sample_ode_cert.json
 ```

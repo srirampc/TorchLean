@@ -68,8 +68,8 @@ transcendental functions (exp/tanh/log/sqrt) used by activations and losses.
   `NN.Spec.Core.Context.Rational`. FloatLib's shared elementary-function class already imports real
   analysis; selecting a context does not add an accuracy theorem for finite-precision arithmetic.
 - For executable examples, `Context.gtBool` converts `x > y` into a printable `Bool`.
-- For interval arithmetic, we override some order/comparison behavior (see `namespace Interval`
-  below).
+- Interval backends supply their own order/comparison operations; `Context` does not require a
+  linear order or agreement between these operations and real-number comparisons.
 -/
 
 @[expose] public section
@@ -205,10 +205,10 @@ attribute [simp] LawfulContext.add_eq LawfulContext.mul_eq LawfulContext.sub_eq
 @[inline] instance : Context Float where
   defaultEpsilon := 1e-6
   decidableGT := inferInstance
-  ratCast value := TorchLean.Numeric.QuotientArithmetic.roundFloat value
+  ratCast value := TorchLean.Numeric.QuotientArithmetic.round value
 /-- Full `Context` instance for native binary32 execution. -/
 @[inline] instance : Context Float32 where
   defaultEpsilon := (1e-6 : Float).toFloat32
   decidableGT := inferInstance
   ratCast value :=
-    TorchLean.Numeric.QuotientArithmetic.roundFloat32 value
+    TorchLean.Numeric.QuotientArithmetic.round value

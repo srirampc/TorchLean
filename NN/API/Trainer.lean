@@ -23,7 +23,7 @@ The main training interface:
 
 ```lean
 let trainer := Trainer.new model
-  { objective := .meanSquaredError
+  { objective := .mse
     optimizer := optim.adam { learningRate := 0.03 } }
 let y0 ← trainer.predict x
 let trained ← trainer.train data { steps := 200, samplesPerStep := 16, logEvery := 25 }
@@ -32,15 +32,17 @@ trained.save "model.state"
 ```
 
 The same interface supports regression, classification, custom losses, finite datasets, and
-streaming batches. Public signatures use `Tensor Float`; the run executes in the binary32 scalar
-selected by `arithmetic` (`Float32` or `ExecFloat.Binary 8 23`) and the report names it.
+streaming batches. The runtime-selected entry points use `Tensor Float`; the run executes in the
+binary32 scalar selected by `arithmetic` (`Float32` or `ExecFloat.Binary 8 23`) and the report names
+it. For a chosen scalar `α`, `trainer.openTyped (α := α)` opens a CPU session that retains `α` in
+inputs, parameters, losses, predictions, and checkpoints.
 
 Programs that own the optimizer loop open the same trainer as a session:
 
 ```lean
 let session ← trainer.open
 for step in [0:steps] do
-  let loss ← session.step (sampleAt step)
+  let loss ← session.step (sampleAt step) (loss := true)
 let trained ← session.finish { before, after }
 ```
 

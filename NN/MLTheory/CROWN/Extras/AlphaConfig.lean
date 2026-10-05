@@ -34,7 +34,7 @@ References:
 @[expose] public section
 
 
-namespace NN.MLTheory.CROWN.alpha
+namespace NN.MLTheory.CROWN.AlphaConfig
 
 open Spec TorchLean
 open TorchLean.Tensor
@@ -65,10 +65,14 @@ structure NetworkAlpha (α : Type) [TorchLean.Storage α] [Context α] where
 
 /-- Neuron status based on pre-activation bounds. -/
 inductive NeuronStatus where
-  | inactive  -- u ≤ 0: ReLU always outputs 0
-  | active    -- l ≥ 0: ReLU always passes through
-  | crossing  -- l < 0 < u: ReLU needs relaxation
-  | unknown   -- Cannot determine
+  /-- `u < 0`: the ReLU always outputs `0`. -/
+  | inactive
+  /-- `l > 0`: the ReLU is the identity. -/
+  | active
+  /-- `l < 0 < u`: the ReLU needs a relaxation. -/
+  | crossing
+  /-- The endpoint comparisons do not establish any of the three strict cases. -/
+  | unknown
   deriving Repr, BEq
 
 /-- Determine neuron status from bounds. -/
@@ -203,4 +207,4 @@ structure OptimizedAlpha (α : Type) [TorchLean.Storage α] [Context α] where
   /-- Number of iterations used -/
   iterations : Nat
 
-end NN.MLTheory.CROWN.alpha
+end NN.MLTheory.CROWN.AlphaConfig

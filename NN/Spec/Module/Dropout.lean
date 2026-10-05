@@ -36,8 +36,11 @@ open TorchLean TorchLean.Tensor
 
 variable {α : Type} [TorchLean.Storage α] [Context α]
 
-/-- Evaluation-mode dropout wrapper. The configured training probability is retained as module
-metadata, while the forward map is the identity. -/
+/-- Evaluation-mode dropout wrapper with an identity forward map.
+
+The metadata identifies evaluation dropout but uses a placeholder for the training probability;
+it does not serialize `p`.
+-/
 def dropoutInference {s : Shape} (p : α) : Spec.Module α s s :=
   { forward := fun x => dropoutInferenceSpec (α := α) (s := s) p x
     kind := "DropoutInference"

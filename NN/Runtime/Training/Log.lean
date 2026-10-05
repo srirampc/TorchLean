@@ -312,7 +312,7 @@ def toTrainLog (e : ExperimentLog) (title : String := "") : TrainLog :=
   else
     title
   let notes := e.run.toNotes ++ e.notes ++ e.artifacts.map Artifact.toNote
-  { e.history.toTrainLog title notes with notes := notes }
+  e.history.toTrainLog title notes
 
 end ExperimentLog
 
@@ -388,7 +388,7 @@ namespace JsonCodec
 /-! ### Primitive arrays -/
 
 /-- Encode finite metric values without losing precision to the default six-decimal formatter.
-Non-finite values use Lean's string sentinels; both signed zeros retain the historical JSON `0`.
+Non-finite values use Lean's string sentinels; both signed zeros serialize as JSON `0`.
 -/
 def floatToJson (x : Float) : Json :=
   match JsonNumber.fromFloat? x with
@@ -470,6 +470,27 @@ def floatArrayOfJsonE (field : String) (j : Json) : Except String (Array Float) 
     | .ok xs => pure xs
     | .error e => throw s!"TrainLog JSON: `{field}` expected an array: {e}"
   xs.mapM (floatOfJsonE (field := field))
+
+namespace Internal
+
+/-- Create parent directories, then encode and write a newline-terminated JSON artifact. -/
+def writeFile {α : Type} (path : System.FilePath) (encode : α → Json)
+    (value : α) (pretty : Bool) : IO Unit := do
+  match path.parent with
+  | some parent => IO.FS.createDirAll parent
+  | none => pure ()
+  let j := encode value
+  let s := if pretty then Json.pretty j else Json.compress j
+  IO.FS.writeFile path (s ++ "\n")
+
+/-- Read an artifact, prefixing only JSON syntax errors with the caller's diagnostic. -/
+def readFile (path : System.FilePath) (parseErrorPrefix : String) : IO Json := do
+  let s ← IO.FS.readFile path
+  match Json.parse s with
+  | .ok j => pure j
+  | .error e => throw <| IO.userError (parseErrorPrefix ++ e)
+
+end Internal
 
 end JsonCodec
 
@@ -564,24 +585,13 @@ def ofJsonE (j : Json) : Except String TrainLog := do
   pure { title := title, steps := steps, series := series, notes := notes }
 
 /-- Write a `TrainLog` as JSON to disk, creating parent directories if needed. -/
-def writeJson (path : System.FilePath) (log : TrainLog) (pretty : Bool := true) : IO Unit := do
-  match path.parent with
-  | some parent => IO.FS.createDirAll parent
-  | none => pure ()
-  let j := toJson log
-  let s := if pretty then Json.pretty j else Json.compress j
-  IO.FS.writeFile path (s ++ "\n")
+def writeJson (path : System.FilePath) (log : TrainLog) (pretty : Bool := true) : IO Unit :=
+  JsonCodec.Internal.writeFile path toJson log pretty
 
 /-- Read a `TrainLog` from a JSON file. -/
 def readJson (path : System.FilePath) : IO TrainLog := do
-  let s ← IO.FS.readFile path
-  let j ←
-    match Json.parse s with
-    | .ok j => pure j
-    | .error e => throw <| IO.userError s!"TrainLog JSON: parse error: {e}"
-  match ofJsonE j with
-  | .ok log => pure log
-  | .error e => throw <| IO.userError e
+  let j ← JsonCodec.Internal.readFile path "TrainLog JSON: parse error: "
+  IO.ofExcept (ofJsonE j)
 
 end TrainLog
 
@@ -624,24 +634,13 @@ def ofJsonE (j : Json) : Except String ConfusionMatrix := do
 
 /-- Write a confusion matrix as JSON to disk, creating parent directories if needed. -/
 def writeJson (path : System.FilePath) (cm : ConfusionMatrix) (pretty : Bool := true) :
-    IO Unit := do
-  match path.parent with
-  | some parent => IO.FS.createDirAll parent
-  | none => pure ()
-  let j := toJson cm
-  let s := if pretty then Json.pretty j else Json.compress j
-  IO.FS.writeFile path (s ++ "\n")
+    IO Unit :=
+  JsonCodec.Internal.writeFile path toJson cm pretty
 
 /-- Read a confusion matrix from a JSON file. -/
 def readJson (path : System.FilePath) : IO ConfusionMatrix := do
-  let s ← IO.FS.readFile path
-  let j ←
-    match Json.parse s with
-    | .ok j => pure j
-    | .error e => throw <| IO.userError s!"TrainLog JSON: parse error: {e}"
-  match ofJsonE j with
-  | .ok cm => pure cm
-  | .error e => throw <| IO.userError e
+  let j ← JsonCodec.Internal.readFile path "TrainLog JSON: parse error: "
+  IO.ofExcept (ofJsonE j)
 
 end ConfusionMatrix
 

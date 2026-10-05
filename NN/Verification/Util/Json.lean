@@ -7,6 +7,7 @@ Authors: TorchLean Team
 module
 
 public import NN.API.Json
+public import NN.MLTheory.CROWN.BoundOps
 
 /-!
 # Json
@@ -81,9 +82,7 @@ def expectArray (j : Json) (ctx : String) : IO (Array Json) :=
 
 /-- Parse a `Nat` from a JSON number or decimal string. -/
 def asNat? (j : Json) : Option Nat :=
-  match TorchLean.Json.expectNat "Nat" j with
-  | .ok n => some n
-  | .error _ => none
+  (TorchLean.Json.expectNat "Nat" j).toOption
 
 /-- Parse a `Float` from a JSON number or a string containing a JSON number. -/
 def asFloat? (j : Json) : Option Float :=
@@ -120,6 +119,39 @@ def parseFiniteFloatArray (ctx : String) (j : Json) : Except String (Array Float
   let xs ← TorchLean.Json.expectArray ctx j
   xs.mapIdxM fun i x => parseFiniteFloat s!"{ctx}[{i}]" x
 
+/--
+Parse a rational in the format emitted by TorchLean’s Arb helpers:
+
+- integer: `"5"`, `"-3"`
+- fraction: `"5/2"`, `"-7/10"`
+
+We avoid JSON numbers here because they are stored as `Scientific` and are not guaranteed to
+round-trip exactly for large integers.
+-/
+def parseRatString (s : String) : Except String Rat := do
+  let s := s.trimAscii.toString
+  if s.isEmpty then
+    throw "empty rational string"
+  match s.splitOn "/" with
+  | [numStr] =>
+      match numStr.toInt? with
+      | some n => pure (Rat.ofInt n)
+      | none => throw s!"invalid integer rational: '{s}'"
+  | [numStr, denStr] =>
+      let n ←
+        match numStr.toInt? with
+        | some n => pure n
+        | none => throw s!"invalid numerator: '{numStr}'"
+      let d ←
+        match denStr.toNat? with
+        | some d => pure d
+        | none => throw s!"invalid denominator (expected Nat): '{denStr}'"
+      if d = 0 then
+        throw "invalid rational: denominator is 0"
+      pure (mkRat n d)
+  | _ =>
+      throw s!"invalid rational (expected n or n/d): '{s}'"
+
 /-- A finite axis-aligned region parsed from a verification artifact. -/
 structure BoxRegion where
   /-- Declared dimension, or the inferred endpoint-array length when `dim` is absent. -/
@@ -149,21 +181,22 @@ end BoxRegion
 Parse either `{lo, hi}` or `{center, eps}` notation for a finite axis-aligned region.
 
 When `dim` is absent, it is inferred from the endpoint or center array. When present, it must be a
-natural number equal to the resulting endpoint lengths. The parser also rejects negative radii,
+natural number equal to the resulting endpoint lengths. The `{center, eps}` endpoints are rounded
+outward, so the parsed box contains the exact real box. The parser also rejects negative radii,
 non-finite values, incomplete schemas, and intervals whose lower endpoint exceeds the upper one.
 Keeping these checks here gives certificate consumers one well-formed region type instead of
 several subtly different parsers.
 -/
 def parseBoxRegion (ctx : String) (j : Json) : Except String BoxRegion := do
-  let obj <- TorchLean.Json.expectObject ctx j
-  let declaredDim? <- match Std.TreeMap.Raw.get? obj "dim" with
+  let obj ← TorchLean.Json.expectObject ctx j
+  let declaredDim? ← match Std.TreeMap.Raw.get? obj "dim" with
     | none => pure none
     | some dimJson => some <$> TorchLean.Json.expectNat s!"{ctx}.dim" dimJson
   let lo? := Std.TreeMap.Raw.get? obj "lo"
   let hi? := Std.TreeMap.Raw.get? obj "hi"
   let center? := Std.TreeMap.Raw.get? obj "center"
   let eps? := Std.TreeMap.Raw.get? obj "eps"
-  let region <- match lo?, hi?, center?, eps? with
+  let region ← match lo?, hi?, center?, eps? with
   | some loJson, some hiJson, none, none =>
       let lo ← parseFiniteFloatArray s!"{ctx}.lo" loJson
       let hi ← parseFiniteFloatArray s!"{ctx}.hi" hiJson
@@ -171,10 +204,12 @@ def parseBoxRegion (ctx : String) (j : Json) : Except String BoxRegion := do
   | none, none, some centerJson, some epsJson =>
       let center ← parseFiniteFloatArray s!"{ctx}.center" centerJson
       let radius ← parseFiniteFloat s!"{ctx}.eps" epsJson
+      unless radius ≥ 0 do
+        throw s!"{ctx}.eps: expected a nonnegative radius, got {radius}"
       pure
         { dim := declaredDim?.getD center.size
-          lo := center.map (· - radius)
-          hi := center.map (· + radius) }
+          lo := center.map (NN.MLTheory.CROWN.HostFloat.subDownTight · radius)
+          hi := center.map (NN.MLTheory.CROWN.HostFloat.addUpTight · radius) }
   | some _, none, _, _ =>
       throw s!"{ctx}: field `lo` requires a matching `hi` field"
   | none, some _, _, _ =>
@@ -212,10 +247,8 @@ def parseBool? (j : Json) : Option Bool :=
   | _ => none
 
 /-- Require a finite floating-point value, accepting JSON numbers and string-encoded numbers. -/
-def expectFiniteFloat (j : Json) (ctx : String) : IO Float := do
-  match asFiniteFloat? j with
-  | some x => pure x
-  | none => throw <| IO.userError s!"{ctx}: expected finite float"
+def expectFiniteFloat (j : Json) (ctx : String) : IO Float :=
+  fromExcept (parseFiniteFloat ctx j)
 
 /-- Require a JSON boolean and report `ctx` on mismatch. -/
 def expectBool (j : Json) (ctx : String) : IO Bool := do
@@ -223,23 +256,9 @@ def expectBool (j : Json) (ctx : String) : IO Bool := do
   | some b => pure b
   | none => throw <| IO.userError s!"{ctx}: expected boolean"
 
-/-- Parse a JSON array of floats. -/
-def parseFloatArray (j : Json) : Option (Array Float) :=
-  match j with
-  | .arr xs => xs.mapM asFloat?
-  | _ => none
-
-/-- Parse a JSON matrix represented as an array of float arrays. -/
-def parseFloatMatrix (j : Json) : Option (Array (Array Float)) := do
-  match j with
-  | .arr rows => rows.mapM parseFloatArray
-  | _ => none
-
-/-- Parse a JSON array of finite floats with contextual errors. -/
-def expectFiniteFloatArray (j : Json) (ctx : String) : IO (Array Float) := do
-  let xs ← expectArray j ctx
-  xs.mapIdxM fun i x => expectFiniteFloat x s!"{ctx}[{i}]"
-
+/-- Require a JSON array of finite floats with contextual errors. -/
+def expectFiniteFloatArray (j : Json) (ctx : String) : IO (Array Float) :=
+  fromExcept (parseFiniteFloatArray ctx j)
 
 /-- Parse a JSON matrix whose entries are all finite floats. -/
 def expectFiniteFloatMatrix (j : Json) (ctx : String) : IO (Array (Array Float)) := do

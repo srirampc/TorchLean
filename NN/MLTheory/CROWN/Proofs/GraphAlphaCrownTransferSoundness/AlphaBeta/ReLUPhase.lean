@@ -26,8 +26,6 @@ namespace NN.MLTheory.CROWN.Graph
 
 open Spec TorchLean
 open TorchLean.Tensor
-open scoped BigOperators
-open Proofs.TensorAlgebra
 
 open NN.MLTheory.CROWN
 open NN.MLTheory.CROWN.Cert

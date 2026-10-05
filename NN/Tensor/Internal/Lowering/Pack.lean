@@ -115,7 +115,7 @@ The sum ranges over the dependent component family. Multiplication order is
 preserved, so a commutative scalar multiplication is not required.
 -/
 @[grind =] theorem dot_packTensor {R : Type u} [Storage R]
-    [Semiring R]
+    [AddCommMonoid R] [Mul R]
     (checked : CheckedPack) (inputTensors : checked.InputTensors R)
     (packedTensor : checked.OutputTensor R) :
     Rep.dot (packTensor checked inputTensors) packedTensor =
@@ -133,10 +133,10 @@ preserved, so a commutative scalar multiplication is not required.
 /--
 Unpack is adjoint to pack with the packed tensor in the left pairing slot.
 
-This is stated separately from `dot_packTensor` because it also preserves
-multiplication order over noncommutative semirings.
+This is stated separately from `dot_packTensor` because it preserves the
+opposite ordering of the two factors without imposing multiplication laws.
 -/
-theorem dot_unpackTensor {R : Type u} [Storage R] [Semiring R]
+theorem dot_unpackTensor {R : Type u} [Storage R] [AddCommMonoid R] [Mul R]
     (checked : CheckedPack) (packedTensor : checked.OutputTensor R)
     (componentTensors : checked.InputTensors R) :
     (∑ component,

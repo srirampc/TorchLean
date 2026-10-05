@@ -8,9 +8,6 @@ module
 
 public import NN.Proofs.Analysis.Softmax
 public import NN.Spec.Layers.Attention
-public import Mathlib.Analysis.SpecialFunctions.Pow.NNReal
-public import Mathlib.Data.Sym.Sym2.Init
-import Mathlib.Tactic.NormNum.GCD
 
 /-!
 # Hard masking with an all-true mask
@@ -28,7 +25,6 @@ namespace NN.Proofs.Models.Attention
 
 open Spec TorchLean
 open TorchLean.Tensor
-open scoped BigOperators
 
 noncomputable section
 
@@ -84,7 +80,7 @@ theorem hardMaskedSoftmaxVecSpec_allTrue {n : Nat} (scores : Tensor ℝ [n]) :
         simp [Proofs.mathfunc_exp_eq_rexp]
       unfold Spec.hardMaskedSoftmaxVecSpec
       rw [hardMaskedMax?_allTrue]
-      simp only []
+      dsimp only
       rw [hnum]
       rfl
 

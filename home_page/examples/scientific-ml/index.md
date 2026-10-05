@@ -2,22 +2,16 @@
 title: Scientific ML
 ---
 
-Scientific ML examples are where TorchLean has to behave like both an ML library and a mathematics
-library. The model should run on real data, but the run should also leave behind objects with clear
-meaning: a grid, a PDE, a parameter file, a residual expression, a certificate, or a prediction
-artifact that Lean can reload.
+Let's try two ways to train a neural network for a differential equation. First, we'll train
+a Fourier neural operator (FNO) on simulated solutions of Burgers' equation. Then we'll train a
+physics-informed neural network (PINN) using an equation and its boundary conditions as the loss.
 
-The first example is a one-dimensional Fourier neural operator for Burgers'
-equation. It is a real training run: prepare simulation data, train an operator model, and export
-loss logs plus prediction curves. The second is PINN-style checking. There the artifacts are kept
-small enough for Lean to inspect directly: PDE residual expressions, dataset samples, compact
-weights, intervals, and certificates. The two paths are different on purpose. One asks whether a
-model learns the scientific map; the other asks which precise residual, dataset, or certificate claim
-can be checked.
+We'll run both examples in TorchLean. After training, we'll look at separate Lean checkers for
+exported PDE residuals and datasets, and work through what their results tell us.
 
 ## The Problem
 
-Burgers' equation is a standard nonlinear PDE benchmark. In viscous form:
+We'll start with Burgers' equation, a standard nonlinear PDE benchmark. In viscous form:
 
 $$
   u_t + u\,u_x = \nu u_{xx}.
@@ -40,8 +34,7 @@ candidate satisfies the PDE residual at sampled points. Use the PINN-style check
 artifact to trust includes a residual, a bound, or a certificate
 attached to the PDE alongside the prediction curve.
 
-For the FNO run, TorchLean uses the common operator-learning version of the task. Each training
-example is a pair:
+For our FNO, we'll pair each initial condition with the solution at a later time:
 
 $$
   \text{input } a = u_0(x),
@@ -57,8 +50,8 @@ $$
 
 In the public `burgers_data_R10.mat` file used by many FNO tutorials, the field `a` stores the
 initial conditions and the field `u` stores the final solution trajectories. The TorchLean data
-script only does the ecosystem work: download or read the `.mat` file, choose a grid resolution,
-pick train/test rows, and write `.npy` tensors. After that, the model run is native TorchLean.
+script downloads or reads the `.mat` file, chooses a grid resolution, selects train/test rows,
+and writes `.npy` tensors. TorchLean then loads these arrays for training.
 
 ## The Architecture
 
@@ -76,14 +69,14 @@ $$
     \right).
 $$
 
-The two pieces have different jobs:
+In this block:
 
 - the pointwise term $Wv_k(x)$ handles local channel mixing;
 - the spectral term keeps a small number of Fourier modes and learns how those modes should evolve;
 - the activation $\sigma$ makes the block nonlinear;
 - repeating the block gives a compact model for the map from the initial field to the final field.
 
-The TorchLean example keeps the model compact enough to inspect:
+We'll keep the model small enough to inspect:
 
 ```text
 grid   = 32
@@ -92,15 +85,14 @@ modes  = 8
 blocks = 1
 ```
 
-The run is enough to exercise the actual operator-learning path while keeping the tensors, modes,
-and artifacts readable. CPU execution uses the dense multidimensional real-split DFT. CUDA uses a
-fused real-FFT FNO primitive backed by cuFFT.
+CPU execution uses the dense multidimensional real-split DFT. CUDA
+uses Lean composition of FFT, frequency mixing, and inverse FFT through LibTorch numerical
+primitives. TorchLean also composes the local reverse calculation and owns the tape's saved buffers.
 
-## What TorchLean Owns
+## Data preparation and training
 
-The split is deliberate. Python handles the parts where the Python ecosystem is the right tool:
-downloading a public `.mat` file, preparing external datasets, or plotting a prediction CSV.
-TorchLean owns the pieces that should be typed, inspectable, or connected to verification:
+Python downloads and converts the data and plots the prediction CSV. In Lean, we load the
+tensors, construct the model, and train it. The relevant APIs are:
 
 <div class="workflow-list">
   <a href="{{ '/blueprint/Building-Models/From-Files-To-Typed-Minibatches/' | relative_url }}">
@@ -116,7 +108,7 @@ TorchLean owns the pieces that should be typed, inspectable, or connected to ver
   <a href="{{ '/blueprint/Floating-Point-and-Native-Boundaries/From-A-Tensor-Operation-To-A-GPU-Kernel/' | relative_url }}">
     <span>03</span>
     <strong>Runtime boundary</strong>
-    <em>The CUDA path is fast, but its role is named: a fused real-FFT kernel implements the TorchLean FNO step.</em>
+    <em>Lean composes the spectral layer and its reverse calculation; LibTorch supplies numerical primitives, and TorchLean owns the tape and saved buffers.</em>
   </a>
   <a href="{{ '/examples/verification/' | relative_url }}">
     <span>04</span>
@@ -125,13 +117,9 @@ TorchLean owns the pieces that should be typed, inspectable, or connected to ver
   </a>
 </div>
 
-That boundary matters. A plot can show that a prediction looks plausible. A Lean side artifact can
-say more precisely which grid was used, which expression was parsed, which interval was checked,
-and which command accepted or rejected the claim.
-
 ## Run The FNO Example
 
-Prepare a small Burgers split:
+First, let's prepare a small training and test split:
 
 ```bash
 python3 NN/Examples/Data/prepare_fno1d_burgers.py \
@@ -151,13 +139,13 @@ data/real/fno/burgers_meta.json
 Build TorchLean with CUDA support:
 
 ```bash
-lake -R -K cuda=true build
+scripts/lake.sh -Kcuda=true build
 ```
 
-Run the trainer:
+With the data ready, we can run the trainer:
 
 ```bash
-lake -R -K cuda=true exe torchlean fno1d_burgers \
+scripts/lake.sh -Kcuda=true exe torchlean fno1d_burgers \
   --device cuda \
   --steps 700 \
   --lr 0.003 \
@@ -168,7 +156,7 @@ lake -R -K cuda=true exe torchlean fno1d_burgers \
 For a short run that exercises the same path:
 
 ```bash
-lake -R -K cuda=true exe torchlean fno1d_burgers \
+scripts/lake.sh -Kcuda=true exe torchlean fno1d_burgers \
   --device cuda --steps 50 --log false
 ```
 
@@ -178,7 +166,7 @@ the default artifact paths, it also writes:
 - `trainlog.json`: train/test MSE history with run metadata;
 - `predictions.csv`: one held-out input, target final field, and predicted final field.
 
-Plot the prediction artifact:
+Let's plot the saved prediction beside its target:
 
 ```bash
 python3 NN/Examples/Data/plot_fno1d_burgers.py \
@@ -190,27 +178,42 @@ Source entrypoint:
 
 ## What To Look For
 
-A good run should show held-out MSE moving down together with training MSE. The compact one-block
-FNO keeps the pipeline readable while still using the real operator-learning path:
+Compare the training and held-out MSE in the loss log. A falling training loss alone does not tell
+you how well the operator predicts a new initial condition. Plot the prediction CSV to compare its
+predicted final field with the held-out target.
 
-- the dataset rows and grid resolution are explicit;
-- the model shape is fixed by the Lean configuration;
-- the CUDA path is named separately from the mathematical model;
-- the run emits scalar logs and field-level prediction artifacts;
-- those artifacts can be inspected outside the trainer.
+These measurements evaluate the trained FNO. The PINN checks below concern separate residual
+expressions and datasets; they do not certify this FNO training run.
 
-For larger scientific models, the neural network should not be a black box floating beside the proof.
-The data shape, runtime path, exported artifacts, and verification claim should line up.
+## Train a PINN in Lean
 
-Inspect both kinds of output. The loss log tells you whether the training run moved in the right
-direction. The prediction CSV tells you what the learned operator does on a held-out trajectory. The
-Lean verification commands tell you whether a much smaller, explicit artifact satisfies the residual,
-dataset, or certificate condition it claims to satisfy.
+Now let's train from an equation rather than simulated solution pairs. We'll solve $u''(x)=-2$
+on $[-1,1]$ with $u(-1)=u(1)=0$, using a tanh MLP. We train on five interior collocation points
+and the two boundary points, without using samples of the exact solution $1-x^2$ as targets.
+
+From the repository root:
+
+```bash
+scripts/lake.sh -Kcuda=false exe torchlean pinn 1
+```
+
+That is a one-step runtime check. Omit `1` for the example's 1,500-step training run. The count is
+a positional argument, not a `--steps` flag. The command prints the initial and final residual
+objective, intermediate losses every 50 steps, and predictions beside the exact solution.
+
+`autograd.model.derivative` computes coordinate derivatives; passing the same direction twice
+computes the second derivative used by the residual. `autograd.model.derivativeVjp` propagates
+the residual's cotangent through that derivative to the model parameters. The resulting gradient
+updates the same typed model state with `nn.sgdStep`.
+
+These sampled residuals and prediction comparisons are diagnostics, not a uniform PDE certificate.
+The complete example is
+[`NN.Examples.Models.Operators.Pinn`](https://github.com/lean-dojo/TorchLean/blob/main/NN/Examples/Models/Operators/Pinn.lean).
 
 ## PINN-Style Checks
 
-A PINN takes a different route. Instead of learning only the operator $u_0 \mapsto u(T)$, a
-physics-informed model represents a candidate solution $u_\theta(x,t)$ and checks the PDE residual:
+For the remaining checks, we'll return to Burgers' equation. Given a candidate solution
+$u_\theta(x,t)$, we can form its PDE residual:
 
 $$
   r_\theta(x,t)
@@ -222,17 +225,17 @@ $$
     \nu\,\partial_{xx}u_\theta(x,t).
 $$
 
-The TorchLean PINN files are written for verification. Python can produce compact weights, PDE
-descriptions, or dataset samples; Lean reloads those artifacts and checks the residual or dataset
-conditions through `NN.Verification.PINN`.
+The separate `NN.Verification.PINN` workflows check exported artifacts. Python can produce compact
+weights, PDE descriptions, or dataset samples; Lean reloads those artifacts and checks the residual
+or dataset conditions. This is independent of the native training example above.
 
-Run the small checked assets:
+Let's start with the small bundled examples:
 
 ```bash
 python3 scripts/verification/pinn/export_pinn_cert.py
-lake exe verify -- pinn-cert
-lake exe verify -- pinn-cli -- "u_t + u*u_x - 0.01*u_xx" 0.0 0.5 0.01
-lake exe verify -- pinn-dataset-check
+scripts/lake.sh exe verify -- pinn-cert
+scripts/lake.sh exe verify -- pinn-cli -- "u_t + u*u_x - 0.01*u_xx" 0.0 0.5 0.01
+scripts/lake.sh exe verify -- pinn-dataset-check
 ```
 
 For a Burgers-style training/export path on the Python side:
@@ -259,15 +262,10 @@ Read the outputs as three different forms of evidence:
 - `pinn-dataset-check` is a dataset containment diagnostic. It shows which samples are already
   covered by the exported intervals and which samples need tighter bounds or a different artifact.
 
-Together, these commands split the scientific run into claims Lean can name: the residual
-expression being bounded, the box or dataset being checked, and the exported certificate values being
-replayed. Larger scientific models should follow the same pattern: ambitious training runs can feed
-precise, checkable artifacts instead of relying on a plot or checkpoint alone.
-
 ## Related Sources
 
 - [`NN.Examples.Models.Operators.Fno1dBurgers`](https://github.com/lean-dojo/TorchLean/blob/main/NN/Examples/Models/Operators/Fno1dBurgers.lean)
-- [`NN.Runtime.Autograd.Engine.Cuda.Fno1dRfftFused`](https://github.com/lean-dojo/TorchLean/blob/main/NN/Runtime/Autograd/Engine/Cuda/Fno1dRfftFused.lean)
+- [`NN.API.Models.FNO`](https://github.com/lean-dojo/TorchLean/blob/main/NN/API/Models/FNO.lean)
 - [`NN.Verification.PINN`](https://github.com/lean-dojo/TorchLean/tree/main/NN/Verification/PINN)
 - [`NN.Verification.PINN.DatasetCheck`](https://github.com/lean-dojo/TorchLean/blob/main/NN/Verification/PINN/DatasetCheck.lean)
 - [`NN.Examples.Verification.PINN assets`](https://github.com/lean-dojo/TorchLean/tree/main/NN/Examples/Verification/PINN)

@@ -7,7 +7,6 @@ Authors: TorchLean Team
 module
 
 public import NN.Verification.Monotonicity.Json
-import Mathlib.Analysis.SpecialFunctions.Trigonometric.DerivHyp
 
 /-!
 # Exact monotonicity checker tests
@@ -15,13 +14,13 @@ import Mathlib.Analysis.SpecialFunctions.Trigonometric.DerivHyp
 Check acceptance and rejection of exact rational certificates at the JSON boundary.
 -/
 
-@[expose] public section
+public section
 
 namespace NN.Tests.MLTheory.Monotonicity
 
 open NN.Verification.Monotonicity
 
-def expect (name text : String) (expected : Bool) : IO Unit := do
+private def expect (name text : String) (expected : Bool) : IO Unit := do
   unless acceptsText text == expected do
     throw <| IO.userError s!"monotonicity: {name}: unexpected acceptance result"
 

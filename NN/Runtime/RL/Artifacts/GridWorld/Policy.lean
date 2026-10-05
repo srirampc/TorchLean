@@ -118,26 +118,14 @@ def ofJsonE (j : Json) : Except String PolicyDiff := do
 Write a `PolicyDiff` JSON file to disk (creating parent directories if needed).
 -/
 def writeJson (path : System.FilePath) (p : PolicyDiff) (pretty : Bool := true) : IO Unit := do
-  match validateE p with
-  | .error e => throw <| IO.userError e
-  | .ok () =>
-      match path.parent with
-      | some parent => IO.FS.createDirAll parent
-      | none => pure ()
-      let j := toJson p
-      let s := if pretty then Json.pretty j else Json.compress j
-      IO.FS.writeFile path (s ++ "\n")
+  IO.ofExcept (validateE p)
+  Runtime.Training.JsonCodec.Internal.writeFile path toJson p pretty
 
 /-- Read a `PolicyDiff` from a JSON file. -/
 def readJson (path : System.FilePath) : IO PolicyDiff := do
-  let s ← IO.FS.readFile path
-  let j ←
-    match Json.parse s with
-    | .ok j => pure j
-    | .error e => throw <| IO.userError s!"GridWorld policy artifact: parse error: {e}"
-  match ofJsonE j with
-  | .ok p => pure p
-  | .error e => throw <| IO.userError e
+  let j ← Runtime.Training.JsonCodec.Internal.readFile path
+    "GridWorld policy artifact: parse error: "
+  IO.ofExcept (ofJsonE j)
 
 end PolicyDiff
 

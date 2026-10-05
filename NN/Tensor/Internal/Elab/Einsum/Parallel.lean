@@ -62,11 +62,12 @@ theorem parallelBuffer_eq_foldl
 
 /--
 Folding one contiguous range of the outer axis constructs the corresponding
-contiguous range of the full row-major output.
+contiguous range of the full row-major output, independently of the reserved
+buffer capacity.
 -/
 theorem coordinateFoldl_push_outerRange_eq_array_ofFn
     {α : Type u} [storage : Storage α]
-    (outer start count : Nat) (shape : Shape)
+    (outer start count : Nat) (shape : Shape) (capacity : Nat)
     (hRange : start + count ≤ outer)
     (values : Fin (Shape.size (outer :: shape)) → α) :
     storage.toArray (coordinateFoldl (count :: shape)
@@ -76,7 +77,7 @@ theorem coordinateFoldl_push_outerRange_eq_array_ofFn
               Coord.linearize (s := outer :: shape)
                 ((⟨start + coordinate.1, by omega⟩ : Fin outer),
                   coordinate.2))
-        (storage.emptyWithCapacity (count * Shape.size shape))) =
+        (storage.emptyWithCapacity capacity)) =
       Array.ofFn
         (flatRange (Shape.size (outer :: shape))
           (start * Shape.size shape) (count * Shape.size shape)
@@ -96,10 +97,8 @@ theorem coordinateFoldl_push_outerRange_eq_array_ofFn
             coordinate.2)
   calc
     _ = Array.ofFn localValues := by
-      simpa only [localValues, Coord.unlinearize_linearize,
-        Shape.size_cons] using
-        coordinateFoldl_storagePush_linearized_toArray_eq_array_ofFn
-          (count :: shape) localValues
+      rw [coordinateFoldl_eq_fin_foldl]
+      exact Storage.toArray_finFoldl_push_eq_array_ofFn capacity localValues
     _ = _ := by
       apply congrArg Array.ofFn
       funext index

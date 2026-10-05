@@ -145,17 +145,12 @@ def Layer.residual {s : Spec.Shape} (inner : Sequential s s) : Layer s s :=
           (ss := stateShapes ++ [s])
           (β := m (TorchLean.Runtime.ValueRef (m := m) (α := α) s))
           (fun arguments => do
-            let (_state, input) :=
+            let (state, input) :=
               Runtime.Autograd.Torch.RefList.splitLast
                 (Ref := fun sh => TorchLean.Runtime.ValueRef (m := m) (α := α) sh)
                 (ss := stateShapes) (τ := s) arguments
             let output ←
-              Runtime.Autograd.Torch.CurriedRef.uncurry
-                (Ref := fun sh => TorchLean.Runtime.ValueRef (m := m) (α := α) sh)
-                (ss := stateShapes ++ [s])
-                (β := m (TorchLean.Runtime.ValueRef (m := m) (α := α) s))
-                (Runtime.Autograd.Model.Layers.Seq.forward inner (mode := mode) (α := α))
-                arguments
+              Runtime.Autograd.Model.Layers.Seq.forwardState inner mode state input
             Runtime.Autograd.Torch.add (m := m) (α := α) (s := s) output input)
   }
 
@@ -252,19 +247,9 @@ def Layer.combineBranches {σ τ₁ τ₂ υ : Spec.Shape} (kind : String)
                 (Ref := fun sh => TorchLean.Runtime.ValueRef (m := m) (α := α) sh)
                 (ss₁ := firstStateShapes) (ss₂ := secondStateShapes) state
             let firstOutput ←
-              Runtime.Autograd.Torch.CurriedRef.uncurry
-                (Ref := fun sh => TorchLean.Runtime.ValueRef (m := m) (α := α) sh)
-                (ss := firstStateShapes ++ [σ])
-                (β := m (TorchLean.Runtime.ValueRef (m := m) (α := α) τ₁))
-                (Runtime.Autograd.Model.Layers.Seq.forward f (mode := mode) (α := α))
-                (Runtime.Autograd.Torch.RefList.append firstState (.cons input .nil))
+              Runtime.Autograd.Model.Layers.Seq.forwardState f mode firstState input
             let secondOutput ←
-              Runtime.Autograd.Torch.CurriedRef.uncurry
-                (Ref := fun sh => TorchLean.Runtime.ValueRef (m := m) (α := α) sh)
-                (ss := secondStateShapes ++ [σ])
-                (β := m (TorchLean.Runtime.ValueRef (m := m) (α := α) τ₂))
-                (Runtime.Autograd.Model.Layers.Seq.forward g (mode := mode) (α := α))
-                (Runtime.Autograd.Torch.RefList.append secondState (.cons input .nil))
+              Runtime.Autograd.Model.Layers.Seq.forwardState g mode secondState input
             combine firstOutput secondOutput)
   }
 
@@ -305,7 +290,7 @@ def Layer.concatBranches {σ s : Spec.Shape} {n m : Nat}
     (f : Sequential σ (s.prependDim n)) (g : Sequential σ (s.prependDim m)) :
     Layer σ (s.prependDim (n + m)) :=
   Layer.combineBranches "ConcatBranches" f g fun {α} _ _ {mRuntime} _ _ yF yG =>
-    Runtime.Autograd.Torch.concatLeadingAxis
+    Runtime.Autograd.Torch.concat
       (m := mRuntime) (α := α) (nDim := n) (mDim := m) (s := s) yF yG
 
 /--

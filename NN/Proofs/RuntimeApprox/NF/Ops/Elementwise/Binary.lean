@@ -34,14 +34,13 @@ variable {rnd : ℝ → ℤ} [ValidRndToNearest rnd]
 
 local notation "R" => NF β fexp rnd
 
-omit [ValidRndToNearest rnd] in
 /--
 `approxTensor` bound for elementwise addition (`addSpec`) over arbitrary tensor shapes.
 
-The output epsilon is computed as `linf_norm (add_bound_tensor epsx epsy xR yR)`, which combines the
+The output epsilon is computed as `linfNorm (addBoundTensor epsx epsy xR yR)`, which combines the
 input epsilons and one rounding-ULP term per element.
 -/
-theorem approxTensor_add_spec {s : Shape} [ValidRndToNearest rnd] :
+theorem approxTensor_add_spec {s : Shape} :
     ∀ {xS yS : SpecTensor s} {xR yR : Tensor R s} {epsx epsy : ℝ},
       approxTensor (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd)) xS xR epsx →
       approxTensor (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd)) yS yR epsy →
@@ -94,14 +93,13 @@ theorem approxTensor_sub_spec {s : Shape} :
             yR) hx hy))
   simpa [subSpec, subBoundTensor] using h
 
-omit [ValidRndToNearest rnd] in
 /--
 `approxTensor` bound for elementwise multiplication (`mulSpec`) over arbitrary tensor shapes.
 
 The scalar core is `approx_mul_nf`, lifted componentwise; the resulting bound is packaged as
 `mulBoundTensor` and reduced with `linfNorm`.
 -/
-theorem approxTensor_mul_spec {s : Shape} [ValidRndToNearest rnd] :
+theorem approxTensor_mul_spec {s : Shape} :
     ∀ {xS yS : SpecTensor s} {xR yR : Tensor R s} {epsx epsy : ℝ},
       approxTensor (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd)) xS xR epsx →
       approxTensor (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd)) yS yR epsy →
@@ -138,6 +136,7 @@ theorem approxTensor_square_spec {s : Shape} :
   have h := approxTensor_mul_spec
     (β := β) (fexp := fexp) (rnd := rnd) hx hx
   simpa only [squareSpec_eq_mulSpec] using h
+
 end NFBackend
 
 end

@@ -42,28 +42,23 @@ noncomputable def jet : {n : Nat} → (Fin n → E) → (E → ℝ) → E → Ne
     ⟨jet (Fin.init directions) f x,
       jet (Fin.init directions) (fun y => fderiv ℝ f y (directions (Fin.last n))) x⟩
 
-/-- All coefficients of the zero function vanish. -/
-theorem jet_zero {n : Nat} (directions : Fin n → E) (x : E) :
-    jet directions (fun _ => 0) x = 0 := by
-  induction n with
-  | zero => rfl
-  | succ n ih =>
-    change Dual.mk _ _ = Dual.mk 0 0
-    congr 1
-    · exact ih _
-    · simpa only [fderiv_const_apply, zero_apply] using ih (Fin.init directions)
-
 /-- Embedding a constant is valid at every order, not just for one forward pass. -/
 theorem jet_const {n : Nat} (directions : Fin n → E) (value : ℝ) (x : E) :
     jet directions (fun _ => value) x = Nested.ofPrimal n value := by
-  induction n with
+  induction n generalizing value with
   | zero => rfl
   | succ n ih =>
     change Dual.mk _ _ = Dual.mk _ 0
     congr 1
-    · exact ih _
-    · simpa only [fderiv_const_apply, zero_apply] using
-        jet_zero (Fin.init directions) x
+    · exact ih _ _
+    · -- The derivative of a constant is the zero function, whose jet is the embedded zero.
+      simpa only [fderiv_const_apply, zero_apply, Nested.ofPrimal_zero] using
+        ih (directions := Fin.init directions) (value := 0)
+
+/-- All coefficients of the zero function vanish. -/
+theorem jet_zero {n : Nat} (directions : Fin n → E) (x : E) :
+    jet directions (fun _ => 0) x = 0 := by
+  rw [jet_const, Nested.ofPrimal_zero]
 
 /-- A linear input coordinate has its value and supplied directions, and no higher coefficients. -/
 theorem jet_linear {n : Nat} (directions : Fin n → E) (f : E →L[ℝ] ℝ) (x : E) :
@@ -478,27 +473,6 @@ theorem jet_foldl_mul_at {n : Nat} {ι : Type*} (indices : List ι) (directions 
         (jet directions initial x) :=
   jet_foldl_at indices directions (· * ·) (· * ·) (by fun_prop)
     (fun _ _ hf hg => jet_mul_at directions hf hg) hinit hterm
-
-/-- A finite fold preserves jets when its update rule does, in the caller's traversal order. -/
-theorem jet_foldl {n : Nat} {ι : Type*} (indices : List ι) (directions : Fin n → E)
-    (step : ℝ → ℝ → ℝ) (lifted : Nested ℝ n → Nested ℝ n → Nested ℝ n)
-    (hstep : ContDiff ℝ n (fun p : ℝ × ℝ => step p.1 p.2))
-    (hjet : ∀ (f g : E → ℝ), ContDiff ℝ n f → ContDiff ℝ n g → ∀ x,
-      jet directions (fun y => step (f y) (g y)) x =
-        lifted (jet directions f x) (jet directions g x))
-    {initial : E → ℝ} {term : ι → E → ℝ} (hinit : ContDiff ℝ n initial)
-    (hterm : ∀ i ∈ indices, ContDiff ℝ n (term i)) (x : E) :
-    jet directions
-      (fun y => indices.foldl (fun acc i => step acc (term i y)) (initial y)) x =
-      indices.foldl (fun acc i => lifted acc (jet directions (term i) x))
-        (jet directions initial x) := by
-  induction indices generalizing initial with
-  | nil => rfl
-  | cons i indices ih =>
-      rw [List.foldl_cons]
-      rw [← hjet initial (term i) hinit (hterm i (by simp)) x]
-      exact ih (hstep.comp (hinit.prodMk (hterm i (by simp))))
-        (fun j hj => hterm j (by simp [hj]))
 
 /-- Ordered summation propagates all derivatives of its entries and initial accumulator. -/
 theorem jet_foldl_add {n : Nat} {ι : Type*} (indices : List ι) (directions : Fin n → E)

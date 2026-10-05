@@ -111,8 +111,8 @@ theorem dotList_zero_left [CommSemiring α] :
       TensorPack.dotList (α := α) (TorchLean.TensorPack.zero (α := α) (ss := ss)) v = 0
   | [], .nil => by simp [TensorPack.dotList, TorchLean.TensorPack.zero]
   | _ :: ss, .cons vh vt => by
-      simp [TensorPack.dotList, TorchLean.TensorPack.zero, dot_full_zero_left,
-        dotList_zero_left vt]
+      simpa [TensorPack.dotList, TorchLean.TensorPack.zero, dot_full_zero_left] using
+        dotList_zero_left vt
 
 /-- A context whose pairing with every context vanishes is the zero context. -/
 theorem eq_zero_of_forall_dotList_eq_zero [CommSemiring α] :
@@ -159,9 +159,9 @@ theorem getElem?_toShapeErasedArray_zero [Zero α] :
       simp [TorchLean.TensorPack.toShapeErasedArray, TorchLean.TensorPack.zero,
         -Spec.SomeTensor.ofTensor]
   | _ :: ss, j + 1 => by
-      simp [TorchLean.TensorPack.toShapeErasedArray, TorchLean.TensorPack.zero,
-        Array.getElem?_append, getElem?_toShapeErasedArray_zero (ss := ss) j,
-        -Spec.SomeTensor.ofTensor]
+      simpa [TorchLean.TensorPack.toShapeErasedArray, TorchLean.TensorPack.zero,
+        Array.getElem?_append, -Spec.SomeTensor.ofTensor] using
+        getElem?_toShapeErasedArray_zero (ss := ss) j
 
 /-- Every indexed contribution of the zero context is a zero tensor at a valid position. -/
 theorem mem_toIndexedShapeErasedArray_zero [Zero α] :
@@ -175,8 +175,8 @@ theorem mem_toIndexedShapeErasedArray_zero [Zero α] :
         TorchLean.TensorPack.zero] at hmem
   | s :: ss, start, pid, pg, hmem => by
       simp only [TorchLean.TensorPack.toIndexedShapeErasedArray,
-        TorchLean.TensorPack.zero, Array.mem_append, Array.mem_singleton,
-        Prod.mk.injEq] at hmem
+        TorchLean.TensorPack.zero, TorchLean.TensorPack.fill, Array.mem_append,
+        Array.mem_singleton, Prod.mk.injEq] at hmem
       rcases hmem with ⟨hpid, hpg⟩ | hmem
       · exact ⟨0, by simp, by simp [hpid], hpg⟩
       · obtain ⟨i, hi, hpid, hpg⟩ := mem_toIndexedShapeErasedArray_zero (ss := ss) (start + 1) hmem

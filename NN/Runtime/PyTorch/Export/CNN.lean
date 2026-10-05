@@ -7,7 +7,7 @@ Authors: TorchLean Team
 module
 
 public import NN.Runtime.PyTorch.Export.Core
-public import NN.Spec.Models.Cnn
+public import NN.Tensor.Conversion
 
 /-!
 # Convolutional PyTorch Reference Export
@@ -26,7 +26,6 @@ The generated model has two convolution, ReLU, and max-pool blocks followed by `
 open Spec TorchLean
 open TorchLean.Tensor
 open Spec.Module
-open Models
 open Export.PyTorch
 
 namespace Export.PyTorch.CNN
@@ -74,12 +73,6 @@ structure Config (spatialRank : Nat) where
   /-- Output width of the linear head. -/
   outputWidth : Nat
 
-/-- Render a tensor shape as a Python tuple. -/
-def dimensionsToPythonTuple (shape : Shape) : String :=
-  let dimensions := shape.toList
-  "(" ++ ", ".intercalate (dimensions.map toString) ++
-    (if dimensions.length = 1 then "," else "") ++ ")"
-
 /-- Select the rank-specific class name required by PyTorch's public API. -/
 def spatialClassName (base : String) (spatialRank : Nat) : Except String String :=
   match spatialRank with
@@ -95,9 +88,9 @@ def classSource {spatialRank : Nat}
   let poolClass ← spatialClassName "MaxPool" spatialRank
   let className := config.className
   let tuple := fun (dimensions : TorchLean.Tensor Nat [spatialRank]) =>
-    dimensionsToPythonTuple (dimensions.to Shape)
+    shapeToPyTupleString (dimensions.to Shape)
   let inputShape :=
-    dimensionsToPythonTuple <|
+    shapeToPyTupleString <|
       (config.inputSpatial.to Shape).prependDim config.inputChannels
   pure <| joinLines <|
     #[generatePyTorchImports, ""] ++
@@ -172,7 +165,7 @@ def withParameters {spatialRank : Nat} (config : Config spatialRank)
     (classifierWeight classifierBias : String) : Except String String := do
   let classCode ← classSource config
   let batchInputShape :=
-    dimensionsToPythonTuple <|
+    shapeToPyTupleString <|
       ((config.inputSpatial.to Shape).prependDim config.inputChannels).prependDim 1
   pure <| joinLines #[
     classCode,

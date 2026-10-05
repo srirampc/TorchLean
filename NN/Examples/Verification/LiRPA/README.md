@@ -13,7 +13,7 @@ The bundled artifacts cover several graph shapes:
 - `gru_gate_cert.json` from `scripts/verification/lirpa/export_gru_cert.py`
 - `transformer_encoder_cert.json` from `scripts/verification/lirpa/export_crown_cert.py`
 
-Start with `lake exe verify -- lirpa-mlp`. No Python producer needs to run first: the JSON
+Start with `scripts/lake.sh exe verify -- lirpa-mlp`. No Python producer needs to run first: the JSON
 fixtures are already bundled. The checker reconstructs the supported network fragment and compares
 its propagated bounds with the reported result. A mismatch raises an error.
 
@@ -32,9 +32,9 @@ This invokes the external producers and can replace the checked-in fixture files
 Or run a single checker through the unified verifier:
 
 ```bash
-lake exe verify -- lirpa-mlp
-lake exe verify -- lirpa-cnn
-lake exe verify -- lirpa-attention
-lake exe verify -- lirpa-gru
-lake exe verify -- lirpa-encoder
+scripts/lake.sh exe verify -- lirpa-mlp
+scripts/lake.sh exe verify -- lirpa-cnn
+scripts/lake.sh exe verify -- lirpa-attention
+scripts/lake.sh exe verify -- lirpa-gru
+scripts/lake.sh exe verify -- lirpa-encoder
 ```

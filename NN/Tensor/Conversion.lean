@@ -305,14 +305,8 @@ theorem prod_eq_to_list_prod {α : Type}
     [TorchLean.Storage α] [Monoid α]
     {n : Nat} (tensor : Tensor α [n]) :
     tensor.prod = (Tensor.to tensor (List α)).prod := by
-  have foldl_mul (values : List α) (accumulator : α) :
-      values.foldl (· * ·) accumulator = accumulator * values.prod := by
-    induction values generalizing accumulator with
-    | nil => simp
-    | cons value values inductionHypothesis =>
-        simp [inductionHypothesis, mul_assoc]
   rw [Tensor.prod, TorchLean.Tensor.Internal.Rep.foldl_eq_data_foldl,
-    ← Array.foldl_toList, foldl_mul, one_mul]
+    ← Array.foldl_toList, ← List.prod_eq_foldl]
   rfl
 
 /-- Converting a natural-number vector to a shape preserves its product as the shape size. -/

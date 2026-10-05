@@ -5,8 +5,8 @@ Authors: TorchLean Team
 
 Device-agnostic real-data example:
   python3 scripts/datasets/download_example_data.py --auto-mpg
-  lake exe torchlean mlp --device cpu
-  lake -R -K cuda=true exe torchlean mlp --device cuda
+  scripts/lake.sh exe torchlean mlp --device cpu
+  scripts/lake.sh -Kcuda=true exe torchlean mlp --device cuda
 -/
 
 module
@@ -26,7 +26,7 @@ Prepare the CSV once:
 
 ```bash
 python3 scripts/datasets/download_example_data.py --auto-mpg
-lake exe torchlean mlp --device cpu --steps 1
+scripts/lake.sh exe torchlean mlp --device cpu --steps 1
 ```
 
 The downloader writes normalized columns `x1..x7,y`. If you want to try your own tabular regression
@@ -81,28 +81,28 @@ def data (path : System.FilePath) (seed : Nat) :
     (shuffle := true) (seed := seed)
 
 /-- Train the Auto MPG MLP with the public `Trainer` surface. -/
-def train (runtime : Runtime.Config) (flags : Support.CsvTrainFlags) :
+def train (runtime : Runtime.Config) (flags : Support.Training.Options Support.Csv.Options) :
     IO (Trainer.Result input output) := do
-  Data.requireFile exeName "CSV dataset" flags.csvPath RealData.missingAutoMpgHint
+  Data.requireFile exeName "CSV dataset" flags.data.path RealData.missingAutoMpgHint
   let trainer :=
     Trainer.new model <|
       Trainer.RunConfig.forObjective
         (Trainer.RunConfig.fromRuntime runtime
           { optimizer := optim.adam { learningRate := flags.training.learningRate } })
-        .meanSquaredError
-        (seed := flags.seed)
+        .mse
+        (seed := flags.data.seed)
   trainer.train
-    (data flags.csvPath flags.seed)
+    (data flags.data.path flags.data.seed)
     (flags.training.trainOptions
       (logTitle := "MLP tabular training")
-      (logNotes := #[s!"dataset={flags.csvPath}", s!"lr={flags.training.learningRate}",
+      (logNotes := #[s!"dataset={flags.data.path}", s!"lr={flags.training.learningRate}",
         s!"steps={flags.training.steps}", s!"batch={batchSize}"]))
 
 /-- CLI entrypoint for Auto MPG regression on CPU or CUDA. -/
 def main (args : List String) : IO UInt32 :=
-  TrainCommand.regressionCsv exeName args
+  TrainCommand.csv exeName args
     NN.Examples.Data.RealPaths.autoMpgCsv defaultLogPath 1 1e-3
-    (Support.bannerWithDevice exeName "Auto MPG MLP regression")
-    train
+    (Support.banner exeName "Auto MPG MLP regression")
+    train (fun result => result.printSummary)
 
 end NN.Examples.Models.Supervised.Mlp

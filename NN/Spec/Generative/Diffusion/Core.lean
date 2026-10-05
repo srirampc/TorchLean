@@ -15,8 +15,8 @@ public import NN.Spec.Core.Tensor.Core
 This module defines the common vocabulary used by TorchLean's diffusion / flow specs:
 
 - `EpsModel`: an $\varepsilon_\theta(x,t)$ denoiser interface (noise prediction), and
-- a couple of **total** scalar helpers (`sqrtNonneg`, `safeDiv`) that keep specs robust across
-  scalar backends.
+- scalar helpers (`sqrtNonneg`, `safeDiv`) with explicit clamping and epsilon-shift formulas.
+  Total scalar operations can still return nonfinite values on floating-point backends.
 
 Design notes:
 
@@ -42,7 +42,7 @@ open TorchLean TorchLean.Tensor
 
 variable {α : Type} [TorchLean.Storage α] [Context α]
 
-/-- A safe square root used by diffusion schedules and samplers:
+/-- A clamped square root used by diffusion schedules and samplers:
 $\sqrt{\max(x,0)}$.
 
 Why this helper exists:
@@ -51,12 +51,13 @@ Why this helper exists:
   (e.g. $\bar\alpha(t)$ and $1-\bar\alpha(t)$), but numeric backends can still produce small
   negative values.
 -/
-def sqrtNonneg (x : α) : α :=
+def sqrtNonneg {α : Type} [Zero α] [Max α] [MathFunctions α] (x : α) : α :=
   MathFunctions.sqrt (Max.max x 0)
 
-/-- Safe scalar division with epsilon protection: $x/(y+\varepsilon)$.
+/-- Epsilon-shifted scalar division: $x/(y+\varepsilon)$.
 
-This is primarily used to avoid $1/0$ in edge cases like $t=0$ or degenerate schedules.
+The shift regularizes small denominators in schedules and samplers. `Context` imposes no
+nonzero-denominator law, so the shifted denominator can still be zero.
 -/
 def safeDiv (x y : α) : α :=
   x / (y + Context.defaultEpsilon)
@@ -73,7 +74,7 @@ Notes:
   closing over extra context in the `eps` function, or by defining a richer model record in user
   code.
 -/
-structure EpsModel (α : Type) (s : Shape) [TorchLean.Storage α] [Context α] where
+structure EpsModel (α : Type) (s : Shape) [TorchLean.Storage α] where
   /-- Predict $\varepsilon$ from a noisy sample $x$ at scalar time $t$. -/
   eps : Tensor α s → α → Tensor α s
 

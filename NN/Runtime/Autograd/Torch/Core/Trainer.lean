@@ -37,16 +37,14 @@ def scalarTrainer {α δ : Type} [TorchLean.Storage α] [TorchLean.Storage δ]
     (validateDataInputs : TorchLean.TensorPack δ dataInputShapes → Except String Unit :=
       fun _ => pure ())
     (loss : ScalarLoss α δ paramShapes inputShapes dataInputShapes) :
-    Curried.Fn α paramShapes
+    Curried.Function α paramShapes
       (IO (ScalarTrainer α δ paramShapes inputShapes dataInputShapes)) :=
     Curried.curry (α := α) (ss := paramShapes)
       (β := IO (ScalarTrainer α δ paramShapes inputShapes dataInputShapes))
     (fun initParams => do
       let parameters ← ParamList.ofPackWithRequiresGrad (α := α) initParams initRequiresGrad
       let validateDataInputsIO (inputs : TorchLean.TensorPack δ dataInputShapes) : IO Unit :=
-        match validateDataInputs inputs with
-        | .error message => throw <| IO.userError message
-        | .ok () => pure ()
+        okOrThrow (validateDataInputs inputs)
       match options.execution with
       | .typedGraph => Internal.graphScalarTrainer options parameters validateDataInputsIO loss
       | .eager => Internal.eagerScalarTrainer options parameters validateDataInputsIO loss)

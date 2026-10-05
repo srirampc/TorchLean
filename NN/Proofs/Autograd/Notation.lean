@@ -8,7 +8,6 @@ module
 
 public import Mathlib.Analysis.InnerProductSpace.Adjoint
 public import Mathlib.Analysis.Calculus.FDeriv.Defs
-import Mathlib.Tactic.Positivity.Finset
 
 /-!
 # Notation for analytic (Fréchet) derivatives in TorchLean autograd proofs
@@ -35,7 +34,7 @@ open scoped InnerProduct
 
 noncomputable section
 
-variable {E F : Type}
+variable {E F : Type*}
 variable [NormedAddCommGroup E] [InnerProductSpace ℝ E] [CompleteSpace E]
 variable [NormedAddCommGroup F] [InnerProductSpace ℝ F] [CompleteSpace F]
 
@@ -46,7 +45,7 @@ The **vector-Jacobian product** operator (VJP) of `f` at `x`.
 
 When `f` is a scalar loss (`F = ℝ`), the gradient is `VJP[f, x] 1` (equivalently `∇ f x`).
 -/
-noncomputable abbrev vjp (f : E → F) (x : E) : F →L[ℝ] E :=
+abbrev vjp (f : E → F) (x : E) : F →L[ℝ] E :=
   (fderiv ℝ f x)†
 
 @[inherit_doc Proofs.Autograd.vjp]

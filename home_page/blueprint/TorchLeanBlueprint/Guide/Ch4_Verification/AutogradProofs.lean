@@ -81,7 +81,7 @@ The autograd quickstart gives two instances of the gradient we want to character
 ```terminal
 # Print tensor and model gradients for the losses discussed
 # below.
-lake exe torchlean quickstart_autograd
+scripts/lake.sh exe torchlean quickstart_autograd
 ```
 
 which prints
@@ -200,7 +200,7 @@ certificate explains why each of the two contributions was correct in the first 
 The central algebraic file is
 {src "NN/Proofs/Autograd/Tape/Algebra/Soundness.lean"}[NN.Proofs.Autograd.Tape.Algebra.Soundness
 API]. It defines the small tape language used by the rest of the autograd proofs, together with the
-local proof data carried by each node.
+local proof data carried by each node. It uses the shared `TensorPack` and `Idx` types.
 
 The objects to track are:
 
@@ -390,11 +390,10 @@ each node may read a non-differentiable environment. Those are useful abstractio
 two results side by side would not prove that the lowered tape computes the Fréchet derivative.
 
 {src "NN/Proofs/Autograd/Runtime/Link/FDeriv.lean"}[NN.Proofs.Autograd.Runtime.Link.FDeriv]
-closes that gap. At scalar type `Real` , fixing the algebraic environment converts nodes to analytic
-nodes;
-the reverse conversion uses the fixed environment through the bridge. Both node and graph
-conversions round-trip, and evaluation, JVP, and
-reverse accumulation commute with the conversion.
+closes that gap. At scalar type `Real`, fixing the algebraic environment converts nodes to analytic
+nodes. Conversely, an analytic graph embeds as an algebraic graph with environment `Unit`.
+The conversions round-trip on that trivial-environment slice; evaluation, JVP, and reverse
+accumulation commute with specialization.
 
 The algebraic reverse pass returns cotangents for the inputs and every intermediate value. The
 analytic theorem needs only the input cotangent. `TensorPack.takeLeft` selects that input prefix,
@@ -618,8 +617,9 @@ Those two theorems are about the analytic vector functions. The specification la
 `Activation.softmaxSpec` on tensors in the numerically stable max-shifted form, so a third file,
 `NN.Proofs.Autograd.FDeriv.SoftmaxSpec`, closes the gap: `hasFDerivAt_softmaxSpec_vec` transfers
 differentiability to the spec kernel, and `softmaxBackwardSpec_eq_vjp` proves that the spec
-backward rule is the vector-Jacobian product of the spec forward map. Log-softmax has the same
-pair. Without that bridge, a theorem about `softmaxVec` would say nothing about the kernel the
+backward rule is the vector-Jacobian product of the spec forward map. Log-softmax has the analogous
+pair, with its backward kernel applied to the saved log-softmax output rather than the input.
+Without that bridge, a theorem about `softmaxVec` would say nothing about the kernel the
 runtime lowers.
 
 ```lean (name := agSpecBridge)
@@ -876,7 +876,7 @@ $$`\nabla_\theta L(\theta)
 \left(D_\theta f_\theta(x)\right)^{\!*}\nabla_y \ell(y,t).`
 
 For the last layer, the statement is clean. For the hidden ReLU layer, the theorem carries
-hypotheses such as "the value before activation is nonzero" at the coordinates being differentiated.
+hypotheses such as "the value before activation is nonzero" at every hidden coordinate.
 Runtime systems usually leave that condition implicit. PyTorch chooses a subgradient convention at
 zero; TorchLean's real analysis statement names the differentiability condition instead.
 
@@ -931,13 +931,19 @@ it.
 
 For attention, meaning the scaled dot-product form of {Informal.citet transformer2017}[], the named
 theorem
-`backprop_eq_adjoint_fderiv_scaledDotProduct` states the desired attention theorem directly: the
-graph reverse pass for scaled dot product attention agrees with the adjoint derivative of the
-forward attention map. The theorem `backprop_eq_adjoint_fderiv_maskedScaledDotProduct` uses a fixed
+`backprop_eq_adjoint_fderiv_scaledDotProduct` identifies the graph reverse pass with the adjoint
+derivative of the graph's full forward evaluation. The spec bridge above restricts the seed to the
+output block and identifies that map with `Spec.scaledDotProductAttention`. The theorem
+`backprop_eq_adjoint_fderiv_maskedScaledDotProduct` uses a fixed
 finite additive
 score bias. It does not prove the boolean hard-mask runtime correct; that transfer needs a separate
-hard-mask theorem, including its fully blocked-row convention. Multi-head attention and residual
-attention then package that structure at a wider interface.
+hard-mask theorem, including its fully blocked-row convention. The multi-head graph in
+`Proofs.Autograd.DirectReshapeAttention` uses a direct reshape from
+`[n, numHeads * headDim]` to `[numHeads, n, headDim]`. The executable specification instead
+reshapes to `[n, numHeads, headDim]` and permutes the token and head axes. These layouts differ
+in general. The multi-head and dependent residual-attention graph theorems therefore characterize
+the declared proof graph; they do not establish its equality with the executable multi-head
+attention function.
 
 For Transformer post-norm blocks, the post-norm API contains several theorem layers:
 

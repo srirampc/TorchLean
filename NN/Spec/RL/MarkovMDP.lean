@@ -60,17 +60,19 @@ namespace Markov
 
 open MeasureTheory ProbabilityTheory
 
-variable {S A : Type} [MeasurableSpace S] [MeasurableSpace A]
+universe u v
+
+variable {S : Type u} {A : Type v} [MeasurableSpace S] [MeasurableSpace A]
 
 /-- Value function over an arbitrary measurable state space. -/
-abbrev ValueFunction (S : Type) : Type := S → ℝ
+abbrev ValueFunction (S : Type u) : Type u := S → ℝ
 
 /-- Deterministic policy (measurability assumptions live in proofs, not in the raw definition). -/
-abbrev Policy (S A : Type) : Type := S → A
+abbrev Policy (S : Type u) (A : Type v) : Type (max u v) := S → A
 
 /-- Discounted MDP specified by a Markov kernel $P(\mathord{\cdot}\mid s,a)$ plus
 reward/termination metadata. -/
-structure MDP (S A : Type) [MeasurableSpace S] [MeasurableSpace A] where
+structure MDP (S : Type u) (A : Type v) [MeasurableSpace S] [MeasurableSpace A] where
   /-- Canonical reset state. -/
   initialState : S
   /-- Transition kernel: $P(\mathord{\cdot}\mid s,a)$ as a measure on next states. -/

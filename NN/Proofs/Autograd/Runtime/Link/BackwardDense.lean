@@ -286,11 +286,18 @@ theorem addGradAll_zeroCotangent [AddZeroClass α] {t : Tape α} {grads : Array 
   by_cases hreq : pnode.requiresGrad = false
   · simp [hreq]
   · have hreq' : pnode.requiresGrad = true := by simpa using hreq
-    simp only [hreq', Bool.true_eq_false, ite_false, hex, dite_eq_left hexs, dite_eq_left hid]
-    rw [dite_eq_left (shape_zeroCotangent pnode), Spec.SomeTensor.ofTensor_cast,
-      Spec.SomeTensor.ofTensor_cast, someTensor_add_zeroCotangent_right pnode existing hexs]
-    show Except.ok (grads.set pid existing hid) = Except.ok grads
-    rw [hset]
+    simp only [hreq', Bool.true_eq_false, ite_false,
+      dite_eq_left (shape_zeroCotangent pnode), Spec.SomeTensor.ofTensor_cast]
+    split
+    · rename_i hget
+      simp [hex] at hget
+    · rename_i value hget
+      have hvalue : value = existing := Option.some.inj (hget.symm.trans hex)
+      subst value
+      simp only [dite_eq_left hexs,
+        someTensor_add_zeroCotangent_right pnode existing hexs]
+      show Except.ok (grads.set pid existing hid) = Except.ok grads
+      rw [hset]
 
 /-- Folding zero contributions through `addGradAll` is the identity on a well-formed accumulator. -/
 theorem foldlM_addGradAll_zero [AddZeroClass α] {t : Tape α} {grads : Array (Spec.SomeTensor α)}
@@ -376,27 +383,50 @@ theorem addGradDense_map_totalizeGrads [AddZeroClass α] {t : Tape α}
       · simp only [dite_eq_left hg]
         have hid : pid < grads.size := hok.size_eq ▸ getNode?_lt_size hnode
         have hidt : pid < t.nodes.size := getNode?_lt_size hnode
-        have hidTot : pid < (totalizeGrads t grads).size := by simpa using hidt
         simp only [dite_eq_left hid]
         cases hcur : grads[pid]'hid with
         | none =>
           have hcur? : grads[pid]? = some none := by rw [Array.getElem?_eq_getElem hid, hcur]
-          rw [getElem?_totalizeGrads_of_none hnode hcur?]
-          simp only [Spec.SomeTensor.ofTensor_cast, dite_eq_left hidTot, Except.map,
-            totalizeGrads_set t grads pid g hid hidt, dite_eq_left (shape_zeroCotangent node),
-            someTensor_add_zeroCotangent_left node g hg]
+          have htotal := getElem?_totalizeGrads_of_none hnode hcur?
+          simp only [Spec.SomeTensor.ofTensor_cast, Except.map,
+            totalizeGrads_set t grads pid g hid hidt]
+          split
+          · rename_i hget
+            simp [htotal] at hget
+          · rename_i existing hget
+            have heq : existing = zeroCotangent node :=
+              Option.some.inj (hget.symm.trans htotal)
+            subst existing
+            simp only [dite_eq_left (shape_zeroCotangent node),
+              someTensor_add_zeroCotangent_left node g hg]
         | some existing =>
           have hcur? : grads[pid]? = some (some existing) := by
             rw [Array.getElem?_eq_getElem hid, hcur]
           obtain ⟨node', hnode', hexs⟩ := hok.shape pid existing hcur?
           rw [hnode] at hnode'
           cases hnode'
-          rw [getElem?_totalizeGrads_of_some hnode hcur?]
-          simp only [dite_eq_left hexs, Spec.SomeTensor.ofTensor_cast, dite_eq_left hidTot]
-          cases Runtime.Autograd.SomeTensor.add existing g with
-          | error e => rfl
+          have htotal := getElem?_totalizeGrads_of_some hnode hcur?
+          simp only [Spec.SomeTensor.ofTensor_cast]
+          cases hadd : Runtime.Autograd.SomeTensor.add existing g with
+          | error e =>
+            simp only [Except.map]
+            split
+            · rename_i hget
+              simp [htotal] at hget
+            · rename_i value hget
+              have heq : value = existing := Option.some.inj (hget.symm.trans htotal)
+              subst value
+              simp only [dite_eq_left hexs, hadd]
           | ok summed =>
             simp only [Except.map, totalizeGrads_set t grads pid summed hid hidt]
+            split
+            · rename_i hget
+              simp [htotal] at hget
+            · rename_i value hget
+              have heq : value = existing := Option.some.inj (hget.symm.trans htotal)
+              subst value
+              simp only [dite_eq_left hexs, hadd]
+
       · simp [hg, Except.map]
 
 /-! ### Folding contributions -/
@@ -461,26 +491,7 @@ theorem foldlM_addGradDense_map_totalizeGrads [AddZeroClass α] {t : Tape α}
 
 /-! ### One node: the executed step simulates the proved step -/
 
-/--
-The per-node step of `Tape.backwardDense`, written out as a function.
-
-`backwardDense` folds this step over node ids in reverse order (`backwardDense_eq_foldlM`).
-Unreached nodes (`acc[id] = some none`) are skipped without running their VJP.
--/
-def backwardDenseStep [Add α] (t : Tape α) (acc : Array (Option (Spec.SomeTensor α)))
-    (id : Nat) : Result (Array (Option (Spec.SomeTensor α))) := do
-  match acc[id]? with
-  | none => throw "autograd: internal error (gradient array out of bounds)"
-  | some none => pure acc
-  | some (some dLdy) =>
-    let node ← match t.getNode? id with
-      | some n => pure n
-      | none => throw "autograd: internal error (node missing)"
-    if node.requiresGrad = false then
-      pure acc
-    else
-      let contribs ← node.backward dLdy
-      contribs.foldlM (fun acc2 (pid, pg) => Tape.addGradDense (t := t) acc2 pid pg) acc
+open Runtime.Autograd.Tape (backwardDenseStep)
 
 /-- The executed step preserves the optional accumulator invariant. -/
 theorem backwardDenseStep_optGradsOk [Add α] {t : Tape α}
@@ -641,7 +652,6 @@ theorem backwardDense_eq_foldlM [Add α] {t : Tape α} {outId : Nat}
   simp only [Tape.backwardDense, hout, Bind.bind, Except.bind, Pure.pure, Except.pure, throw,
     throwThe, MonadExceptOf.throw, dite_eq_left hseed, Array.size_replicate, dite_eq_left hlt,
     Spec.SomeTensor.ofTensor_cast]
-  rfl
 
 /--
 **Executed backward pass = proved backward pass.** On a zero-preserving tape, the totalized

@@ -22,9 +22,10 @@ Runtime commands may choose native binary32, reference IEEE binary32, or complex
 `Arithmetic` records that semantic choice. `FromFloat` supplies conversion from Lean binary64
 `Float` literals and scalar-specific rounding for parameter validation.
 
-The generic runtime dispatcher supports all three modes. The public supervised trainer accepts the
-two real modes. Explicit complex training uses `autograd.complex.grad` for a real objective and
-`nn.sgdStep` on complex state; its predictions and `Checkpoint.State` retain both components.
+The generic runtime dispatcher supports all three modes. The runtime-selected `trainer.open` and
+`trainer.train` paths accept the two real modes; `trainer.openTyped` chooses its scalar directly on
+CPU. Explicit complex training uses `autograd.complex.grad` for a real objective and `nn.sgdStep` on
+complex state; its predictions and `Checkpoint.State` retain both components.
 
 Model definitions remain polymorphic over the existing `Context α` interface. The arithmetic choice
 does not replace that mathematical interface; it selects a concrete executable element
@@ -39,6 +40,7 @@ namespace TorchLean
 namespace Runtime
 
 open FloatLib.Floats
+open FloatLib.Floats.Formats.BinaryInterchange
 
 /--
 Conversion from Lean `Float` constants into a selected runtime arithmetic representation.
@@ -59,6 +61,29 @@ class FromFloat (α : Type) where
 def ofFloat {α : Type} [FromFloat α] (x : Float) : α :=
   FromFloat.ofFloat x
 
+/--
+Convert a binary64 value toward `-∞` (`up = false`) or `+∞` (`up = true`).
+
+This requires `roundForValidation` to report the converted scalar's value faithfully in binary64,
+as it does for the native and configured binary32 instances. Move the source away from `x` until
+its conversion lands on the requested side, falling back to that side's infinity after 64 attempts.
+Custom instances whose validation hook is only the default identity do not supply this guarantee.
+-/
+def ofFloatDirected {α : Type} [FromFloat α] (up : Bool) (x : Float) : α :=
+  Id.run do
+    let rounded (candidate : Float) := FromFloat.roundForValidation (α := α) candidate
+    let onSide (candidate : Float) :=
+      if up then x ≤ rounded candidate else rounded candidate ≤ x
+    if onSide x then
+      return ofFloat x
+    let mut gap := if up then x - rounded x else rounded x - x
+    for _ in [0:64] do
+      let candidate := if up then x + gap else x - gap
+      if onSide candidate then
+        return ofFloat candidate
+      gap := gap + gap
+    return ofFloat (if up then (1.0 / 0.0) else -(1.0 / 0.0))
+
 /-- `Float` values inject into the same type by identity. -/
 instance : FromFloat Float where
   ofFloat := id
@@ -72,6 +97,25 @@ instance : FromFloat Float32 where
 instance : FromFloat (ExecFloat.Binary (exponentBits := 8) (fractionBits := 23)) where
   ofFloat x := ExecFloat.Binary.ofFloat32 x.toFloat32
   roundForValidation x := x.toFloat32.toFloat
+
+/--
+Round the exact binary64 source value once into any configured binary format.
+
+The binary32 specialization above retains its native conversion path. Validation converts the
+rounded destination value back to binary64, exposing overflow, underflow, and domain changes.
+Explicit scalar-valued tensors and state do not use this conversion.
+-/
+instance (priority := 100) configuredBinaryFromFloat
+    {format : FloatFormat} {plan : Configured.StoragePlan format} {code : Type}
+    [ExecFloat.ModelCodec plan (Model format) code] :
+    FromFloat (ExecFloat (Configured.Family format code plan)) :=
+  let convert : Float → ExecFloat (Configured.Family format code plan) := fun value =>
+    ExecFloat.Binary.ofModel
+      (Model.cast _ format (ExecFloat.Binary.toModel (ExecFloat.Binary.ofFloat value)))
+  { ofFloat := convert
+    roundForValidation value :=
+      ExecFloat.Binary.toFloat (ExecFloat.Binary.ofModel
+        (Model.cast format _ (ExecFloat.Binary.toModel (convert value)))) }
 
 /--
 Inject binary64 literals into the dual-number backend used by the runtime autograd engine.
@@ -136,12 +180,8 @@ def parse (value : String) : Except String Arithmetic :=
 
 /-- Parse and remove `--arithmetic`, using `default` when the flag is absent. -/
 def parseAndStrip (arguments : List String) (default : Arithmetic := .native) :
-    Except String (Arithmetic × List String) := do
-  let (value?, remainingArguments) ←
-    TorchLean.CLI.takeFlagValue? arguments "arithmetic"
-  match value? with
-  | none => pure (default, remainingArguments)
-  | some value => pure (← parse value, remainingArguments)
+    Except String (Arithmetic × List String) :=
+  TorchLean.CLI.takeParsedFlag arguments "arithmetic" default.cliName parse
 
 /--
 Run `continuation` under the type selected by `arithmetic`.

@@ -34,22 +34,22 @@ only import targets whose job is to exercise maintained library modules.
 For ordinary code changes that stay inside Lean definitions, examples, or docs:
 
 ```bash
-lake build
-lake build NNCI NNExamples NNTests
-lake test
+scripts/lake.sh build
+scripts/lake.sh build NNCI NNExamples NNTests
+scripts/lake.sh test
 ```
 
 For proof-heavy or public API changes:
 
 ```bash
-lake build NNCI NNSlowProofs
+scripts/lake.sh build NNCI NNSlowProofs
 ```
 
 For CUDA changes:
 
 ```bash
-lake -R -K cuda=true build NN NNCI NNExamples NNTests
-lake -R -K cuda=true exe nn_tests_suite
+scripts/lake.sh -Kcuda=true build NN NNCI NNExamples NNTests
+scripts/lake.sh -Kcuda=true exe nn_tests_suite
 scripts/checks/cuda_sanitize_tests.sh --all-tools
 ```
 
@@ -60,7 +60,7 @@ For public command changes, run the affected command with a small input after co
 the examples. For website changes, rebuild the site:
 
 ```bash
-lake build NNExamples
+scripts/lake.sh build NNExamples
 cd home_page
 bundle _2.3.14_ exec jekyll build --config _config.yml,_config_dev.yml
 ```
@@ -68,8 +68,8 @@ bundle _2.3.14_ exec jekyll build --config _config.yml,_config_dev.yml
 For docs that mention verification tools, compare the command names with:
 
 ```bash
-lake exe verify --help
-lake exe torchlean --help
+scripts/lake.sh exe verify --help
+scripts/lake.sh exe torchlean --help
 ```
 
 CI should keep these evidence types distinct. A theorem target proves a mathematical statement. A

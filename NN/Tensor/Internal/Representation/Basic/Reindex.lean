@@ -325,14 +325,6 @@ def unflatten {α : Type u} [Storage α] {s : Shape} (x : Fin (Shape.size s) →
     getFlat x (Coord.linearize i)
   exact getFlat_ofFlatFn x.getFlat (Coord.linearize i)
 
-/-- Coordinate tensors are equivalent to their row-major flat functions. -/
-def flatEquiv (α : Type u) [Storage α] (s : Shape) :
-    Rep α s ≃ (Fin (Shape.size s) → α) where
-  toFun := flatten
-  invFun := unflatten
-  left_inv := unflatten_flatten
-  right_inv := flatten_unflatten
-
 /--
 The coordinate equivalence underlying a reshape between equally sized
 shapes.
@@ -426,11 +418,8 @@ theorem flatten_reshape {α : Type u} [Storage α] {s t : Shape}
 /-- Reshaping to the same shape is extensionally the identity. -/
 @[simp, grind =] theorem reshape_rfl {α : Type u} [Storage α] {s : Shape}
     (x : Rep α s) :
-    reshape (s := s) (t := s) rfl x = x := by
-  ext i
-  simp only [reshape_apply]
-  change x (Coord.unlinearize (Coord.linearize i)) = x i
-  rw [Coord.unlinearize_linearize]
+    reshape (s := s) (t := s) rfl x = x :=
+  rfl
 
 /-- Successive zero-copy reshapes are one reshape along the composed size equality. -/
 @[simp] theorem reshape_reshape {α : Type u} [Storage α] {r s t : Shape}
@@ -453,15 +442,8 @@ theorem reshape_one_cons {α : Type u} [Storage α] {s : Shape}
 /-- Reshaping back along the symmetric size equality recovers the input. -/
 @[simp, grind =] theorem reshape_symm_reshape {α : Type u} [Storage α] {s t : Shape}
     (h : Shape.size s = Shape.size t) (x : Rep α s) :
-    reshape h.symm (reshape h x) = x := by
-  apply (flatEquiv α s).injective
-  change flatten (reshape h.symm (reshape h x)) = flatten x
-  rw [flatten_reshape]
-  funext i
-  rw [congrFun (flatten_reshape h x) (finCongr h i)]
-  have hcast : finCongr h.symm (finCongr h i) = i := by
-    exact (finCongr h).symm_apply_apply i
-  rw [hcast]
+    reshape h.symm (reshape h x) = x :=
+  rfl
 
 end Rep
 

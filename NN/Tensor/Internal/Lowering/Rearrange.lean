@@ -139,20 +139,6 @@ tensor.
     (inputTensor : checked.InputTensor α) :
     rearrangeTensor checked hKind inputTensor =
       Semantics.denoteRearrange checked hKind inputTensor := by
-  let axisPermutation :
-      Coord
-          (checked.value.normalized.outputAxes.map checked.value.axisLength) ≃
-        Coord
-          (checked.value.normalized.inputAxes.map checked.value.axisLength) :=
-    (AxisTuple.coordEquiv checked.value.axisLength
-        checked.value.normalized.outputAxes).trans <|
-      (AxisTuple.selectEquiv
-        checked.valid.normalization.input_nodup
-        checked.valid.normalization.output_nodup
-        (checked.valid.normalization.input_axes_subset_output_of_rearrange hKind)
-        (checked.valid.normalization.output_axes_subset_input_of_rearrange hKind)).trans <|
-          (AxisTuple.coordEquiv checked.value.axisLength
-            checked.value.normalized.inputAxes).symm
   unfold rearrangeTensor Semantics.denoteRearrange
   dsimp only
   rw [Rep.reshape_eq_reindex, Rep.reshape_eq_reindex,

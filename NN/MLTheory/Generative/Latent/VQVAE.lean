@@ -41,6 +41,7 @@ open BigOperators
 variable {α : Type} [TorchLean.Storage α] [Context α]
 variable {obs latent : Shape} {numCodes : Nat}
 
+omit [Context α] in
 /-- VQ-VAE reconstruction decodes the selected codebook vector. -/
 @[simp] theorem forward_eq_decoder_codebook
     (model : Model α obs latent numCodes) (x : Tensor α obs) (idx : Fin numCodes) :
@@ -97,8 +98,8 @@ theorem vqvae_loss_mono_beta_of_commitment_nonneg
     {beta₁ beta₂ : ℝ} (hbeta : beta₁ ≤ beta₂)
     (hcommit : 0 ≤ commitmentLoss model x idx) :
     loss model beta₁ x idx ≤ loss model beta₂ x idx := by
-  simp [loss]
-  exact mul_le_mul_of_nonneg_right hbeta hcommit
+  rw [vqvae_loss_eq_weightedThreeTerm, vqvae_loss_eq_weightedThreeTerm]
+  exact weightedThreeTerm_mono_weight (vqvaeObjectiveTerms model x idx) hbeta hcommit
 
 /-! ## Nearest-code optimality -/
 

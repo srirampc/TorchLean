@@ -44,19 +44,19 @@ variable {α : Type} [TorchLean.Storage α] [Context α]
 variable {obs latent : Shape}
 
 /-- Diagonal-Gaussian encoder `q_φ(z|x)`, returning `(μ, logσ²)`. -/
-structure Encoder (α : Type) (obs latent : Shape) [TorchLean.Storage α] [Context α] where
+structure Encoder (α : Type) (obs latent : Shape) [TorchLean.Storage α] where
   /-- Posterior mean. -/
   mean : Tensor α obs → Tensor α latent
   /-- Posterior log-variance. -/
   logvar : Tensor α obs → Tensor α latent
 
 /-- Decoder/generator `p_θ(x|z)` represented by its reconstruction mean. -/
-structure Decoder (α : Type) (latent obs : Shape) [TorchLean.Storage α] [Context α] where
+structure Decoder (α : Type) (latent obs : Shape) [TorchLean.Storage α] where
   /-- Decode a latent sample into observation space. -/
   forward : Tensor α latent → Tensor α obs
 
 /-- A VAE is an encoder plus a decoder. -/
-structure Model (α : Type) (obs latent : Shape) [TorchLean.Storage α] [Context α] where
+structure Model (α : Type) (obs latent : Shape) [TorchLean.Storage α] where
   /-- Approximate posterior network. -/
   encoder : Encoder α obs latent
   /-- Generative decoder network. -/

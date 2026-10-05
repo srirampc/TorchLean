@@ -10,7 +10,7 @@ the object of a later verification statement.
 
 Most downstream code should not import modules from this directory directly. Prefer:
 
-* `import NN` for ordinary model and training code,
+* `import NN.API` for ordinary model and training code,
 * `import NN.API.Runtime` when you are extending the runtime subsystem itself, or
 * `import NN.Runtime` when you need the broad executable umbrella.
 
@@ -44,7 +44,7 @@ updates, and verification checkers.
 | `Autograd/TypedGraph` | Typed SSA graph execution that runs through the same runtime values instead of becoming a detached interpreter. |
 | `Autograd/Model` | The TorchLean-native runtime used by the trainer: layer functions, modules, sessions, losses, metrics, training glue, and the `Runtime.Autograd.Model.Layers.Seq` model type. Random helpers are abbreviations for `Spec.Random` in `NN/Spec/Core/Random.lean`. |
 | `Autograd/IRExec` | Checked lowering from `NN.IR.Graph` to a forward-only shape-indexed `ForwardGraph`, with its correctness proofs under `IRExec/Correctness`. |
-| `Autograd/LeadingAxis.lean` | The shared recursion for mapping an operation over the outer axis of a shape-typed reference. |
+| `Autograd/Batch.lean` | The shared recursion for mapping an operation over the outer axis of a shape-typed reference. |
 | `Autograd/Torch` | Lower-level imperative sessions used for PyTorch interop and typed graph recording. |
 | `Autograd/Train` | Deterministic datasets, step streams, loaders, losses, training loops, evaluation helpers, and optimizer integration. |
 | `Optim` | Executable optimizer equations and scheduler utilities. Public optimizer names are re-exported through `TorchLean.optim`. |
@@ -62,7 +62,7 @@ strategy, arithmetic semantics, and device:
 ```lean
 let trainer :=
   Trainer.new model
-    { objective := .meanSquaredError
+    { objective := .mse
       execution := .typedGraph
       arithmetic := .ieee
       optimizer := optim.adam { learningRate := 0.001 } }
@@ -85,7 +85,7 @@ Runtime evidence and proof evidence are different, and both have a role.
 
 | Evidence | Where it lives | What it says |
 | --- | --- | --- |
-| Executable examples | `NN/Examples`, `lake exe torchlean ...` | The command runs, uses the intended backend, and produces the expected artifact shape. |
+| Executable examples | `NN/Examples`, `scripts/lake.sh exe torchlean ...` | The command runs, uses the intended backend, and produces the expected artifact shape. |
 | Runtime tests | `NN/Tests/Runtime` | The implementation agrees with closed forms, cross-backend checks, saved fixtures, or regression expectations. |
 | Formal proofs | `NN/Proofs`, `NN/MLTheory`, `NN/Verification/Builtin/Proved` | A Lean theorem establishes a mathematical property of the specification, translation, bound, or checker. |
 | Certificate checks | `NN/Verification` | An external or generated artifact is parsed and checked against a Lean side condition. The checker can be proved sound even when the artifact producer is not trusted. |

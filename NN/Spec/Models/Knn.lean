@@ -92,17 +92,6 @@ private def nearestWithDistances {β : Type} {n : Nat}
         da < db ∨ (¬ (db < da) ∧ ia < ib))
     (sorted.extract 0 (min knn.k sorted.size)).map (fun triple => (triple.1, triple.2.1))
 
-/-- Find the `k` nearest neighbors under Euclidean distance.
-
-PyTorch/sklearn analogy: Euclidean `L2` distance is the default for many baseline kNN examples.
--/
-def findKNearest (α β : Type) (n : ℕ)
-  [TorchLean.Storage α] [Context α]
-  [DecidableRel ((· > ·) : α → α → Prop)]
-  (knn : KNN α β n) (input : Tensor α [n]) :
-  Array (Tensor α [n] × β) :=
-  (nearestWithDistances euclideanDistanceSpec knn input).map (·.1)
-
 /-- Find the `k` nearest neighbors under a user-provided distance function.
 
 Notes:
@@ -117,6 +106,17 @@ def findKNearestWithDistance (α β : Type) (n : ℕ)
   (knn : KNN α β n) (input : Tensor α [n]) :
   Array (Tensor α [n] × β) :=
   (nearestWithDistances distanceFn knn input).map (·.1)
+
+/-- Find the `k` nearest neighbors under Euclidean distance.
+
+PyTorch/sklearn analogy: Euclidean `L2` distance is the default for many baseline kNN examples.
+-/
+def findKNearest (α β : Type) (n : ℕ)
+  [TorchLean.Storage α] [Context α]
+  [DecidableRel ((· > ·) : α → α → Prop)]
+  (knn : KNN α β n) (input : Tensor α [n]) :
+  Array (Tensor α [n] × β) :=
+  findKNearestWithDistance α β n euclideanDistanceSpec knn input
 
 /-! ## Classification -/
 
@@ -146,6 +146,17 @@ private def majorityWithCount {β : Type} [BEq β] [Hashable β]
   let counts := voteCounts labels
   firstMajority labels (fun label => counts[label]?.getD 0)
 
+/-- Classify with an explicit distance function and the same vote tie rule as `classify`. -/
+def classifyWithDistance (α β : Type) (n : ℕ)
+  [TorchLean.Storage α] [Context α]
+  [DecidableRel ((· > ·) : α → α → Prop)]
+  [BEq β] [Hashable β] [Inhabited β]
+  (distanceFn : Tensor α [n] → Tensor α [n] → α)
+  (knn : KNN α β n) (input : Tensor α [n]) : β :=
+  let neighbors := findKNearestWithDistance α β n distanceFn knn input
+  let labels := neighbors.map (fun (_, label) => label)
+  ((majorityWithCount labels).map (·.1)).getD default
+
 /-- Majority vote among the neighbors.
 
 Among labels with the same maximum count, choose the one whose closest observation comes first.
@@ -158,9 +169,7 @@ def classify (α β : Type) (n : ℕ)
   [DecidableRel ((· > ·) : α → α → Prop)]
   [BEq β] [Hashable β] [Inhabited β]
   (knn : KNN α β n) (input : Tensor α [n]) : β :=
-  let neighbors := findKNearest α β n knn input
-  let labels := neighbors.map (fun (_, label) => label)
-  ((majorityWithCount labels).map (·.1)).getD default
+  classifyWithDistance α β n euclideanDistanceSpec knn input
 
 /-- Classification using an ordered tree map for label counts.
 
@@ -171,7 +180,7 @@ return `none`.
 def classifyTreeMap (α β : Type) (n : ℕ)
   [TorchLean.Storage α] [Context α]
   [DecidableRel ((· > ·) : α → α → Prop)]
-  [Ord β] [Inhabited β]
+  [Ord β]
   (knn : KNN α β n) (input : Tensor α [n]) : Option β :=
   let neighbors := findKNearest α β n knn input
   let labels := neighbors.map (fun (_, label) => label)
@@ -266,32 +275,6 @@ def KNN.fromData (α β : Type) (n : ℕ) (k : Nat)
     [TorchLean.Storage α]
     (data : Array (Tensor α [n] × β)) : KNN α β n :=
   { k := k, dataset := data }
-
-/-- Batch regression: map `predict` over an array of inputs. -/
-def batchPredict (α : Type) (n : ℕ)
-  [TorchLean.Storage α] [Context α]
-  [DecidableRel ((· > ·) : α → α → Prop)]
-  (knn : KNN α α n) (inputs : Array (Tensor α [n])) : Array α :=
-  inputs.map (predict α n knn)
-
-/-- Batch classification: map `classify` over an array of inputs. -/
-def batchClassify (α β : Type) (n : ℕ)
-  [TorchLean.Storage α] [Context α]
-  [DecidableRel ((· > ·) : α → α → Prop)]
-  [Hashable β] [Inhabited β] [BEq β]
-  (knn : KNN α β n) (inputs : Array (Tensor α [n])) : Array β :=
-  inputs.map (classify α β n knn)
-
-/-- Classify with an explicit distance function and the same vote tie rule as `classify`. -/
-def classifyWithDistance (α β : Type) (n : ℕ)
-  [TorchLean.Storage α] [Context α]
-  [DecidableRel ((· > ·) : α → α → Prop)]
-  [BEq β] [Hashable β] [Inhabited β]
-  (distanceFn : Tensor α [n] → Tensor α [n] → α)
-  (knn : KNN α β n) (input : Tensor α [n]) : β :=
-  let neighbors := findKNearestWithDistance α β n distanceFn knn input
-  let labels := neighbors.map (fun (_, label) => label)
-  ((majorityWithCount labels).map (·.1)).getD default
 
 /-- Classify and return the winning label's fraction of the selected neighbors.
 

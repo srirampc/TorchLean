@@ -9,30 +9,11 @@ module
 public import NN.Runtime.Autograd.IRExec.Correctness.Common
 
 /-!
-# SemanticEquivalenceCommon
+# Semantic Equivalence: Empty Prefix and Permutations
 
-Shared helper lemmas for the semantic equivalence proof in `NN.Runtime.Autograd.IRExec.Correctness`.
-
-This module contains correctness infrastructure used by the end-to-end semantic equivalence proof.
-We keep these lemmas separate from `...Correctness.Common` because they are specific to the
-recursive `buildFrom` proof shape rather than generally useful per-op infrastructure.
-
-The lemmas are grouped as follows:
-
-* `denoteAllState_nil`: base case table lemma for the empty lowered prefix.
-* `permuteSomeTensor_eq_applySwapsTensor` (+ helper): connects IR permutation semantics to the
-  runtime swap-based implementation.
-* `buildFrom_denoteAllFrom_nodeData_exact`: packages the standard semantic equivalence proof
-  pattern once a `nodeData` closure has been constructed.
-* `normalizeNodeOutput_mk_of_eq`: the evaluator's final shape normalization as a cast.
-
-These helpers exist because the main correctness proof is expensive to elaborate. They keep the
-recursive theorem from re-solving the same typed-context and dynamic-value facts for every operator.
-When a new proof starts to repeat parent lookup, `Spec.SomeTensor` casting, or tail-of-graph
-preservation steps, it usually belongs here.
-
-Maintenance note: add focused, well-named lemmas here instead of adding another large
-tactic block to the recursive proof.
+The empty-prefix lemma initializes the recursive graph proof. The permutation lemmas relate
+shape-erased adjacent swaps to the typed swap program used by concat, transpose, and permute.
+General parent lookup, output normalization, and tail composition live in `Correctness.Common`.
 -/
 
 @[expose] public section
@@ -60,8 +41,7 @@ theorem denoteAllState_nil {α : Type} [TorchLean.Storage α] [Context α]
     denoteAllState (α := α) inShape (st := (⟨[], .nil⟩ : State α inShape)) x =
       #[Spec.SomeTensor.ofTensor x] := by
   simp [denoteAllState, execOfState, ForwardGraph.denoteAll, ForwardGraph.eval,
-    packedTensorsOfContext, Spec.SomeTensor.ofTensor, ForwardData.eval,
-    TorchLean.TensorPack.toShapeErasedArray]
+    Spec.SomeTensor.ofTensor, TorchLean.TensorPack.toShapeErasedArray]
 
 attribute [grind =] denoteAllState_nil
 
@@ -119,104 +99,6 @@ theorem permuteSomeTensor_eq_applySwapsTensor
 -- that are not uniquely determined from the left-hand side, so it cannot be registered as a
 -- `grind` rule.
 attribute [grind =] applySwapsTensorList_eq_foldl_swapAdjacentAtDepth
-
-/--
-Semantic equivalence lemma for a lowering step after the typed `nodeData` has been built.
-
-Many operator cases differ only in how they validate parents and construct the forward closure.
-Once that closure and the matching `evalAt` fact are available, the tail-of-graph argument is the
-same for unary, binary, and shape-changing nodes.
--/
-theorem buildFrom_denoteAllFrom_nodeData_exact
-    {α : Type} [TorchLean.Storage α] [Context α]
-    (g : NN.IR.Graph) (payload : Payload α) {inShape : Shape} {ss : List Shape}
-    (gd : ForwardData α [inShape] ss)
-    (i : Nat) (st' : State α inShape) (x : Tensor α inShape)
-    (hi : i < g.nodes.size)
-    (τ : Shape)
-    (nodeData : ForwardNode α ([inShape] ++ ss) τ)
-    (hTail :
-      NN.IR.Graph.denoteAllFrom (α := α) (g := g) (payload := payload)
-          (input := Spec.SomeTensor.mk (α := α) inShape x) (i := i + 1)
-          (vals := denoteAllState (α := α) inShape
-            (st := (⟨ss ++ [τ], .snoc (ss := ss) gd nodeData⟩ : State α inShape)) x) =
-        .ok (denoteAllState (α := α) inShape st' x))
-    (hEval :
-      NN.IR.Graph.evalAt (α := α) (g := g) (payload := payload)
-          (input := Spec.SomeTensor.mk (α := α) inShape x)
-          (vals := denoteAllState (α := α) inShape (st := (⟨ss, gd⟩ : State α inShape)) x)
-          (i := i) =
-        .ok
-          (Spec.SomeTensor.mk (α := α) τ
-            (nodeData.eval
-              (ForwardData.eval (α := α) (Γ := [inShape]) (ss := ss) gd (.cons x .nil))))) :
-    NN.IR.Graph.denoteAllFrom (α := α) (g := g) (payload := payload)
-        (input := Spec.SomeTensor.mk (α := α) inShape x) (i := i)
-        (vals := denoteAllState (α := α) inShape (st := (⟨ss, gd⟩ : State α inShape)) x) =
-      .ok (denoteAllState (α := α) inShape st' x) := by
-  let vals0 : Array (Spec.SomeTensor α) :=
-    denoteAllState (α := α) inShape (st := (⟨ss, gd⟩ : State α inShape)) x
-  let ctx : TorchLean.TensorPack α ([inShape] ++ ss) :=
-    ForwardData.eval (α := α) (Γ := [inShape]) (ss := ss) gd (.cons x .nil)
-  let input : Spec.SomeTensor α := Spec.SomeTensor.mk (α := α) inShape x
-  have hStep :
-      denoteAllState (α := α) inShape
-          (st := (⟨ss ++ [τ], .snoc (ss := ss) gd nodeData⟩ : State α inShape)) x =
-        vals0.push (Spec.SomeTensor.mk (α := α) τ (nodeData.eval ctx)) := by
-    simpa [vals0, ctx] using
-      (denoteAllState_snoc (α := α) (inShape := inShape) (ss := ss) (τ := τ)
-        (gd := gd) (nodeData := nodeData) (x := x))
-  exact buildFrom_denoteAllFrom_finish (α := α) (g := g) (payload := payload)
-    (i := i) (x := x) (hi := hi) (τ := τ) (nodeData := nodeData)
-    (st1 := ⟨ss ++ [τ], .snoc (ss := ss) gd nodeData⟩) (st' := st')
-    (ctx := ctx) (vals0 := vals0) (input := input) hTail hEval hStep
-
-/--
-`normalizeNodeOutput` accepts a value whose stored shape equals the declared output shape and
-transports the tensor along that equality.
-
-Stating the cast with `Tensor.castShape` lets the per-op proofs compare it with the lowered closure
-through `Tensor.eqRec_eq_cast_shape` and proof irrelevance.
--/
-theorem normalizeNodeOutput_mk_of_eq {α : Type} [TorchLean.Storage α] [Context α]
-    {s : Shape} (i : Nat) (n : NN.IR.Node) (t : Tensor α s) (h : s = n.outShape) :
-    NN.IR.Graph.normalizeNodeOutput (α := α) i n (Spec.SomeTensor.mk (α := α) s t) =
-      .ok (Spec.SomeTensor.mk (α := α) n.outShape (Tensor.castShape t h)) := by
-  subst h
-  simp [NN.IR.Graph.normalizeNodeOutput, Pure.pure, Except.pure]
-
-/-!
-## Boolean Shape Equality Helpers
-
-The IR evaluator uses *boolean* equality/inequality checks on `Shape` (via `BEq Shape`) in a few
-places. For example, `evalAt`'s `.conv` case checks a computed output shape against the node's
-declared `outShape` using `!=` (rather than a propositional `≠`) because it is part of the
-runtime error-reporting path.
-
-In the proof layer we frequently have a propositional equality `s = t` and need to discharge such
-boolean guards. Since `BEq Shape` is defined as an explicit structural test (`Shape.areEqual`) and
-we do not globally assume `LawfulBEq Shape`, we prove the small bridge lemmas locally here.
--/
-
-/-- Reflexivity of the explicit structural boolean equality test `Shape.areEqual`. -/
-theorem shape_areEqual_refl (s : Shape) : Shape.areEqual s s = true := by
-  induction s with
-  | scalar => rfl
-  | dim n s ih =>
-      simp [Shape.areEqual, ih]
-
-/-- Reflexivity of `BEq Shape` (`==`). -/
-theorem shape_beq_refl (s : Shape) : (s == s) = true :=
-  beq_self_eq_true s
-
-/-- Reflexivity of boolean inequality (`!=`) on shapes. -/
-theorem shape_bne_refl (s : Shape) : (s != s) = false := by
-  simp [bne]
-
-/-- Propositional shape equality implies the boolean inequality guard `s != t` is false. -/
-theorem shape_bne_eq_false_of_eq {s t : Shape} (h : s = t) : (s != t) = false := by
-  cases h
-  exact shape_bne_refl s
 
 end IRExec
 end Autograd

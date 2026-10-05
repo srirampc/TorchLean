@@ -29,25 +29,6 @@ open Proofs.Autograd.Algebra
 open Proofs (Idx getIdx)
 
 /--
-Flatten a tensor to a 1D vector (preserving total size).
-
-PyTorch comparison: `torch.flatten(x)` (for a single tensor value).
--/
-def flatten {α : Type} {Δ : Type} [TorchLean.Storage α] [Inhabited α] [Zero α]
-  {Γ : List Shape} {s : Shape} (x : Var s) :
-  MWith α Δ Γ (Var (.dim (Spec.Shape.size s) .scalar)) := do
-  let ⟨ss, g, _⟩ ← get
-  let ix ← liftM (mkIdx (_α := α) (Γ := Γ) ss x)
-  let outS : Shape := .dim (Spec.Shape.size s) .scalar
-  let node : NodeData α Δ (Γ ++ ss) outS :=
-    { forward := fun ctx _d => flattenSpec (α := α) (getIdx (α := α) (xs := ctx) ix)
-      jvp := fun _ctx dctx _d =>
-        flattenSpec (α := α) (getIdx (α := α) (xs := dctx) ix)
-      vjp := fun _ctx _d δ =>
-        TensorPack.single (α := α) (Γ := Γ ++ ss) (s := s) ix (unflattenSpec (α := α) s δ) }
-  push (α := α) (Δ := Δ) (Γ := Γ) (ss := ss) (s := outS) g node
-
-/--
 Reshape a tensor, given a proof that the total sizes match.
 
 PyTorch comparison: `torch.reshape(x, new_shape)`.
@@ -56,18 +37,29 @@ def reshape {α : Type} {Δ : Type} [TorchLean.Storage α] [Inhabited α] [Zero 
   {Γ : List Shape} {s₁ s₂ : Shape} (x : Var s₁) (h : Spec.Shape.size s₁ = Spec.Shape.size s₂) :
     MWith α Δ Γ (Var s₂) := do
   let ⟨ss, g, _⟩ ← get
-  let ix ← liftM (mkIdx (_α := α) (Γ := Γ) ss x)
+  let ix ← liftM (mkIdx (Γ := Γ) ss x)
   let node : NodeData α Δ (Γ ++ ss) s₂ :=
-    { forward := fun ctx _d =>
+    NodeData.ofLocalCompact (fun lookup => lookup.read ix)
+      (forward := fun ctx _d =>
         TorchLean.Tensor.reshapeSpec (α := α) (source := s₁) (target := s₂)
-          (getIdx (α := α) (xs := ctx) ix) h
-      jvp := fun _ctx dctx _d =>
+          (ctx) h)
+      (jvp := fun _ctx dctx _d =>
         TorchLean.Tensor.reshapeSpec (α := α) (source := s₁) (target := s₂)
-          (getIdx (α := α) (xs := dctx) ix) h
-      vjp := fun _ctx _d δ =>
-        TensorPack.single (α := α) (Γ := Γ ++ ss) (s := s₁) ix
-          (TorchLean.Tensor.reshapeSpec (α := α) (source := s₂) (target := s₁) δ h.symm) }
+          (dctx) h)
+      (vjp := fun _ctx _d δ =>
+        Contributions.single (α := α) (Γ := Γ ++ ss) (s := s₁) ix
+          (TorchLean.Tensor.reshapeSpec (α := α) (source := s₂) (target := s₁) δ h.symm))
   push (α := α) (Δ := Δ) (Γ := Γ) (ss := ss) (s := s₂) g node
+
+/--
+Flatten a tensor to a 1D vector (preserving total size).
+
+PyTorch comparison: `torch.flatten(x)` (for a single tensor value).
+-/
+def flatten {α : Type} {Δ : Type} [TorchLean.Storage α] [Inhabited α] [Zero α]
+  {Γ : List Shape} {s : Shape} (x : Var s) :
+    MWith α Δ Γ (Var (.dim (Spec.Shape.size s) .scalar)) :=
+  reshape x (by simp only [Shape.size, Nat.mul_one])
 
 /--
 Swap two adjacent axes at a given nesting `depth`.
@@ -78,19 +70,20 @@ def swapAdjacentAtDepth {α : Type} {Δ : Type} [TorchLean.Storage α] [Zero α]
   {Γ : List Shape} {s : Shape} (depth : Nat) (x : Var s) :
     MWith α Δ Γ (Var (s.swapAdjacentAtDepth depth)) := do
   let ⟨ss, g, _⟩ ← get
-  let ix ← liftM (mkIdx (_α := α) (Γ := Γ) ss x)
+  let ix ← liftM (mkIdx (Γ := Γ) ss x)
   let outS : Shape := s.swapAdjacentAtDepth depth
   let node : NodeData α Δ (Γ ++ ss) outS :=
-    { forward := fun ctx _d =>
-        TorchLean.Tensor.swapAdjacentAxes (tensor := getIdx (α := α) (xs := ctx) ix) depth
-      jvp := fun _ctx dctx _d =>
-        let dx := getIdx (α := α) (xs := dctx) ix
-        TorchLean.Tensor.swapAdjacentAxes (tensor := dx) depth
-      vjp := fun _ctx _d δ =>
+    NodeData.ofLocalCompact (fun lookup => lookup.read ix)
+      (forward := fun ctx _d =>
+        TorchLean.Tensor.swapAdjacentAxes (tensor := ctx) depth)
+      (jvp := fun _ctx dctx _d =>
+        let dx := dctx
+        TorchLean.Tensor.swapAdjacentAxes (tensor := dx) depth)
+      (vjp := fun _ctx _d δ =>
         let dx' := TorchLean.Tensor.swapAdjacentAxes (tensor := δ) depth
         let dx : Tensor α s :=
           Tensor.castShape dx' (by simp [outS])
-        TensorPack.single (α := α) (Γ := Γ ++ ss) (s := s) ix dx }
+        Contributions.single (α := α) (Γ := Γ ++ ss) (s := s) ix dx)
   push (α := α) (Δ := Δ) (Γ := Γ) (ss := ss) (s := outS) g node
 
 /--
@@ -102,15 +95,16 @@ def broadcastTo {α : Type} {Δ : Type} [TorchLean.Storage α] [Inhabited α] [A
   {Γ : List Shape} {s₁ s₂ : Shape} (cb : Shape.CanBroadcastTo s₁ s₂) (x : Var s₁) :
   MWith α Δ Γ (Var s₂) := do
   let ⟨ss, g, _⟩ ← get
-  let ix ← liftM (mkIdx (_α := α) (Γ := Γ) ss x)
+  let ix ← liftM (mkIdx (Γ := Γ) ss x)
   let node : NodeData α Δ (Γ ++ ss) s₂ :=
-    { forward := fun ctx _d =>
-        TorchLean.Tensor.broadcastTo (α := α) cb (getIdx (α := α) (xs := ctx) ix)
-      jvp := fun _ctx dctx _d =>
-        TorchLean.Tensor.broadcastTo (α := α) cb (getIdx (α := α) (xs := dctx) ix)
-      vjp := fun _ctx _d δ =>
-        TensorPack.single (α := α) (Γ := Γ ++ ss) (s := s₁) ix
-          (TorchLean.Tensor.reduceFromBroadcastTo (α := α) cb δ) }
+    NodeData.ofLocalCompact (fun lookup => lookup.read ix)
+      (forward := fun ctx _d =>
+        TorchLean.Tensor.broadcastTo (α := α) cb (ctx))
+      (jvp := fun _ctx dctx _d =>
+        TorchLean.Tensor.broadcastTo (α := α) cb (dctx))
+      (vjp := fun _ctx _d δ =>
+        Contributions.single (α := α) (Γ := Γ ++ ss) (s := s₁) ix
+          (TorchLean.Tensor.reduceFromBroadcastTo (α := α) cb δ))
   push (α := α) (Δ := Δ) (Γ := Γ) (ss := ss) (s := s₂) g node
 
 /--
@@ -123,18 +117,19 @@ def reduceSum {α : Type} {Δ : Type} [TorchLean.Storage α] [Add α] [Zero α] 
   [_valid : Shape.HasNonemptyAxis axis s] [_wf : Shape.WellFormed s]
   (x : Var s) : MWith α Δ Γ (Var (shapeAfterSum s axis)) := do
   let ⟨ss, g, _⟩ ← get
-  let ix ← liftM (mkIdx (_α := α) (Γ := Γ) ss x)
+  let ix ← liftM (mkIdx (Γ := Γ) ss x)
   let outS : Shape := shapeAfterSum s axis
   let node : NodeData α Δ (Γ ++ ss) outS :=
-    { forward := fun ctx _d =>
+    NodeData.ofLocalCompact (fun lookup => lookup.read ix)
+      (forward := fun ctx _d =>
         TorchLean.Tensor.reduceSum (α := α) (s := s) axis
-          (getIdx (α := α) (xs := ctx) ix) _valid.proof
-      jvp := fun _ctx dctx _d =>
+          (ctx) _valid.proof)
+      (jvp := fun _ctx dctx _d =>
         TorchLean.Tensor.reduceSum (α := α) (s := s) axis
-          (getIdx (α := α) (xs := dctx) ix) _valid.proof
-      vjp := fun _ctx _d δ =>
-        TensorPack.single (α := α) (Γ := Γ ++ ss) (s := s) ix
-          (TorchLean.Tensor.broadcastAfterSum s axis δ) }
+          (dctx) _valid.proof)
+      (vjp := fun _ctx _d δ =>
+        Contributions.single (α := α) (Γ := Γ ++ ss) (s := s) ix
+          (TorchLean.Tensor.broadcastAfterSum s axis δ))
   push (α := α) (Δ := Δ) (Γ := Γ) (ss := ss) (s := outS) g node
 
 /--
@@ -147,23 +142,24 @@ def reduceMean {α : Type} {Δ : Type} [TorchLean.Storage α] [Context α]
   [valid : Shape.HasNonemptyAxis axis s] [_wf : Shape.WellFormed s]
   (x : Var s) : MWith α Δ Γ (Var (shapeAfterSum s axis)) := do
   let ⟨ss, g, _⟩ ← get
-  let ix ← liftM (mkIdx (_α := α) (Γ := Γ) ss x)
+  let ix ← liftM (mkIdx (Γ := Γ) ss x)
   let outS : Shape := shapeAfterSum s axis
   letI : Shape.AxisInBounds axis s := valid.proof.toAxisInBounds
   let denomNat := Shape.axisSize s axis
   let node : NodeData α Δ (Γ ++ ss) outS :=
-    { forward := fun ctx _d =>
-        let xv := getIdx (α := α) (xs := ctx) ix
+    NodeData.ofLocalCompact (fun lookup => lookup.read ix)
+      (forward := fun ctx _d =>
+        let xv := ctx
         let h := valid.proof
-        TorchLean.Tensor.reduceMean (α := α) (s := s) axis xv h
-      jvp := fun _ctx dctx _d =>
-        let dx := getIdx (α := α) (xs := dctx) ix
+        TorchLean.Tensor.reduceMean (α := α) (s := s) axis xv h)
+      (jvp := fun _ctx dctx _d =>
+        let dx := dctx
         let h := valid.proof
-        TorchLean.Tensor.reduceMean (α := α) (s := s) axis dx h
-      vjp := fun _ctx _d δ =>
+        TorchLean.Tensor.reduceMean (α := α) (s := s) axis dx h)
+      (vjp := fun _ctx _d δ =>
         let dLdx := TorchLean.Tensor.broadcastAfterSum s axis δ
         let dLdx' := scaleSpec (α := α) (s := s) dLdx (1 / (denomNat : α))
-        TensorPack.single (α := α) (Γ := Γ ++ ss) (s := s) ix dLdx' }
+        Contributions.single (α := α) (Γ := Γ ++ ss) (s := s) ix dLdx')
   push (α := α) (Δ := Δ) (Γ := Γ) (ss := ss) (s := outS) g node
 
 /-! ## Indexing -/
@@ -174,15 +170,16 @@ def select {α : Type} {Δ : Type} [TorchLean.Storage α] [Zero α]
     (x : Var s) (index : Fin (Shape.axisSize s axis)) :
     MWith α Δ Γ (Var (s.eraseAxis axis)) := do
   let ⟨ss, graph, _⟩ ← get
-  let ix ← liftM (mkIdx (_α := α) (Γ := Γ) ss x)
+  let ix ← liftM (mkIdx (Γ := Γ) ss x)
   let node : NodeData α Δ (Γ ++ ss) (s.eraseAxis axis) :=
-    { forward := fun context _ =>
-        Tensor.selectSpec axis (getIdx (α := α) (xs := context) ix) index
-      jvp := fun _ tangent _ =>
-        Tensor.selectSpec axis (getIdx (α := α) (xs := tangent) ix) index
-      vjp := fun _ _ delta =>
-        TensorPack.single (α := α) (Γ := Γ ++ ss) (s := s) ix
-          (Tensor.selectBackwardSpec axis index delta) }
+    NodeData.ofLocalCompact (fun lookup => lookup.read ix)
+      (forward := fun context _ =>
+        Tensor.selectSpec axis (context) index)
+      (jvp := fun _ tangent _ =>
+        Tensor.selectSpec axis (tangent) index)
+      (vjp := fun _ _ delta =>
+        Contributions.single (α := α) (Γ := Γ ++ ss) (s := s) ix
+          (Tensor.selectBackwardSpec axis index delta))
   push (α := α) (Δ := Δ) (Γ := Γ) (ss := ss) (s := s.eraseAxis axis) graph node
 
 /-- Select several bounded coordinates from an arbitrary tensor axis. -/
@@ -191,15 +188,16 @@ def indexSelect {α : Type} {Δ : Type} [TorchLean.Storage α] [Add α] [Zero α
     (x : Var s) (indices : Δ → Tensor (Fin (Shape.axisSize s axis)) [count]) :
     MWith α Δ Γ (Var (s.replaceAxis axis count)) := do
   let ⟨ss, graph, _⟩ ← get
-  let ix ← liftM (mkIdx (_α := α) (Γ := Γ) ss x)
+  let ix ← liftM (mkIdx (Γ := Γ) ss x)
   let node : NodeData α Δ (Γ ++ ss) (s.replaceAxis axis count) :=
-    { forward := fun context data =>
-        Tensor.indexSelectSpec axis (getIdx (α := α) (xs := context) ix) (indices data)
-      jvp := fun _ tangent data =>
-        Tensor.indexSelectSpec axis (getIdx (α := α) (xs := tangent) ix) (indices data)
-      vjp := fun _ data delta =>
+    NodeData.ofLocalCompact (fun lookup => lookup.read ix)
+      (forward := fun context data =>
+        Tensor.indexSelectSpec axis (context) (indices data))
+      (jvp := fun _ tangent data =>
+        Tensor.indexSelectSpec axis (tangent) (indices data))
+      (vjp := fun _ data delta =>
         let dx := Tensor.scatterAddSpec axis (Tensor.full s (0 : α)) (indices data) delta
-        TensorPack.single (α := α) (Γ := Γ ++ ss) (s := s) ix dx }
+        Contributions.single (α := α) (Γ := Γ ++ ss) (s := s) ix dx)
   push (α := α) (Δ := Δ) (Γ := Γ) (ss := ss) (s := s.replaceAxis axis count) graph node
 
 /-- Add source slices into an arbitrary tensor axis at bounded coordinates. -/
@@ -209,21 +207,22 @@ def scatterAdd {α : Type} {Δ : Type} [TorchLean.Storage α] [Add α] [Zero α]
     (indices : Δ → Tensor (Fin (Shape.axisSize s axis)) [count]) :
     MWith α Δ Γ (Var s) := do
   let ⟨ss, graph, _⟩ ← get
-  let ibase ← liftM (mkIdx (_α := α) (Γ := Γ) ss base)
-  let isource ← liftM (mkIdx (_α := α) (Γ := Γ) ss source)
+  let ibase ← liftM (mkIdx (Γ := Γ) ss base)
+  let isource ← liftM (mkIdx (Γ := Γ) ss source)
   let node : NodeData α Δ (Γ ++ ss) s :=
-    { forward := fun context data =>
-        Tensor.scatterAddSpec axis (getIdx (α := α) (xs := context) ibase) (indices data)
-          (getIdx (α := α) (xs := context) isource)
-      jvp := fun _ tangent data =>
-        Tensor.scatterAddSpec axis (getIdx (α := α) (xs := tangent) ibase) (indices data)
-          (getIdx (α := α) (xs := tangent) isource)
-      vjp := fun _ data delta =>
-        TorchLean.TensorPack.add (α := α) (ss := Γ ++ ss)
-          (TensorPack.single (α := α) (Γ := Γ ++ ss) (s := s) ibase delta)
-          (TensorPack.single (α := α) (Γ := Γ ++ ss)
+    NodeData.ofLocalCompact (fun lookup => (lookup.read ibase, lookup.read isource))
+      (forward := fun context data =>
+        Tensor.scatterAddSpec axis (context.1) (indices data)
+          (context.2))
+      (jvp := fun _ tangent data =>
+        Tensor.scatterAddSpec axis (tangent.1) (indices data)
+          (tangent.2))
+      (vjp := fun _ data delta =>
+        Contributions.add (α := α) (shapes := Γ ++ ss)
+          (Contributions.single (α := α) (Γ := Γ ++ ss) (s := s) ibase delta)
+          (Contributions.single (α := α) (Γ := Γ ++ ss)
             (s := s.replaceAxis axis count) isource
-            (Tensor.indexSelectSpec axis delta (indices data))) }
+            (Tensor.indexSelectSpec axis delta (indices data))))
   push (α := α) (Δ := Δ) (Γ := Γ) (ss := ss) (s := s) graph node
 
 end GraphM

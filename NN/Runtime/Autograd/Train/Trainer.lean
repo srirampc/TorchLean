@@ -6,14 +6,6 @@ Authors: TorchLean Team
 
 module
 
-public import Aesop.BuiltinRules
-public import Mathlib.Data.Finset.Attr
-import Mathlib.Tactic.Bound.Init
-import Mathlib.Tactic.Finiteness.Attr
-import Mathlib.Tactic.SetLike
-import Mathlib.Tactic.ToAdditive
-import Mathlib.Tactic.ToDual
-
 /-!
 # Trainer API with metrics and logging
 

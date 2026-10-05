@@ -16,5 +16,5 @@ public import NN.Examples.Factorization.Check
 
 Public `Tensor.cholesky` and `Tensor.qr` examples over `Float`. They check Cholesky reconstruction,
 square and wide reduced QR, full-rank orthonormality, and explicit negative controls. Run all checks
-with `lake exe torchlean factorizations`.
+with `scripts/lake.sh exe torchlean factorizations`.
 -/

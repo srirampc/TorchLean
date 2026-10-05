@@ -69,9 +69,6 @@ def payload : Payload Float :=
 def expected (x gamma beta mean var eps : Float) : Float :=
   ((x - mean) / Float.sqrt (max var 0.0 + eps)) * gamma + beta
 
-def flatVal {n : Nat} (t : Tensor Float [n]) (i : Fin n) : Float :=
-  (get t i).item
-
 def expectSome {α : Type} (label : String) : Option α → IO α
   | some x => pure x
   | none => throw (IO.userError s!"ir_batchnorm: expected {label}")
@@ -106,8 +103,9 @@ def checkTensor (label : String) (y : Tensor Float inputShape) : IO Unit := do
       for hi in List.finRange h do
         for wi in List.finRange w do
           let want :=
-            expected (tensorVal input [ni, ci, hi, wi]) (vecVal gamma ci) (vecVal beta ci)
-              (vecVal mean ci) (vecVal var ci) bnEps
+            expected (tensorVal input [ni, ci, hi, wi])
+              (Tensor.getScalar gamma ci) (Tensor.getScalar beta ci)
+              (Tensor.getScalar mean ci) (Tensor.getScalar var ci) bnEps
           assertApprox s!"{label}[{ni.val},{ci.val},{hi.val},{wi.val}]"
             (tensorVal y [ni, ci, hi, wi]) want 1e-5
 
@@ -143,15 +141,17 @@ def run : IO Unit := do
 
   let ibp := runIBP (α := Float) graph verifierParams
   let yB ← expectSome "IBP BatchNorm box" ibp[1]!
-  let want0 := expected (tensorVal input [0, 0, 0, 0]) (vecVal gamma 0) (vecVal beta 0)
-    (vecVal mean 0) (vecVal var 0) bnEps
   if hdim : yB.dim = Spec.Shape.size inputShape then
     let lo : Tensor Float [Spec.Shape.size inputShape] :=
       NN.MLTheory.CROWN.Graph.castDimScalar (α := Float) hdim yB.lo
     let hi : Tensor Float [Spec.Shape.size inputShape] :=
       NN.MLTheory.CROWN.Graph.castDimScalar (α := Float) hdim yB.hi
-    assertApprox "ir_batchnorm ibp lo[0]" (flatVal lo ⟨0, by decide⟩) want0 1e-5
-    assertApprox "ir_batchnorm ibp hi[0]" (flatVal hi ⟨0, by decide⟩) want0 1e-5
+    let expectedValues := yDenote.to (Array Float)
+    for i in List.finRange (Spec.Shape.size inputShape) do
+      assertApprox s!"ir_batchnorm ibp lo[{i.val}]"
+        (Tensor.getScalar lo i) expectedValues[i.val]! 1e-5
+      assertApprox s!"ir_batchnorm ibp hi[{i.val}]"
+        (Tensor.getScalar hi i) expectedValues[i.val]! 1e-5
   else
     throw (IO.userError s!"ir_batchnorm: IBP output dimension mismatch: {yB.dim}")
 
@@ -167,9 +167,9 @@ def run : IO Unit := do
   for i in List.finRange
       (Spec.Shape.size [backward.outDim, backward.inDim]) do
     assertApprox s!"ir_batchnorm backward lower coefficient[{i.val}]"
-      (flatVal loCoeffs i) 0.0 0.0
+      (Tensor.getScalar loCoeffs i) 0.0 0.0
     assertApprox s!"ir_batchnorm backward upper coefficient[{i.val}]"
-      (flatVal hiCoeffs i) 0.0 0.0
+      (Tensor.getScalar hiCoeffs i) 0.0 0.0
 
   let pyCode ←
     match Export.IRPyTorch.emit graph verifierParams 0 1 with

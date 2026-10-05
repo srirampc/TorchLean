@@ -30,8 +30,8 @@ namespace TorchLean
 namespace rl
 namespace cli
 
-/-- Parsed PPO command options shared by multiple runnable examples. -/
-structure PPOOptions where
+/-- Shared training, evaluation, and logging options for RL commands. -/
+structure Options where
   updateCount : Nat
   evaluationInterval : Nat
   evaluationEpisodes : Nat
@@ -39,15 +39,15 @@ structure PPOOptions where
   logDestination : Runtime.Training.LogDestination
 deriving Repr
 
-namespace PPOOptions
+namespace Options
 
-/-- Help text for PPO commands, with optional environment-specific artifact flags. -/
+/-- Help text for RL commands, with optional environment-specific artifact flags. -/
 def usage (exeName : String) (artifactOptions : Array String := #[]) : String :=
   String.intercalate "\n" <| (#[
-    s!"Usage: lake exe torchlean {exeName} [options]",
+    s!"Usage: scripts/lake.sh exe torchlean {exeName} [options]",
     "",
     "Training and evaluation:",
-    "  --updates N         PPO update iterations",
+    "  --updates N         training update iterations",
     "  --eval-every N      updates between policy evaluations",
     "  --eval-episodes N   episodes in each evaluation",
     "  --eval-max-steps N  step limit for each evaluation episode",
@@ -55,14 +55,14 @@ def usage (exeName : String) (artifactOptions : Array String := #[]) : String :=
   ] ++ artifactOptions ++ #[
     "",
     "Runtime:",
-    "  --device auto|cpu|cuda|rocm|metal|wasm|tpu|trainium|custom|external",
+    "  --device auto|cpu|gpu|cuda|rocm|metal|wasm|tpu|trainium|custom|external",
     "  --execution eager|typed-graph",
     "  --arithmetic native",
     "  --seed N --show-backend"
   ]).toList
 
 /--
-Parse shared PPO command options.
+Parse shared RL command options.
 
 Notes:
 - `--log off|none|false` selects `LogDestination.disabled`.
@@ -73,7 +73,7 @@ def parse (exeName : String) (arguments : List String)
     (defaultLogPath : System.FilePath)
     (defaultUpdateCount defaultEvaluationInterval defaultEvaluationEpisodes
       defaultMaximumEvaluationSteps : Nat) :
-    Except String (PPOOptions × List String) := do
+    Except String (Options × List String) := do
   let (logRaw?, arguments) ← TorchLean.CLI.takeFlagValue? arguments "log"
   let (updateCount, arguments) ←
     TorchLean.CLI.takePositiveNatFlag arguments exeName "updates" (default := defaultUpdateCount)
@@ -97,7 +97,7 @@ def parse (exeName : String) (arguments : List String)
        logDestination },
      arguments)
 
-end PPOOptions
+end Options
 end cli
 end rl
 end TorchLean

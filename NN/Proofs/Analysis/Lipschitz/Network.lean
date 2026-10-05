@@ -8,7 +8,6 @@ module
 
 public import NN.Proofs.Analysis.Lipschitz.Norm
 public import NN.Spec.Layers.Activation
-import Mathlib.Tactic.Positivity.Finset
 public import NN.Proofs.Tensor.Basic.Algebra
 
 /-!
@@ -30,10 +29,7 @@ open _root_.TorchLean _root_.TorchLean.Tensor
 open Activation
 open scoped BigOperators
 
-open Spec (dot tensorNormSquared tensor_norm_squared_nonneg
-           tensor_norm_squared_zero_iff mul_spec_comm add_spec_comm dot_comm
-           sum_spec_add_distrib mul_spec_add_left mul_spec_add_right
-           add_spec_assoc)
+open Spec (dot tensorNormSquared tensor_norm_squared_nonneg)
 
 /-! ## Bridges between `tensorL2Dist` bounds and Mathlib's `LipschitzWith` -/
 
@@ -61,37 +57,7 @@ Foundation for tensor-level Lipschitz bounds.
 -/
 theorem relu_scalar_lipschitz (x y : ℝ) :
   |max (0 : ℝ) x - max (0 : ℝ) y| ≤ |x - y| := by
-  -- ReLU is 1-Lipschitz: |max(0,x) - max(0,y)| ≤ |x - y|
-  -- This follows from case analysis on the signs of x and y
-  -- We'll consider four cases based on the signs of x and y
-  by_cases hx : (0 : ℝ) ≤ x
-  · by_cases hy : (0 : ℝ) ≤ y
-    · -- Case 1: x ≥ 0 and y ≥ 0, so max 0 x = x and max 0 y = y
-      simp [max_eq_right hx, max_eq_right hy]
-    · -- Case 2: x ≥ 0 and y < 0, so max 0 x = x and max 0 y = 0
-      push Not at hy
-      simp [max_eq_right hx, max_eq_left (le_of_lt hy)]
-      -- Need to show |x - 0| ≤ |x - y|
-      -- Since x ≥ 0 and y < 0, we have x - y > x
-      have h : (0 : ℝ) ≤ x - y := by linarith
-      have hx_pos : (0 : ℝ) ≤ x := hx
-      rw [abs_of_nonneg hx_pos, abs_of_nonneg h]
-      simp
-      linarith
-  · push Not at hx
-    by_cases hy : (0 : ℝ) ≤ y
-    · -- Case 3: x < 0 and y ≥ 0, so max 0 x = 0 and max 0 y = y
-      simp [max_eq_left (le_of_lt hx), max_eq_right hy]
-      -- Need to show |0 - y| ≤ |x - y|
-      -- Since x < 0 and y ≥ 0, we have |x - y| ≥ y
-      have h : x - y ≤ (0 : ℝ) := by linarith
-      rw [abs_of_nonneg hy, abs_of_nonpos h]
-      simp
-      linarith
-    · -- Case 4: x < 0 and y < 0, so max 0 x = 0 and max 0 y = 0
-      push Not at hy
-      simp [max_eq_left (le_of_lt hx), max_eq_left (le_of_lt hy)]
-
+  simpa only [max_comm (0 : ℝ)] using abs_max_sub_max_le_abs x y 0
 
 private theorem relu_squared_difference_le (x y : ℝ) :
     (Math.reluSpec x - Math.reluSpec y) * (Math.reluSpec x - Math.reluSpec y) ≤
@@ -102,8 +68,8 @@ private theorem relu_squared_difference_le (x y : ℝ) :
     mul_self_le_mul_self (abs_nonneg (Math.reluSpec x - Math.reluSpec y)) hAbs
   simpa [sq_abs, pow_two] using hSquared
 
-private theorem relu_lipschitz_packed {shape : Shape}
-    (x y : Tensor ℝ shape) :
+/-- ReLU is 1-Lipschitz in the L2 norm for tensors of every shape. -/
+theorem relu_lipschitz_general {s : Shape} (x y : Tensor ℝ s) :
     tensorL2Dist (reluSpec x) (reluSpec y) ≤ tensorL2Dist x y := by
   unfold tensorL2Dist tensorL2Norm tensorNormSquared dot
   apply Real.sqrt_le_sqrt
@@ -112,26 +78,6 @@ private theorem relu_lipschitz_packed {shape : Shape}
   intro coordinate _
   simpa [reluSpec, mapSpec, subSpec, mulSpec, Tensor.map] using
     relu_squared_difference_le (x coordinate) (y coordinate)
-
-/-- ReLU is 1-Lipschitz on scalar tensors. -/
-theorem relu_scalar_tensor_lipschitz (x y : Tensor ℝ .scalar) :
-    tensorL2Dist (reluSpec x) (reluSpec y) ≤ tensorL2Dist x y :=
-  relu_lipschitz_packed x y
-
-/-- ReLU is 1-Lipschitz in the L2 norm for tensors of every shape. -/
-theorem relu_lipschitz_general {s : Shape} (x y : Tensor ℝ s) :
-    tensorL2Dist (reluSpec x) (reluSpec y) ≤ tensorL2Dist x y :=
-  relu_lipschitz_packed x y
-
-/--
-Rank-one ReLU is 1-Lipschitz in $\ell_2$.
-
-This theorem is just the vector specialization of `relu_lipschitz_general`, but it is convenient
-for callers working with ordinary `.dim n .scalar` activations.
--/
-theorem relu_vector_lipschitz {n : Nat} (x y : Tensor ℝ [n]) :
-  tensorL2Dist (reluSpec x) (reluSpec y) ≤ tensorL2Dist x y := by
-  simpa using (relu_lipschitz_general (s := .dim n .scalar) x y)
 
 /-- ReLU is `1`-Lipschitz for the Euclidean metric on real tensors. -/
 theorem reluSpec_lipschitzWith {s : Shape} :
@@ -149,17 +95,7 @@ reuse additive and scaling lemmas than reason about `subSpec` directly.
 -/
 theorem sub_spec_eq_add_scale_neg_one {s : Shape} (a b : Tensor ℝ s) :
   subSpec a b = addSpec a (scaleSpec b (-1 : ℝ)) := by
-  apply TorchLean.Tensor.Internal.Rep.ext
-  intro coordinate
-  simp [subSpec, addSpec, scaleSpec, map2Spec, mapSpec, Tensor.map]
-  ring
-
-/-- Subtracting the zero tensor on the right leaves the tensor unchanged. -/
-theorem sub_spec_zero_right {s : Shape} (t : Tensor ℝ s) :
-  subSpec t (Tensor.full s (0 : ℝ)) = t := by
-  apply TorchLean.Tensor.Internal.Rep.ext
-  intro coordinate
-  simp [subSpec, map2Spec, Tensor.full]
+  rw [subSpec_eq_sub, addSpec_eq_add, scaleSpec_eq_smul, neg_one_smul, sub_eq_add_neg]
 
 /--
 Matrix-vector multiplication sends the zero vector to the zero vector.
@@ -224,107 +160,31 @@ theorem matVec_norm_le_frobenius {m n : Nat}
   (x : Tensor ℝ [n]) :
   tensorL2Norm (matVecMulSpec W x) ≤ matrixFrobeniusNorm W * tensorL2Norm x := by
   classical
-  -- Work with the squared form and then apply `Real.sqrt`.
-  have hsum_nonneg : 0 ≤ ∑ i : Fin m, tensorNormSquared (get W i) := by
-    have : 0 ≤ ∑ i ∈ (Finset.univ : Finset (Fin m)), tensorNormSquared (get W i) := by
-      refine Finset.sum_nonneg ?_
-      intro i _
-      exact tensor_norm_squared_nonneg (tensor := get W i)
-    simpa using this
-
+  have hsum_nonneg : 0 ≤ ∑ i : Fin m, tensorNormSquared (get W i) :=
+    Finset.sum_nonneg fun i _ => tensor_norm_squared_nonneg (get W i)
+  -- Each coordinate of `W x` is a row inner product, so squared Cauchy–Schwarz bounds its square
+  -- by `‖rowᵢ‖² ‖x‖²`; summing over the rows gives the squared Frobenius bound.
+  have hterm : ∀ i : Fin m,
+      getScalar (matVecMulSpec W x) i * getScalar (matVecMulSpec W x) i ≤
+        tensorNormSquared (get W i) * tensorNormSquared x := by
+    intro i
+    rw [mat_vec_coord_eq_dot_row]
+    simp only [tensorNormSquared, dot_eq_inner]
+    exact real_inner_mul_inner_self_le _ _
   have hsquared :
       tensorNormSquared (matVecMulSpec W x) ≤
         (∑ i : Fin m, tensorNormSquared (get W i)) * tensorNormSquared x := by
-    -- Expand `‖W x‖²` as a sum of squared coordinates.
-    have hnormsq :
-        tensorNormSquared (matVecMulSpec W x) =
-          ∑ i : Fin m, (getScalar (matVecMulSpec W x) i) * (getScalar (matVecMulSpec W x) i) := by
-      simpa [tensorNormSquared] using
-        (dot_vec_eq_sum (a := matVecMulSpec W x) (b := matVecMulSpec W x))
-
-    -- Bound each coordinate via Cauchy–Schwarz on the corresponding row.
-    have hterm :
-        ∀ i : Fin m,
-          (getScalar (matVecMulSpec W x) i) * (getScalar (matVecMulSpec W x) i) ≤
-            tensorNormSquared (get W i) * tensorNormSquared x := by
-      intro i
-      have hcoord : getScalar (matVecMulSpec W x) i = dot (get W i) x :=
-        mat_vec_coord_eq_dot_row (W := W) (x := x) (i := i)
-      have cs :
-          |dot (get W i) x| ≤ tensorL2Norm (get W i) * tensorL2Norm x :=
-        tensor_cauchy_schwarz (x := get W i) (y := x)
-      have cs2 :
-          (dot (get W i) x) ^ 2 ≤ (tensorL2Norm (get W i) * tensorL2Norm x) ^ 2 := by
-        -- Square both sides of `cs` via `mul_le_mul`.
-        have hmul :
-            |dot (get W i) x| * |dot (get W i) x| ≤
-              (tensorL2Norm (get W i) * tensorL2Norm x) *
-                (tensorL2Norm (get W i) * tensorL2Norm x) := by
-          refine mul_le_mul cs cs (abs_nonneg (dot (get W i) x)) ?_
-          exact mul_nonneg (tensor_l2_norm_nonneg (get W i)) (tensor_l2_norm_nonneg x)
-        have hsq :
-            (|dot (get W i) x|) ^ 2 ≤ (tensorL2Norm (get W i) * tensorL2Norm x) ^ 2 := by
-          simpa [pow_two] using hmul
-        simpa [sq_abs] using hsq
-
-      have row_sq : (tensorL2Norm (get W i)) ^ 2 = tensorNormSquared (get W i) := by
-        unfold tensorL2Norm
-        simp [Real.sq_sqrt (tensor_norm_squared_nonneg (tensor := get W i))]
-      have x_sq : (tensorL2Norm x) ^ 2 = tensorNormSquared x := by
-        unfold tensorL2Norm
-        simp [Real.sq_sqrt (tensor_norm_squared_nonneg (tensor := x))]
-      have rhs_sq :
-          (tensorL2Norm (get W i) * tensorL2Norm x) ^ 2 =
-            tensorNormSquared (get W i) * tensorNormSquared x := by
-        -- `(a*b)^2 = a^2 * b^2`, then unfold the squares of the norms.
-        simp [mul_pow, row_sq, x_sq]
-
-      have hsq :
-          (getScalar (matVecMulSpec W x) i) ^ 2 ≤
-            tensorNormSquared (get W i) * tensorNormSquared x := by
-        -- Replace the coordinate by the row dot-product and use `cs2`.
-        simpa [hcoord, rhs_sq] using cs2
-
-      -- Convert `a^2` back into `a*a`.
-      simpa [pow_two] using hsq
-
-    -- Sum the coordinate-wise bounds and factor out `‖x‖²`.
-    have hsum_le :
-        (∑ i : Fin m,
-              (getScalar (matVecMulSpec W x) i) * (getScalar (matVecMulSpec W x) i)) ≤
-          ∑ i : Fin m, tensorNormSquared (get W i) * tensorNormSquared x := by
-      have :
-          (∑ i ∈ (Finset.univ : Finset (Fin m)),
-                (getScalar (matVecMulSpec W x) i) * (getScalar (matVecMulSpec W x) i)) ≤
-            ∑ i ∈ (Finset.univ : Finset (Fin m)), tensorNormSquared (get W i) *
-              tensorNormSquared x := by
-        refine Finset.sum_le_sum ?_
-        intro i _
-        exact hterm i
-      simpa using this
-
-    have hfactor :
-        (∑ i : Fin m, tensorNormSquared (get W i) * tensorNormSquared x) =
-          (∑ i : Fin m, tensorNormSquared (get W i)) * tensorNormSquared x := by
-      have h :=
-        (Finset.sum_mul (s := (Finset.univ : Finset (Fin m)))
-          (f := fun i : Fin m => tensorNormSquared (get W i)) (a := tensorNormSquared x))
-      simpa using h.symm
-
-    -- Put everything together.
     calc
       tensorNormSquared (matVecMulSpec W x)
-          = ∑ i : Fin m,
-              (getScalar (matVecMulSpec W x) i) * (getScalar (matVecMulSpec W x) i) := hnormsq
-      _ ≤ ∑ i : Fin m, tensorNormSquared (get W i) * tensorNormSquared x := hsum_le
-      _ = (∑ i : Fin m, tensorNormSquared (get W i)) * tensorNormSquared x := hfactor
-
-  -- Take square roots and rewrite the RHS using `Real.sqrt_mul`.
+          = ∑ i : Fin m, getScalar (matVecMulSpec W x) i * getScalar (matVecMulSpec W x) i := by
+            rw [tensorNormSquared, dot_vec_eq_sum]
+      _ ≤ ∑ i : Fin m, tensorNormSquared (get W i) * tensorNormSquared x :=
+            Finset.sum_le_sum fun i _ => hterm i
+      _ = (∑ i : Fin m, tensorNormSquared (get W i)) * tensorNormSquared x :=
+            (Finset.sum_mul _ _ _).symm
   unfold matrixFrobeniusNorm tensorL2Norm
-  have hsqrt := Real.sqrt_le_sqrt hsquared
-  -- Rewrite `√(A * B)` as `√A * √B` with `A = ∑ i, ‖row_i‖² ≥ 0`.
-  rw [Real.sqrt_mul hsum_nonneg (tensorNormSquared x)] at hsqrt
-  simpa using hsqrt
+  rw [← Real.sqrt_mul hsum_nonneg]
+  exact Real.sqrt_le_sqrt hsquared
 
 /--
 Linear transformations preserve $\ell_2$-norm bounds.
@@ -396,9 +256,5 @@ theorem relu_linear_lipschitz {m n : Nat}
       relu_lipschitz_general (matVecMulSpec W x) (matVecMulSpec W y)
     _ ≤ matrixFrobeniusNorm W * tensorL2Dist x y                        :=
       linear_op_norm_bound W x y
-
--- ====================================================================
--- SPECIALIZED ACTIVATION FUNCTION ANALYSIS
--- ====================================================================
 
 end Proofs

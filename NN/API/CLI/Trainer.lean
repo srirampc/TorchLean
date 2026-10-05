@@ -36,10 +36,9 @@ def parse (arguments : List String) (base : Trainer.RunConfig := {}) :
     throw <|
       "TorchLean.Trainer: supervised training supports native or IEEE arithmetic; " ++
         "complex arithmetic requires an explicit complex-valued training API"
-  let hasFlag (name : String) :=
-    arguments.any fun argument => argument == s!"--{name}" || argument.startsWith s!"--{name}="
-  let device := if hasFlag "device" then selection.device else base.device
-  let backendProfile? := if hasFlag "device" then none else base.backendProfile?
+  let hasDevice := CLI.hasFlagValue arguments "device"
+  let device := if hasDevice then selection.device else base.device
+  let backendProfile? := if hasDevice then none else base.backendProfile?
   if backendProfile?.isNone && (NN.Backend.BackendProfile.maintainedForDevice? device).isNone then
     throw <|
       s!"device `{device.cliName}` has no maintained runtime profile; " ++
@@ -47,7 +46,8 @@ def parse (arguments : List String) (base : Trainer.RunConfig := {}) :
   pure
     ({ base with
         arithmetic := selection.arithmetic
-        execution := if hasFlag "execution" then selection.execution else base.execution
+        execution :=
+          if CLI.hasFlagValue arguments "execution" then selection.execution else base.execution
         device
         backendProfile?
         showBackend := selection.showBackend || base.showBackend },
@@ -63,9 +63,9 @@ def parseCommandLine
 
 /-- Render a run configuration as the command-line arguments `parse` accepts. -/
 def cliArguments (run : Trainer.RunConfig) : List String :=
-  ["--arithmetic", run.arithmetic.cliName] ++
-  ["--execution", Runtime.ExecutionMode.cliName run.execution] ++
-  ["--device", run.device.cliName] ++
+  ["--arithmetic", run.arithmetic.cliName,
+    "--execution", Runtime.ExecutionMode.cliName run.execution,
+    "--device", run.device.cliName] ++
   (if run.showBackend then ["--show-backend"] else [])
 
 end TorchLean.CLI.Trainer
@@ -89,17 +89,3 @@ def trainOptions
     logNotes }
 
 end TorchLean.CLI.Training.RunOptions
-
-namespace TorchLean.CLI.Training.OptimizerOptions
-
-/-- Training options consumed by `Trainer.train`. -/
-def trainOptions
-    (optimizerOptions : CLI.Training.OptimizerOptions)
-    (enableLog : Bool := true)
-    (logEvery : Nat := 0)
-    (logTitle : String := "Training")
-    (logNotes : Array String := #[]) :
-    Trainer.TrainOptions :=
-  optimizerOptions.toRunOptions.trainOptions enableLog logEvery logTitle logNotes
-
-end TorchLean.CLI.Training.OptimizerOptions

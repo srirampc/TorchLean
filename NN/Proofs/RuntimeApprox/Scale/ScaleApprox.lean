@@ -31,7 +31,6 @@ https://pytorch.org/docs/stable/generated/torch.allclose.html
 
 @[expose] public section
 
-
 namespace Proofs
 namespace RuntimeApprox
 
@@ -42,9 +41,7 @@ open scoped NNReal
 
 noncomputable section
 
--- ---------------------------------------------------------------------------
--- Scale vectors aligned with contexts
--- ---------------------------------------------------------------------------
+/-! ## Scale vectors aligned with contexts -/
 
 /-- Nonnegative scale bounds aligned with a context shape list. -/
 inductive BList : List Shape → Type where
@@ -78,8 +75,7 @@ def unsnoc {τ : Shape} : {ss : List Shape} → BList (ss ++ [τ]) → BList ss 
 
 Graph evaluation appends one bound per node, so the pair `snoc`/`unsnoc` is how a scale list follows
 a growing context. This lemma is what keeps the induction on graph length from having to reason
-about
-list append at all. -/
+about list append at all. -/
 @[simp] theorem unsnoc_snoc {ss : List Shape} {τ : Shape} (xs : BList ss) (e : ℝ≥0) :
     unsnoc (ss := ss) (τ := τ) (snoc (ss := ss) (τ := τ) xs e) = (xs, e) := by
   induction ss with
@@ -100,9 +96,7 @@ def get : {ss : List Shape} → BList ss → (i : Fin ss.length) → ℝ≥0
 
 end BList
 
--- ---------------------------------------------------------------------------
--- Scale predicates (single tensor and contexts)
--- ---------------------------------------------------------------------------
+/-! ## Scale predicates (single tensor and contexts) -/
 
 /-- A scale bound says both spec and runtime (mapped to spec) norms are bounded by `B`. -/
 def scaleWith {α : Type} [TorchLean.Storage α] {s : Shape}
@@ -257,9 +251,7 @@ theorem scaleCtx_get {α : Type} [TorchLean.Storage α] {toSpec : α → SpecSca
                             ⟨j, Nat.lt_of_succ_lt_succ hiVal⟩
                           simpa [TorchLean.TensorPack.get, BList.get] using this
 
--- ---------------------------------------------------------------------------
--- Derive abs+rel tolerances from (eps, scale)
--- ---------------------------------------------------------------------------
+/-! ## Derive abs+rel tolerances from (eps, scale) -/
 
 /-- A derived tolerance from an absolute error `eps` and a scale bound `B`.
 
@@ -280,12 +272,7 @@ theorem absOnly_le_tolFromEpsScale (eps : ℝ) (B : ℝ≥0) :
     (ApproxTol.absOnly eps).abs ≤ (tolFromEpsScale eps B).abs ∧
     (ApproxTol.absOnly eps).rel ≤ (tolFromEpsScale eps B).rel ∧
     (ApproxTol.absOnly eps).slack ≤ (tolFromEpsScale eps B).slack := by
-  constructor
-  · simp [ApproxTol.absOnly, tolFromEpsScale, ApproxTol.ofReal]
-  constructor
-  · -- `0 ≤ Real.toNNReal _`
-    simp [ApproxTol.absOnly, tolFromEpsScale, ApproxTol.ofReal]
-  · simp [ApproxTol.absOnly, tolFromEpsScale, ApproxTol.ofReal]
+  refine ⟨?_, ?_, ?_⟩ <;> simp [ApproxTol.absOnly, tolFromEpsScale, ApproxTol.ofReal]
 
 /-- An absolute tensor bound upgrades to the abs-plus-rel tolerance derived from a scale bound. -/
 theorem approxTensorWithTol_from_scale {α : Type} [TorchLean.Storage α] {s : Shape}
@@ -296,11 +283,11 @@ theorem approxTensorWithTol_from_scale {α : Type} [TorchLean.Storage α] {s : S
   -- `approxTensor` -> `absOnly eps`, then enlarge tolerance (abs+rel) via monotonicity.
   have habsOnly :
       approxTensorWithTol (α := α) (toSpec := toSpec) spec runtime (ApproxTol.absOnly eps) := by
-    -- use eps->absOnly lift lemma for `approx_with`
+    -- use eps->absOnly lift lemma for `approxWith`
     have : approxWith (α := α) (toSpec := toSpec) (norm := linfNorm) spec runtime eps := by
       simpa [approxTensor] using h
     simpa [approxTensorWithTol] using
-      (approx_with_to_approx_with_tol_absOnly (toSpec := toSpec) (norm := linfNorm)
+      (approxWithTol_absOnly_of_approxWith (toSpec := toSpec) (norm := linfNorm)
         (spec := spec) (runtime := runtime) eps this)
   rcases absOnly_le_tolFromEpsScale eps B with ⟨habs, hrel, hslack⟩
   exact approxTensorWithTol_mono (α := α) (toSpec := toSpec) (spec := spec) (runtime := runtime)
@@ -309,15 +296,13 @@ theorem approxTensorWithTol_from_scale {α : Type} [TorchLean.Storage α] {s : S
 /-- Per-entry form of the upgrade: each context slot gets the tolerance derived from its own `eps`
 and its own scale bound.
 
-The scale hypothesis is currently unused in the proof, since the derived tolerance is reached purely
-by weakening. It stays in the signature because it is what makes the resulting relative component
-meaningful, and dropping it would let callers form tolerances against a scale nothing satisfies. -/
+As in `approxTensorWithTol_from_scale`, no scale hypothesis is needed: the derived tolerance is
+reached purely by weakening the absolute bound. A scale bound on the context only makes the
+relative component informative; it is not required for soundness. -/
 theorem approxCtx_get_tolFromEpsScale {α : Type} [TorchLean.Storage α] {toSpec : α → SpecScalar}
     {Γ : List Shape}
     {xS : TorchLean.TensorPack SpecScalar Γ} {xR : TorchLean.TensorPack α Γ} {eps : EList Γ}
-    {bs : BList Γ}
-    (hε : approxCtx (α := α) toSpec xS xR eps) (_hB : scaleCtx (α := α) toSpec xS xR bs)
-    (i : Fin Γ.length) :
+    (bs : BList Γ) (hε : approxCtx (α := α) toSpec xS xR eps) (i : Fin Γ.length) :
     approxTensorWithTol (α := α) (toSpec := toSpec)
       (TorchLean.TensorPack.get (α := SpecScalar) xS i)
       (TorchLean.TensorPack.get (α := α) xR i)

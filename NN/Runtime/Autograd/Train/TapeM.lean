@@ -7,7 +7,6 @@ Authors: TorchLean Team
 module
 
 public import NN.Runtime.Autograd.Engine.TapeM
-public import NN.Data.SampleStream
 
 /-!
 # Training-facing TapeM helpers
@@ -20,7 +19,7 @@ The main helpers are:
 
 - `param` for trainable leaves (`requiresGrad := true`);
 - `const` for data or frozen leaves (`requiresGrad := false`);
-- `meanScalarOver` and `meanScalarOverDataset` for averaged scalar losses.
+- `meanScalarOver` for averaged scalar losses; pass `SampleStream.toArray` for a finite stream.
 
 ## Higher derivatives
 
@@ -90,20 +89,6 @@ def meanScalarOver {a b : Type}
       let n : Nat := xs.size
       let invN : a := (1 : a) / (n : a)
       Runtime.Autograd.TapeM.scale (s := Shape.scalar) sumLossId invN
-
-/--
-Mean reduction for a finite `SampleStream`.
-
-This is the natural bridge from `TorchLean.Data.SampleStream` batches to a scalar loss node. It
-materializes the current dataset order as an array and delegates to `meanScalarOver`, without
-shuffling, batching, or mutating the dataset.
--/
-def meanScalarOverDataset {a b : Type}
-  [TorchLean.Storage a] [Add a] [Mul a] [Div a] [One a] [NatCast a]
-  (tag : String) (xs : TorchLean.Data.SampleStream b)
-  (lossOf : b -> Runtime.Autograd.TapeM a Nat) :
-  Runtime.Autograd.TapeM a Nat :=
-  meanScalarOver (tag := tag) xs.toArray lossOf
 
 end TapeM
 end Train

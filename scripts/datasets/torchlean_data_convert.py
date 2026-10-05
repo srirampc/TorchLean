@@ -17,7 +17,7 @@ The output is always `.npy`, optionally accompanied by a small JSON manifest.
 That keeps TorchLean examples and training code simple:
 
     python3 scripts/datasets/torchlean_data_convert.py tensor --input data.pt --key x --output X.npy
-    lake exe -K cuda=true torchlean cnn --device cuda --x X.npy --y y.npy --n-total 1000
+    scripts/lake.sh -Kcuda=true exe torchlean cnn --device cuda --x X.npy --y y.npy --n-total 1000
 """
 
 from __future__ import annotations
@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
@@ -80,13 +81,39 @@ def to_numpy(x: Any, *, source: Path) -> np.ndarray:
 
 
 def cast_array(arr: np.ndarray, dtype: str) -> np.ndarray:
-    """Return a contiguous array, casting when a dtype is requested."""
-    if dtype == "preserve":
-        return np.ascontiguousarray(arr)
+    """Return a contiguous array without turning a rank-zero tensor into a vector."""
     try:
-        return np.ascontiguousarray(arr.astype(dtype, copy=False))
-    except TypeError as exc:
+        return np.asarray(arr, dtype=None if dtype == "preserve" else dtype, order="C")
+    except (TypeError, ValueError) as exc:
         die(f"unsupported dtype {dtype!r}: {exc}")
+
+
+def npy_output_path(value: str) -> Path:
+    """Match NumPy's suffix convention so the printed path and manifest name the saved file."""
+    return Path(value if value.endswith(".npy") else value + ".npy")
+
+
+def cast_labels(values: Any, dtype: str) -> np.ndarray:
+    """Reject fractional, nonfinite or unrepresentable labels before writing an artifact."""
+    integers = []
+    source = values if isinstance(values, np.ndarray) else np.asarray(values, dtype=object)
+    for value in source.reshape(-1).tolist():
+        if not isinstance(value, (int, float)) or (
+            isinstance(value, float) and (not math.isfinite(value) or not value.is_integer())
+        ):
+            die(f"expected an integer label, got {value!r}")
+        integers.append(int(value))
+    try:
+        target = np.dtype(dtype)
+        if target.kind not in "iuf":
+            die(f"labels require an integer or floating dtype, got {dtype!r}")
+        with np.errstate(over="ignore", invalid="ignore"):
+            labels = np.asarray(integers, dtype=target)
+    except (TypeError, ValueError, OverflowError) as exc:
+        die(f"labels cannot be represented as {dtype}: {exc}")
+    if any(actual != expected for actual, expected in zip(labels.tolist(), integers)):
+        die(f"labels cannot be represented exactly as {dtype}")
+    return labels
 
 
 def write_manifest(out: Path, arr: np.ndarray, *, source: Path, key: str | None, kind: str) -> None:
@@ -169,7 +196,8 @@ def load_tensor(
     if suffix == ".npy":
         return np.load(path, allow_pickle=False)
     if suffix == ".npz":
-        return select_key(np.load(path, allow_pickle=False), key, source=path)
+        with np.load(path, allow_pickle=False) as archive:
+            return select_key(archive, key, source=path)
     if suffix == ".mat":
         try:
             import scipy.io  # type: ignore
@@ -187,7 +215,7 @@ def load_tensor(
 def cmd_tensor(args: argparse.Namespace) -> None:
     """Implement the `tensor` subcommand."""
     inp = Path(args.input)
-    out = Path(args.output)
+    out = npy_output_path(args.output)
     out.parent.mkdir(parents=True, exist_ok=True)
     obj = load_tensor(
         inp,
@@ -197,7 +225,7 @@ def cmd_tensor(args: argparse.Namespace) -> None:
         trusted_pickle=args.trusted_pickle,
     )
     arr = cast_array(to_numpy(obj, source=inp), args.dtype)
-    np.save(out, arr)
+    np.save(out, arr, allow_pickle=False)
     if args.manifest:
         write_manifest(out, arr, source=inp, key=args.key, kind="tensor")
     print(f"[write] {out} shape={tuple(arr.shape)} dtype={arr.dtype}")
@@ -237,12 +265,10 @@ def read_labels_csv(path: Path, label_col: str | None, *, skip_header: int = 0) 
 def cmd_labels(args: argparse.Namespace) -> None:
     """Implement the `labels` subcommand, including optional class-range checks."""
     inp = Path(args.input)
-    out = Path(args.output)
+    out = npy_output_path(args.output)
     out.parent.mkdir(parents=True, exist_ok=True)
     if inp.suffix.lower() == ".csv":
-        labels = np.asarray(
-            read_labels_csv(inp, args.label_col, skip_header=args.skip_header), dtype=args.dtype
-        )
+        values = read_labels_csv(inp, args.label_col, skip_header=args.skip_header)
     else:
         obj = load_tensor(
             inp,
@@ -250,12 +276,15 @@ def cmd_labels(args: argparse.Namespace) -> None:
             csv_skip_header=args.skip_header,
             trusted_pickle=args.trusted_pickle,
         )
-        labels = cast_array(to_numpy(obj, source=inp), args.dtype).reshape(-1)
+        values = to_numpy(obj, source=inp)
+    labels = cast_labels(values, args.dtype)
     if args.classes is not None:
+        if args.classes <= 0:
+            die("--classes must be positive")
         bad = labels[(labels < 0) | (labels >= args.classes)]
         if bad.size:
             die(f"labels outside [0,{args.classes}): first bad label {bad[0]}")
-    np.save(out, labels)
+    np.save(out, labels, allow_pickle=False)
     if args.manifest:
         write_manifest(out, labels, source=inp, key=args.key, kind="labels")
     print(f"[write] {out} shape={tuple(labels.shape)} dtype={labels.dtype}")
@@ -269,8 +298,16 @@ def cmd_image_folder(args: argparse.Namespace) -> None:
         die("image-folder conversion requires Pillow: python3 -m pip install pillow")
 
     root = Path(args.input)
-    x_out = Path(args.x_output)
-    y_out = Path(args.y_output) if args.y_output else None
+    x_out = npy_output_path(args.x_output)
+    y_out = npy_output_path(args.y_output) if args.y_output else None
+    if args.labels_from_dirs and y_out is None:
+        die("--y-output is required with --labels-from-dirs")
+    if y_out is not None and x_out.resolve() == y_out.resolve():
+        die("--x-output and --y-output must name different files")
+    if args.height <= 0 or args.width <= 0:
+        die("--height and --width must be positive")
+    if args.limit is not None and args.limit <= 0:
+        die("--limit must be positive")
     exts = {e.lower() if e.startswith(".") else f".{e.lower()}" for e in args.ext}
 
     if args.labels_from_dirs:
@@ -297,7 +334,8 @@ def cmd_image_folder(args: argparse.Namespace) -> None:
     images: list[np.ndarray] = []
     labels: list[int] = []
     for p, label in files:
-        img = Image.open(p).convert("RGB").resize((w, h))
+        with Image.open(p) as source:
+            img = source.convert("RGB").resize((w, h))
         arr = np.asarray(img, dtype=np.float32) / 255.0
         images.append(np.transpose(arr, (2, 0, 1)))
         if label >= 0:
@@ -305,17 +343,16 @@ def cmd_image_folder(args: argparse.Namespace) -> None:
 
     X = np.stack(images, axis=0).astype(args.dtype, copy=False)
     x_out.parent.mkdir(parents=True, exist_ok=True)
-    np.save(x_out, X)
+    np.save(x_out, X, allow_pickle=False)
     if args.manifest:
         write_manifest(x_out, X, source=root, key=None, kind="images")
     print(f"[write] {x_out} shape={tuple(X.shape)} dtype={X.dtype}")
 
     if args.labels_from_dirs:
-        if y_out is None:
-            die("--y-output is required with --labels-from-dirs")
-        y = np.asarray(labels, dtype=np.float32)
+        assert y_out is not None
+        y = cast_labels(labels, "float32")
         y_out.parent.mkdir(parents=True, exist_ok=True)
-        np.save(y_out, y)
+        np.save(y_out, y, allow_pickle=False)
         if args.manifest:
             write_manifest(y_out, y, source=root, key=None, kind="labels")
         print(f"[write] {y_out} shape={tuple(y.shape)} dtype={y.dtype}")

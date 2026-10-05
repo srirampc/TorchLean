@@ -5,10 +5,6 @@ Authors: TorchLean contributors
 -/
 module
 
-public import Mathlib.Algebra.Order.Field.Basic
-import Mathlib.Tactic.NormNum.Inv
-import Mathlib.Tactic.NormNum.Pow
-import Mathlib.Tactic.Positivity.Finset
 public meta import NN.Tensor.Internal.Elab.Einsum.Index -- shake: keep
 public import NN.Tensor.Internal.Elab.Einsum.Tiling -- shake: keep
 
@@ -29,22 +25,22 @@ open Lean.Elab
 open Lean.Elab.Term
 open Lean.Meta
 
-open Lean.Elab
-open Lean.Elab.Term
-open Lean.Meta
-
 /--
 Report whether a generated kernel contains a conversion or quotient-remainder
 expression handled by the focused native-index simplifier.
 
 The scan keeps the simplifier away from unrelated symbolic and scalar terms.
+Natural-number division in symbolic indices does not require native-word normalization.
 -/
 def hasNativeIndexRedex (value : Expr) : Bool :=
   (value.find? fun subexpression =>
     subexpression.isConstOf ``Nat.toUSize ||
       subexpression.isConstOf ``USize.ofNat ||
-      subexpression.isConstOf ``HDiv.hDiv ||
-      subexpression.isConstOf ``HMod.hMod).isSome
+      ((subexpression.isAppOfArity ``HDiv.hDiv 6 ||
+          subexpression.isAppOfArity ``HMod.hMod 6) &&
+        subexpression.getAppArgs[0]!.isConstOf ``USize &&
+        subexpression.getAppArgs[1]!.isConstOf ``USize &&
+        subexpression.getAppArgs[2]!.isConstOf ``USize)).isSome
 
 /--
 Remove a generated native-to-natural-to-native conversion round trip.

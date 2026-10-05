@@ -8,6 +8,14 @@ module
 
 public import NN.Proofs.Autograd.Runtime.Link.Core
 
+/-!
+# Tape invariants of lowered graphs
+
+Lowering a graph marks every runtime node as a gradient accumulation slot and only emits backward
+contributions to earlier node ids (`BackwardPidsLt`). The dense reverse sweep proofs in
+`BackwardGraph` and `BackwardGraphData` consume both invariants.
+-/
+
 @[expose] public section
 
 namespace Proofs
@@ -22,15 +30,21 @@ namespace Graph
 open Runtime
 open Runtime.Autograd
 
-/-!
-## Runtime link: `lowerGraphToTape` + `Tape.backwardDenseFrom`
-
-`lowerGraphToTape` produces a runtime tape whose node ids correspond to positions in the proof
-context `Γ ++ ss`, and bakes the proved `vjp` into each node's runtime `backward` closure.
-
-The theorem `backwardDenseFrom_lowerGraphToTape_eq_backpropAllCtx` states that executing the
-runtime reverse-mode loop on this lowered tape matches the proved `backpropAllCtx`.
--/
+/-- `addLeaves` keeps every tape node eligible for gradient accumulation. -/
+theorem all_requiresGrad_addLeaves {α : Type} [TorchLean.Storage α] (t : Tape α)
+    (ht : t.nodes.all (fun n => n.requiresGrad) = true)
+    {Γ : List Shape} (xs : TorchLean.TensorPack α Γ) :
+    (addLeaves (α := α) (t := t) (Γ := Γ) xs).nodes.all (fun n => n.requiresGrad) = true := by
+  induction xs generalizing t with
+  | nil => simpa [addLeaves] using ht
+  | cons x xs ih =>
+      -- `leaf` pushes a node with `requiresGrad = true`, so `.all` survives the push.
+      let t' : Tape α := (Runtime.Autograd.Tape.leaf (t := t) x).1
+      have ht' : t'.nodes.all (fun n => n.requiresGrad) = true := by
+        simpa [t', Runtime.Autograd.Tape.leaf, Runtime.Autograd.Tape.addNode, Array.all_push]
+          using ht
+      simpa [addLeaves, t', Runtime.Autograd.Tape.leaf, Runtime.Autograd.Tape.addNode]
+        using ih (t := t') ht'
 
 /--
 All nodes produced by `lowerGraphDataToTape` have `requiresGrad = true`.
@@ -45,43 +59,19 @@ theorem lowerGraphDataToTape_all_requires_grad_true {α : Type} {Δ : Type}
     (d : Δ) :
     ((lowerGraphDataToTape (α := α) (Δ := Δ) (Γ := Γ) (ss := ss) g x d).1.nodes.all (fun n =>
       n.requiresGrad)) = true := by
-  -- Helper: if the current tape has `.all requiresGrad = true`, `addLeaves` preserves it.
-  have addLeaves_all :
-      ∀ (t : Tape α),
-        t.nodes.all (fun n => n.requiresGrad) = true →
-          ∀ {Γ : List Shape} (xs : TorchLean.TensorPack α Γ),
-            (addLeaves (α := α) (t := t) (Γ := Γ) xs).nodes.all (fun n => n.requiresGrad) = true :=
-              by
-    intro t ht Γ xs
-    induction xs generalizing t with
-    | nil =>
-        simpa [addLeaves] using ht
-    | cons x xs ih =>
-        -- push one leaf (which has `requiresGrad = true`) and recurse
-        let t' : Tape α := (Runtime.Autograd.Tape.leaf (t := t) x).1
-        have ht' : t'.nodes.all (fun n => n.requiresGrad) = true := by
-          simpa [t', Runtime.Autograd.Tape.leaf, Runtime.Autograd.Tape.addNode, Array.all_push]
-            using ht
-        simpa [addLeaves, t', Runtime.Autograd.Tape.leaf, Runtime.Autograd.Tape.addNode] using ih (t
-          := t') ht'
-
   induction g with
   | nil =>
-      have h0 : (Runtime.Autograd.Tape.empty (α := α)).nodes.all (fun n => n.requiresGrad) = true
-        := by
+      have h0 :
+          (Runtime.Autograd.Tape.empty (α := α)).nodes.all (fun n => n.requiresGrad) = true := by
         simp [Runtime.Autograd.Tape.empty]
       simpa [lowerGraphDataToTape] using
-        addLeaves_all (t := Runtime.Autograd.Tape.empty (α := α)) h0 (Γ := Γ) x
+        all_requiresGrad_addLeaves (Runtime.Autograd.Tape.empty (α := α)) h0 x
   | snoc g node ih =>
       rename_i ssPrev τ
       simp [lowerGraphDataToTape, Runtime.Autograd.Tape.addNode, ih]
 
-/--
-Pointwise form of `lowerGraphDataToTape_all_requires_grad_true`: every node index is `requiresGrad =
-  true`.
-
-This is often more convenient than the `.all` formulation when reasoning about array indexing.
--/
+/-- Pointwise form of `lowerGraphDataToTape_all_requires_grad_true`, convenient for array
+indexing: every node of the lowered tape has `requiresGrad = true`. -/
 theorem lowerGraphDataToTape_requires_grad_true {α : Type} {Δ : Type}
     [TorchLean.Storage α]
     {Γ : List Shape} {ss : List Shape} (g : GraphData α Δ Γ ss)
@@ -109,13 +99,8 @@ theorem lowerGraphDataToTape_backward_pids_lt_id {α : Type} {Δ : Type}
     {Γ : List Shape} {ss : List Shape} (g : GraphData α Δ Γ ss)
     (x : TorchLean.TensorPack α Γ)
     (d0 : Δ) :
-    ∀ id (n : Runtime.Autograd.Node α),
-      (Runtime.Autograd.Tape.getNode?
-        (t := (lowerGraphDataToTape (α := α) (Δ := Δ) (Γ := Γ) (ss := ss) g x d0).1) id =
-          some n) →
-      ∀ (d : Spec.SomeTensor α) (contribs : Array (Nat × Spec.SomeTensor α)),
-        n.backward d = .ok contribs →
-          ∀ {pid : Nat} {pg : Spec.SomeTensor α}, (pid, pg) ∈ contribs → pid < id := by
+    BackwardPidsLt (lowerGraphDataToTape (α := α) (Δ := Δ) (Γ := Γ) (ss := ss) g x d0).1 := by
+  unfold BackwardPidsLt
   induction g with
   | nil =>
       intro id n hn d contribs hback pid pg hmem
@@ -133,9 +118,8 @@ theorem lowerGraphDataToTape_backward_pids_lt_id {α : Type} {Δ : Type}
             symm
             simpa [Array.getElem?_map, hx] using hn'
           subst hnEq
-          have hcontribs : contribs = #[] := by
-            have := congrArg (fun r => match r with | .ok xs => xs | .error _ => #[]) hback
-            simpa [leafNodeOfSomeTensor] using this
+          -- A leaf contributes no parent cotangents.
+          have hcontribs : contribs = #[] := (Except.ok.inj hback).symm
           subst hcontribs
           simp at hmem
   | snoc g node ih =>
@@ -160,25 +144,16 @@ theorem lowerGraphDataToTape_backward_pids_lt_id {α : Type} {Δ : Type}
           by_contra hne
           have : runtimeNode.backward d = .error "autograd: upstream gradient shape mismatch" :=
             lowerNode_backward_of_ne _ _ _ _ d hne
-          simp [this]  at hback
+          simp [this] at hback
+        have hret : runtimeNode.backward d =
+            .ok (TorchLean.TensorPack.toIndexedShapeErasedArray (α := α) (ss := Γ ++ ssPrev)
+              (node.vjp ctxPrev d0 (d.cast hd)) 0) :=
+          lowerNode_backward_of_shape _ _ _ _ d hd
         have hcontribs :
             contribs =
               TorchLean.TensorPack.toIndexedShapeErasedArray (α := α) (ss := Γ ++ ssPrev)
-                (node.vjp ctxPrev d0 (d.cast hd)) 0 := by
-          let arrayExpr :=
-            TorchLean.TensorPack.toIndexedShapeErasedArray (α := α) (ss := Γ ++ ssPrev)
-              (node.vjp ctxPrev d0 (d.cast hd)) 0
-          have hret : runtimeNode.backward d = .ok arrayExpr :=
-            lowerNode_backward_of_shape _ _ _ _ d hd
-          have hok :
-              (.ok arrayExpr : Result (Array (Nat × Spec.SomeTensor α))) = .ok contribs := by
-            calc
-              (.ok arrayExpr : Result (Array (Nat × Spec.SomeTensor α))) = runtimeNode.backward d :=
-                by
-                simpa using hret.symm
-              _ = .ok contribs := hback
-          have := congrArg (fun r => match r with | .ok xs => xs | .error _ => #[]) hok
-          simpa [arrayExpr] using this.symm
+                (node.vjp ctxPrev d0 (d.cast hd)) 0 :=
+          (Except.ok.inj (hret.symm.trans hback)).symm
         subst hcontribs
         have hpidlt :=
           TorchLean.TensorPack.mem_toIndexedShapeErasedArray_lt
@@ -191,16 +166,7 @@ theorem lowerGraphDataToTape_backward_pids_lt_id {α : Type} {Δ : Type}
           simpa [prev] using
             lowerGraphDataToTape_nodes_size (α := α) (Δ := Δ) (Γ := Γ) (ss := ssPrev) g x d0
         simpa [htPrev] using hpidlt
-      · have hidPrev : id < tPrev.nodes.size := by
-          have hidPush : id < (tPrev.nodes.push runtimeNode).size := by
-            rcases Array.getElem_of_getElem? hnNodes with ⟨hid, _⟩
-            exact hid
-          have hidLe : id ≤ tPrev.nodes.size := by
-            have : id < tPrev.nodes.size + 1 := by
-              simpa [Array.size_push] using hidPush
-            exact Nat.le_of_lt_succ this
-          exact Nat.lt_of_le_of_ne hidLe hlast
-        have hnPrev : Runtime.Autograd.Tape.getNode? (t := tPrev) id = some n := by
+      · have hnPrev : Runtime.Autograd.Tape.getNode? (t := tPrev) id = some n := by
           have : tPrev.nodes[id]? = some n := by
             simpa [Array.getElem?_push, hlast] using hnNodes
           simpa [Runtime.Autograd.Tape.getNode?, tPrev] using this
@@ -212,41 +178,19 @@ All nodes produced by `lowerGraphToTape` have `requiresGrad = true`.
 This mirrors `lowerGraphDataToTape_all_requires_grad_true` for the `Graph` interface.
 -/
 theorem lowerGraphToTape_all_requires_grad_true {α : Type} {Δ : Type}
-  [TorchLean.Storage α] [CommSemiring α]
+    [TorchLean.Storage α] [CommSemiring α]
     {Γ : List Shape} {ss : List Shape} (g : Graph (α := α) Δ Γ ss)
     (x : TorchLean.TensorPack α Γ)
     (d0 : Δ) :
     ((lowerGraphToTape (α := α) (Δ := Δ) (Γ := Γ) (ss := ss) g x d0).1.nodes.all (fun n =>
       n.requiresGrad)) = true := by
-  -- Helper: if the current tape has `.all requiresGrad = true`, `addLeaves` preserves it.
-  have addLeaves_all :
-      ∀ (t : Tape α),
-        t.nodes.all (fun n => n.requiresGrad) = true →
-          ∀ {Γ : List Shape} (xs : TorchLean.TensorPack α Γ),
-            (addLeaves (α := α) (t := t) (Γ := Γ) xs).nodes.all (fun n => n.requiresGrad) = true :=
-              by
-    intro t ht Γ xs
-    induction xs generalizing t with
-    | nil =>
-        simpa [addLeaves] using ht
-    | cons x xs ih =>
-        -- push one leaf (which has `requiresGrad = true`) and recurse
-        let t' : Tape α := (Runtime.Autograd.Tape.leaf (t := t) x).1
-        have ht' : t'.nodes.all (fun n => n.requiresGrad) = true := by
-          -- `leaf` pushes a node with `requiresGrad = true`, so `.all` is preserved
-          simpa [t', Runtime.Autograd.Tape.leaf, Runtime.Autograd.Tape.addNode, Array.all_push]
-            using ht
-        simpa [addLeaves, t', Runtime.Autograd.Tape.leaf, Runtime.Autograd.Tape.addNode] using ih (t
-          := t') ht'
-
   induction g with
   | nil =>
-      -- Start from the empty tape where `.all _ = true`.
-      have h0 : (Runtime.Autograd.Tape.empty (α := α)).nodes.all (fun n => n.requiresGrad) = true
-        := by
+      have h0 :
+          (Runtime.Autograd.Tape.empty (α := α)).nodes.all (fun n => n.requiresGrad) = true := by
         simp [Runtime.Autograd.Tape.empty]
       simpa [lowerGraphToTape] using
-        addLeaves_all (t := Runtime.Autograd.Tape.empty (α := α)) h0 (Γ := Γ) x
+        all_requiresGrad_addLeaves (Runtime.Autograd.Tape.empty (α := α)) h0 x
   | snoc g node ih =>
       rename_i ssPrev τ
       -- `lowerGraphToTape` appends a node with `requiresGrad = true`.
@@ -254,7 +198,7 @@ theorem lowerGraphToTape_all_requires_grad_true {α : Type} {Δ : Type}
 
 /-- Pointwise form of `lowerGraphToTape_all_requires_grad_true`. -/
 theorem lowerGraphToTape_requires_grad_true {α : Type} {Δ : Type}
-  [TorchLean.Storage α] [CommSemiring α]
+    [TorchLean.Storage α] [CommSemiring α]
     {Γ : List Shape} {ss : List Shape} (g : Graph (α := α) Δ Γ ss)
     (x : TorchLean.TensorPack α Γ)
     (d0 : Δ) :
@@ -276,16 +220,12 @@ smaller than the node id.
 This mirrors `lowerGraphDataToTape_backward_pids_lt_id` for the `Graph` interface.
 -/
 theorem lowerGraphToTape_backward_pids_lt_id {α : Type} {Δ : Type}
-  [TorchLean.Storage α] [CommSemiring α]
+    [TorchLean.Storage α] [CommSemiring α]
     {Γ : List Shape} {ss : List Shape} (g : Graph (α := α) Δ Γ ss)
     (x : TorchLean.TensorPack α Γ)
     (d0 : Δ) :
-    ∀ id (n : Runtime.Autograd.Node α),
-      (Runtime.Autograd.Tape.getNode?
-        (t := (lowerGraphToTape (α := α) (Δ := Δ) (Γ := Γ) (ss := ss) g x d0).1) id = some n) →
-      ∀ (d : Spec.SomeTensor α) (contribs : Array (Nat × Spec.SomeTensor α)),
-        n.backward d = .ok contribs →
-          ∀ {pid : Nat} {pg : Spec.SomeTensor α}, (pid, pg) ∈ contribs → pid < id := by
+    BackwardPidsLt (lowerGraphToTape (α := α) (Δ := Δ) (Γ := Γ) (ss := ss) g x d0).1 := by
+  unfold BackwardPidsLt
   induction g with
   | nil =>
       intro id n hn d contribs hback pid pg hmem
@@ -305,9 +245,7 @@ theorem lowerGraphToTape_backward_pids_lt_id {α : Type} {Δ : Type}
             simpa [Array.getElem?_map, hx] using hn'
           subst hnEq
           -- A leaf contributes no parent cotangents.
-          have hcontribs : contribs = #[] := by
-            have := congrArg (fun r => match r with | .ok xs => xs | .error _ => #[]) hback
-            simpa [leafNodeOfSomeTensor] using this
+          have hcontribs : contribs = #[] := (Except.ok.inj hback).symm
           subst hcontribs
           simp at hmem
   | snoc g node ih =>
@@ -333,25 +271,16 @@ theorem lowerGraphToTape_backward_pids_lt_id {α : Type} {Δ : Type}
           by_contra hne
           have : runtimeNode.backward d = .error "autograd: upstream gradient shape mismatch" :=
             lowerNode_backward_of_ne _ _ _ _ d hne
-          simp [this]  at hback
+          simp [this] at hback
+        have hret : runtimeNode.backward d =
+            .ok (TorchLean.TensorPack.toIndexedShapeErasedArray (α := α) (ss := Γ ++ ssPrev)
+              (node.vjp ctxPrev d0 (d.cast hd)) 0) :=
+          lowerNode_backward_of_shape _ _ _ _ d hd
         have hcontribs :
             contribs =
               TorchLean.TensorPack.toIndexedShapeErasedArray (α := α) (ss := Γ ++ ssPrev)
-                (node.vjp ctxPrev d0 (d.cast hd)) 0 := by
-          let arrayExpr :=
-            TorchLean.TensorPack.toIndexedShapeErasedArray (α := α) (ss := Γ ++ ssPrev)
-              (node.vjp ctxPrev d0 (d.cast hd)) 0
-          have hret : runtimeNode.backward d = .ok arrayExpr :=
-            lowerNode_backward_of_shape _ _ _ _ d hd
-          have hok :
-              (.ok arrayExpr : Result (Array (Nat × Spec.SomeTensor α))) = .ok contribs := by
-            calc
-              (.ok arrayExpr : Result (Array (Nat × Spec.SomeTensor α))) = runtimeNode.backward d :=
-                by
-                simpa using hret.symm
-              _ = .ok contribs := hback
-          have := congrArg (fun r => match r with | .ok xs => xs | .error _ => #[]) hok
-          simpa [arrayExpr] using this.symm
+                (node.vjp ctxPrev d0 (d.cast hd)) 0 :=
+          (Except.ok.inj (hret.symm.trans hback)).symm
         subst hcontribs
         have hpidlt :=
           TorchLean.TensorPack.mem_toIndexedShapeErasedArray_lt

@@ -26,7 +26,8 @@ open TorchLean TorchLean.Tensor
 variable {α : Type} [TorchLean.Storage α] [Context α] [DecidableRel ((· > ·) : α → α → Prop)]
 
 /-- Repeat a channel vector over every position of a spatial shape. -/
-def broadcastChannel {channels : Nat} (sSpatial : Shape)
+def broadcastChannel {α : Type} [TorchLean.Storage α] [Inhabited α]
+    {channels : Nat} (sSpatial : Shape)
     (x : Tensor α [channels]) : Tensor α (Shape.concat [channels] sSpatial) :=
   let spatialSize := Spec.Shape.size sSpatial
   let sFlat : Shape := [channels, spatialSize]

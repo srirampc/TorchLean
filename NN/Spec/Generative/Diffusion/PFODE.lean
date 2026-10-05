@@ -13,7 +13,7 @@ public import NN.Spec.Core.Context.Real
 /-!
 # Probability-flow ODE (spec layer)
 
-This file defines a small continuous-time VP schedule (linear $\beta(t)$) and the corresponding
+This file defines a small continuous-time VP schedule (linear $\beta(t)$) and an epsilon-shifted
 probability-flow ODE drift field, using an $\varepsilon_\theta(x,t)$ model.
 
 Why include this in the spec layer:
@@ -29,7 +29,9 @@ We keep the implementation scalar-polymorphic (`Context α`) so it can be:
 
 References (informal pointers):
 - Song et al. (2021), "Score-Based Generative Modeling through Stochastic Differential Equations".
-  The VP SDE and its probability-flow ODE share the same marginals.
+  The marginal-equivalence result concerns the exact score and unshifted continuous ODE.
+  This module defines a learned-score approximation, an epsilon shift, and discrete Euler steps;
+  it does not prove that those approximations preserve the SDE marginals.
 -/
 
 @[expose] public section
@@ -43,7 +45,7 @@ variable {α : Type} [TorchLean.Storage α] [Context α]
 
 /-- Continuous-time linear VP schedule on $t\in[0,1]$:
 $\beta(t)=\beta_0+t(\beta_1-\beta_0)$. -/
-structure VPLinearSchedule (α : Type) [TorchLean.Storage α] [Context α] where
+structure VPLinearSchedule (α : Type) where
   /-- $\beta(0)$. -/
   beta0 : α
   /-- $\beta(1)$. -/
@@ -102,6 +104,11 @@ dx=\left[
   +\tfrac12\frac{\beta(t)}{\sigma(t)}\hat\varepsilon(x,t)
 \right]dt.
 $$
+
+The implementation below replaces the denominator $\sigma(t)$ by
+$\sigma(t)+\mathtt{Context.defaultEpsilon}$. This shift is part of the denotation,
+including over the reals; it does not guarantee a nonzero denominator for arbitrary schedules
+and contexts.
 -/
 def pfOdeRhs (sch : VPLinearSchedule α) (model : EpsModel α s) (x : Tensor α s) (t : α) :
     Tensor α s :=
@@ -130,8 +137,10 @@ Inputs:
 - `steps`: number of Euler steps (typically large, e.g. 1000),
 - `x1`: initial state at $t=1$ (typically standard normal noise).
 
-We integrate backwards in time on the grid:
-$t_i=1-i/\mathtt{steps}$, with $dt=-1/\mathtt{steps}$.
+For `steps > 0`, the counter runs from `steps` down to `1`. Each time is computed as
+`(counter : α) / (steps : α)`, with `dt = -(1 / (steps : α))`. Over the reals this is the
+descending grid $1,(\mathtt{steps}-1)/\mathtt{steps},\ldots,1/\mathtt{steps}$; the stated
+division order also fixes the rounded computation. Zero steps return `x1` unchanged.
 -/
 def pfOdeSampleEuler (sch : VPLinearSchedule α) (model : EpsModel α s)
     (steps : Nat) (x1 : Tensor α s) : Tensor α s :=

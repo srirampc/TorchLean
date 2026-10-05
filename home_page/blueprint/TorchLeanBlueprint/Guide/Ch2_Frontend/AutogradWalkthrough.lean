@@ -40,7 +40,7 @@ The two runnable examples are:
 ```terminal
 # Compare tensor differentiation with differentiation of a
 # model loss.
-lake exe torchlean quickstart_autograd
+scripts/lake.sh exe torchlean quickstart_autograd
 ```
 
 ```terminal +output
@@ -58,7 +58,7 @@ and
 ```terminal
 # Request directional derivatives and curvature without an
 # optimizer update.
-lake exe torchlean autograd_transforms
+scripts/lake.sh exe torchlean autograd_transforms
 ```
 
 ```terminal +output
@@ -336,8 +336,9 @@ Input, output cotangent, and result: `Tensor α σ`, `Tensor α τ`, `Tensor α 
 the wrong shape is a compile error, not a runtime broadcast.
 
 A scalar gradient is the special case in which the output has one coordinate and its cotangent
-is one. A zero cotangent would ask for the derivative of a zero-weighted output and return zero,
-even when the function itself is sensitive to its inputs. This is why the seed belongs in the
+is one. In the real linear pullback, a zero cotangent returns zero even when the function itself
+is sensitive to its inputs. Executable rules at singular or nonfinite values need separate care:
+an intermediate expression such as `0 * Inf` can produce NaN. This is why the seed belongs in the
 meaning of a VJP rather than being an incidental implementation argument. It also explains why
 an output-shaped seed is enough: the reverse traversal combines its weights with local rules
 without allocating a matrix with one entry for every input/output pair.
@@ -434,7 +435,8 @@ also a source of training mistakes, such as a forgotten
 model.
 
 TorchLean's transforms return the derivative as a value. There is no `.grad` field to clear, and
-running the same query twice returns the same answer twice, because nothing was mutated.
+repeating this fixed square query returns a fresh result rather than adding to a retained gradient.
+Stochastic programs also require the same random state for a reproducibility comparison.
 Accumulation across microbatches is an explicit addition of returned packs.
 
 The caller supplies the function to differentiate and passes the resulting gradient to its
@@ -478,7 +480,7 @@ def agModel : nn.Sequential [2] [3] :=
 /-- Every weight and bias pinned to `0.1`, so the numbers
 below can be checked by hand. -/
 def agState : autograd.model.State agModel Float :=
-  autograd.model.fullState agModel 0.1
+  nn.State.full 0.1
 
 def agIn : Tensor Float [2] := [0.5, -1.2]
 
@@ -561,7 +563,7 @@ $`(-0.446\overline6,\,-0.046\overline6,\,0.353\overline3)`:
 def agTarget : Tensor Float [3] := [0.7, 0.1, -0.5]
 
 def agMse : autograd.model.Loss [3] [3] :=
-  autograd.model.Loss.meanSquaredError
+  autograd.model.Loss.mse
 
 #eval show IO Unit from do
   let (gradient, lossValue) ←
@@ -612,7 +614,7 @@ using Mathlib's Fréchet derivative and adjoint ({Informal.citep mathlib2020}[])
       (fderiv ℝ
         (fun W2 => mse t (mlpVecMat W1 b1 W2 b2 x)) W2))
       1 =
-    outer (mseGrad (y W1 b1 W2 b2 x) t) (a1 W1 b1 x)
+    outer (mseGrad (mlpOutput W1 b1 W2 b2 x) t) (mlpHidden W1 b1 x)
 ```
 
 Read the right-hand side: `outer` of the output gradient with the hidden activation, which is
@@ -671,20 +673,21 @@ The theorem for a first-layer bias makes the smoothness requirement explicit:
   (W1 : Mat hidDim inDim) (b1 : Vec hidDim)
   (W2 : Mat outDim hidDim) (b2 : Vec outDim)
   (x : Vec inDim) (t : Vec outDim),
-  (∀ (i : Fin hidDim), (z1 W1 b1 x).ofLp i ≠ 0) →
+  (∀ (i : Fin hidDim), (mlpPreActivation W1 b1 x).ofLp i ≠ 0) →
     (ContinuousLinearMap.adjoint
         (fderiv ℝ
           (fun b1 => mse t (mlpVecMat W1 b1 W2 b2 x)) b1))
         1 =
-      (reluDerivCLM (z1 W1 b1 x))
+      (reluDerivCLM (mlpPreActivation W1 b1 x))
         ((ContinuousLinearMap.adjoint
             (matCLM (toMatrix W2)))
-          (mseGrad (y W1 b1 W2 b2 x) t))
+          (mseGrad (mlpOutput W1 b1 W2 b2 x) t))
 ```
 
-The hypothesis `∀ i, (z1 W1 b1 x).ofLp i ≠ 0` says no hidden pre-activation sits exactly on the
-kink. The gradient with respect to the first-layer bias passes through the ReLU derivative, so the
-theorem is stated only where that derivative exists. Compare it with `grad_W2_mse` above, which
+The hypothesis `∀ i, (mlpPreActivation W1 b1 x).ofLp i ≠ 0` says no hidden pre-activation sits
+exactly on the kink. The gradient with respect to the first-layer bias passes through the ReLU
+derivative, so the theorem is stated only where that derivative exists. Compare it with
+`grad_W2_mse` above, which
 needs no such hypothesis: the second-layer weight sits after the activation, so it never sees the
 nonsmooth point.
 
@@ -902,7 +905,7 @@ $`H_f(x)v` without ever forming $`H_f(x)`, which is Pearlmutter's trick
 -- and the change in its gradient.
 #eval show IO Unit from do
   let direction : autograd.model.State agModel Float :=
-    autograd.model.fullState agModel 0.1
+    nn.State.full 0.1
   let d ←
     autograd.model.jvp agModel agMse agState agIn agTarget
       direction
@@ -1082,7 +1085,7 @@ one independently:
 1. Replacing `nn.functional.mean` with a sum in `agSumSq` doubles the gradient by removing the
    division by two.
 2. The seed $`(0,1)` in `autograd.vjp agSquare` selects the second Jacobian row.
-3. Setting `agState` to `autograd.model.fullState agModel 0.2` changes the loss through the
+3. Setting `agState` to `nn.State.full 0.2` changes the loss through the
    affine model output. The same residual calculation predicts the new value.
 4. Setting one coordinate of `agIn` to $`0` makes the corresponding weight-gradient column zero.
 5. Evaluating `agRelu` at `[-1.0, 1.0e-30, 1.0]` and then at `[-1.0, -1.0e-30, 1.0]` crosses the

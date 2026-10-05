@@ -50,12 +50,6 @@ def natAddExpr (left right : Expr) : MetaM Expr := do
   | _, some 0 => pure left
   | _, _ => mkAppM ``Nat.add #[left, right]
 
-/-- Build the right-associated product used by `Shape.size`. -/
-def shapeSizeExpr : List Expr → MetaM Expr
-  | [] => pure (mkNatLit 1)
-  | dimension :: dimensions => do
-      mkAppM ``Nat.mul #[dimension, ← shapeSizeExpr dimensions]
-
 /-- Compute a runtime stride while folding literal and neutral factors. -/
 def runtimeShapeSizeExpr : List Expr → MetaM Expr
   | [] => pure (mkNatLit 1)
@@ -64,12 +58,15 @@ def runtimeShapeSizeExpr : List Expr → MetaM Expr
 
 /--
 Use native index arithmetic only when an operand's complete concrete buffer
-fits the platform word size. Symbolic shapes retain the general `Nat` kernel.
+fits every Lean target. The index certificate covers both platform widths, so
+the elaboration host's word size cannot determine eligibility. Sizes that
+remain symbolic, and concrete sizes at least `2^32`, retain the general `Nat`
+kernel.
 -/
 def supportsNativeInputIndex (dimensions : List Expr) : MetaM Bool := do
   let size ← runtimeShapeSizeExpr dimensions
   match ← getNatValue? size with
-  | some size => pure (size < USize.size)
+  | some size => pure (size < 2 ^ 32)
   | none => pure false
 
 /--
@@ -250,28 +247,6 @@ def coordinateAxisExpr : Nat → Expr → MetaM Expr
         ← mkAppM ``Prod.snd #[coordinate]
 
 /--
-Expand row-major unlinearization into bounded quotient/remainder components.
-
-Binding these components before constructing the temporary proof-level
-coordinate lets native code decode each output axis once without allocating
-the nested `Prod` representation of `Coord`.
--/
-def coordinateComponentsFromFlatIndex :
-    List Expr → Expr → MetaM (List Expr)
-  | [], _ => pure []
-  | dimension :: dimensions, flatIndex => withTransparency .all do
-      let tailSize ← shapeSizeExpr dimensions
-      let headCoordinate ←
-        mkAppOptM ``Fin.divNat #[
-          some dimension, some tailSize, some flatIndex]
-      let tailFlatIndex ←
-        mkAppOptM ``Fin.modNat #[
-          some dimension, some tailSize, some flatIndex]
-      let tailCoordinates ←
-        coordinateComponentsFromFlatIndex dimensions tailFlatIndex
-      pure (headCoordinate :: tailCoordinates)
-
-/--
 Construct the operand index produced by repeatedly unfolding `Fin.foldl`.
 
 The first operand is `0`; each later operand is one more `Fin.succ` around
@@ -334,6 +309,34 @@ def coordinateFromComponentsEquality :
           different lengths"
 
 /--
+Introduce generated lets around several results independently.
+
+`mkLetFVars` drops unused let declarations from each result. A
+contraction-invariant operand can therefore remain in a scalar factor while
+coordinate-dependent reads stay only in the middle product.
+-/
+def withGeneratedLetResults (bindings : List (Name × Expr))
+    (body : List Expr → TermElabM (Array Expr)) :
+    TermElabM (Array Expr) := do
+  let rec
+    /-- Preserve source order while closing each result over only the lets it uses. -/
+    visit (remaining : List (Name × Expr))
+        (values : List Expr) : TermElabM (Array Expr) := do
+      match remaining with
+      | [] => body values
+      | (name, value) :: remaining =>
+          withLetDecl name (← inferType value) value fun localValue => do
+            let results ←
+              visit remaining (values.concat localValue)
+            let mut closedResults := #[]
+            for result in results do
+              closedResults := closedResults.push <|
+                ← mkLetFVars
+                  (generalizeNondepLet := false) #[localValue] result
+            return closedResults
+  visit bindings []
+
+/--
 Introduce generated values as ordinary `let` bindings and pass their local
 variables to the body in source order. Both returned expressions receive the
 same bindings, allowing an optimized value and its correctness proof to be
@@ -342,24 +345,10 @@ constructed together.
 def withGeneratedLetPair (bindings : List (Name × Expr))
     (body : List Expr → TermElabM (Expr × Expr)) :
     TermElabM (Expr × Expr) := do
-  let rec
-    /-- Traverse pending bindings while retaining their local variables in source order. -/
-    visit (remaining : List (Name × Expr))
-      (values : List Expr) : TermElabM (Expr × Expr) := do
-    match remaining with
-    | [] => body values
-    | (name, value) :: remaining =>
-        withLetDecl name (← inferType value) value fun localValue => do
-          let (result, correctness) ←
-            visit remaining (values.concat localValue)
-          let result ←
-            mkLetFVars
-              (generalizeNondepLet := false) #[localValue] result
-          let correctness ←
-            mkLetFVars
-              (generalizeNondepLet := false) #[localValue] correctness
-          return (result, correctness)
-  visit bindings []
+  let results ← withGeneratedLetResults bindings fun values => do
+    let (result, correctness) ← body values
+    return #[result, correctness]
+  return (results[0]!, results[1]!)
 
 /-- Abstract one ordinary local while retaining the body's generated lets. -/
 def mkLambdaPreservingLets (localExpr body : Expr) : MetaM Expr := do
@@ -375,28 +364,14 @@ after compilation, preserving loop-invariant values outside nested folds.
 The continuation also receives the opened locals so a caller can selectively
 unfold generated aliases without enabling unrestricted zeta reduction.
 -/
-partial def withLeadingLetPair (value : Expr)
+def withLeadingLetPair (value : Expr)
     (body : Array Expr → Expr → TermElabM (Expr × Expr)) :
     TermElabM (Expr × Expr) := do
-  let rec
-    /-- Open the let chain while retaining its locals in source order. -/
-    visit (remaining : Expr) (locals : Array Expr) :
-        TermElabM (Expr × Expr) := do
-      match remaining with
-      | .letE name type assignment letBody _ =>
-          withLetDecl name type assignment fun localValue => do
-            let (result, correctness) ←
-              visit (letBody.instantiate1 localValue)
-                (locals.push localValue)
-            let result ←
-              mkLetFVars
-                (generalizeNondepLet := false) #[localValue] result
-            let correctness ←
-              mkLetFVars
-                (generalizeNondepLet := false) #[localValue] correctness
-            return (result, correctness)
-      | _ => body locals remaining
-  visit value #[]
+  letTelescope value (preserveNondepLet := false) fun locals remaining => do
+    let (result, correctness) ← body locals remaining
+    let result ← mkLetFVars (generalizeNondepLet := false) locals result
+    let correctness ← mkLetFVars (generalizeNondepLet := false) locals correctness
+    return (result, correctness)
 
 /--
 A symbolic `Fin` coordinate is zero when its dimension is known locally to be
@@ -586,7 +561,7 @@ def certifyNativeIntermediateBound
     `(tactic|
       (intros
        apply Nat.lt_of_lt_of_le ?_ USize.le_size
-       simp only [Shape.size] at *
+       simp only [Shape.size, List.prod_cons, List.prod_nil, Nat.mul_one] at *
        omega))
   let certificate ←
     certifySelfContained
@@ -637,14 +612,8 @@ partial def certifiedNativeIndexValue?
     TermElabM (Option (Expr × Expr)) := do
   let value := value.consumeMData
   if let some literal ← getNatValue? value then
-    let portableLimit : Nat := 2 ^ 32
-    unless literal < portableLimit do
-      return none
-    let nativeValue ← mkNumeral (mkConst ``USize) literal
-    let hPortable ←
-      mkDecideProof (← mkLT (mkNatLit literal) (mkNatLit portableLimit))
-    let hValue ←
-      mkAppM ``USize.toNat_ofNat_of_lt_32 #[hPortable]
+    let some (nativeValue, hValue) ← nativeLoopBound? (mkNatLit literal)
+      | return none
     let hValue ←
       withTransparency .all <|
         mkExpectedTypeHint hValue
@@ -816,7 +785,7 @@ partial def withFoldInvariantLets
 Hoist maximal native-index fragments that are invariant under the current
 contraction fold.
 
-`nativeIndexValue` emits only native constants and arithmetic.
+`nativeIndexValue` emits native constants, conversions, and arithmetic.
 Lean's C compiler does not always move compound fragments of that tree out of
 nested loops. Binding the largest independent fragment once removes repeated
 stride arithmetic while preserving definitional equality. Recursing through

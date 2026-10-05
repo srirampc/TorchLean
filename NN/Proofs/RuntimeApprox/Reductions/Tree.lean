@@ -66,7 +66,6 @@ theorem leafCount_pos (t : SumTree α) : 0 < t.leafCount := by
   induction t with
   | leaf => simp [leafCount]
   | node a b ihA ihB =>
-      -- `0 < a + b` since `0 < a`.
       simpa [leafCount] using Nat.add_pos_left ihA (leafCount b)
 
 end SumTree
@@ -117,9 +116,10 @@ $$
 |e|\le u(|a|+|b|).
 $$
 Binary32 does **not** satisfy it globally with $u=2^{-24}$: subnormal results require an
-absolute-error term. Consequently the executable
-theorems below take this predicate as an explicit hypothesis; it must be established from
-normal-range intermediate sums or replaced by an absolute/mixed analysis.
+absolute-error term. The executable theorems below take this global predicate as an explicit
+hypothesis. Normal-range evidence for one evaluation tree cannot establish a bound quantified
+over all real operands. Applying a normal-range analysis to a particular tree requires a
+tree-local hypothesis; handling underflow requires an absolute/mixed analysis.
 -/
 def RelativeLocalAddBound (roundAdd : ℝ → ℝ → ℝ) (u : ℝ) : Prop :=
   ∀ a b : ℝ, _root_.abs (roundAdd a b - (a + b)) ≤ u * (_root_.abs a + _root_.abs b)

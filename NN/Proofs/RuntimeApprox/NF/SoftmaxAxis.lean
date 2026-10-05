@@ -50,8 +50,8 @@ open Flocq
 
 noncomputable section
 
-variable {β : Radix} {fexp : ℤ -> ℤ} [ValidExp fexp]
-variable {rnd : ℝ -> ℤ} [ValidRndToNearest rnd]
+variable {β : Radix} {fexp : ℤ → ℤ} [ValidExp fexp]
+variable {rnd : ℝ → ℤ} [ValidRndToNearest rnd]
 
 local notation "R" => NF β fexp rnd
 
@@ -104,26 +104,26 @@ theorem approxTensor_maxVecSpec {n : Nat}
   let mS : ℝ := Tensor.item (Activation.maxVecSpec xS)
   let mHat : ℝ := Tensor.item (Activation.maxVecSpec xHat)
   have hpoint :
-      ∀ i, |TorchLean.Tensor.getScalar xHat i - TorchLean.Tensor.getScalar xS i| <= eps := by
+      ∀ i, |TorchLean.Tensor.getScalar xHat i - TorchLean.Tensor.getScalar xS i| ≤ eps := by
     intro i
-    have hi := approxTensor_dim_get (α := R)
+    have hi := approxTensor_unstack (α := R)
       (toSpec := NFBackend.toSpec (β := β) (fexp := fexp) (rnd := rnd)) hx i
     have hi' := (approxTensor_scalar_item_iff (α := R)
       (toSpec := NFBackend.toSpec (β := β) (fexp := fexp) (rnd := rnd))).mp hi
     simpa [xHat, Tensor.getScalar, Spec.get] using hi'
   rcases Proofs.exists_getScalar_eq_maxVecSpec xS with ⟨iS, hiS⟩
   rcases Proofs.exists_getScalar_eq_maxVecSpec xHat with ⟨iHat, hiHat⟩
-  have hmS_le : mS <= mHat + eps := by
+  have hmS_le : mS ≤ mHat + eps := by
     have hcoord := (abs_sub_le_iff.mp (hpoint iS)).2
     have hmax := Proofs.getScalar_le_maxVecSpec xHat iS
     dsimp [mS, mHat] at *
     linarith
-  have hmHat_le : mHat <= mS + eps := by
+  have hmHat_le : mHat ≤ mS + eps := by
     have hcoord := (abs_sub_le_iff.mp (hpoint iHat)).1
     have hmax := Proofs.getScalar_le_maxVecSpec xS iHat
     dsimp [mS, mHat] at *
     linarith
-  have hmaxError : |mHat - mS| <= eps := by
+  have hmaxError : |mHat - mS| ≤ eps := by
     rw [abs_le]
     constructor <;> linarith
   have hbridge := toSpec_maxVecSpec (β := β) (fexp := fexp) (rnd := rnd) xR
@@ -245,7 +245,7 @@ theorem approxTensor_softmaxVecSpec {n : Nat}
     simpa [epsDenom] using hdenom
   have hOutNonneg : 0 ≤ outBound := by
     simpa [outBound, softmaxErrorBound] using
-      (linf_norm_nonneg
+      (linfNorm_nonneg
         (t := softmaxBoundTensor (β := β) (fexp := fexp) (rnd := rnd) eps xR))
 
   refine approxTensor_dim_of_forall
@@ -255,7 +255,7 @@ theorem approxTensor_softmaxVecSpec {n : Nat}
   intro i
   let numS := (exS.unstack i).item
   let numR := (exR.unstack i).item
-  have hnumI := approxTensor_dim_get (α := R)
+  have hnumI := approxTensor_unstack (α := R)
     (toSpec := NFBackend.toSpec (β := β) (fexp := fexp) (rnd := rnd)) hexp i
   have hnumScalar := (approxTensor_scalar_item_iff (α := R)
     (toSpec := NFBackend.toSpec (β := β) (fexp := fexp) (rnd := rnd))).mp hnumI
@@ -264,7 +264,7 @@ theorem approxTensor_softmaxVecSpec {n : Nat}
   have hdiv := NFBackend.approx_div_nf_of_pos_lb
     (β := β) (fexp := fexp) (rnd := rnd) (η := (1 : ℝ))
     hdenomLower hbudget hnumScalar hdenomScalar
-  have hcoord := linf_norm_le_get_dim
+  have hcoord := linfNorm_unstack_le
     (t := softmaxBoundTensor (β := β) (fexp := fexp) (rnd := rnd) eps xR) i
   have hdivBound :
       NFBackend.divPosErrorBound (β := β) (fexp := fexp) 1 epsNum epsDenom
@@ -344,20 +344,20 @@ theorem approxTensor_softmaxRowsSpec {m n : Nat}
   let bound := softmaxRowsErrorBound (β := β) (fexp := fexp) (rnd := rnd) eps xR
   have hbound : 0 ≤ bound := by
     simpa [bound, softmaxRowsErrorBound] using
-      (linf_norm_nonneg
+      (linfNorm_nonneg
         (t := softmaxRowsBoundTensor (β := β) (fexp := fexp) (rnd := rnd) eps xR))
   refine approxTensor_dim_of_forall
     (xS := Activation.Internal.softmaxInnermostSpec xS)
     (xR := Activation.Internal.softmaxInnermostSpec xR)
     (eps := bound) hbound ?_
   intro i
-  have hrow := approxTensor_dim_get (α := R)
+  have hrow := approxTensor_unstack (α := R)
     (toSpec := NFBackend.toSpec (β := β) (fexp := fexp) (rnd := rnd)) hx i
   have hsoft := approxTensor_softmaxVecSpec (β := β) (fexp := fexp) (rnd := rnd) hrow
     (by simpa [Spec.get] using hdenom i)
   have hrowLe :
       softmaxErrorBound (β := β) (fexp := fexp) (rnd := rnd) eps (xR.unstack i) ≤ bound := by
-    have h := linf_norm_le_get_dim
+    have h := linfNorm_unstack_le
       (t := softmaxRowsBoundTensor (β := β) (fexp := fexp) (rnd := rnd) eps xR) i
     simpa [bound, softmaxRowsErrorBound, softmaxRowsBoundTensor,
       softmaxErrorBound] using h
@@ -414,10 +414,11 @@ def hardMaskedShiftError {n : Nat} (epsScores epsMax : ℝ)
     (NFBackend.subBoundTensor (β := β) (fexp := fexp)
       epsScores epsMax scoresR maxRepR)
 
-/-- Error in the hard-masked numerator vector; applying the mask adds no rounding error. -/
+/-- Error in the hard-masked numerator vector, independent of the mask because applying it adds
+no rounding error. -/
 def hardMaskedNumeratorError {n : Nat} (epsScores epsMax : ℝ)
     (scoresR : Tensor R [n])
-    (_mask : Tensor Bool [n]) (rowMaxR : R) : ℝ :=
+    (rowMaxR : R) : ℝ :=
   let maxRepR : Tensor R [n] := Tensor.replicate (Tensor.scalar rowMaxR)
   let shiftedR := subSpec scoresR maxRepR
   let epsShift := hardMaskedShiftError (β := β) (fexp := fexp) (rnd := rnd)
@@ -431,7 +432,7 @@ def hardMaskedDenominatorError {n : Nat} (epsScores epsMax : ℝ)
     (mask : Tensor Bool [n]) (rowMaxR : R) : ℝ :=
   NFBackend.sumBound (β := β) (fexp := fexp) (rnd := rnd)
     (hardMaskedNumeratorError (β := β) (fexp := fexp) (rnd := rnd)
-      epsScores epsMax scoresR mask rowMaxR)
+      epsScores epsMax scoresR rowMaxR)
     (hardMaskedNumerators scoresR mask rowMaxR)
 
 /-- Final per-coordinate budget for a nonempty hard-masked softmax row. -/
@@ -446,7 +447,7 @@ def hardMaskedSoftmaxBoundTensor {n : Nat} (η epsScores epsMax : ℝ)
   NFBackend.divPosBoundTensor (β := β) (fexp := fexp) (rnd := rnd)
     η
     (hardMaskedNumeratorError (β := β) (fexp := fexp) (rnd := rnd)
-      epsScores epsMax scoresR mask rowMaxR)
+      epsScores epsMax scoresR rowMaxR)
     (hardMaskedDenominatorError (β := β) (fexp := fexp) (rnd := rnd)
       epsScores epsMax scoresR mask rowMaxR)
     numeratorsR denominatorRepR
@@ -500,7 +501,7 @@ theorem approxTensor_hardMaskedSoftmaxVecSpec_of_max {n : Nat}
   let epsShift := hardMaskedShiftError (β := β) (fexp := fexp) (rnd := rnd)
     epsScores epsMax scoresR rowMaxR
   let epsNumerator := hardMaskedNumeratorError (β := β) (fexp := fexp) (rnd := rnd)
-    epsScores epsMax scoresR mask rowMaxR
+    epsScores epsMax scoresR rowMaxR
   let epsDenominator := hardMaskedDenominatorError (β := β) (fexp := fexp) (rnd := rnd)
     epsScores epsMax scoresR mask rowMaxR
 
@@ -567,20 +568,29 @@ structure HardMaskedRowsEvidence {m n : Nat}
     (scoresR : Tensor R [m, n])
     (mask : Tensor Bool [m, n])
     (epsScores : ℝ) where
+  /-- Exact allowed-row maximum of each row. -/
   rowMaxS : Fin m → ℝ
+  /-- Rounded allowed-row maximum of each row. -/
   rowMaxR : Fin m → R
+  /-- Error budget relating the two maxima of each row. -/
   epsMax : Fin m → ℝ
+  /-- Positive lower bound on the exact denominator of each row. -/
   eta : Fin m → ℝ
+  /-- The rounded maximum approximates the exact one within `epsMax`. -/
   maxApprox : ∀ i,
     abs (NFBackend.toSpec (β := β) (fexp := fexp) (rnd := rnd) (rowMaxR i) -
       rowMaxS i) ≤ epsMax i
+  /-- `rowMaxS` is the maximum selected by the exact hard-masked softmax. -/
   specMax : ∀ i,
     Spec.hardMaskedMax? (Spec.get scoresS i) (Spec.get mask i) = some (rowMaxS i)
+  /-- `rowMaxR` is the maximum selected by the rounded hard-masked softmax. -/
   runtimeMax : ∀ i,
     Spec.hardMaskedMax? (Spec.get scoresR i) (Spec.get mask i) = some (rowMaxR i)
+  /-- The exact denominator of each row is at least `eta`. -/
   denominatorLower : ∀ i,
     eta i ≤ sumSpec
       (hardMaskedNumerators (Spec.get scoresS i) (Spec.get mask i) (rowMaxS i))
+  /-- The rounded denominator error of each row stays strictly below `eta`. -/
   denominatorMargin : ∀ i,
     hardMaskedDenominatorError (β := β) (fexp := fexp) (rnd := rnd)
       epsScores (epsMax i) (Spec.get scoresR i) (Spec.get mask i) (rowMaxR i) < eta i
@@ -624,7 +634,7 @@ theorem approxTensor_hardMaskedSoftmaxRowsSpec_of_max {m n : Nat}
       evidence.eta epsScores scoresR mask evidence.rowMaxR evidence.epsMax)
   have hbound : 0 ≤ bound := by
     simpa [bound] using
-      (linf_norm_nonneg
+      (linfNorm_nonneg
         (t := hardMaskedRowsBoundTensor (β := β) (fexp := fexp) (rnd := rnd)
           evidence.eta epsScores scoresR mask evidence.rowMaxR evidence.epsMax))
   refine approxTensor_dim_of_forall
@@ -633,7 +643,7 @@ theorem approxTensor_hardMaskedSoftmaxRowsSpec_of_max {m n : Nat}
     (xR := Spec.hardMaskedSoftmaxSpec scoresR mask)
     (eps := bound) hbound ?_
   intro i
-  have hscoresI := approxTensor_dim_get (α := R)
+  have hscoresI := approxTensor_unstack (α := R)
     (toSpec := NFBackend.toSpec (β := β) (fexp := fexp) (rnd := rnd)) hscores i
   have hrow := approxTensor_hardMaskedSoftmaxVecSpec_of_max
     (β := β) (fexp := fexp) (rnd := rnd)
@@ -648,7 +658,7 @@ theorem approxTensor_hardMaskedSoftmaxRowsSpec_of_max {m n : Nat}
             (evidence.eta i) epsScores (evidence.epsMax i)
             (scoresR.unstack i) (mask.unstack i) (evidence.rowMaxR i)) ≤
         bound := by
-    have h := linf_norm_le_get_dim
+    have h := linfNorm_unstack_le
       (t := hardMaskedRowsBoundTensor (β := β) (fexp := fexp) (rnd := rnd)
         evidence.eta epsScores scoresR mask evidence.rowMaxR evidence.epsMax) i
     simpa [bound, hardMaskedRowsBoundTensor] using h
@@ -790,21 +800,9 @@ theorem approxTensor_softmaxBackwardVecSpec {n : Nat}
 /-- The analytic softmax on a nonempty vector sums to one. -/
 theorem sum_softmaxVec {n : Nat} (x : Vec (Nat.succ n)) :
     (∑ i, softmaxVec x i) = 1 := by
-  classical
-  have hpos : 0 < sumExp x := by
-    simpa [sumExp] using
-      Finset.sum_pos (fun i (_ : i ∈ (Finset.univ : Finset (Fin (Nat.succ n)))) =>
-        Real.exp_pos (x i)) Finset.univ_nonempty
-  have hne : sumExp x ≠ 0 := ne_of_gt hpos
-  have hne' : (∑ i, Real.exp (x i)) ≠ 0 := by
-    simpa [sumExp] using hne
-  simp only [softmaxVec, softmaxVecOfFun_apply]
-  calc
-    (∑ i, Real.exp (x i) / sumExp x) = (∑ i, Real.exp (x i)) / sumExp x := by
-      simpa using
-        (Finset.sum_div (s := (Finset.univ : Finset (Fin (Nat.succ n))))
-          (f := fun i => Real.exp (x i)) (a := sumExp x)).symm
-    _ = 1 := div_self hne'
+  simp only [softmaxVec, vecOfFun_apply]
+  rw [← Finset.sum_div]
+  exact div_self (sumExp_ne_zero x)
 
 /-- A softmax JVP is tangent to the probability simplex: its coordinates sum to zero. -/
 theorem sum_softmaxJvp {n : Nat} (x dx : Vec (Nat.succ n)) :
@@ -818,16 +816,9 @@ theorem sum_softmaxJvp {n : Nat} (x dx : Vec (Nat.succ n)) :
   calc
     (∑ i, softmaxJvp x dx i) = ∑ i, y i * (dx i - s) := by
       simp [softmaxJvp, y, s]
-    _ = (∑ i, y i * dx i) - s * (∑ i, y i) := by
-      calc
-        (∑ i, y i * (dx i - s)) = ∑ i, (y i * dx i - s * y i) := by
-          refine Finset.sum_congr rfl ?_
-          intro i _
-          ring
-        _ = (∑ i, y i * dx i) - ∑ i, s * y i := by
-          rw [Finset.sum_sub_distrib]
-        _ = (∑ i, y i * dx i) - s * (∑ i, y i) := by
-          rw [Finset.mul_sum]
+    _ = (∑ i, y i * dx i) - (∑ i, y i) * s := by
+      rw [Finset.sum_mul, ← Finset.sum_sub_distrib]
+      exact Finset.sum_congr rfl fun i _ => mul_sub _ _ _
     _ = 0 := by rw [hy, hs]; ring
 
 /-- Coordinatewise VJP/JVP bound in the infinity norm.
@@ -838,52 +829,49 @@ sum to one. It is intentionally conservative; tighter certificates may retain th
 `2 * y_i * (1 - y_i)` for each coordinate.
 -/
 theorem abs_softmaxJvp_le_two_mul {n : Nat} (x dx : Vec (Nat.succ n)) (G : Real)
-    (hdx : ∀ i, abs (dx i) <= G) (i : Fin (Nat.succ n)) :
-    abs (softmaxJvp x dx i) <= 2 * G := by
+    (hdx : ∀ i, abs (dx i) ≤ G) (i : Fin (Nat.succ n)) :
+    abs (softmaxJvp x dx i) ≤ 2 * G := by
   classical
   let y : Vec (Nat.succ n) := softmaxVec x
   let s : Real := dotCLM y dx
   have hyPos : ∀ j, 0 < y j := by
     intro j
-    simp only [y, softmaxVec, softmaxVecOfFun_apply]
-    exact div_pos (Real.exp_pos (x j)) <| by
-      simpa [sumExp] using
-        Finset.sum_pos (fun k (_ : k ∈ (Finset.univ : Finset (Fin (Nat.succ n)))) =>
-          Real.exp_pos (x k)) Finset.univ_nonempty
+    simp only [y, softmaxVec, vecOfFun_apply]
+    exact div_pos (Real.exp_pos (x j)) (sumExp_pos x)
   have hySum : (∑ j, y j) = 1 := sum_softmaxVec x
   have hs : s = ∑ j, y j * dx j := by
     simp [s, dotCLM_apply]
-  have hsAbs : abs s <= G := by
+  have hsAbs : abs s ≤ G := by
     rw [hs]
     calc
-      abs (∑ j, y j * dx j) <= ∑ j, abs (y j * dx j) :=
+      abs (∑ j, y j * dx j) ≤ ∑ j, abs (y j * dx j) :=
         Finset.abs_sum_le_sum_abs _ _
       _ = ∑ j, y j * abs (dx j) := by
         refine Finset.sum_congr rfl ?_
         intro j _
         rw [abs_mul, abs_of_pos (hyPos j)]
-      _ <= ∑ j, y j * G := by
+      _ ≤ ∑ j, y j * G := by
         refine Finset.sum_le_sum ?_
         intro j _
         exact mul_le_mul_of_nonneg_left (hdx j) (le_of_lt (hyPos j))
       _ = G := by rw [← Finset.sum_mul, hySum, one_mul]
-  have hyLeOne : y i <= 1 := by
+  have hyLeOne : y i ≤ 1 := by
     calc
-      y i <= ∑ j, y j :=
+      y i ≤ ∑ j, y j :=
         Finset.single_le_sum (fun j _ => le_of_lt (hyPos j)) (Finset.mem_univ i)
       _ = 1 := hySum
-  have hdiff : abs (dx i - s) <= 2 * G := by
+  have hdiff : abs (dx i - s) ≤ 2 * G := by
     calc
-      abs (dx i - s) <= abs (dx i) + abs s := abs_sub _ _
-      _ <= G + G := add_le_add (hdx i) hsAbs
+      abs (dx i - s) ≤ abs (dx i) + abs s := abs_sub _ _
+      _ ≤ G + G := add_le_add (hdx i) hsAbs
       _ = 2 * G := by ring
-  simp only [softmaxJvp, softmaxVecOfFun_apply]
-  change abs (y i * (dx i - s)) <= 2 * G
+  simp only [softmaxJvp, vecOfFun_apply]
+  change abs (y i * (dx i - s)) ≤ 2 * G
   rw [abs_mul, abs_of_pos (hyPos i)]
   calc
-    y i * abs (dx i - s) <= 1 * abs (dx i - s) :=
+    y i * abs (dx i - s) ≤ 1 * abs (dx i - s) :=
       mul_le_mul_of_nonneg_right hyLeOne (abs_nonneg _)
-    _ <= 1 * (2 * G) := mul_le_mul_of_nonneg_left hdiff zero_le_one
+    _ ≤ 1 * (2 * G) := mul_le_mul_of_nonneg_left hdiff zero_le_one
     _ = 2 * G := one_mul _
 
 end

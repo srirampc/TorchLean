@@ -13,8 +13,8 @@ public import NN.Tensor.Internal.Lowering.Einsum
 This module isolates the mathematical certificate used when a generated
 einsum kernel changes the nesting order of contracted axes. A permutation of
 duplicate-free logical axes induces an equivalence of coordinate spaces.
-Coordinate sums may be transported across that equivalence only when addition
-is commutative, so ordered scalar folds keep their original traversal.
+The coordinate-sum transport theorem assumes an additive commutative monoid;
+ordered scalar folds keep their original traversal.
 -/
 
 @[expose] public section

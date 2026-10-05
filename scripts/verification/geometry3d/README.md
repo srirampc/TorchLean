@@ -77,7 +77,7 @@ _external/geometry3d/wilddet3d/wilddet3d_cat_box3d_cert.json
 and checks it with:
 
 ```bash
-lake exe verify -- camera-box3d-cert _external/geometry3d/wilddet3d/wilddet3d_cat_box3d_cert.json
+scripts/lake.sh exe verify -- camera-box3d-cert _external/geometry3d/wilddet3d/wilddet3d_cat_box3d_cert.json
 ```
 
 The `--overlay` flag writes a PNG beside the exported JSON. To inspect the strict model-box
@@ -99,7 +99,7 @@ separate `utils3d --no-deps` install is deliberate: WildDet3D imports `utils3d` 
 backend, but the full dependency chain pulls Open3D/GLTF visualization packages that are not needed
 for the certificate exporter and can fail on newer Python versions.
 
-The exporter has two bbox modes:
+The exporter rejects detections below `--min-score`. It has three bbox modes:
 
 - `--bbox-source auto` is the default used above. It checks whether the model's own 2D box encloses
   the projected 3D corners. If not, it records the mismatch in metadata and exports the exact
@@ -107,6 +107,8 @@ The exporter has two bbox modes:
 - `--bbox-source model2d` exports the strict model 2D box claim. On the default cat image this is
   rejected by Lean, which is a useful real diagnostic: the 3D prediction is projectable, but its
   projected footprint is slightly outside the detector's 2D box.
+- `--bbox-source projected-envelope` always exports the image-clipped projected footprint,
+  including the requested envelope padding.
 
 ## Direct 3D Detector Path: Cube R-CNN / Omni3D
 
@@ -143,6 +145,6 @@ Key statements:
 Build/check:
 
 ```bash
-lake build NN.Verification.Geometry3D NN.Verification.CLI NN.Examples.BugZoo.All
-lake exe verify -- camera-box3d-cert _external/geometry3d/realworld/coco_cats_depth_box.json
+scripts/lake.sh build NN.Verification.Geometry3D NN.Verification.CLI NN.Examples.BugZoo.All
+scripts/lake.sh exe verify -- camera-box3d-cert _external/geometry3d/realworld/coco_cats_depth_box.json
 ```

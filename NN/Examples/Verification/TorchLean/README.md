@@ -16,10 +16,10 @@ structures, transfer rules, and proof files belong under `NN/MLTheory/CROWN`.
 Run the maintained entry points through the unified verifier:
 
 ```bash
-lake exe verify -- torchlean-ibp
-lake exe verify -- torchlean-crown-ops
-lake exe verify -- torchlean-transformer-ibp
-lake exe verify -- torchlean-mlp-workflow
+scripts/lake.sh exe verify -- torchlean-ibp
+scripts/lake.sh exe verify -- torchlean-crown-ops
+scripts/lake.sh exe verify -- torchlean-transformer-ibp
+scripts/lake.sh exe verify -- torchlean-mlp-workflow
 ```
 
 The first three commands use bundled, fixed weights. The MLP workflow trains its own small model.
@@ -43,7 +43,8 @@ Implementation map:
 - `torchlean-transformer-ibp`: `NN.Verification.Builtin.TransformerIBPWorkflow`
 - `torchlean-mlp-workflow`: trains a classifier, then calls
   `trained.verify center (radius := 0.10) (norm := .inf) (property := .topLabel 0)`
-  with Alpha-Beta-CROWN internally
+  with the default `.alphaBetaCrown` method, which is fixed-relaxation alpha-CROWN with ReLU phases
+  taken from IBP (printed as `Alpha-CROWN (IBP phases)`)
 
 The `Proved/` subtree contains theorem-backed lowering and evaluator fragments. Runtime reports and
 checker results remain separate from those theorems.

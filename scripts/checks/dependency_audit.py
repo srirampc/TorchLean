@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import pathlib
 import re
 import subprocess
@@ -33,7 +34,9 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 
 # The parser is intentionally shallow: TorchLean's public graph page needs module imports,
 # namespaces, and declaration headers, not a full elaborated Lean environment.
-IMPORT_RE = re.compile(r"^\s*(public\s+)?(?:meta\s+)?import\s+([A-Za-z0-9_'.]+)\s*$")
+IMPORT_RE = re.compile(
+    r"^\s*(public\s+)?(?:meta\s+)?import\s+(?:all\s+)?([A-Za-z0-9_'.]+)\s*$"
+)
 NAMESPACE_RE = re.compile(r"^\s*namespace\s+([A-Za-z0-9_'.]+)\s*$")
 DECL_RE = re.compile(
     r"^\s*(?:private\s+|protected\s+|partial\s+|unsafe\s+|noncomputable\s+|scoped\s+|local\s+)*"
@@ -102,8 +105,17 @@ def iter_lean_files(root: pathlib.Path) -> Iterable[pathlib.Path]:
         paths = (root / name.decode("utf-8", errors="surrogateescape")
                  for name in result.stdout.split(b"\0") if name)
     else:
-        # Source archives remain inspectable without Git metadata.
-        paths = root.rglob("*.lean")
+        # Prune before descent: filtering an rglob result still walks caches.
+        def archive_sources() -> Iterable[pathlib.Path]:
+            for directory, children, names in os.walk(root):
+                children[:] = [
+                    name for name in children
+                    if name not in SKIP_PARTS | EXTERNAL_TREE_NAMES
+                ]
+                for name in names:
+                    if name.endswith(".lean"):
+                        yield pathlib.Path(directory) / name
+        paths = archive_sources()
     for path in sorted(set(paths)):
         if any(part in SKIP_PARTS | EXTERNAL_TREE_NAMES for part in path.relative_to(root).parts):
             continue
@@ -340,7 +352,6 @@ def code_stats(root: pathlib.Path, files: list[pathlib.Path]) -> dict:
     """
 
     total_lines = 0
-    blank_lines = 0
     code_lines = 0
     declaration_counts: Counter[str] = Counter()
     layer_files: Counter[str] = Counter()
@@ -363,7 +374,6 @@ def code_stats(root: pathlib.Path, files: list[pathlib.Path]) -> dict:
 
         for line in visible_lines:
             if not line.strip():
-                blank_lines += 1
                 continue
             code_lines += 1
             # The declaration regex is deliberately conservative. It is for scale

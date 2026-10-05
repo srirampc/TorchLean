@@ -96,9 +96,12 @@ def elabEinsum : TermElab := fun stx expectedType? => withRef stx do
           pure
             (checked, compactOutputShape, outputShapeAgreement,
               inputShapes, axisExpressions)
-    let compactResultType :=
-      mkAppN (mkConst ``Rep [scalarLevel]) #[
-        scalarType, compactOutputShape, storage]
+    let compactResultType ←
+      if scalarLevel == .zero then
+        publicTensorType scalarType compactOutputShape storage
+      else
+        pure <| mkAppN (mkConst ``Rep [scalarLevel]) #[
+          scalarType, compactOutputShape, storage]
     if let some expectedType := expectedType? then
       unless ←
           withTransparency .reducible <|
@@ -230,16 +233,14 @@ def elabEinsum : TermElab := fun stx expectedType? => withRef stx do
     let hOutputArraySize ←
       mkAppM ``Storage.size_eq_of_toArray_eq_ofFn #[
         outputArray, outputValues, hOutputArray]
-    let rawOutputTensor ←
+    let outputTensor ←
       mkAppM ``Rep.mk #[outputArray, hOutputArraySize]
-    let rawOutputTensorCorrectness ←
+    let hOutputTensor ←
       mkAppM ``Rep.mk_eq_ofFlatFn #[
         outputValues, outputArray, hOutputArraySize, hOutputArray]
     -- Output generation already normalizes the complete native loop nest and
     -- seals its array-level certificate. Wrapping that array directly avoids a
     -- second normalization pass over the same generated kernel and its proofs.
-    let outputTensor := rawOutputTensor
-    let hOutputTensor := rawOutputTensorCorrectness
     let result ←
       mkAppM ``Lowering.einsumTensorKernel #[
         checked, inputs, outputValues, hOutputValues,

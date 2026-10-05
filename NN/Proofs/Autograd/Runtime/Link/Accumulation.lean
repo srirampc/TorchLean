@@ -118,39 +118,7 @@ theorem foldlM_addGradAll_toIndexedShapeErasedArray_eq_add {α : Type}
                 TorchLean.TensorPack.toShapeErasedArray (α := α) (ss := ss) seedTail ++
                 suffix)[pref.size]? =
                 some seedHeadValue := by
-            have hlt : pref.size < (pref.push seedHeadValue).size := by
-              simp
             simp [Array.getElem?_append]
-
-          have hsummed :
-              Runtime.Autograd.SomeTensor.add seedHeadValue contribHeadValue =
-                .ok newHeadValue := by
-            -- Reduce the shape-cast using definitional equality of shapes.
-            have hs :
-                (Spec.SomeTensor.ofTensor seedHead).shape =
-                  (Spec.SomeTensor.ofTensor contribHead).shape := by
-              rfl
-            cases hs
-            simp [Runtime.Autograd.SomeTensor.add, Spec.SomeTensor.ofTensor,
-              seedHeadValue, contribHeadValue, newHeadValue]
-
-          have hset :
-              ((pref.push seedHeadValue) ++
-                TorchLean.TensorPack.toShapeErasedArray (α := α) (ss := ss) seedTail ++
-                suffix).set
-                  pref.size newHeadValue
-                  (by
-                    simp [Array.size_append, Nat.add_assoc]) =
-                (pref.push newHeadValue) ++
-                  TorchLean.TensorPack.toShapeErasedArray (α := α) (ss := ss) seedTail ++
-                  suffix := by
-            have hlt : pref.size < (pref.push seedHeadValue).size := by
-              simp
-            simp [Array.set_append_left (xs := pref.push seedHeadValue)
-                  (ys := TorchLean.TensorPack.toShapeErasedArray (α := α) (ss := ss) seedTail ++
-                    suffix)
-                  (i := pref.size) (x := newHeadValue) hlt,
-              Array.set_push]
 
           have hadd0 :
               Runtime.Autograd.Tape.addGradAll (t := t)
@@ -162,12 +130,6 @@ theorem foldlM_addGradAll_toIndexedShapeErasedArray_eq_add {α : Type}
                 .ok ((pref.push newHeadValue) ++
                   TorchLean.TensorPack.toShapeErasedArray (α := α) (ss := ss) seedTail ++
                   suffix) := by
-              have hidAcc :
-                  pref.size <
-                  ((pref.push seedHeadValue) ++
-                    TorchLean.TensorPack.toShapeErasedArray (α := α) (ss := ss) seedTail ++
-                    suffix).size := by
-                simp [Array.size_append, Nat.add_assoc]
               have hshapeG : contribHeadValue.shape = node0.value.shape := by
                 calc
                   contribHeadValue.shape = seedHeadValue.shape := by rfl
@@ -182,12 +144,6 @@ theorem foldlM_addGradAll_toIndexedShapeErasedArray_eq_add {α : Type}
                     suffix))[pref.size]? =
                     some seedHeadValue := by
                 simpa [Array.append_assoc] using hgetExisting
-              have hidAcc' :
-                  pref.size <
-                    ((pref.push seedHeadValue) ++
-                      (TorchLean.TensorPack.toShapeErasedArray (α := α) (ss := ss) seedTail ++
-                      suffix)).size := by
-                simpa [Array.append_assoc] using hidAcc
 
               have : Runtime.Autograd.Tape.addGradAll (t := t)
                   ((pref.push seedHeadValue) ++
@@ -204,20 +160,19 @@ theorem foldlM_addGradAll_toIndexedShapeErasedArray_eq_add {α : Type}
                 cases hshapeExisting
                 cases hshapeG
 
-                have hid :
-                    pref.size < pref.size + 1 + (ss.length + suffix.size) := by
-                  -- `pref.size < pref.size + 1` and adding to the RHS preserves `<`.
-                  exact Nat.lt_of_lt_of_le (Nat.lt_succ_self pref.size)
-                    (Nat.le_add_right (pref.size + 1) (ss.length + suffix.size))
-
-                -- Now `addGradAll` is a straight-line computation: fetch node, check flags/shapes,
-                -- add, and overwrite the `pref.size` slot.
-                -- Keep `Tensor.cast_shape` opaque here: the following tensor equalities are about
-                -- the accumulated value, not the proof terms used to align shapes.
-                simp [Runtime.Autograd.Tape.addGradAll, hnode0', hreq0, hid, seedHeadValue,
-                  contribHeadValue, newHeadValue, Array.set_push]
-
-                simp [Runtime.Autograd.SomeTensor.add]
+                simp only [Runtime.Autograd.Tape.addGradAll, hnode0', hreq0,
+                  Bool.true_eq_false, ite_false, Bind.bind, Except.bind, Pure.pure,
+                  Except.pure]
+                rw [dite_eq_left (show contribHeadValue.shape = node0.value.shape from rfl)]
+                split
+                · rename_i hget
+                  simp [hgetExisting'] at hget
+                · rename_i existing hget
+                  have heq : existing = seedHeadValue :=
+                    Option.some.inj (hget.symm.trans hgetExisting')
+                  subst existing
+                  simp [seedHeadValue, contribHeadValue, newHeadValue, Array.set_push,
+                    Runtime.Autograd.SomeTensor.add, Spec.SomeTensor.cast]
 
               -- Rewrite back to the original associative form for the outer goal.
               rw [hacc0]
@@ -260,12 +215,6 @@ theorem foldlM_addGradAll_toIndexedShapeErasedArray_eq_add {α : Type}
                 have hcons :=
                   (TorchLean.TensorPack.toShapeErasedArray_cons (α := α) (s := s) (ss := ss)
                     seedHead seedTail)
-                have hxs : (#[(Spec.SomeTensor.ofTensor seedHead)] : Array (Spec.SomeTensor
-                  α)).size ≤ i + 1 := by
-                  simp
-                have : (i + 1) - (#[(Spec.SomeTensor.ofTensor seedHead)] : Array
-                  (Spec.SomeTensor α)).size = i := by
-                  simp
                 simp [hcons]
               have hshape' :
                   ((TorchLean.TensorPack.toShapeErasedArray (α := α) (ss := s :: ss)
@@ -288,37 +237,22 @@ theorem foldlM_addGradAll_toIndexedShapeErasedArray_eq_add {α : Type}
             using htail
 
 /--
-`Tape.addGradAll` never changes the size of the dense gradient array in the `.ok` case.
+`Tape.addGradAll` never changes the size of the dense gradient array when it succeeds.
 
-This is a structural property needed to show the runtime reverse loop preserves array sizes.
+This is the structural property that lets the runtime reverse loop preserve array sizes.
 -/
-theorem addGradAll_size_preserved {α : Type}
-    [TorchLean.Storage α] [Add α]
-    (t : Runtime.Autograd.Tape α) (grads : Array (Spec.SomeTensor α)) (id : Nat) (g :
-      Spec.SomeTensor α) :
-    match Runtime.Autograd.Tape.addGradAll (t := t) grads id g with
-    | .ok grads' => grads'.size = grads.size
-    | .error _ => True := by
-  cases hresult : Runtime.Autograd.Tape.addGradAll (t := t) grads id g with
-  | error => simp
-  | ok grads' =>
-      simp only [Runtime.Autograd.Tape.addGradAll, Pure.pure, Except.pure, Bind.bind, Except.bind,
-        throw, throwThe, MonadExceptOf.throw] at hresult
-      repeat' split at hresult
-      all_goals simp_all
-      subst grads'
-      simp
-
-/-- If `addGradAll` returns `.ok grads'`, then `grads'.size = grads.size`. -/
 theorem addGradAll_ok_size {α : Type}
     [TorchLean.Storage α] [Add α]
-    (t : Runtime.Autograd.Tape α) :
-    ∀ {grads : Array (Spec.SomeTensor α)} {id : Nat} {g : Spec.SomeTensor α}
-      {grads' : Array (Spec.SomeTensor α)},
-      Runtime.Autograd.Tape.addGradAll (t := t) grads id g = .ok grads' →
-        grads'.size = grads.size := by
-  intro grads id g grads' h
-  simpa [h] using addGradAll_size_preserved (t := t) grads id g
+    (t : Runtime.Autograd.Tape α) {grads : Array (Spec.SomeTensor α)} {id : Nat}
+    {g : Spec.SomeTensor α} {grads' : Array (Spec.SomeTensor α)}
+    (h : Runtime.Autograd.Tape.addGradAll (t := t) grads id g = .ok grads') :
+    grads'.size = grads.size := by
+  simp only [Runtime.Autograd.Tape.addGradAll, Pure.pure, Except.pure, Bind.bind, Except.bind,
+    throw, throwThe, MonadExceptOf.throw] at h
+  repeat' split at h
+  all_goals simp_all
+  subst grads'
+  simp
 
 /--
 If one step of the runtime dense backward loop succeeds, it preserves the accumulator array size.
@@ -381,7 +315,6 @@ theorem backwardDenseFromStep_ok_size {α : Type}
   repeat' split at h
   all_goals simp_all
   exact fold_ok_size _ _ _ h
-
 
 end Graph
 

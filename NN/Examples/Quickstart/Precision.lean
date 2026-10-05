@@ -43,7 +43,7 @@ def run : IO Unit := do
   let graph ← nn.lowerToTypedGraph model (α := Scalar)
   let output := nn.TypedGraphModel.forward graph state input
   let derivative := nn.TypedGraphModel.jvp graph state nn.State.zeros input (Tensor.full [1] 1)
-  IO.println s!"f(2) = {ExecFloat.Binary.toRat? (output.getScalar ⟨0, by decide⟩)}"
-  IO.println s!"f'(2) = {ExecFloat.Binary.toRat? (derivative.getScalar ⟨0, by decide⟩)}"
+  IO.println s!"f(2) = {ExecFloat.Binary.toRat? output[0]}"
+  IO.println s!"f'(2) = {ExecFloat.Binary.toRat? derivative[0]}"
 
 end NN.Examples.Quickstart.Precision

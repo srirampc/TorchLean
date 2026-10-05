@@ -12,12 +12,12 @@ compiler-preservation obligation.
 Build all fifteen case studies from the repository root with:
 
 ```bash
-lake build NN.Examples.BugZoo.All
+scripts/lake.sh build NN.Examples.BugZoo.All
 ```
 
 Then open an individual file in Lean's Infoview to inspect its definitions and theorem statements.
 These are checked case studies rather than training executables. The geometry checker also runs
-with `lake exe verify -- camera-box3d-cert`; `verify -- all` runs the broader registered
+with `scripts/lake.sh exe verify -- camera-box3d-cert`; `verify -- all` runs the broader registered
 verification suite, not every BugZoo file.
 
 With PyTorch installed, compare native normalization results against the constant-slice reference:

@@ -37,7 +37,6 @@ References:
 open FloatLib.Floats (ExecFloat)
 open FloatLib.Floats.Formats.BinaryInterchange (Model FloatFormat)
 
-
 namespace Proofs
 namespace RL
 namespace Float32Exec
@@ -50,21 +49,22 @@ open IEEE32Exec
 
 /--
 If `Runtime.RL.Numerics.Float32.discountedBackupChecked` returns `.ok`, then the decoded real
-meaning of the result agrees with the standard “real-op + round-to-float32” model (`fp32Round`)
+meaning of the result agrees with the standard “real-op + round-to-float32” model (`Model.roundAt
+FloatFormat.binary32`)
 at each primitive operation.
 
 This is the direct `checked boundary ⇒ semantics theorem applies` wrapper.
 -/
-theorem toReal_discountedBackupChecked_eq_fp32Round_chain
+theorem toReal_discountedBackupChecked_eq_round_chain
     (reward gamma bootstrap : ExecFloat.Binary 8 23) (done : Bool)
     (out : ExecFloat.Binary 8 23)
     (h : Runtime.RL.Numerics.Float32.discountedBackupChecked reward gamma bootstrap done
       = .ok out) :
     (ExecFloat.Binary.toModel out).toReal =
-      fp32Round
+      Model.roundAt FloatFormat.binary32
         ((ExecFloat.Binary.toModel reward).toReal +
-          fp32Round
-            (fp32Round
+          Model.roundAt FloatFormat.binary32
+            (Model.roundAt FloatFormat.binary32
                 ((ExecFloat.Binary.toModel gamma).toReal *
                   (ExecFloat.Binary.toModel (continueMask (α := (ExecFloat.Binary 8 23))
                     done)).toReal) *
@@ -75,28 +75,30 @@ theorem toReal_discountedBackupChecked_eq_fp32Round_chain
   -- Reduce to the spec-layer refinement theorem.
   rw [hout]
   exact
-    (toReal_discountedBackup_eq_fp32Round_chain_of_isFinite
+    (toReal_discountedBackup_eq_round_chain_of_isFinite
       (reward := reward) (gamma := gamma) (bootstrap := bootstrap) (done := done)
       (h₁ := h₁) (h₂ := h₂) (h₃ := h₃))
 
 /--
 If `Runtime.RL.Numerics.Float32.tdResidualChecked` returns `.ok`, then the decoded real meaning of
-the result agrees with the standard “real-op + round-to-float32” model (`fp32Round`) at each
+the result agrees with the standard “real-op + round-to-float32” model (`Model.roundAt
+FloatFormat.binary32`) at each
 primitive operation.
 
 This is the `checked boundary ⇒ semantics theorem applies` wrapper for TD residuals.
 -/
-theorem toReal_tdResidualChecked_eq_fp32Round_chain
+theorem toReal_tdResidualChecked_eq_round_chain
     (value reward gamma nextValue : ExecFloat.Binary 8 23) (done : Bool)
     (out : ExecFloat.Binary 8 23)
     (h : Runtime.RL.Numerics.Float32.tdResidualChecked value reward gamma nextValue done
       = .ok out) :
     (ExecFloat.Binary.toModel out).toReal =
-      fp32Round
-        (fp32Round
+      Model.roundAt FloatFormat.binary32
+        (Model.roundAt FloatFormat.binary32
             ((ExecFloat.Binary.toModel reward).toReal +
-              fp32Round
-                (fp32Round ((ExecFloat.Binary.toModel gamma).toReal * (ExecFloat.Binary.toModel
+              Model.roundAt FloatFormat.binary32
+                (Model.roundAt FloatFormat.binary32
+                  ((ExecFloat.Binary.toModel gamma).toReal * (ExecFloat.Binary.toModel
                   (continueMask (α := (ExecFloat.Binary 8 23)) done)).toReal) *
                   (ExecFloat.Binary.toModel nextValue).toReal)) -
           (ExecFloat.Binary.toModel value).toReal) := by
@@ -108,7 +110,7 @@ theorem toReal_tdResidualChecked_eq_fp32Round_chain
   -- Reduce to the spec-layer refinement theorem.
   rw [hout]
   exact
-    (toReal_tdResidual_eq_fp32Round_chain_of_isFinite
+    (toReal_tdResidual_eq_round_chain_of_isFinite
       (value := value) (reward := reward) (gamma := gamma) (nextValue := nextValue) (done := done)
       (h₁ := h₁) (h₂ := h₂) (h₃ := h₃) (hval := hval) (hsub := hsub))
 

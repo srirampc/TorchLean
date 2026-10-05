@@ -8,8 +8,7 @@ module
 
 public import NN.Verification.Util.Json
 public import NN.Tensor.Conversion
-public import NN.Floats.Interval.IEEEExec32ArbTrans
-import Mathlib.Analysis.SpecialFunctions.Trigonometric.DerivHyp
+public import FloatLib.Floats.Formats.BinaryInterchange.Configured
 
 /-!
 # Piecewise polynomial certificates
@@ -66,39 +65,6 @@ open Spec TorchLean
 ## Utilities: exact rationals in JSON
 -/
 
-/--
-Parse a rational in the format emitted by TorchLean’s Arb helpers:
-
-- integer: `"5"`, `"-3"`
-- fraction: `"5/2"`, `"-7/10"`
-
-We avoid JSON numbers here because they are stored as `Scientific` and are not guaranteed to
-round-trip exactly for large integers.
--/
-def parseRatString (s : String) : Except String Rat := do
-  let s := s.trimAscii.toString
-  if s.isEmpty then
-    throw "empty rational string"
-  match s.splitOn "/" with
-  | [numStr] =>
-      match numStr.toInt? with
-      | some n => pure (Rat.ofInt n)
-      | none => throw s!"invalid integer rational: '{s}'"
-  | [numStr, denStr] =>
-      let n ←
-        match numStr.toInt? with
-        | some n => pure n
-        | none => throw s!"invalid numerator: '{numStr}'"
-      let d ←
-        match denStr.toNat? with
-        | some d => pure d
-        | none => throw s!"invalid denominator (expected Nat): '{denStr}'"
-      if d = 0 then
-        throw "invalid rational: denominator is 0"
-      pure (Rat.ofInt n / Rat.ofInt (Int.ofNat d))
-  | _ =>
-      throw s!"invalid rational (expected n or n/d): '{s}'"
-
 /-- Parse a `Rat` from a JSON string field with context. -/
 def parseRat (ctx : String) (j : Json) : IO Rat := do
   let kind : String :=
@@ -124,8 +90,11 @@ def parseRat (ctx : String) (j : Json) : IO Rat := do
 /-- One polynomial segment on an interval $[\mathrm{lo},\mathrm{hi}]$, using local coordinate
 $t=x-\mathrm{lo}$. -/
 structure PolynomialPiece where
+  /-- Left endpoint of the segment. -/
   lo : Rat
+  /-- Right endpoint of the segment. -/
   hi : Rat
+  /-- Coefficients `[a₀, …, a_d]` of the polynomial in the local coordinate `t = x - lo`. -/
   coeffs : Array Rat
   deriving Repr, Inhabited
 
@@ -231,16 +200,18 @@ def parsePiecewisePolyCertificate (j : Json) : IO PiecewisePolyCertificate := do
 ## Checking
 -/
 
-/--
-Check a piecewise-polynomial certificate **exactly** over `Rat`.
+namespace Internal
 
-This is the smallest checker core for this format: it uses exact rational arithmetic with no
-tolerances, so a passing check means the certificate's equalities hold exactly as stated.
--/
-def checkCertificateRat (cert : PiecewisePolyCertificate) : IO Unit := do
+/-- Validate the knot partition and polynomial metadata, including for direct in-memory callers. -/
+def checkStructure (cert : PiecewisePolyCertificate) : IO Unit := do
   let n := cert.n
-  let xs := Tensor.to cert.xs (Array ℚ)
-  let ys := Tensor.to cert.ys (Array ℚ)
+  let xs := Tensor.to cert.xs (Array Rat)
+  if n < 2 then
+    throw <| IO.userError "xs must have length ≥ 2"
+  if cert.pieces.size != n - 1 then
+    throw <|
+      IO.userError
+        s!"pieces length mismatch: pieces.size={cert.pieces.size}, expected {n - 1} (=xs.size-1)"
 
   for i in [0:n - 1] do
     let a ← requireArrayEntry "xs" xs i
@@ -261,6 +232,23 @@ def checkCertificateRat (cert : PiecewisePolyCertificate) : IO Unit := do
         IO.userError
           s!"piece[{i}].coeffs length mismatch: {p.coeffs.size} ≠ degree+1={cert.degree + 1}"
 
+end Internal
+
+/--
+Check a piecewise-polynomial certificate **exactly** over `Rat`.
+
+This is the smallest checker core for this format: it validates the structure and uses exact
+rational arithmetic with no tolerances, so a passing check means the certificate's equalities
+hold exactly as stated.
+-/
+def checkCertificateRat (cert : PiecewisePolyCertificate) : IO Unit := do
+  Internal.checkStructure cert
+  let xs := Tensor.to cert.xs (Array Rat)
+  let ys := Tensor.to cert.ys (Array Rat)
+  for i in [0:cert.pieces.size] do
+    let p ← requireArrayEntry "pieces" cert.pieces i
+    let lo ← requireArrayEntry "xs" xs i
+    let hi ← requireArrayEntry "xs" xs (i + 1)
     let yLo ← requireArrayEntry "ys" ys i
     let yHi ← requireArrayEntry "ys" ys (i + 1)
     let tHi : Rat := hi - lo
@@ -292,12 +280,10 @@ Implementation note:
   bits. We accept only when the lower and upper rounding compare equal.
 -/
 def ratToIEEE32ExecExact (ctx : String) (q : Rat) : IO (ExecFloat.Binary 8 23) := do
-  let lo : ExecFloat.Binary 8 23 := ExecFloat.Binary.ofModel <|
-    FloatLib.Floats.Formats.BinaryInterchange.Model.roundRatQDown
-      FloatLib.Floats.Formats.BinaryInterchange.FloatFormat.binary32 q
-  let hi : ExecFloat.Binary 8 23 := ExecFloat.Binary.ofModel <|
-    FloatLib.Floats.Formats.BinaryInterchange.Model.roundRatQUp
-      FloatLib.Floats.Formats.BinaryInterchange.FloatFormat.binary32 q
+  let lo : ExecFloat.Binary 8 23 :=
+    ExecFloat.Binary.ofModel (Model.roundRatQDown FloatFormat.binary32 q)
+  let hi : ExecFloat.Binary 8 23 :=
+    ExecFloat.Binary.ofModel (Model.roundRatQUp FloatFormat.binary32 q)
   unless lo == hi do
     throw <|
       IO.userError
@@ -317,12 +303,14 @@ binary32 values and run the polynomial evaluation with executable IEEE-754 ops, 
 the claimed endpoints?”
 
 The check is deliberately strict:
+- the knot partition and polynomial metadata must be structurally valid,
 - every rational in the cert must be exactly representable as a finite `ExecFloat.Binary 8 23`,
 - comparisons use IEEE-style `BEq` (so `+0 == -0`, and NaNs never compare equal).
 -/
 def checkCertificateIEEE32ExecExact (cert : PiecewisePolyCertificate) : IO Unit := do
-  let xsQ := Tensor.to cert.xs (Array ℚ)
-  let ysQ := Tensor.to cert.ys (Array ℚ)
+  Internal.checkStructure cert
+  let xsQ := Tensor.to cert.xs (Array Rat)
+  let ysQ := Tensor.to cert.ys (Array Rat)
 
   let xs ← xsQ.mapIdxM (fun i q => ratToIEEE32ExecExact (ctx := s!"xs[{i}]") q)
   let ys ← ysQ.mapIdxM (fun i q => ratToIEEE32ExecExact (ctx := s!"ys[{i}]") q)
@@ -363,10 +351,5 @@ def checkJsonIEEE32ExecExact (j : Json) : IO Unit := do
   checkCertificateRat cert
   IO.println "Piecewise polynomial certificate verified."
   checkCertificateIEEE32ExecExact cert
-
-/-- Check a piecewise-polynomial certificate stored as a JSON file. -/
-def checkFile (path : String) : IO Unit := do
-  let j ← readJsonFile path
-  checkJson j
 
 end NN.Verification.Splines.PiecewisePolyCert

@@ -40,21 +40,6 @@ noncomputable section
 open CrownCertSoundness
 open CertSoundness
 
--- The graph dialect’s `FlatBox` is a dependent record (the tensor shapes depend on `dim`),
--- so Lean does not automatically register a usable extensionality lemma for the `ext` tactic.
--- We add a small `[ext]` lemma locally.
-/-- Extensionality for `FlatBox`: equal dimension and heterogeneously equal endpoints. -/
-@[ext] theorem FlatBox.ext' {α : Type} [TorchLean.Storage α] [Context α] {B1 B2 : FlatBox α}
-    (hDim : B1.dim = B2.dim)
-    (hLo : HEq B1.lo B2.lo)
-    (hHi : HEq B1.hi B2.hi) : B1 = B2 := by
-  cases B1
-  cases B2
-  cases hDim
-  cases hLo
-  cases hHi
-  rfl
-
 /-! ## Helper assumptions -/
 
 /-- The designated input entry in `inputs` matches the concrete point `x` (up to a `castDimScalar`).
@@ -83,6 +68,7 @@ def AlphaOK (alpha : Array (Option (FlatTensor ℝ))) : Prop :=
 
 /-! ## `Theorems.Semantics.encloses` ↔ componentwise inequalities (via `getScalar`) -/
 
+/-- Enclosure in a box is the conjunction of the two coordinatewise inequalities. -/
 theorem encloses_iff_getScalar {n : Nat}
     (lo hi x : Tensor ℝ [n]) :
     Theorems.Semantics.encloses (α := ℝ) { dim := n, lo := lo, hi := hi } x ↔
@@ -90,13 +76,6 @@ theorem encloses_iff_getScalar {n : Nat}
   rfl
 
 /-! ## Small tensor algebra helpers -/
-
-theorem add_spec_full_zero_right {n : Nat}
-    (t : Tensor ℝ [n]) :
-    Tensor.addSpec (α := ℝ) t (Tensor.full (α := ℝ) (.dim n .scalar) (0 : ℝ)) = t := by
-  apply Tensor.ext_vector
-  intro i
-  simp [Tensor.addSpec]
 
 /-- A linear layer with zero bias is a plain matrix-vector product.
 
@@ -115,18 +94,10 @@ theorem linear_spec_bias_zero_eq_matvec {m n : Nat}
 
 /-! ## Small cast lemmas (avoid `cases` on equalities mentioning record fields) -/
 
-/-!
-`castDimScalar_trans` comes from `CertSoundness` (opened above) and `castDimScalar_self` from the
-engine module where the cast is defined; this file already depends on both for the rest of the
-interval lemmas. Each of them was stated a second time here, word for word, before this note
-replaced them.
--/
 /-- `castDimScalar` is proof-irrelevant in its equality argument. -/
 theorem castDimScalar_proof_irrel {n n' : Nat}
     (h₁ h₂ : n = n') (t : Tensor ℝ [n]) :
-    castDimScalar (α := ℝ) h₁ t = castDimScalar (α := ℝ) h₂ t := by
-  have : h₁ = h₂ := Subsingleton.elim _ _
-  cases this
+    castDimScalar (α := ℝ) h₁ t = castDimScalar (α := ℝ) h₂ t :=
   rfl
 
 /-- `getScalar` commutes with `castDimScalar` (up to `Fin.cast`). -/
@@ -135,6 +106,41 @@ theorem getScalar_castDimScalar {n n' : Nat} (h : n = n') (t : Tensor ℝ [n]) (
       getScalar t (Fin.cast h.symm i) := by
   cases h
   simp [castDimScalar]
+
+/-- Casting the dimension of a tensor preserves the unit-interval range of its entries. -/
+theorem castDimScalar_unit_range {n n' : Nat} (h : n = n') (t : Tensor ℝ [n])
+    (hr : ∀ i : Fin n, (0 : ℝ) ≤ getScalar t i ∧ getScalar t i ≤ (1 : ℝ)) :
+    ∀ i : Fin n', (0 : ℝ) ≤ getScalar (castDimScalar (α := ℝ) h t) i ∧
+      getScalar (castDimScalar (α := ℝ) h t) i ≤ (1 : ℝ) := by
+  intro i
+  rw [getScalar_castDimScalar]
+  exact hr _
+
+/-! ## Safe lookups -/
+
+/-- A successful `Cert.getAff?` lookup is an in-bounds array read. -/
+theorem getElem!_of_getAff?_eq_some {cert : Array (Option (FlatAffineBounds ℝ))} {p : Nat}
+    {xin : FlatAffineBounds ℝ} (h : NN.MLTheory.CROWN.Cert.getAff? (α := ℝ) cert p = some xin) :
+    cert[p]! = some xin := by
+  by_cases hlt : p < cert.size
+  · simpa [NN.MLTheory.CROWN.Cert.getAff?, Array.getD, hlt] using h
+  · simp [NN.MLTheory.CROWN.Cert.getAff?, Array.getD, hlt] at h
+
+/-- A successful `getAlpha?` lookup is an in-bounds array read. -/
+theorem getElem!_of_getAlpha?_eq_some {alpha : Array (Option (FlatTensor ℝ))} {id : Nat}
+    {αv : FlatTensor ℝ} (h : NN.MLTheory.CROWN.Cert.getAlpha? (α := ℝ) alpha id = some αv) :
+    id < alpha.size ∧ alpha[id]! = some αv := by
+  by_cases hlt : id < alpha.size
+  · exact ⟨hlt, by simpa [NN.MLTheory.CROWN.Cert.getAlpha?, Array.getD, hlt] using h⟩
+  · simp [NN.MLTheory.CROWN.Cert.getAlpha?, Array.getD, hlt] at h
+
+/-- Under `AlphaOK`, an α vector read by `getAlpha?` has every entry in `[0, 1]`. -/
+theorem getAlpha?_unit_range {alpha : Array (Option (FlatTensor ℝ))} {id : Nat}
+    {αv : FlatTensor ℝ} (halpha : AlphaOK (alpha := alpha))
+    (h : NN.MLTheory.CROWN.Cert.getAlpha? (α := ℝ) alpha id = some αv) :
+    ∀ i : Fin αv.n, (0 : ℝ) ≤ getScalar αv.v i ∧ getScalar αv.v i ≤ (1 : ℝ) := by
+  obtain ⟨hlt, hentry⟩ := getElem!_of_getAlpha?_eq_some h
+  simpa [hentry] using halpha id hlt
 
 /-- `Activation.reluSpec` commutes with `castDimScalar`. -/
 theorem relu_spec_castDimScalar {n n' : Nat} (h : n = n') (t : Tensor ℝ [n]) :
@@ -184,40 +190,6 @@ theorem boundsEvalAt_castAffineOut (xin : FlatAffineBounds ℝ) {outDim' : Nat}
   cases h
   rfl
 
-/-- `Semantics.encloses` is preserved under casting a box and point to an equal dimension. -/
-theorem sem_encloses_castDim {B : FlatBox ℝ} {n' : Nat}
-    (h : B.dim = n') (x : Tensor ℝ [B.dim]) :
-    Theorems.Semantics.encloses (α := ℝ) B x →
-      Theorems.Semantics.encloses (α := ℝ)
-        { dim := n'
-          lo := castDimScalar (α := ℝ) h B.lo
-          hi := castDimScalar (α := ℝ) h B.hi }
-        (castDimScalar (α := ℝ) h x) := by
-  intro hx
-  cases B with
-  | mk n lo hi =>
-      cases h
-      simpa [Theorems.Semantics.encloses, castDimScalar, getDimScalarFn] using hx
-
-/-- `Semantics.encloses` respects definitional equality of boxes. -/
-theorem sem_encloses_of_eq {B1 B2 : FlatBox ℝ}
-    (h : B1 = B2) (x : Tensor ℝ [B1.dim]) :
-    Theorems.Semantics.encloses (α := ℝ) B1 x →
-      Theorems.Semantics.encloses (α := ℝ) B2
-        (castDimScalar (α := ℝ) (congrArg FlatBox.dim h) x) := by
-  intro hx
-  cases h
-  simpa [castDimScalar] using hx
-
-/-- `Semantics.encloses` respects definitional equality of values. -/
-theorem sem_encloses_value_eq {B : FlatBox ℝ}
-    {x y : Tensor ℝ [B.dim]} (hxy : x = y) :
-    Theorems.Semantics.encloses (α := ℝ) B x →
-      Theorems.Semantics.encloses (α := ℝ) B y := by
-  intro hx
-  cases hxy
-  simpa using hx
-
 /-- `EnclosesAtInput` is preserved under casting the output dimension of bounds and value payloads.
   -/
 theorem enclosesAtInput_castOut (ctx : AffineCtx) (x : Tensor ℝ [ctx.inputDim])
@@ -233,88 +205,16 @@ theorem enclosesAtInput_castOut (ctx : AffineCtx) (x : Tensor ℝ [ctx.inputDim]
             (m' := outDim') hout xin.hiAff }
         { n := outDim', v := castDimScalar (α := ℝ) hvout vp.v } := by
   intro hpar
-  rcases hpar with ⟨hinDim, hvec⟩
-  refine ⟨hinDim, ?_⟩
-  -- The `x'` used to evaluate `xin` and the casted bound is the same, since `inDim` is unchanged.
-  dsimp
-  rcases hvec with ⟨hdim, henc⟩
-  -- Cast the enclosure result from `xin.outDim` to `outDim'` via `hout`.
-  have hencCast :=
-    (sem_encloses_castDim (B := CrownCertSoundness.boundsEvalAt (α := ℝ) xin (castDimScalar (α :=
-      ℝ) hinDim.symm x))
-      (h := hout) (x := castDimScalar (α := ℝ) hdim.symm vp.v) henc)
-  -- Simplify the RHS cast: `hout ∘ hdim.symm` is a proof of `vp.n = outDim'`, so it matches
-  -- `hvout`.
-  have hvout' : Eq.trans hdim.symm hout = hvout := by
-    exact Subsingleton.elim _ _
-  have hxCast :
-      castDimScalar (α := ℝ) hout (castDimScalar (α := ℝ) hdim.symm vp.v)
-        = castDimScalar (α := ℝ) hvout vp.v := by
-    calc
-      castDimScalar (α := ℝ) hout (castDimScalar (α := ℝ) hdim.symm vp.v)
-          = castDimScalar (α := ℝ) (Eq.trans hdim.symm hout) vp.v := by
-              exact (castDimScalar_trans (h₁ := hdim.symm) (h₂ := hout) (t := vp.v)).symm
-      _ = castDimScalar (α := ℝ) hvout vp.v := by
-              exact castDimScalar_proof_irrel (Eq.trans hdim.symm hout) hvout vp.v
-  -- Rewrite the enclosure `henc'` to target `castDimScalar hvout vp.v`.
-  have henc1 :
-      Theorems.Semantics.encloses (α := ℝ)
-        { dim := outDim'
-          lo := castDimScalar (α := ℝ) hout (CrownCertSoundness.boundsEvalAt (α := ℝ) xin
-            (castDimScalar (α := ℝ) hinDim.symm x)).lo
-          hi := castDimScalar (α := ℝ) hout (CrownCertSoundness.boundsEvalAt (α := ℝ) xin
-            (castDimScalar (α := ℝ) hinDim.symm x)).hi }
-        (castDimScalar (α := ℝ) hvout vp.v) := by
-    exact sem_encloses_value_eq hxCast hencCast
-
-  -- Avoid rewriting dependent `boundsEvalAt` equalities: transfer componentwise between the
-  -- explicit cast box
-  -- and `boundsEvalAt` of the casted affine bound.
-  let x0 : Tensor ℝ [xin.inDim] :=
-    castDimScalar (α := ℝ) (n := ctx.inputDim) (n' := xin.inDim) hinDim.symm x
-  let B1 : FlatBox ℝ :=
-    boundsEvalAt (α := ℝ)
-      { inDim := xin.inDim
-        outDim := outDim'
-        loAff := NN.MLTheory.CROWN.Graph.castAffineOut (α := ℝ) (n := xin.inDim) (m := xin.outDim)
-          (m' := outDim') hout xin.loAff
-        hiAff := NN.MLTheory.CROWN.Graph.castAffineOut (α := ℝ) (n := xin.inDim) (m := xin.outDim)
-          (m' := outDim') hout xin.hiAff } x0
-  let B2 : FlatBox ℝ :=
-    { dim := outDim'
-      lo := castDimScalar (α := ℝ) hout (boundsEvalAt (α := ℝ) xin x0).lo
-      hi := castDimScalar (α := ℝ) hout (boundsEvalAt (α := ℝ) xin x0).hi }
-
-  have hB2 : Theorems.Semantics.encloses (α := ℝ) B2 (castDimScalar (α := ℝ) hvout vp.v) := by
-    simpa [B2, x0] using henc1
-
-  have hlo : B1.lo = B2.lo := by
-    -- `B1.lo` is `affineEvalAt` of the casted affine map; `B2.lo` is the cast of the original
-    -- `boundsEvalAt` lower.
-    simpa [B1, B2, x0, CrownCertSoundness.boundsEvalAt, CrownCertSoundness.affineEvalAt] using
-      (affineEvalAt_castAffineOut (h := hout) (aff := xin.loAff) (x := x0))
-  have hhi : B1.hi = B2.hi := by
-    simpa [B1, B2, x0, CrownCertSoundness.boundsEvalAt, CrownCertSoundness.affineEvalAt] using
-      (affineEvalAt_castAffineOut (h := hout) (aff := xin.hiAff) (x := x0))
-
-  have hB1 : Theorems.Semantics.encloses (α := ℝ) B1 (castDimScalar (α := ℝ) hvout vp.v) := by
-    have hcomp :=
-      (encloses_iff_getScalar (n := outDim') (lo := B2.lo) (hi := B2.hi)
-        (x := castDimScalar (α := ℝ) hvout vp.v)).1 hB2
-    refine (encloses_iff_getScalar (n := outDim') (lo := B1.lo) (hi := B1.hi)
-      (x := castDimScalar (α := ℝ) hvout vp.v)).2 ?_
-    intro i
-    have hi := hcomp i
-    constructor
-    · simpa [hlo] using hi.1
-    · simpa [hhi] using hi.2
-
-  -- Finish by packaging as `EnclosesVec` (the outer cast is definitional).
-  refine ⟨rfl, ?_⟩
-  simpa [B1, x0, castDimScalar] using hB1
+  obtain ⟨hinDim, hdim, henc⟩ := hpar
+  -- Once `outDim'` is identified with `xin.outDim`, both casts run along `rfl`: the cast bounds
+  -- are `xin` itself and the two casts of `vp.v` agree by proof irrelevance, so the parent
+  -- enclosure is the goal up to definitional unfolding.
+  subst hout
+  exact ⟨hinDim, rfl, henc⟩
 
 /-! ## Matrix sign-splitting bound (pointwise, over `ℝ`) -/
 
+/-- Entries of the positive part of a matrix: the entry where it is positive, else zero. -/
 theorem get2_mat_pos {m n : Nat}
     (W : Tensor ℝ [m, n]) (i : Fin m) (j : Fin n) :
     Spec.get2 (NN.MLTheory.CROWN.IBP.matPos (α := ℝ) (m := m) (n := n) W) i j =
@@ -501,22 +401,7 @@ theorem encloses_linear_signSplit {m n : Nat}
             (Spec.get2 (NN.MLTheory.CROWN.IBP.matNeg (α := ℝ) (m := m) (n := n) W) i k) *
               (TorchLean.Tensor.getScalar hi k))
             ≤ (∑ k : Fin n, (Spec.get2 W i k) * (TorchLean.Tensor.getScalar x k)) := by
-      -- Start from `hLowerSum` and distribute the sum.
-      let f : Fin n → ℝ :=
-        fun k =>
-          (Spec.get2 (NN.MLTheory.CROWN.IBP.matPos (α := ℝ) (m := m) (n := n) W) i k) *
-            (TorchLean.Tensor.getScalar lo k)
-      let g : Fin n → ℝ :=
-        fun k =>
-          (Spec.get2 (NN.MLTheory.CROWN.IBP.matNeg (α := ℝ) (m := m) (n := n) W) i k) *
-            (TorchLean.Tensor.getScalar hi k)
-      have hLowerSum_fg :
-          (∑ k : Fin n, (f k + g k)) ≤
-            (∑ k : Fin n, (Spec.get2 W i k) * (TorchLean.Tensor.getScalar x k)) := by
-        simpa [f, g] using hLowerSum
-      have hdist : (∑ k : Fin n, (f k + g k)) = (∑ k : Fin n, f k) + (∑ k : Fin n, g k) := by
-        simp [Finset.sum_add_distrib, f, g]
-      simpa [hdist, f, g] using hLowerSum_fg
+      simpa only [Finset.sum_add_distrib] using hLowerSum
     have hLowerSum_swapped :
         (∑ k : Fin n,
             (Spec.get2 (NN.MLTheory.CROWN.IBP.matNeg (α := ℝ) (m := m) (n := n) W) i k) *
@@ -547,21 +432,7 @@ theorem encloses_linear_signSplit {m n : Nat}
             (∑ k : Fin n,
               (Spec.get2 (NN.MLTheory.CROWN.IBP.matNeg (α := ℝ) (m := m) (n := n) W) i k) *
                 (TorchLean.Tensor.getScalar lo k)) := by
-      let f : Fin n → ℝ :=
-        fun k =>
-          (Spec.get2 (NN.MLTheory.CROWN.IBP.matPos (α := ℝ) (m := m) (n := n) W) i k) *
-            (TorchLean.Tensor.getScalar hi k)
-      let g : Fin n → ℝ :=
-        fun k =>
-          (Spec.get2 (NN.MLTheory.CROWN.IBP.matNeg (α := ℝ) (m := m) (n := n) W) i k) *
-            (TorchLean.Tensor.getScalar lo k)
-      have hUpperSum_fg :
-          (∑ k : Fin n, (Spec.get2 W i k) * (TorchLean.Tensor.getScalar x k)) ≤
-            (∑ k : Fin n, (f k + g k)) := by
-        simpa [f, g] using hUpperSum
-      have hdist : (∑ k : Fin n, (f k + g k)) = (∑ k : Fin n, f k) + (∑ k : Fin n, g k) := by
-        simp [Finset.sum_add_distrib, f, g]
-      simpa [hdist, f, g] using hUpperSum_fg
+      simpa only [Finset.sum_add_distrib] using hUpperSum
     have hUpperSum_swapped :
         (∑ k : Fin n, (Spec.get2 W i k) * (TorchLean.Tensor.getScalar x k)) ≤
           (∑ k : Fin n,
@@ -577,47 +448,7 @@ theorem encloses_linear_signSplit {m n : Nat}
 
 /-! ## ReLU relaxations used by α-CROWN -/
 
-theorem relu_relax_scalar_upper_real_runtime
-  (l u x : ℝ)
-  (hlx : l ≤ x) (hxu : x ≤ u) :
-  let rp := NN.MLTheory.CROWN.Runtime.Ops.ReLU.relaxScalar (α:=ℝ) l u
-  Activation.Math.reluSpec (α:=ℝ) x ≤ rp.slope * x + rp.bias := by
-  -- Same structure as `Models/mlp.lean`, but for `Runtime/Ops`.
-  unfold NN.MLTheory.CROWN.Runtime.Ops.ReLU.relaxScalar
-  by_cases hu : u > 0
-  · by_cases hlpos : l > 0
-    · have hxpos : 0 < x := lt_of_lt_of_le hlpos hlx
-      have hxnonneg : 0 ≤ x := le_of_lt hxpos
-      simp [hu, hlpos, Activation.Math.reluSpec_eq_max, max_eq_left hxnonneg]
-    · have hle0 : l ≤ 0 := le_of_not_gt hlpos
-      have hden : 0 < (u - l) := by linarith
-      simp only [hu, hlpos, ite_true, ite_false]
-      by_cases hxpos : 0 < x
-      · have hxnonneg : 0 ≤ x := le_of_lt hxpos
-        simp [Activation.Math.reluSpec_eq_max, max_eq_left hxnonneg]
-        have hx_to_goal : x ≤ u / (u - l) * (x - l) := by
-          have hrewrite : (u - l) * x - u * (x - l) = l * (u - x) := by ring
-          have hxux : 0 ≤ u - x := sub_nonneg.mpr hxu
-          have hxmul_le : l * (u - x) ≤ 0 := mul_nonpos_of_nonpos_of_nonneg hle0 hxux
-          have hmul_goal : (u - l) * x ≤ u * (x - l) := by
-            have : (u - l) * x - u * (x - l) ≤ 0 := by simpa [hrewrite] using hxmul_le
-            exact sub_nonpos.mp this
-          have hx_to_goal' : x ≤ (u * (x - l)) / (u - l) := by
-            have : x * (u - l) ≤ u * (x - l) := by simpa [mul_comm] using hmul_goal
-            exact (le_div_iff₀ (G₀ := ℝ) hden).mpr this
-          simpa [div_eq_mul_inv, mul_comm, mul_left_comm, mul_assoc] using hx_to_goal'
-        have h2 : u / (u - l) * (x - l) = u / (u - l) * x + -(u / (u - l)) * l := by ring
-        simpa [h2] using hx_to_goal
-      · have hxle : x ≤ 0 := le_of_not_gt hxpos
-        have h1 : u / (u - l) * x + -(u / (u - l) * l) = u / (u - l) * (x - l) := by ring
-        have : 0 ≤ u / (u - l) * (x - l) := by
-          apply mul_nonneg
-          · have : 0 ≤ u := le_of_lt hu
-            exact div_nonneg this (le_of_lt hden)
-          · linarith
-        simpa [Activation.Math.reluSpec_eq_max, max_eq_right hxle, h1] using this
-  · have hxle : x ≤ 0 := le_trans hxu (le_of_not_gt hu)
-    simp [hu, Activation.Math.reluSpec_eq_max, max_eq_right hxle]
+export NN.MLTheory.CROWN.Proofs (relu_relax_scalar_upper_real_runtime)
 
 /-- The upper ReLU relaxation has nonnegative slope, in all three phase branches.
 
@@ -650,30 +481,6 @@ theorem alphaRelaxLowerScalar_slope_nonneg (l u a : ℝ) (ha0 : 0 ≤ a) :
 
 /-! ## ReLU relaxations used by α/β-CROWN (β phase constraints) -/
 
-theorem phaseConsistentScalar?_inactive {l u : ℝ} :
-    phaseConsistentScalar? (α := ℝ) l u ReLUPhase.inactive = some () → u ≤ 0 := by
-  intro h
-  unfold phaseConsistentScalar? at h
-  by_cases hu : u > 0
-  · simp [hu] at h
-  ·
-    have : ¬ (0 : ℝ) < u := by simpa using hu
-    exact (not_lt).1 this
-
-/-- Accepting an `active` phase constraint forces `0 ≤ l`, so the neuron really is unambiguously on.
-
-This is how the β-CROWN branch decisions are validated: the checker refuses a phase assignment that
-the interval bounds do not already support, rather than trusting the search that proposed it. -/
-theorem phaseConsistentScalar?_active {l u : ℝ} :
-    phaseConsistentScalar? (α := ℝ) l u ReLUPhase.active = some () → 0 ≤ l := by
-  intro h
-  unfold phaseConsistentScalar? at h
-  by_cases hl : l < 0
-  · simp [hl] at h
-  ·
-    have : ¬ l < (0 : ℝ) := by simpa using hl
-    exact (not_lt).1 this
-
 /-- Nonnegative slope for the upper relaxation under any phase constraint. -/
 theorem phaseRelaxUpperScalar_slope_nonneg (l u : ℝ) (ph : ReLUPhase) :
     0 ≤ (phaseRelaxUpperScalar (α := ℝ) l u ph).slope := by
@@ -686,6 +493,7 @@ theorem phaseRelaxLowerScalar_slope_nonneg (l u a : ℝ) (ph : ReLUPhase) (ha0 :
 
 /-! ## ReLU transfer helpers (getScalar-level) -/
 
+/-- The default α vector is a `0`/`1` vector, hence lies in `[0, 1]` coordinatewise. -/
 theorem defaultAlphaVec_range {n : Nat}
     (lo hi : Tensor ℝ [n]) :
     ∀ i : Fin n, (0 : ℝ) ≤ getScalar (defaultAlphaVec (α := ℝ) (n := n) lo hi) i ∧
@@ -781,28 +589,6 @@ theorem getScalar_affineEvalAt_relu_propagate_affine
 extract their per-index consequences from the fact they returned `some ...`.
 -/
 
-theorem List.all_eq_true_of_mem {α : Type} (p : α → Bool) (xs : List α) :
-    xs.all p = true → ∀ x : α, x ∈ xs → p x = true := by
-  intro hall
-  induction xs with
-  | nil =>
-      intro x hx
-      cases hx
-  | cons a xs ih =>
-      -- Unfold `List.all` without rewriting it into a `∀`-statement.
-      have ha' : p a = true ∧ xs.all p = true := by
-        simpa [List.all, Bool.and_eq_true] using hall
-      rcases ha' with ⟨ha, hxs⟩
-      intro x hx
-      have hx' : x = a ∨ x ∈ xs := by
-        simpa [List.mem_cons] using hx
-      cases hx' with
-      | inl hxa =>
-          cases hxa
-          simpa using ha
-      | inr hxmem =>
-          exact ih hxs x hxmem
-
 /-- Unpack a successful `phaseRelaxVec?`: the phase array has the right length, and every coordinate
 carries a phase that is consistent with its interval and whose two relaxations are the scalar ones.
 
@@ -858,6 +644,7 @@ theorem phaseRelaxVec?_some_getScalar {n : Nat}
 
 /-! ## Evaluating `linearBoundsFromAffine` at a point -/
 
+/-- `get2` distributes over matrix addition. -/
 theorem get2_add_spec {m n : Nat}
     (A B : Tensor ℝ [m, n]) (i : Fin m) (j : Fin n) :
     Spec.get2 (Tensor.addSpec (α := ℝ) A B) i j = Spec.get2 A i j + Spec.get2 B i j := by
@@ -872,47 +659,34 @@ theorem mat_vec_add_matrix {m n : Nat}
         (Spec.matVecMulSpec (α := ℝ) A x)
         (Spec.matVecMulSpec (α := ℝ) B x) := by
   classical
-  have hgetScalar :
-      TorchLean.Tensor.getScalar (Spec.matVecMulSpec (α := ℝ) (Tensor.addSpec (α := ℝ) A B) x) =
-        TorchLean.Tensor.getScalar
-          (Tensor.addSpec (α := ℝ)
-            (Spec.matVecMulSpec (α := ℝ) A x)
-            (Spec.matVecMulSpec (α := ℝ) B x)) := by
-    funext i
-    rw [Proofs.TensorAlgebra.getScalar_mat_vec_mul_spec (A := Tensor.addSpec (α := ℝ) A B) (v := x)
-      (i := i)]
-    simp [Spec.getScalar_add_spec]
-    rw [Proofs.TensorAlgebra.getScalar_mat_vec_mul_spec (A := A) (v := x) (i := i)]
-    rw [Proofs.TensorAlgebra.getScalar_mat_vec_mul_spec (A := B) (v := x) (i := i)]
-    -- Distribute `get2 (A+B)` and split the sum.
-    have :
-        (∑ k : Fin n,
-            (Spec.get2 (Tensor.addSpec (α := ℝ) A B) i k) * (TorchLean.Tensor.getScalar x k)) =
-          (∑ k : Fin n, (Spec.get2 A i k) * (TorchLean.Tensor.getScalar x k)) +
+  apply Tensor.ext_vector
+  intro i
+  rw [Proofs.TensorAlgebra.getScalar_mat_vec_mul_spec (A := Tensor.addSpec (α := ℝ) A B) (v := x)
+    (i := i)]
+  simp [Spec.getScalar_add_spec]
+  rw [Proofs.TensorAlgebra.getScalar_mat_vec_mul_spec (A := A) (v := x) (i := i)]
+  rw [Proofs.TensorAlgebra.getScalar_mat_vec_mul_spec (A := B) (v := x) (i := i)]
+  -- Distribute `get2 (A+B)` and split the sum.
+  have :
+      (∑ k : Fin n,
+          (Spec.get2 (Tensor.addSpec (α := ℝ) A B) i k) * (TorchLean.Tensor.getScalar x k)) =
+        (∑ k : Fin n, (Spec.get2 A i k) * (TorchLean.Tensor.getScalar x k)) +
+        (∑ k : Fin n, (Spec.get2 B i k) * (TorchLean.Tensor.getScalar x k)) := by
+    calc
+      (∑ k : Fin n,
+          (Spec.get2 (Tensor.addSpec (α := ℝ) A B) i k) * (TorchLean.Tensor.getScalar x k))
+          = ∑ k : Fin n,
+              ((Spec.get2 A i k + Spec.get2 B i k) * (TorchLean.Tensor.getScalar x k)) := by
+              refine Finset.sum_congr rfl ?_
+              intro k _
+              simp [get2_add_spec]
+      _ = ∑ k : Fin n, ((Spec.get2 A i k) * (TorchLean.Tensor.getScalar x k) +
+            (Spec.get2 B i k) * (TorchLean.Tensor.getScalar x k)) := by
+            simp [add_mul]
+      _ = (∑ k : Fin n, (Spec.get2 A i k) * (TorchLean.Tensor.getScalar x k)) +
           (∑ k : Fin n, (Spec.get2 B i k) * (TorchLean.Tensor.getScalar x k)) := by
-      classical
-      calc
-        (∑ k : Fin n,
-            (Spec.get2 (Tensor.addSpec (α := ℝ) A B) i k) * (TorchLean.Tensor.getScalar x k))
-            = ∑ k : Fin n,
-                ((Spec.get2 A i k + Spec.get2 B i k) * (TorchLean.Tensor.getScalar x k)) := by
-                refine Finset.sum_congr rfl ?_
-                intro k _
-                simp [get2_add_spec]
-        _ = ∑ k : Fin n, ((Spec.get2 A i k) * (TorchLean.Tensor.getScalar x k) +
-              (Spec.get2 B i k) * (TorchLean.Tensor.getScalar x k)) := by
-              simp [add_mul]
-        _ = (∑ k : Fin n, (Spec.get2 A i k) * (TorchLean.Tensor.getScalar x k)) +
-            (∑ k : Fin n, (Spec.get2 B i k) * (TorchLean.Tensor.getScalar x k)) := by
-              simp [Finset.sum_add_distrib]
-    simp [this]
-  have hTensor := congrArg TorchLean.Tensor.ofFn hgetScalar
-  simpa using
-    (Eq.trans (TorchLean.Tensor.ofFn_getScalar
-        (t := Spec.matVecMulSpec (α := ℝ) (Tensor.addSpec (α := ℝ) A B) x)).symm
-      (Eq.trans hTensor (TorchLean.Tensor.ofFn_getScalar (t := Tensor.addSpec (α := ℝ)
-        (Spec.matVecMulSpec (α := ℝ) A x)
-        (Spec.matVecMulSpec (α := ℝ) B x)))))
+            simp [Finset.sum_add_distrib]
+  simp [this]
 
 /-- The zero matrix sends every vector to zero, which is what makes constant bounds constant. -/
 theorem mat_vec_mul_spec_full_zero {m n : Nat}
@@ -920,70 +694,54 @@ theorem mat_vec_mul_spec_full_zero {m n : Nat}
     Spec.matVecMulSpec (α := ℝ) (Tensor.full (α := ℝ) (.dim m (.dim n .scalar)) (0 : ℝ)) x =
       Tensor.full (α := ℝ) (.dim m .scalar) (0 : ℝ) := by
   classical
-  have hgetScalar :
-      TorchLean.Tensor.getScalar
-          (Spec.matVecMulSpec (α := ℝ) (Tensor.full (α := ℝ) (.dim m (.dim n .scalar)) (0 : ℝ)) x) =
-        TorchLean.Tensor.getScalar (Tensor.full (α := ℝ) (.dim m .scalar) (0 : ℝ)) := by
-    funext i
-    -- Expand the mat-vec coordinate as a finite sum; all terms are zero.
-    rw [Proofs.TensorAlgebra.getScalar_mat_vec_mul_spec
-      (A := Tensor.full (α := ℝ) (.dim m (.dim n .scalar)) (0 : ℝ)) (v := x) (i := i)]
-    simp
-  have hTensor := congrArg TorchLean.Tensor.ofFn hgetScalar
-  simpa using
-    (Eq.trans (TorchLean.Tensor.ofFn_getScalar (t := Spec.matVecMulSpec (α := ℝ)
-        (Tensor.full (α := ℝ) (.dim m (.dim n .scalar)) (0 : ℝ)) x)).symm
-      (Eq.trans hTensor
-        (TorchLean.Tensor.ofFn_getScalar (t := Tensor.full (α := ℝ) (.dim m .scalar) (0 : ℝ)))))
+  apply Tensor.ext_vector
+  intro i
+  -- Expand the mat-vec coordinate as a finite sum; all terms are zero.
+  rw [Proofs.TensorAlgebra.getScalar_mat_vec_mul_spec
+    (A := Tensor.full (α := ℝ) (.dim m (.dim n .scalar)) (0 : ℝ)) (v := x) (i := i)]
+  simp
 
 /-- The identity affine certificate acts as the identity on inputs. -/
 theorem mat_vec_mul_spec_aff_identity {n : Nat}
     (x : Tensor ℝ [n]) :
-    Spec.matVecMulSpec (α := ℝ) (Cert.affIdentity (α := ℝ) n).A x = x := by
+    Spec.matVecMulSpec (α := ℝ) (Graph.affIdentity (α := ℝ) n).A x = x := by
   classical
-  have hgetScalar :
-      TorchLean.Tensor.getScalar (Spec.matVecMulSpec (α := ℝ) (Cert.affIdentity (α := ℝ) n).A x) =
-        TorchLean.Tensor.getScalar x := by
-    funext i
-    -- Expand mat-vec coordinate; only the diagonal term survives.
-    rw [Proofs.TensorAlgebra.getScalar_mat_vec_mul_spec
-      (A := (Cert.affIdentity (α := ℝ) n).A) (v := x) (i := i)]
-    simp only [Cert.affIdentity, Spec.get2_dim]
-    rw [Finset.sum_eq_single i]
-    · simp
-    · intro j _ hj
-      have hji : i ≠ j := fun h => hj h.symm
-      simp [hji]
-    · intro hnot
-      exact False.elim (hnot (Finset.mem_univ i))
-  have hTensor := congrArg TorchLean.Tensor.ofFn hgetScalar
-  simpa using
-    (Eq.trans (TorchLean.Tensor.ofFn_getScalar
-        (t := Spec.matVecMulSpec (α := ℝ) (Cert.affIdentity (α := ℝ) n).A x)).symm
-      (Eq.trans hTensor (TorchLean.Tensor.ofFn_getScalar (t := x))))
+  apply Tensor.ext_vector
+  intro i
+  -- Expand mat-vec coordinate; only the diagonal term survives.
+  rw [Proofs.TensorAlgebra.getScalar_mat_vec_mul_spec
+    (A := (Graph.affIdentity (α := ℝ) n).A) (v := x) (i := i)]
+  simp only [Graph.affIdentity, Spec.get2_dim]
+  rw [Finset.sum_eq_single i]
+  · simp
+  · intro j _ hj
+    have hji : i ≠ j := fun h => hj h.symm
+    simp [show i.val ≠ j.val from fun h => hji (Fin.ext h)]
+  · intro hnot
+    exact False.elim (hnot (Finset.mem_univ i))
 
 /-- The identity bounds certificate evaluates to the degenerate box `[x, x]`.
 
 This is the base case of every certificate chain: the input is bounded by itself exactly. -/
 theorem boundsEvalAt_bounds_identity {n : Nat} (x : Tensor ℝ [n]) :
-    boundsEvalAt (α := ℝ) (Cert.boundsIdentity (α := ℝ) n) x = { dim := n, lo := x, hi := x } := by
+    boundsEvalAt (α := ℝ) (Graph.boundsIdentity (α := ℝ) n) x = { dim := n, lo := x, hi := x } := by
   classical
   have hMat :
-      Spec.matVecMulSpec (α := ℝ) (Cert.affIdentity (α := ℝ) n).A x = x :=
+      Spec.matVecMulSpec (α := ℝ) (Graph.affIdentity (α := ℝ) n).A x = x :=
     mat_vec_mul_spec_aff_identity (n := n) x
-  have hC : (Cert.affIdentity (α := ℝ) n).c = Tensor.full (α := ℝ) (.dim n .scalar) (0 : ℝ) := by
-    simp [Cert.affIdentity]
-  ext <;> simp [boundsEvalAt, Cert.boundsIdentity, affineEvalAt, hMat, hC]
+  have hC : (Graph.affIdentity (α := ℝ) n).c = Tensor.full (α := ℝ) (.dim n .scalar) (0 : ℝ) := by
+    simp [Graph.affIdentity]
+  ext <;> simp [boundsEvalAt, Graph.boundsIdentity, affineEvalAt, hMat, hC]
 
 /-- A constant bounds certificate evaluates to its own endpoints, ignoring the input. -/
 theorem boundsEvalAt_bounds_const {inDim outDim : Nat}
     (lo hi : Tensor ℝ [outDim]) (x : Tensor ℝ [inDim]) :
-    boundsEvalAt (α := ℝ) (Cert.boundsConst (α := ℝ) inDim outDim lo hi) x =
+    boundsEvalAt (α := ℝ) (Graph.boundsConst (α := ℝ) inDim outDim lo hi) x =
       { dim := outDim
         lo := lo
         hi := hi } := by
   classical
-  ext <;> simp [boundsEvalAt, Cert.boundsConst, affineEvalAt, mat_vec_mul_spec_full_zero]
+  ext <;> simp [boundsEvalAt, Graph.boundsConst, affineEvalAt, mat_vec_mul_spec_full_zero]
 
 /-- Left commutativity of tensor addition, derived from associativity and commutativity. -/
 theorem add_spec_left_comm {s : Shape}
@@ -1059,7 +817,7 @@ theorem boundsEvalAt_linear_bounds_from_affine
     (hout : xB.outDim = n)
     (x : Tensor ℝ [xB.inDim]) :
     boundsEvalAt (α := ℝ)
-        (Cert.linearBoundsFromAffine (α := ℝ) (inDim := xB.inDim) (n := n) (m := m) W b xB hout) x =
+        (Graph.propagateLinearBounds (α := ℝ) (n := n) (m := m) W b xB hout) x =
       { dim := m
         lo :=
           let l := affineEvalAt (α := ℝ) (inDim := xB.inDim) (outDim := n)
@@ -1098,9 +856,9 @@ theorem boundsEvalAt_linear_bounds_from_affine
   let Wneg := NN.MLTheory.CROWN.IBP.matNeg (α := ℝ) (m := m) (n := n) W
   have hlo := affineEvalAt_linear_pair Wpos Wneg xLo xHi b x
   have hhi := affineEvalAt_linear_pair Wpos Wneg xHi xLo b x
-  unfold boundsEvalAt Cert.linearBoundsFromAffine
+  unfold boundsEvalAt Graph.propagateLinearBounds
   dsimp only
-  refine FlatBox.ext' rfl (heq_of_eq ?_) (heq_of_eq ?_)
+  refine FlatBox.ext rfl (heq_of_eq ?_) (heq_of_eq ?_)
   · exact hlo
   · exact hhi
 

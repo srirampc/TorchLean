@@ -82,6 +82,16 @@ def runNpy (fixtureDirectory : System.FilePath) : IO Unit := do
       let full ← requireData (← TorchLean.Data.IO.readNpy path)
       expect "NPY full reads should support both header versions and float widths"
         (full.shape == #[3, 2] && full.values == #[1, 2, 3, 4, 5, 6] && !full.fortran)
+      let distinctBytes :=
+        if wide then Float.ofBits 0x0123456789abcdef
+        else (Float32.ofBits 0x01020304).toFloat
+      let subnormal := if wide then Float.ofBits 1 else (Float32.ofBits 1).toFloat
+      let bitValues := #[distinctBytes, subnormal, -0.0, 1.0 / 0.0]
+      let decoded ← requireData <|
+        TorchLean.Data.IO.parseNpy "test"
+          (encode version dtype "False" "(4,)" (payload wide bitValues))
+      expect "NPY decoding should preserve byte order, subnormals, signed zero, and infinity"
+        (decoded.values.map Float.toBits == bitValues.map Float.toBits)
       let selected ← requireData (← TorchLean.Data.IO.readNpyLeadingAxisPrefix path #[2, 2])
       expect "NPY prefixes should preserve row boundaries"
         (selected.shape == #[2, 2] && selected.values == #[1, 2, 3, 4])

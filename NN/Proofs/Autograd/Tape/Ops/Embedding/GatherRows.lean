@@ -69,7 +69,6 @@ theorem gatherRows_scatterAddRows_adjoint {vocab dim k : Nat}
     (dY : Fin k → Fin dim → ℝ) :
     matInner (gatherRows dTable idx) dY =
       matInner dTable (scatterAddRows idx dY) := by
-  classical
   unfold matInner gatherRows scatterAddRows
   apply Finset.sum_congr rfl
   intro c _
@@ -90,9 +89,7 @@ theorem gatherRows_scatterAddRows_adjoint {vocab dim k : Nat}
         simp only [Finset.sum_filter]
         apply Finset.sum_congr rfl
         intro j _
-        by_cases h : idx j = r
-        · simp [h]
-        · simp [h]
+        by_cases h : idx j = r <;> simp [h]
 
 end Embedding
 end Autograd

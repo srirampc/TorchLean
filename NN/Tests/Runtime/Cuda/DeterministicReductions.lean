@@ -6,21 +6,18 @@ Authors: TorchLean Team
 
 module
 
-public import NN.Runtime.Autograd.Engine.Cuda.Kernels
-public import NN.Runtime.Autograd.Engine.Cuda.ConvPool
+public import NN.Runtime.Autograd.Engine.LibTorch.Kernels
+public import NN.Runtime.Autograd.Engine.LibTorch.ConvPool
 public import NN.Tests.Runtime.Cuda.Utils
 
 /-!
-# CUDA Deterministic Reductions Mode
+# Deterministic Reduction Regressions
 
-These tests exercise TorchLean's opt-in "deterministic reductions" mode.
+Native runs request strict deterministic execution through LibTorch and restore the previous
+settings afterward.
 
-Goal: when deterministic mode is enabled, kernels that would otherwise accumulate using `atomicAdd`
-must become bit-stable across runs (same input, same output, exact float equality).
-
-The tests are written so they run:
-- with CUDA enabled (`lake test -K cuda=true`) using real device buffers, and
-- with CUDA disabled (default) via the CPU stub implementations.
+The repeated calls compare outputs on the current build and device. These are runtime regressions,
+not proofs of a reduction order or reproducibility across implementations.
 -/
 
 @[expose] public section
@@ -29,17 +26,14 @@ namespace Tests
 namespace Cuda
 namespace DeterministicReductions
 
-open Runtime.Autograd.Cuda
+open Runtime.Autograd.LibTorch
 
--- Exact numerical buffer comparison, shared with `Stress` through `Cuda.Utils`.
+-- Exact numerical buffer comparison, shared with `Stress` through `LibTorch.Utils`.
 -- Signed-zero preservation is checked separately through `toBits`.
 open Tests.Cuda.Utils (assertFloatArrayEq)
 
 def runScatterAddTwice : IO Unit := do
   IO.println "== deterministic scatter_add: exact repeatability =="
-
-  -- Enable deterministic mode via Lean side API.
-  Buffer.setDeterministicReductions true
 
   -- Construct a values buffer with a large leading element + many ones, and scatter-add all
   -- updates into a single output index. This is a worst-case accumulator for non-associativity.
@@ -59,9 +53,8 @@ def runScatterAddTwice : IO Unit := do
   assertFloatArrayEq "scatterAdd deterministic run1 vs run2"
     (Buffer.toFloatArray y1) (Buffer.toFloatArray y2)
 
-/-- Deterministic scatter starts its left fold at the base value, including its signed zero. -/
+/-- Check cancellation against the base value and preservation of untouched signed zero. -/
 def runScatterAddBaseOrder : IO Unit := do
-  Buffer.setDeterministicReductions true
   let base := Buffer.ofFloatArray (FloatArray.mk #[1.0e8, -0.0])
   let values := Buffer.ofFloatArray (FloatArray.mk #[-1.0e8, 1.0])
   let result := Buffer.scatterAdd base values 2 #[0, 0] 2
@@ -75,13 +68,8 @@ def runScatterAddBaseOrder : IO Unit := do
   assertFloatArrayEq "scatterAddRows includes base before updates"
     (Buffer.toFloatArray rowResult) (FloatArray.mk #[1.0, 1.0])
 
-def outDim (inDim k stride padding : Nat) : Nat :=
-  Spec.Shape.slidingWindowOutDim inDim k stride padding
-
 def runAvgPoolBwdTwice : IO Unit := do
   IO.println "== deterministic avg_pool backward: exact repeatability =="
-
-  Buffer.setDeterministicReductions true
 
   -- A small overlapping-window case (stride=1) so the backward pass needs accumulation.
   let inC : UInt32 := 1
@@ -90,8 +78,8 @@ def runAvgPoolBwdTwice : IO Unit := do
   let stride : Array Nat := #[1, 1]
   let padding : Array Nat := #[1, 1]
 
-  let outH : Nat := outDim 17 3 1 1
-  let outW : Nat := outDim 17 3 1 1
+  let outH : Nat := Spec.Shape.slidingWindowOutDim 17 3 1 1
+  let outW : Nat := Spec.Shape.slidingWindowOutDim 17 3 1 1
   let outElems : UInt32 := UInt32.ofNat (inC.toNat * outH * outW)
 
   let gradOutput ← Buffer.randUniformIO outElems 12345
@@ -104,10 +92,24 @@ def runAvgPoolBwdTwice : IO Unit := do
 /-- Entry point called by the CUDA runtime suite. -/
 def run : IO Unit := do
   IO.println "== CUDA deterministic reductions =="
-  runScatterAddTwice
-  runScatterAddBaseOrder
-  runAvgPoolBwdTwice
-  Buffer.setDeterministicReductions false
+  let previousSettings : Option (Bool × Bool) ←
+    match Buffer.runtimeStatus with
+    | .nativeAvailable =>
+        pure (some (← Runtime.Autograd.LibTorch.getDeterministic, ←
+          Runtime.Autograd.LibTorch.getCuDNNBenchmark))
+    | .notLinked => pure none
+    | .nativeUnavailable =>
+        throw <| IO.userError "deterministic reduction tests require a usable CUDA device"
+  try
+    if previousSettings.isSome then
+      Runtime.Autograd.LibTorch.setDeterministic true
+    runScatterAddTwice
+    runScatterAddBaseOrder
+    runAvgPoolBwdTwice
+  finally
+    if let some (deterministic, benchmark) := previousSettings then
+      Runtime.Autograd.LibTorch.setDeterministic deterministic
+      Runtime.Autograd.LibTorch.setCuDNNBenchmark benchmark
   IO.println "== CUDA deterministic reductions: OK =="
 
 end DeterministicReductions

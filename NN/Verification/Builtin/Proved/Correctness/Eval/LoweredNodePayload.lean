@@ -6,6 +6,8 @@ Authors: TorchLean Team
 
 module
 
+public import NN.Verification.Builtin.Proved.Correctness.Eval.LayerNorm
+public import NN.Verification.Builtin.Proved.Correctness.Eval.LoweringPayload
 public import NN.Verification.Builtin.Proved.Correctness.Eval.PayloadBridge
 
 /-!
@@ -29,9 +31,6 @@ open NN.IR
 namespace Correctness
 
 open NN.Verification.Builtin
--- Typed context indices come from `NN.Proofs.Autograd.Tape.Util.Idx`, the one place
--- `Idx` and `getIdx` are defined.
-open Proofs (Idx getIdx)
 
 /-- A lowered `const` node evaluates like the typed `const` node. -/
 theorem evalAt_eq_evalNode_const
@@ -147,18 +146,14 @@ theorem evalAt_eq_evalNode_layerNorm
       (gamma := Tensor.full (α := α) (.dim op.width .scalar) 1)
       (beta := Tensor.full (α := α) (.dim op.width .scalar) 0)
       (h_seq_pos := op.rows_pos) (h_embed_pos := op.width_pos)
-  have hLN :
-      Graph.layerNormWithoutAffine (α := α) op.rows op.width xMatrix = Except.ok yMatrix := by
-    unfold Graph.layerNormWithoutAffine Graph.layerNormMatrix
-    rw [dite_eq_left op.rows_pos, dite_eq_left op.width_pos]
-    rfl
   have hNoLayerNorm : (payloadOfParamStore (α := α) P).layerNorm? id = none := by
     rw [IRStep.payloadOfParamStore_layerNorm?_eq, hLayerNorm]
+  -- `Graph.layerNormWithoutAffine` is this `layerNormMatrix` application by definition.
   have hLayerNormMatrix :
       Graph.layerNormMatrix op.rows op.width xMatrix
           (Tensor.full (α := α) [op.width] 1) (Tensor.full (α := α) [op.width] 0)
-          TorchLean.normalizationEpsilon = .ok yMatrix := by
-    simpa [Graph.layerNormWithoutAffine, Graph.layerNormMatrix] using hLN
+          TorchLean.normalizationEpsilon = .ok yMatrix :=
+    IRStep.layerNormWithoutAffine_eq_spec op.rows op.width xMatrix op.rows_pos op.width_pos
   have hEvalAt :
       Graph.evalAt (α := α) G (payloadOfParamStore (α := α) P) input vals id =
         Except.ok
@@ -172,42 +167,6 @@ theorem evalAt_eq_evalNode_layerNorm
       Bind.bind, Except.bind, Pure.pure, Except.pure]
   simpa [evalNode, hGetVal, matrixShape, xMatrix, yMatrix,
     Bind.bind, Except.bind, Pure.pure, Except.pure] using hEvalAt
-
-/-- The IR convolution configuration emitted by lowering a `conv` node. -/
-abbrev loweredConvConfig {d : Nat} (inC outC : Nat)
-    (kernelShape stride padding : TorchLean.Tensor Nat [d]) : ConvConfig :=
-  { spatialRank := d
-    kernel := kernelShape
-    stride := stride
-    padding := padding
-    dilation := Tensor.full [d] 1
-    paddingAfter := padding
-    groups := 1
-    channelAxis := 0
-    inChannels := inC
-    outChannels := outC }
-
-/-- The convolution payload written to the parameter store by lowering a `conv` node. -/
-abbrev loweredConvParams
-    {α : Type} [TorchLean.Storage α] [Context α] {d : Nat} (inC outC : Nat)
-    (kernelShape stride padding inSpatial : TorchLean.Tensor Nat [d])
-    (hKernel : ∀ i : Fin d, kernelShape.getScalar i ≠ 0)
-    (hStride : ∀ i : Fin d, stride.getScalar i ≠ 0)
-    (kT : Tensor α (Shape.ofList (outC :: inC :: Tensor.to kernelShape (List Nat))))
-    (bT : Tensor α [outC]) : ConvParams α :=
-  { spatialRank := d
-    inChannels := inC
-    outChannels := outC
-    kernel := kernelShape
-    stride := stride
-    padding := padding
-    dilation := Tensor.full [d] 1
-    paddingAfter := padding
-    groups := 1
-    inputSpatial := inSpatial
-    kernelNonzero := hKernel
-    strideNonzero := hStride
-    spec := { kernel := kT, bias := bT } }
 
 /--
 A lowered `conv` node evaluates like the typed `conv` node. The IR evaluates a grouped, dilated

@@ -19,10 +19,7 @@ while lowering. The closures then apply the typed specification operators direct
 parent value, transporting along the shape equalities established by those checks. They do not
 call the dynamic IR evaluator and cannot fail at runtime.
 
-Each operation has its own small `lower*` definition. `lowerConvolutionNormalization` only
-dispatches on the operation kind, and the `lowerConvolutionNormalization_*` equation lemmas let
-correctness proofs reduce a dispatch to the branch they care about without unfolding the whole
-dispatcher.
+Each operation has a named lowerer, called directly by the exhaustive `lowerNode` dispatch.
 -/
 
 @[expose] public section
@@ -50,7 +47,7 @@ def lowerMaxPool {α : Type} [TorchLean.Storage α] [Context α]
   let n := ctx.node
   let τ : Shape := n.outShape
   let parentIdx := ctx.parentIdx
-  let fwd (forward : TorchLean.TensorPack α Γ → Tensor α τ) :
+  let fwd (forward : TensorReader α Γ → Tensor α τ) :
       ForwardNode α Γ τ :=
     mkForwardNode (α := α) (Γ := Γ) (τ := τ) forward
   match unaryParent? n.parents with
@@ -60,10 +57,10 @@ def lowerMaxPool {α : Type} [TorchLean.Storage α] [Context α]
       let ip ← parentIdx pId sIn
       let plan ← OpContracts.planPool "max_pool" config sIn
       if hOut : plan.outShape = τ then
-        let forward := fun ctx : TorchLean.TensorPack α Γ =>
+        let forward := fun ctx : TensorReader α Γ =>
           let input : Tensor α
               (plan.leading.concat (Shape.ofList (Tensor.to plan.spatial (List Nat)))) :=
-            Tensor.castShape (getIdx (α := α) (xs := ctx) ip) plan.concat_eq.symm
+            Tensor.castShape (readTensor (α := α) (xs := ctx) ip) plan.concat_eq.symm
           let layer : Spec.MaxPoolSpec config.spatialRank config.kernel config.stride
               config.padding plan.kernelNonzero plan.strideNonzero := {}
           let output : Tensor α plan.outShape :=
@@ -84,7 +81,7 @@ def lowerAvgPool {α : Type} [TorchLean.Storage α] [Context α]
   let n := ctx.node
   let τ : Shape := n.outShape
   let parentIdx := ctx.parentIdx
-  let fwd (forward : TorchLean.TensorPack α Γ → Tensor α τ) :
+  let fwd (forward : TensorReader α Γ → Tensor α τ) :
       ForwardNode α Γ τ :=
     mkForwardNode (α := α) (Γ := Γ) (τ := τ) forward
   match unaryParent? n.parents with
@@ -94,10 +91,10 @@ def lowerAvgPool {α : Type} [TorchLean.Storage α] [Context α]
       let ip ← parentIdx pId sIn
       let plan ← OpContracts.planPool "avg_pool" config sIn
       if hOut : plan.outShape = τ then
-        let forward := fun ctx : TorchLean.TensorPack α Γ =>
+        let forward := fun ctx : TensorReader α Γ =>
           let input : Tensor α
               (plan.leading.concat (Shape.ofList (Tensor.to plan.spatial (List Nat)))) :=
-            Tensor.castShape (getIdx (α := α) (xs := ctx) ip) plan.concat_eq.symm
+            Tensor.castShape (readTensor (α := α) (xs := ctx) ip) plan.concat_eq.symm
           let layer : Spec.AvgPoolSpec config.spatialRank config.kernel config.stride
               config.padding plan.kernelNonzero plan.strideNonzero := {}
           let output : Tensor α plan.outShape :=
@@ -119,7 +116,7 @@ def lowerConv {α : Type} [TorchLean.Storage α] [Context α]
   let n := ctx.node
   let τ : Shape := n.outShape
   let parentIdx := ctx.parentIdx
-  let fwd (forward : TorchLean.TensorPack α Γ → Tensor α τ) :
+  let fwd (forward : TensorReader α Γ → Tensor α τ) :
       ForwardNode α Γ τ :=
     mkForwardNode (α := α) (Γ := Γ) (τ := τ) forward
   match unaryParent? n.parents with
@@ -138,9 +135,9 @@ def lowerConv {α : Type} [TorchLean.Storage α] [Context α]
             if hInput : expectedIn = payloadShape then
               if hPayloadOut : params.output leading = expected then
                 if hOut : expected = τ then
-                  let forward := fun ctx : TorchLean.TensorPack α Γ =>
+                  let forward := fun ctx : TensorReader α Γ =>
                     let input : Tensor α payloadShape :=
-                      Tensor.castShape (getIdx (α := α) (xs := ctx) ix) hInput
+                      Tensor.castShape (readTensor (α := α) (xs := ctx) ix) hInput
                     let output : Tensor α (params.output leading) :=
                       Tensor.mapLeading leading
                         (Spec.groupedConvSpec (α := α) (stride := params.stride)
@@ -175,7 +172,7 @@ def lowerBatchNormEval {α : Type} [TorchLean.Storage α] [Context α]
   let n := ctx.node
   let τ : Shape := n.outShape
   let parentIdx := ctx.parentIdx
-  let fwd (forward : TorchLean.TensorPack α Γ → Tensor α τ) :
+  let fwd (forward : TensorReader α Γ → Tensor α τ) :
       ForwardNode α Γ τ :=
     mkForwardNode (α := α) (Γ := Γ) (τ := τ) forward
   match unaryParent? n.parents with
@@ -195,9 +192,9 @@ def lowerBatchNormEval {α : Type} [TorchLean.Storage α] [Context α]
             match decEq expectedIn payloadShape with
             | isTrue hInput =>
                 if hOut : @Eq Shape expectedIn τ then
-                  let forward := fun ctx : TorchLean.TensorPack α Γ =>
+                  let forward := fun ctx : TensorReader α Γ =>
                     let input : Tensor α payloadShape :=
-                      Tensor.castShape (getIdx (α := α) (xs := ctx) ix) hInput
+                      Tensor.castShape (readTensor (α := α) (xs := ctx) ix) hInput
                     let output : Tensor α payloadShape :=
                       Tensor.mapLeading leading
                         (fun sample => Spec.batchNormInference sample params.mean params.var
@@ -225,7 +222,7 @@ def lowerLayernorm {α : Type} [TorchLean.Storage α] [Context α]
   let n := ctx.node
   let τ : Shape := n.outShape
   let parentIdx := ctx.parentIdx
-  let fwd (forward : TorchLean.TensorPack α Γ → Tensor α τ) :
+  let fwd (forward : TensorReader α Γ → Tensor α τ) :
       ForwardNode α Γ τ :=
     mkForwardNode (α := α) (Γ := Γ) (τ := τ) forward
   match unaryParent? n.parents with
@@ -236,71 +233,26 @@ def lowerLayernorm {α : Type} [TorchLean.Storage α] [Context α]
         | .error msg => throw s!"IRExec: node {i}: layernorm: {msg} ({n.summary})"
       let view2d : Shape := .dim seqLen (.dim embedDim .scalar)
       if hNumel : Spec.Shape.size τ = Spec.Shape.size view2d then
-        if hSeq : seqLen > 0 then
-          if hEmb : embedDim > 0 then
-            let ip ← parentIdx pId τ
-            let affine ←
-              NN.IR.Graph.resolveLayerNormAffine payload i axis τ embedDim
-            let forward := fun ctx : TorchLean.TensorPack α Γ =>
-              let x : Tensor α τ := getIdx (α := α) (xs := ctx) ip
-              let x2d : Tensor α view2d :=
-                Tensor.reshapeSpec (α := α) (source := τ) (target := view2d) x hNumel
-              let y2d : Tensor α view2d :=
-                Spec.layerNorm (α := α) (seqLen := seqLen) (embedDim := embedDim)
-                  (x := x2d) (gamma := affine.gamma) (beta := affine.beta)
-                  (h_seq_pos := hSeq) (h_embed_pos := hEmb) (epsilon := affine.epsilon)
-              Tensor.reshapeSpec (α := α) (source := view2d) (target := τ) y2d hNumel.symm
-            pure <| fwd forward
-          else
-            throw s!"IRExec: node {i}: layernorm embedDim must be > 0 (got {embedDim})"
+        if hEmb : embedDim > 0 then
+          let ip ← parentIdx pId τ
+          let affine ←
+            NN.IR.Graph.resolveLayerNormAffine payload i axis τ embedDim
+          let forward := fun ctx : TensorReader α Γ =>
+            let x : Tensor α τ := readTensor (α := α) (xs := ctx) ip
+            let x2d : Tensor α view2d :=
+              Tensor.reshapeSpec (α := α) (source := τ) (target := view2d) x hNumel
+            let y2d := NN.IR.Graph.layerNormMatrixValue seqLen embedDim x2d
+              affine.gamma affine.beta affine.epsilon hEmb
+            Tensor.reshapeSpec (α := α) (source := view2d) (target := τ) y2d hNumel.symm
+          pure <| fwd forward
         else
-          throw s!"IRExec: node {i}: layernorm seqLen must be > 0 (got {seqLen})"
+          throw s!"IRExec: node {i}: layernorm embedDim must be > 0 (got {embedDim})"
       else
         throw <|
           s!"IRExec: node {i}: layernorm internal error: bad reshape sizes " ++
             s!"({Spec.Shape.size τ} vs {Spec.Shape.size view2d}) ({n.summary})"
   | _ =>
       throw s!"IRExec: node {i}: layernorm expects 1 parent ({n.summary})"
-
-/-- Checked lowering for pooling, convolution, batch normalization, and layer normalization. -/
-def lowerConvolutionNormalization {α : Type} [TorchLean.Storage α] [Context α]
-    {Γ : List Shape} (ctx : NodeLoweringContext α Γ) (kind : OpKind) :
-    NodeLoweringResult ctx :=
-  match kind with
-  | .maxPool config => lowerMaxPool ctx config
-  | .avgPool config => lowerAvgPool ctx config
-  | .conv config => lowerConv ctx config
-  | .batchNormEval channelAxis channels => lowerBatchNormEval ctx channelAxis channels
-  | .layernorm axis => lowerLayernorm ctx axis
-  | _ => throw s!"IRExec: internal error: operation routed to lowerConvolutionNormalization"
-
-variable {α : Type} [TorchLean.Storage α] [Context α] {Γ : List Shape}
-
-/-- Dispatch equation for `.maxPool config`. -/
-@[simp] theorem lowerConvolutionNormalization_maxPool (ctx : NodeLoweringContext α Γ)
-    (config : WindowConfig) :
-    lowerConvolutionNormalization ctx (.maxPool config) = lowerMaxPool ctx config := rfl
-
-/-- Dispatch equation for `.avgPool config`. -/
-@[simp] theorem lowerConvolutionNormalization_avgPool (ctx : NodeLoweringContext α Γ)
-    (config : WindowConfig) :
-    lowerConvolutionNormalization ctx (.avgPool config) = lowerAvgPool ctx config := rfl
-
-/-- Dispatch equation for `.conv config`. -/
-@[simp] theorem lowerConvolutionNormalization_conv (ctx : NodeLoweringContext α Γ)
-    (config : ConvConfig) :
-    lowerConvolutionNormalization ctx (.conv config) = lowerConv ctx config := rfl
-
-/-- Dispatch equation for `.batchNormEval channelAxis channels`. -/
-@[simp] theorem lowerConvolutionNormalization_batchNormEval (ctx : NodeLoweringContext α Γ)
-    (channelAxis channels : Nat) :
-    lowerConvolutionNormalization ctx (.batchNormEval channelAxis channels) =
-      lowerBatchNormEval ctx channelAxis channels := rfl
-
-/-- Dispatch equation for `.layernorm axis`. -/
-@[simp] theorem lowerConvolutionNormalization_layernorm (ctx : NodeLoweringContext α Γ)
-    (axis : Nat) :
-    lowerConvolutionNormalization ctx (.layernorm axis) = lowerLayernorm ctx axis := rfl
 
 end Internal
 end IRExec

@@ -165,8 +165,8 @@ namespace NpyDatasets
 
 /-- Parse the shared NPY data flags with CIFAR-10's default paths and row count filled in. -/
 def parseCifar (args : List String) :
-    Except String (Support.NpyDataFlags × List String) := do
-  Support.NpyDataFlags.parse args
+    Except String (Support.Npy.Options × List String) :=
+  Support.Npy.Options.parse args
     NN.Examples.Data.RealPaths.cifar10TrainX
     NN.Examples.Data.RealPaths.cifar10TrainY
     defaultCifarRows
@@ -179,57 +179,15 @@ converter handles JPEG/PNG decoding, RGB conversion, resizing, class-directory l
 NCHW layout. Lean then reads only the simple `.npy` tensors.
 -/
 def parseImageNet64 (args : List String) :
-    Except String (Support.NpyDataFlags × List String) := do
-  Support.NpyDataFlags.parse args
+    Except String (Support.Npy.Options × List String) :=
+  Support.Npy.Options.parse args
     NN.Examples.Data.RealPaths.imagenet64TrainX
     NN.Examples.Data.RealPaths.imagenet64TrainY
     defaultImageNet64Rows
 
 end NpyDatasets
 
-/-- Parsed CIFAR dataset and fixed-sample training flags for runnable model examples. -/
-abbrev CifarLoggedTrainFlags := Support.NpyLoggedTrainFlags
-
-/-- Parsed CIFAR dataset and optimizer/training flags for classifier examples. -/
-abbrev CifarModelTrainFlags := Support.NpyModelTrainFlags
-
-namespace CifarLoggedTrainFlags
-
-/--
-Parse the standard CIFAR plus fixed-step training flags and reject unused arguments.
-
-Generative examples use the same prepared CIFAR arrays and the same loss-curve logging contract;
-only the model and target construction differ.
--/
-def parse (exeName : String) (args : List String)
-    (defaultLogPath : System.FilePath) (defaultSteps : Nat := 10) :
-    Except String CifarLoggedTrainFlags :=
-  Support.NpyLoggedTrainFlags.parse exeName args defaultLogPath defaultSteps
-    (parseData := NpyDatasets.parseCifar)
-
-end CifarLoggedTrainFlags
-
-namespace CifarModelTrainFlags
-
-/--
-Parse the standard CIFAR plus optimizer/training flags.
-
-Vision examples share the same CIFAR data boundary and optimizer controls; architecture files only
-need to provide the model constructor and logging title. Any remaining arguments are preserved so
-the caller can forward runtime flags such as `--device cpu`, `--device cuda`, or
-`--execution typed-graph` to the public `Trainer.RunConfig` parser.
--/
-def parse (exeName : String) (args : List String)
-    (defaultLogPath : System.FilePath) (defaultSteps : Nat := 1)
-    (defaultLearningRate : Float := 1e-3) :
-    Except String (CifarModelTrainFlags × List String) :=
-  Support.NpyModelTrainFlags.parse exeName args defaultLogPath
-    (defaultSteps := defaultSteps) (defaultLearningRate := defaultLearningRate)
-    (parseData := NpyDatasets.parseCifar)
-
-end CifarModelTrainFlags
-
-namespace ForecastWindowDataFlags
+namespace Forecast.Options
 
 /--
 Parse the shared flags for household-power forecasting windows.
@@ -241,7 +199,7 @@ def parse
     (args : List String)
     (defaultWindows : Nat := 512)
     (defaultReportOffset : Nat := 96) :
-    Except String (Support.ForecastWindowDataFlags × List String) := do
+    Except String (Support.Forecast.Options × List String) := do
   let (dataDir, args) ← TorchLean.CLI.takePathFlag args "data-dir"
     (default := NN.Examples.Data.RealPaths.defaultDataDir)
   let (seed, args) ← CLI.takeSeed args (default := 0)
@@ -257,34 +215,30 @@ def parse
           reportOffset := reportOffset
           seed := seed }, args)
 
-end ForecastWindowDataFlags
+end Forecast.Options
 
-/-- Parsed household-power forecasting data plus optimizer/training flags. -/
-abbrev HouseholdPowerModelTrainFlags := Support.ForecastWindowModelTrainFlags
+namespace Internal
 
-namespace HouseholdPowerModelTrainFlags
+/-- Load prepared labeled images with dataset-specific preparation and recovery hints. -/
+def loadImageLoader (imageShape : Shape) (classes : Nat)
+    (datasetName missingHint recoveryHint exeName : String)
+    (batchSize rowCount seed : Nat) (xPath yPath : System.FilePath) :
+    IO (Data.Loader Float batchSize imageShape [classes]) := do
+  Data.requirePairedFiles exeName
+    s!"{datasetName} images" xPath s!"{datasetName} labels" yPath missingHint
+  let source := Data.LabeledSource.fromFiles xPath yPath rowCount imageShape classes
+  let samples ←
+    try
+      source.load (α := Float)
+    catch error =>
+      throw <| IO.userError <|
+        s!"{exeName}: failed to load {datasetName} arrays for --n-total {rowCount}.\n" ++
+        s!"{error}\n" ++
+        "If your local .npy files contain fewer rows, pass --n-total with that row count; " ++
+        recoveryHint
+  pure (Data.Loader.fromStream samples batchSize (shuffle := true) (seed := seed))
 
-/--
-Parse the standard household-power forecasting flags plus optimizer/training flags.
-
-The forecasting command still owns the model and reporting logic, but the shared data/runtime flag
-surface lives here with the other real-data code.
--/
-def parse
-    (exeName : String)
-    (args : List String)
-    (defaultLogPath : System.FilePath)
-    (defaultSteps : Nat := 100)
-    (defaultLearningRate : Float := 0.01)
-    (defaultWindows : Nat := 512)
-    (defaultReportOffset : Nat := 96) :
-    Except String (HouseholdPowerModelTrainFlags × List String) :=
-  Support.ForecastWindowModelTrainFlags.parse exeName args defaultLogPath
-    (defaultSteps := defaultSteps) (defaultLearningRate := defaultLearningRate)
-    (parseData :=
-      fun args => ForecastWindowDataFlags.parse exeName args defaultWindows defaultReportOffset)
-
-end HouseholdPowerModelTrainFlags
+end Internal
 
 /--
 Build a batched CIFAR-10 loader from the image and label `.npy` files.
@@ -294,34 +248,17 @@ fails with something actionable rather than a decode error halfway through the f
 -/
 def loadCifarLoader
     (exeName : String) (batchSize rowCount seed : Nat) (xPath yPath : System.FilePath) :
-    IO (Data.Loader Float batchSize CifarImage CifarTarget) := do
-  Data.requirePairedFiles
-    exeName
-    "CIFAR-10 images" xPath
-    "CIFAR-10 labels" yPath
-    missingCifarHint
-  let src := Data.LabeledSource.fromFiles xPath yPath rowCount
-    [cifarChannels, cifarHeight, cifarWidth] cifarClasses
-  let ds ←
-    try
-      src.load (α := Float)
-    catch error =>
-      let hint :=
-        s!"{exeName}: failed to load CIFAR-10 arrays for --n-total {rowCount}.\n" ++
-        s!"{error}\n" ++
-        "If your local .npy files contain fewer rows, pass --n-total with that row count; " ++
-        "to regenerate the prepared slice, run:\n" ++
-        "  python3 scripts/datasets/download_example_data.py --cifar10"
-      throw <| IO.userError hint
-  -- Return the typed minibatch loader. Callers can take one batch for a fixed-sample check or pass
-  -- the loader to the shared training code for shuffled multi-step training.
-  let dl := Data.Loader.fromStream ds batchSize (shuffle := true) (seed := seed)
-  pure dl
+    IO (Data.Loader Float batchSize CifarImage CifarTarget) :=
+  Internal.loadImageLoader CifarImage cifarClasses "CIFAR-10" missingCifarHint
+    ("to regenerate the prepared slice, run:\n" ++
+      "  python3 scripts/datasets/download_example_data.py --cifar10")
+    exeName batchSize rowCount seed xPath yPath
 
-/-- Common training-log notes for CIFAR-backed classifier examples. -/
-def cifarClassifierNotes (batchSize : Nat)
-    (flags : CifarModelTrainFlags) (extra : Array String := #[]) : Array String :=
-  Support.NpyDataFlags.trainLogNotes flags.data "cifar10" ++
+/-- Dataset and optimizer metadata for training on prepared NPY tensors. -/
+def trainingNotes (dataset : String) (batchSize : Nat)
+    (flags : Support.Training.Options Support.Npy.Options) (extra : Array String := #[]) :
+    Array String :=
+  Support.Npy.Options.logNotes flags.data dataset ++
   #[s!"lr={flags.training.learningRate}", s!"steps={flags.training.steps}", s!"batch={batchSize}"]
   ++ extra
 
@@ -329,17 +266,43 @@ def cifarClassifierNotes (batchSize : Nat)
 def loadCifarBatches
     (exeName : String) (batchSize rowCount seed : Nat) (xPath yPath : System.FilePath) :
     IO (Array (Sample.Batch Float batchSize CifarImage CifarTarget)) := do
-  let dl ← loadCifarLoader exeName batchSize rowCount seed xPath yPath
+  let loader ← loadCifarLoader exeName batchSize rowCount seed xPath yPath
   let epoch ← CLI.orThrow exeName <|
-    Data.Loader.nextNonemptyEpoch exeName dl
+    Data.Loader.nextNonemptyEpoch exeName loader
   pure epoch.batches
+
+/-- Train a cropped CIFAR classifier with the examples' shared Adam and cross-entropy policy. -/
+def trainCifarClassifier (batchSize cropHeight cropWidth : Nat)
+    (exeName logTitle : String)
+    (model : nn.Builder (nn.Sequential
+      [batchSize, cifarChannels, cropHeight, cropWidth] [batchSize, cifarClasses]))
+    (runtime : Runtime.Config) (flags : Support.Training.Options Support.Npy.Options)
+    (extraNotes : Array String := #[]) : IO Trainer.Report := do
+  let batches ←
+    loadCifarBatches exeName batchSize flags.data.nRows flags.data.seed
+      flags.data.xPath flags.data.yPath
+  let batches ← batches.mapM fun sample =>
+    CLI.orThrow exeName <| cropCifarBatch batchSize cropHeight cropWidth sample
+  let trainer :=
+    Trainer.new model <|
+      Trainer.RunConfig.forObjective
+        (Trainer.RunConfig.fromRuntime runtime
+          { optimizer := optim.adam { learningRate := flags.training.learningRate } })
+        (.oneHotCrossEntropy 1)
+        (seed := flags.data.seed)
+  let trained ← trainer.train
+    (Data.fromSamples batches)
+    (flags.training.trainOptions
+      (logTitle := logTitle)
+      (logNotes := trainingNotes "cifar10" batchSize flags extraNotes))
+  pure trained.report
 
 /-- Load the first full CIFAR-10 minibatch from the shared CIFAR loader. -/
 def loadCifarBatch
     (exeName : String) (batchSize rowCount seed : Nat) (xPath yPath : System.FilePath) :
     IO (Sample.Batch Float batchSize CifarImage CifarTarget) := do
-  let dl ← loadCifarLoader exeName batchSize rowCount seed xPath yPath
-  CLI.orThrow exeName <| Data.Loader.firstFullBatch exeName dl
+  let loader ← loadCifarLoader exeName batchSize rowCount seed xPath yPath
+  CLI.orThrow exeName <| Data.Loader.firstFullBatch exeName loader
 
 /--
 Load a user-prepared ImageNet-style `64x64` minibatch.
@@ -350,44 +313,19 @@ shape and class range before handing the batch to examples.
 -/
 def loadImageNet64Loader
     (exeName : String) (batchSize rowCount seed : Nat) (xPath yPath : System.FilePath) :
-    IO (Data.Loader Float batchSize ImageNet64Image ImageNet64Target) := do
-  Data.requirePairedFiles
-    exeName
-    "ImageNet64 images" xPath
-    "ImageNet64 labels" yPath
-    missingImageNet64Hint
-  let src := Data.LabeledSource.fromFiles xPath yPath rowCount
-    [imagenet64Channels, imagenet64Height, imagenet64Width] imagenet64Classes
-  let ds ←
-    try
-      src.load (α := Float)
-    catch error =>
-      let hint :=
-        s!"{exeName}: failed to load ImageNet64 arrays for --n-total {rowCount}.\n" ++
-        s!"{error}\n" ++
-        "If your local .npy files contain fewer rows, pass --n-total with that row count; " ++
-        "to create ImageNet64 arrays, run the image-folder converter described in the error hint."
-      throw <| IO.userError hint
-  -- Same convention as CIFAR: this is the reusable loader for full-dataset loops.
-  -- `loadImageNet64Batch` is for call sites that need a single fixed minibatch.
-  let dl := Data.Loader.fromStream ds batchSize (shuffle := true) (seed := seed)
-  pure dl
+    IO (Data.Loader Float batchSize ImageNet64Image ImageNet64Target) :=
+  Internal.loadImageLoader ImageNet64Image imagenet64Classes "ImageNet64" missingImageNet64Hint
+    "to create ImageNet64 arrays, run the image-folder converter described in the error hint."
+    exeName batchSize rowCount seed xPath yPath
 
 /-- Load one shuffled epoch of full ImageNet64-style minibatches from prepared `.npy` arrays. -/
 def loadImageNet64Batches
     (exeName : String) (batchSize rowCount seed : Nat) (xPath yPath : System.FilePath) :
     IO (Array (Sample.Batch Float batchSize ImageNet64Image ImageNet64Target)) := do
-  let dl ← loadImageNet64Loader exeName batchSize rowCount seed xPath yPath
+  let loader ← loadImageNet64Loader exeName batchSize rowCount seed xPath yPath
   let epoch ← CLI.orThrow exeName <|
-    Data.Loader.nextNonemptyEpoch exeName dl
+    Data.Loader.nextNonemptyEpoch exeName loader
   pure epoch.batches
-
-/-- Load the first full ImageNet64-style minibatch from the shared ImageNet64 loader. -/
-def loadImageNet64Batch
-    (exeName : String) (batchSize rowCount seed : Nat) (xPath yPath : System.FilePath) :
-    IO (Sample.Batch Float batchSize ImageNet64Image ImageNet64Target) := do
-  let dl ← loadImageNet64Loader exeName batchSize rowCount seed xPath yPath
-  CLI.orThrow exeName <| Data.Loader.firstFullBatch exeName dl
 
 /--
 Load a CIFAR minibatch, flatten each channel-first image, and retain its first `config.dataWidth`
@@ -426,10 +364,7 @@ def cifarFeatureDataset {τ : Shape}
     let x ← loadCifarFeatureBatch batchSize config exeName xPath yPath rowCount seed
     pure (sampleOfFeatures x)
 
-/-- Shared text-corpus CLI/data boundary for local text-model examples. -/
-abbrev TextCorpusFlags := text.CorpusPathOptions
-
-namespace TextCorpusFlags
+namespace Corpus
 
 /-- Command-line options shared by local text-corpus examples. -/
 def help : Array String :=
@@ -443,48 +378,48 @@ Parse the shared `--data-file` flag used by local text-model examples.
 `--tiny-shakespeare` is accepted as an explicit shortcut for the default corpus path.
 -/
 def parse (args : List String) :
-    Except String (TextCorpusFlags × List String) := do
+    Except String (System.FilePath × List String) := do
   let args := args.filter (fun a => a != "--tiny-shakespeare")
-  text.CorpusPathOptions.parse args NN.Examples.Data.RealPaths.tinyShakespeare
+  CLI.takePathFlag args "data-file" (default := NN.Examples.Data.RealPaths.tinyShakespeare)
 
 /-- Read the selected text corpus and fail with a shared preparation hint when it is missing. -/
-def read (exeName : String) (flags : TextCorpusFlags) : IO String := do
-  unless (← flags.path.pathExists) do
-    throw <| IO.userError s!"{exeName}: missing text corpus: {flags.path}\n{missingTextHint}"
-  let text ← IO.FS.readFile flags.path
+def read (exeName : String) (path : System.FilePath) : IO String := do
+  unless (← path.pathExists) do
+    throw <| IO.userError s!"{exeName}: missing text corpus: {path}\n{missingTextHint}"
+  let text ← IO.FS.readFile path
   if text.isEmpty then
-    throw <| IO.userError s!"{exeName}: empty text corpus: {flags.path}"
+    throw <| IO.userError s!"{exeName}: empty text corpus: {path}"
   pure text
 
-end TextCorpusFlags
+end Corpus
 
 /-- Text corpus selection plus the number of causal training windows to expose. -/
-structure TextWindowFlags where
+structure Corpus.Options where
   /-- Selected UTF-8 corpus. -/
-  corpus : TextCorpusFlags
+  corpus : System.FilePath
   /-- Number of approximately evenly spaced windows in the finite training dataset. -/
   windows : Nat
 deriving Repr
 
-namespace TextWindowFlags
+namespace Corpus.Options
 
 /-- Command-line options shared by finite-window text examples. -/
 def help (defaultWindows : Nat) : Array String :=
-  TextCorpusFlags.help ++
+  Corpus.help ++
     #[s!"  --windows N           corpus windows available to training (default: {defaultWindows})"]
 
 /-- Parse a text corpus and a positive `--windows` count. -/
 def parse (exeName : String) (defaultWindows : Nat) (args : List String) :
-    Except String (TextWindowFlags × List String) := do
-  let (corpus, args) ← TextCorpusFlags.parse args
+    Except String (Corpus.Options × List String) := do
+  let (corpus, args) ← Corpus.parse args
   let (windows, args) ←
     CLI.takePositiveNatFlag args exeName "windows" (default := defaultWindows)
   pure ({ corpus, windows }, args)
 
 /-- Read the selected text corpus. -/
-def read (exeName : String) (flags : TextWindowFlags) : IO String :=
-  TextCorpusFlags.read exeName flags.corpus
+def read (exeName : String) (flags : Corpus.Options) : IO String :=
+  Corpus.read exeName flags.corpus
 
-end TextWindowFlags
+end Corpus.Options
 
 end NN.Examples.Models.RealData

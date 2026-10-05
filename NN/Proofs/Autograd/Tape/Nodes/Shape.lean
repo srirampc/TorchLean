@@ -19,7 +19,6 @@ dimension permutations (e.g. Multi-Head Attention head splitting/combining).
 
 @[expose] public section
 
-
 namespace Proofs
 namespace Autograd
 
@@ -36,24 +35,9 @@ namespace TapeNodes
 
 namespace ShapeOps
 
-/-- Move `castVec` across the left argument of an inner product. -/
-public lemma inner_castVec_left {n m : Nat} (h : n = m) (x : Vec n) (y : Vec m) :
-    inner ℝ (castVec h x) y = inner ℝ x (castVec h.symm y) := by
-  -- Insert the cancelling cast on `y` and use `inner_castVec_castVec`.
-  have hy : castVec h (castVec h.symm y) = y := by
-    simp
-  calc
-    inner ℝ (castVec h x) y
-        = inner ℝ (castVec h x) (castVec h (castVec h.symm y)) := by simp [hy]
-    _ = inner ℝ x (castVec h.symm y) := by
-          simpa using (inner_castVec_castVec (h := h) (x := x) (y := castVec h.symm y))
-
 /-- `castVec` is proof-irrelevant in its equality argument. -/
-public lemma castVec_proof_irrel {n m : Nat} (h₁ h₂ : n = m) (v : Vec n) :
-    castVec h₁ v = castVec h₂ v := by
-  have : h₁ = h₂ := Subsingleton.elim _ _
-  cases this
-  rfl
+theorem castVec_proof_irrel {n m : Nat} (h₁ h₂ : n = m) (v : Vec n) :
+    castVec h₁ v = castVec h₂ v := rfl
 
 /-!
 `reshape` is linear: on vectors it is just a type cast along `Spec.Shape.size` equality.
@@ -112,8 +96,8 @@ def reshapeFderiv {Γ : List Shape} {s₁ s₂ : Shape}
 -/
 
 /--
-`flatten` node: specialization of `reshape` to the canonical vector shape `(.dim (Spec.Shape.size s)
-  .scalar)`.
+`flatten` node: specialization of `reshape` to the canonical vector shape
+`(.dim (Spec.Shape.size s) .scalar)`.
 
 PyTorch analogue: `flatten` when applied to a contiguous tensor.
 https://pytorch.org/docs/stable/generated/torch.flatten.html
@@ -134,11 +118,11 @@ def flattenFderiv {Γ : List Shape} {s : Shape} (idx : Idx Γ s) :
 -- ---------------------------------------------------------------------------
 
 /-- Reindex a vector along a `Fin` equivalence (coordinate permutation/renaming). -/
-public def reindexVec {n m : Nat} (e : Fin n ≃ Fin m) : Vec n → Vec m :=
+def reindexVec {n m : Nat} (e : Fin n ≃ Fin m) : Vec n → Vec m :=
   fun v => vecOfFun (n := m) fun i => v (e.symm i)
 
 /-- The linear map induced by `reindexVec`. -/
-public def reindexLin {n m : Nat} (e : Fin n ≃ Fin m) : Vec n →L[ℝ] Vec m := by
+def reindexLin {n m : Nat} (e : Fin n ≃ Fin m) : Vec n →L[ℝ] Vec m := by
   classical
   let fLin : Vec n →ₗ[ℝ] Vec m :=
     { toFun := reindexVec (n := n) (m := m) e
@@ -153,12 +137,12 @@ public def reindexLin {n m : Nat} (e : Fin n ≃ Fin m) : Vec n →L[ℝ] Vec m 
   refine ⟨fLin, ?_⟩
   exact LinearMap.continuous_of_finiteDimensional (f := fLin)
 
-@[simp] public lemma reindexLin_apply {n m : Nat} (e : Fin n ≃ Fin m) (v : Vec n) :
-    reindexLin (n := n) (m := m) e v = reindexVec (n := n) (m := m) e v := by
-  rfl
+/-- The bundled reindexing computes `reindexVec`. -/
+@[simp] theorem reindexLin_apply {n m : Nat} (e : Fin n ≃ Fin m) (v : Vec n) :
+    reindexLin (n := n) (m := m) e v = reindexVec (n := n) (m := m) e v := rfl
 
 /-- Move `reindexVec` across the left argument of an inner product. -/
-public lemma inner_reindex_left {n m : Nat} (e : Fin n ≃ Fin m) (x : Vec n) (y : Vec m) :
+theorem inner_reindex_left {n m : Nat} (e : Fin n ≃ Fin m) (x : Vec n) (y : Vec m) :
     inner ℝ (reindexVec (n := n) (m := m) e x) y = inner ℝ x (reindexVec (n := m) (m := n) e.symm y)
       := by
   classical
@@ -181,7 +165,7 @@ public lemma inner_reindex_left {n m : Nat} (e : Fin n ≃ Fin m) (x : Vec n) (y
             simp [reindexVec, inner_eq_sum_mul]
 
 /-- Coordinate equivalence induced by exchanging two adjacent blocks. -/
-public def swapAdjacentEquiv (outer inner tail : Nat) :
+def swapAdjacentEquiv (outer inner tail : Nat) :
     Fin (outer * (inner * tail)) ≃ Fin (inner * (outer * tail)) :=
   let e_m_nk : (Fin outer × Fin (inner * tail)) ≃ Fin (outer * (inner * tail)) :=
     finProdFinEquiv
@@ -201,7 +185,7 @@ public def swapAdjacentEquiv (outer inner tail : Nat) :
 /--
 Lift a coordinate equivalence pointwise under a leading axis.
 -/
-public def mapOuterEquiv (leading : Nat) {source target : Nat}
+def mapOuterEquiv (leading : Nat) {source target : Nat}
     (e : Fin source ≃ Fin target) : Fin (leading * source) ≃ Fin (leading * target) :=
   let sourceProd : (Fin leading × Fin source) ≃ Fin (leading * source) := finProdFinEquiv
   let targetProd : (Fin leading × Fin target) ≃ Fin (leading * target) := finProdFinEquiv
@@ -240,7 +224,7 @@ def reindex {Γ : List Shape} {source target : Shape}
       exact hperm.trans hctx.symm)
 
 /-- `NodeFDerivCorrect` for an arbitrary coordinate reindexing. -/
-def reindexFDeriv {Γ : List Shape} {source target : Shape}
+def reindexFderiv {Γ : List Shape} {source target : Shape}
     (idx : Idx Γ source)
     (e : Fin (Spec.Shape.size source) ≃ Fin (Spec.Shape.size target)) :
     NodeFDerivCorrect (reindex (Γ := Γ) (source := source) (target := target) idx e) := by

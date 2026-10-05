@@ -6,11 +6,8 @@ Authors: TorchLean Team
 
 module
 
-public import NN.Spec.Layers.Attention
-public import Mathlib.Analysis.SpecialFunctions.Pow.NNReal
-public import Mathlib.Data.Sym.Sym2.Init
-import Mathlib.Tactic.NormNum.GCD
 public import NN.Spec.Core.Context.Real
+public import NN.Spec.Layers.Attention
 
 /-!
 # Causal attention mask laws
@@ -52,20 +49,6 @@ without unfolding the tensor constructors each time.
 @[simp] theorem futureMask_get2 {n : Nat} (i j : Fin n) :
     Spec.get2 (Spec.futureMask n) i j = decide (i.val < j.val) := by
   simp [Spec.futureMask, Spec.get2]
-
-/--
-Elementwise binary maps commute with matrix indexing.
-
-This small tensor lemma is useful for attention proofs because masking is implemented as
-`map2Spec` over the score matrix and the Boolean mask.
--/
-@[simp] theorem get2_map2Spec_matrix {α β γ : Type} {m n : Nat}
-    (f : α → β → γ)
-    (A : TorchLean.Tensor α [m, n])
-    (B : TorchLean.Tensor β [m, n])
-    (i : Fin m) (j : Fin n) :
-    Spec.get2 (map2Spec f A B) i j = f (Spec.get2 A i j) (Spec.get2 B i j) := by
-  exact TorchLean.Tensor.get2_map2Spec A B i j
 
 /-!
 ## Causal blocking and past visibility

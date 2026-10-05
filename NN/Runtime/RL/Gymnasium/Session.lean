@@ -92,11 +92,8 @@ def stepChecked {obsShape : Shape} {nActions : Nat}
     IO (Boundary.Transition obsShape nActions × Session obsShape nActions) := do
   let obs := s.observation
   let (obs', reward, terminated, truncated) ← Client.Internal.step s.client action.1
-  let tr ←
-    match Boundary.checkTransitionFin (obsShape := obsShape) (nActions := nActions)
-        s.client.contract obs obs' action reward terminated truncated with
-    | .ok t => pure t
-    | .error e => throw <| IO.userError e
+  let tr ← IO.ofExcept (Boundary.checkTransitionFin (obsShape := obsShape) (nActions := nActions)
+    s.client.contract obs obs' action reward terminated truncated)
   let done : Bool := Boundary.Transition.done tr
   let nextObs ←
     if resetOnDone && done then

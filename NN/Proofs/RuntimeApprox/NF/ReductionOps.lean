@@ -18,11 +18,10 @@ The row and column lemmas use explicit `Shape.NonemptyAxis` evidence derived fro
 matrix dimensions.
 
 ## PyTorch correspondence / citations
-This file targets reduction patterns used by normalization/attention (sums, means, maxes along an
-axis), analogous to operations like `torch.sum`, `torch.mean`, and `torch.max`.
+This file targets reduction patterns used by normalization/attention (sums and means along an
+axis), analogous to `torch.sum` and `torch.mean`.
 https://pytorch.org/docs/stable/generated/torch.sum.html
 https://pytorch.org/docs/stable/generated/torch.mean.html
-https://pytorch.org/docs/stable/generated/torch.max.html
 
 Current scope: row and column reductions on matrices. Broader-rank reductions can reuse the same
 argument after moving the selected axis into a matrix view.
@@ -37,7 +36,6 @@ the budget falls back to an always valid triangle-inequality bound.
 -/
 
 @[expose] public section
-
 
 namespace Proofs
 namespace RuntimeApprox
@@ -113,11 +111,6 @@ private theorem pos_of_row_axis {m n : Nat}
   cases hRed with
   | succ inner => cases inner; exact Nat.succ_pos _
 
-/-- Axis-0 nonemptiness of a matrix shape is positivity of the column length. -/
-private theorem pos_of_column_axis {m n : Nat}
-    (hRed : Shape.NonemptyAxis 0 ([m, n] : Shape)) : 0 < m := by
-  cases hRed; exact Nat.succ_pos _
-
 /-- Row-wise budget vector for an `m × n` runtime matrix: entry `i` is the accumulated rounding
 budget of runtime row `i`, so a row of large magnitudes is allowed a larger error than a row of
 small ones. This is the sum-side counterpart of `meanRowBoundVec` below, and naming it keeps the
@@ -141,13 +134,8 @@ theorem approxTensor_reduce_sum_rows
       (TorchLean.Tensor.reduceSum (α := R) (s := [m, n]) 1 xR hRed)
       (linfNorm (sumRowBoundVec (β := β) (fexp := fexp) (rnd := rnd) eps xR)) := by
   classical
-  have hε : 0 ≤ eps := approxTensor_eps_nonneg (s := [m, n]) hx
-  let boundVec : SpecTensor [m] :=
-    Tensor.dim fun i =>
-      Tensor.scalar
-        (sumBound (β := β) (fexp := fexp) (rnd := rnd) (s := .dim n .scalar)
-          eps (xR.unstack i))
-  have hBoundNonneg : 0 ≤ linfNorm boundVec := linf_norm_nonneg (t := boundVec)
+  let boundVec := sumRowBoundVec (β := β) (fexp := fexp) (rnd := rnd) eps xR
+  have hBoundNonneg : 0 ≤ linfNorm boundVec := linfNorm_nonneg (t := boundVec)
   have hRed' : Shape.NonemptyAxis 1 (.dim m (.dim n .scalar)) := hRed
 
   refine approxTensor_dim_of_forall
@@ -157,7 +145,7 @@ theorem approxTensor_reduce_sum_rows
     (eps := linfNorm boundVec) hBoundNonneg ?_
   intro i
   have hxRow :=
-    approxTensor_dim_get (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd))
+    approxTensor_unstack (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd))
       (xS := xS) (xR := xR) (eps := eps) hx i
   have hSum :=
     approxTensor_sum_spec (β := β) (fexp := fexp) (rnd := rnd) (s := .dim n .scalar)
@@ -167,10 +155,10 @@ theorem approxTensor_reduce_sum_rows
       (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd))).1 hSum
   have hle : sumBound (β := β) (fexp := fexp) (rnd := rnd) (s := .dim n .scalar)
       eps (xR.unstack i) ≤ linfNorm boundVec := by
-    have hcomponent := linf_norm_le_get_dim (t := boundVec) i
+    have hcomponent := linfNorm_unstack_le (t := boundVec) i
     have habs : abs (sumBound (β := β) (fexp := fexp) (rnd := rnd)
         (s := .dim n .scalar) eps (xR.unstack i)) ≤ linfNorm boundVec := by
-      simpa [boundVec, linfNorm, RuntimeApprox.linfNorm, tensorLinfNorm,
+      simpa [boundVec, sumRowBoundVec, linfNorm, RuntimeApprox.linfNorm, tensorLinfNorm,
         Numerics.MathFunctions.abs] using hcomponent
     exact le_trans (le_abs_self _) habs
   have herror : abs
@@ -330,7 +318,7 @@ theorem approxTensor_reduce_mean_rows
   have hn : 0 < n := pos_of_row_axis hRed
   set boundVec : SpecTensor [m] :=
     meanRowBoundVec (β := β) (fexp := fexp) (rnd := rnd) eps xR with hboundVec
-  have hBoundNonneg : 0 ≤ linfNorm boundVec := linf_norm_nonneg (t := boundVec)
+  have hBoundNonneg : 0 ≤ linfNorm boundVec := linfNorm_nonneg (t := boundVec)
   have hRed' : Shape.NonemptyAxis 1 (.dim m (.dim n .scalar)) := hRed
   refine approxTensor_dim_of_forall
     (n := m) (s := .scalar)
@@ -339,7 +327,7 @@ theorem approxTensor_reduce_mean_rows
     (eps := linfNorm boundVec) hBoundNonneg ?_
   intro i
   have hxRow :=
-    approxTensor_dim_get (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd))
+    approxTensor_unstack (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd))
       (xS := xS) (xR := xR) (eps := eps) hx i
   have hlocal := approx_mean_row_nf (β := β) (fexp := fexp) (rnd := rnd) hn hxRow
   have hunstack : boundVec.unstack i =
@@ -347,7 +335,7 @@ theorem approxTensor_reduce_mean_rows
     simp [hboundVec, meanRowBoundVec]
   have hle : meanRowBound (β := β) (fexp := fexp) (rnd := rnd) eps (xR.unstack i) ≤
       linfNorm boundVec := by
-    have hcomponent := linf_norm_le_get_dim (t := boundVec) i
+    have hcomponent := linfNorm_unstack_le (t := boundVec) i
     rw [hunstack] at hcomponent
     have habs : abs (meanRowBound (β := β) (fexp := fexp) (rnd := rnd) eps (xR.unstack i)) ≤
         linfNorm boundVec := by
@@ -399,13 +387,9 @@ theorem approxTensor_reduce_sum_columns
       (TorchLean.Tensor.reduceSum (α := R) (s := [m, n]) 0 xR hRed)
       (linfNorm (sumColumnBoundVec (β := β) (fexp := fexp) (rnd := rnd) eps xR)) := by
   classical
-  have hm : 0 < m := pos_of_column_axis hRed
   have hε : 0 ≤ eps := approxTensor_eps_nonneg (s := [m, n]) hx
-  let boundVec : SpecTensor [n] :=
-    Tensor.dim (fun j =>
-      Tensor.scalar (sumBound (β := β) (fexp := fexp) (rnd := rnd)
-        (s := .dim m .scalar) eps (colR (m := m) (n := n) xR j)))
-  have hBoundNonneg : 0 ≤ linfNorm boundVec := linf_norm_nonneg (t := boundVec)
+  let boundVec := sumColumnBoundVec (β := β) (fexp := fexp) (rnd := rnd) eps xR
+  have hBoundNonneg : 0 ≤ linfNorm boundVec := linfNorm_nonneg (t := boundVec)
 
   refine approxTensor_dim_of_forall
     (n := n) (s := .scalar)
@@ -423,10 +407,10 @@ theorem approxTensor_reduce_sum_columns
       (eps := eps) hε ?_
     intro i
     have hrow :=
-      approxTensor_dim_get (α := R)
+      approxTensor_unstack (α := R)
         (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd)) hx i
     have hij :=
-      approxTensor_dim_get (α := R)
+      approxTensor_unstack (α := R)
         (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd)) hrow j
     simpa [colS, colR] using hij
 
@@ -441,11 +425,11 @@ theorem approxTensor_reduce_sum_columns
       sumBound (β := β) (fexp := fexp) (rnd := rnd) (s := .dim m .scalar)
           eps (colR (m := m) (n := n) xR j) ≤
         linfNorm boundVec := by
-    have hcomponent := linf_norm_le_get_dim (t := boundVec) j
+    have hcomponent := linfNorm_unstack_le (t := boundVec) j
     have habs :
         abs (sumBound (β := β) (fexp := fexp) (rnd := rnd) (s := .dim m .scalar)
           eps (colR (m := m) (n := n) xR j)) ≤ linfNorm boundVec := by
-      simpa [boundVec, linfNorm, RuntimeApprox.linfNorm, tensorLinfNorm,
+      simpa [boundVec, sumColumnBoundVec, linfNorm, RuntimeApprox.linfNorm, tensorLinfNorm,
         Numerics.MathFunctions.abs] using hcomponent
     exact le_trans (le_abs_self _) habs
   have herror : abs

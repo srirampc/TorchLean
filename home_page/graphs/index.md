@@ -85,11 +85,7 @@ expanded here.
   const layerOf = (mod) => {
     const parts = mod.split(".");
     if (parts[0] !== "NN" || parts.length < 2) return parts[0] || "unknown";
-    const named = new Set([
-      "API", "CI", "Examples", "Floats", "GraphSpec", "IR", "MLTheory",
-      "Proofs", "Runtime", "Spec", "Tensor", "Tests", "Verification"
-    ]);
-    return named.has(parts[1]) ? `NN.${parts[1]}` : parts[1];
+    return `NN.${parts[1]}`;
   };
 
   function setOptions(select, values, label) {
@@ -136,7 +132,8 @@ expanded here.
   }
 
   function buildIndex(report) {
-    const modules = new Set();
+    // The namespace table includes source modules with no import edges.
+    const modules = new Set(Object.keys(report.namespaces || {}));
     for (const edge of report.edges) {
       modules.add(edge.src);
       modules.add(edge.dst);
@@ -171,9 +168,11 @@ expanded here.
       }
       return true;
     });
+    const matchCount = mods.length;
     mods = mods.slice(0, 180);
 
-    $("dep-module-list").innerHTML = mods.map(mod => {
+    $("dep-module-list").innerHTML =
+      (matchCount > mods.length ? `<p class="muted">Showing ${mods.length} of ${matchCount} matches. Narrow the filters to see more.</p>` : "") + mods.map(mod => {
       const out = idx.imports.get(mod)?.length || 0;
       const inc = idx.importers.get(mod)?.length || 0;
       const active = mod === state.selected ? " active" : "";
@@ -197,7 +196,7 @@ expanded here.
   function edgeList(title, edges, side) {
     if (!edges.length) return `<h4>${title}</h4><div class="muted">None.</div>`;
     return `
-      <h4>${title}</h4>
+      <h4>${title}${edges.length > 80 ? ` (first 80 of ${edges.length})` : ""}</h4>
       <ul class="dep-edge-list">
         ${edges.slice(0, 80).map(e => {
           const mod = side === "dst" ? e.dst : e.src;

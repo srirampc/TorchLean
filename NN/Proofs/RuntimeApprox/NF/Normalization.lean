@@ -162,7 +162,7 @@ theorem approxTensor_normalizeCore
           xR meanR varianceR gammaR betaR cbMean cbVar cbGamma cbBeta)
         trace.outputError := by
   dsimp only
-  intro hstabilizedMargin hstdMargin
+  intro _hstabilizedMargin hstdMargin
   let meanBroadcastS := broadcastTo cbMean meanS
   let meanBroadcastR := broadcastTo cbMean meanR
   let varianceBroadcastS := broadcastTo cbVar varianceS
@@ -218,7 +218,7 @@ theorem approxTensor_normalizeCore
     (β := β) (fexp := fexp) (rnd := rnd) hvarianceBroadcast hepsilonFill
   have hstd := approxTensor_sqrt_spec_of_pos_lb
     (β := β) (fexp := fexp) (rnd := rnd) η hη
-    hstabilizedApprox hstabilized hstabilizedMargin
+    hstabilizedApprox hstabilized
   have hstdLower : Tensor.Forall (fun z : ℝ => Real.sqrt η ≤ z) stdS := by
     apply Tensor.forall_mapSpec hstabilized
     intro z hz

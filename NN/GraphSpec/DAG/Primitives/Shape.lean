@@ -116,18 +116,6 @@ theorem applyAdjacentSwaps_range_eq_replaceAxis
     (shape : Shape) (axis extent : Nat) (hAxis : axis < shape.rank) :
     (Shape.dim extent (shape.eraseAxis axis)).applyAdjacentSwaps (List.range axis) =
       shape.replaceAxis axis extent := by
-  have range_succ_eq_zero_cons_map_succ (n : Nat) :
-      List.range (n + 1) = 0 :: (List.range n).map Nat.succ := by
-    induction n with
-    | zero => rfl
-    | succ n ih =>
-        calc
-          List.range (n.succ + 1) = List.range (n + 1) ++ [n + 1] := by
-            rw [show n.succ + 1 = (n + 1) + 1 by grind, List.range_succ]
-          _ = (0 :: (List.range n).map Nat.succ) ++ [n + 1] := by rw [ih]
-          _ = 0 :: (List.range (n + 1)).map Nat.succ := by
-            rw [List.range_succ, List.map_append]
-            rfl
   have applyAdjacentSwaps_dim_map_succ
       (outer : Nat) (s : Shape) (depths : List Nat) :
       (Shape.dim outer s).applyAdjacentSwaps (depths.map Nat.succ) =
@@ -146,8 +134,8 @@ theorem applyAdjacentSwaps_range_eq_replaceAxis
           have hInner : axis < rest.rank := by
             simp only [Shape.rank] at hAxis
             grind
-          rw [range_succ_eq_zero_cons_map_succ]
-          simp only [Shape.eraseAxis, Shape.applyAdjacentSwaps,
+          rw [List.range_succ_eq_map]
+          simp only [Shape.applyAdjacentSwaps,
             Shape.swapAdjacentAtDepth, applyAdjacentSwaps_dim_map_succ]
           rw [ih axis hInner]
           rfl
@@ -170,6 +158,43 @@ theorem applyAdjacentSwaps_range_eq_replaceAxis
           simp only [Shape.replaceAxis,
             @Shape.axisSize_succ outer rest axis innerAxis hAxis]
           rw [@ih axis innerAxis]
+
+namespace Internal
+
+/-- Move a chosen runtime axis to the front, retaining the unchanged axes in their order. -/
+def moveAxisToFront {α : Type} [TorchLean.Storage α] [Context α]
+    {m : Type → Type} [Monad m] [Runtime.Autograd.Torch.Ops (m := m) (α := α)]
+    (shape : Shape) (axis extent : Nat) [Shape.AxisInBounds axis shape]
+    (input : Runtime.Autograd.Model.RefTy (m := m) (α := α)
+      (shape.replaceAxis axis extent)) :
+    m (Runtime.Autograd.Model.RefTy (m := m) (α := α)
+      (.dim extent (shape.eraseAxis axis))) := do
+  let swaps := List.range axis
+  have axisReplacement :=
+    applyAdjacentSwaps_range_eq_replaceAxis shape axis extent
+      (inferInstance : Shape.AxisInBounds axis shape).proof
+  let input' : Runtime.Autograd.Model.RefTy (m := m) (α := α)
+      ((Shape.dim extent (shape.eraseAxis axis)).applyAdjacentSwaps swaps) :=
+    axisReplacement.symm ▸ input
+  let moved ← Runtime.Autograd.Model.F.Einsum.permuteBySwapsTyped
+    (m := m) (α := α) input' swaps.reverse
+  pure (Shape.applyAdjacentSwaps_reverse
+    (.dim extent (shape.eraseAxis axis)) swaps ▸ moved)
+
+/-- Restore a front runtime axis to its original position. -/
+def moveAxisFromFront {α : Type} [TorchLean.Storage α] [Context α]
+    {m : Type → Type} [Monad m] [Runtime.Autograd.Torch.Ops (m := m) (α := α)]
+    (shape : Shape) (axis extent : Nat) [Shape.AxisInBounds axis shape]
+    (input : Runtime.Autograd.Model.RefTy (m := m) (α := α)
+      (.dim extent (shape.eraseAxis axis))) :
+    m (Runtime.Autograd.Model.RefTy (m := m) (α := α)
+      (shape.replaceAxis axis extent)) := do
+  let moved ← Runtime.Autograd.Model.F.Einsum.permuteBySwapsTyped
+    (m := m) (α := α) input (List.range axis)
+  pure (applyAdjacentSwaps_range_eq_replaceAxis shape axis extent
+    (inferInstance : Shape.AxisInBounds axis shape).proof ▸ moved)
+
+end Internal
 
 /-- Concatenate tensors along an arbitrary statically valid axis. -/
 def concatAxisSpec {α : Type} [TorchLean.Storage α]
@@ -210,42 +235,12 @@ def concatAxis (shape : Shape) (axis left right : Nat)
       fun {m} _ _ => fun a b =>
         let run : m (Runtime.Autograd.Model.RefTy (m := m) (α := α)
             (shape.replaceAxis axis (left + right))) := do
-          let swaps := List.range axis
-          have axisReplacement (extent : Nat) :
-              (Shape.dim extent (shape.eraseAxis axis)).applyAdjacentSwaps swaps =
-                shape.replaceAxis axis extent :=
-            applyAdjacentSwaps_range_eq_replaceAxis shape axis extent
-              (inferInstance : Shape.AxisInBounds axis shape).proof
-          let moveToFront :
-              (extent : Nat) →
-                Runtime.Autograd.Model.RefTy (m := m) (α := α)
-                  (shape.replaceAxis axis extent) →
-                m (Runtime.Autograd.Model.RefTy (m := m) (α := α)
-                  (.dim extent (shape.eraseAxis axis))) :=
-            fun extent input => do
-              let input' : Runtime.Autograd.Model.RefTy (m := m) (α := α)
-                  ((Shape.dim extent (shape.eraseAxis axis)).applyAdjacentSwaps swaps) :=
-                (axisReplacement extent).symm ▸ input
-              let moved ← Runtime.Autograd.Model.F.Einsum.permuteBySwapsTyped
-                (m := m) (α := α) input' swaps.reverse
-              pure (Shape.applyAdjacentSwaps_reverse
-                (.dim extent (shape.eraseAxis axis)) swaps ▸ moved)
-          let moveFromFront :
-              (extent : Nat) →
-                Runtime.Autograd.Model.RefTy (m := m) (α := α)
-                  (.dim extent (shape.eraseAxis axis)) →
-                m (Runtime.Autograd.Model.RefTy (m := m) (α := α)
-                  (shape.replaceAxis axis extent)) :=
-            fun extent input => do
-              let moved ← Runtime.Autograd.Model.F.Einsum.permuteBySwapsTyped
-                (m := m) (α := α) input swaps
-              pure (axisReplacement extent ▸ moved)
-          let aFront ← moveToFront left a
-          let bFront ← moveToFront right b
-          let outputFront ← Runtime.Autograd.Model.concatLeadingAxis
+          let aFront ← Internal.moveAxisToFront (m := m) (α := α) shape axis left a
+          let bFront ← Internal.moveAxisToFront (m := m) (α := α) shape axis right b
+          let outputFront ← Runtime.Autograd.Model.concat
             (m := m) (α := α) (nDim := left) (mDim := right)
             (s := shape.eraseAxis axis) aFront bFront
-          moveFromFront (left + right) outputFront
+          Internal.moveAxisFromFront (m := m) (α := α) shape axis (left + right) outputFront
         run }
 
 /-- The pure meaning of arbitrary-axis concatenation. -/
@@ -272,45 +267,15 @@ def sliceAxisRange (shape : Shape) (axis start length : Nat)
       fun {m} _ _ => fun input =>
         let run : m (Runtime.Autograd.Model.RefTy (m := m) (α := α)
             (shape.replaceAxis axis length)) := do
-          let swaps := List.range axis
-          have axisReplacement (extent : Nat) :
-              (Shape.dim extent (shape.eraseAxis axis)).applyAdjacentSwaps swaps =
-                shape.replaceAxis axis extent :=
-            applyAdjacentSwaps_range_eq_replaceAxis shape axis extent
-              (inferInstance : Shape.AxisInBounds axis shape).proof
-          let moveToFront :
-              (extent : Nat) →
-                Runtime.Autograd.Model.RefTy (m := m) (α := α)
-                  (shape.replaceAxis axis extent) →
-                m (Runtime.Autograd.Model.RefTy (m := m) (α := α)
-                  (.dim extent (shape.eraseAxis axis))) :=
-            fun extent input => do
-              let input' : Runtime.Autograd.Model.RefTy (m := m) (α := α)
-                  ((Shape.dim extent (shape.eraseAxis axis)).applyAdjacentSwaps swaps) :=
-                (axisReplacement extent).symm ▸ input
-              let moved ← Runtime.Autograd.Model.F.Einsum.permuteBySwapsTyped
-                (m := m) (α := α) input' swaps.reverse
-              pure (Shape.applyAdjacentSwaps_reverse
-                (.dim extent (shape.eraseAxis axis)) swaps ▸ moved)
-          let moveFromFront :
-              (extent : Nat) →
-                Runtime.Autograd.Model.RefTy (m := m) (α := α)
-                  (.dim extent (shape.eraseAxis axis)) →
-                m (Runtime.Autograd.Model.RefTy (m := m) (α := α)
-                  (shape.replaceAxis axis extent)) :=
-            fun extent input => do
-              let moved ← Runtime.Autograd.Model.F.Einsum.permuteBySwapsTyped
-                (m := m) (α := α) input swaps
-              pure (axisReplacement extent ▸ moved)
           let total := shape.axisSize axis
           let input' : Runtime.Autograd.Model.RefTy (m := m) (α := α)
               (shape.replaceAxis axis total) :=
             (replaceAxis_axisSize shape axis).symm ▸ input
-          let inputFront ← moveToFront total input'
-          let outputFront ← Runtime.Autograd.Model.sliceLeadingAxisRange
+          let inputFront ← Internal.moveAxisToFront (m := m) (α := α) shape axis total input'
+          let outputFront ← Runtime.Autograd.Model.slice
             (m := m) (α := α) (nDim := total) (s := shape.eraseAxis axis)
             start length hRange inputFront
-          moveFromFront length outputFront
+          Internal.moveAxisFromFront (m := m) (α := α) shape axis length outputFront
         run }
 
 /-- The pure meaning of a checked arbitrary-axis contiguous slice. -/

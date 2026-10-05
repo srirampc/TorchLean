@@ -210,9 +210,23 @@ def referenceParams {α : Type} [TorchLean.Storage α] [Context α] (inputDim : 
       { m := 1, n := 16, w := outputWeight, b := outputBias } }
 
 /-- Seed an $\ell_\infty$ input box centered at a typed input tensor. -/
-def seedInput {α : Type} [TorchLean.Storage α] [Context α] {inputDim : Nat}
+def seedInput {α : Type} [TorchLean.Storage α] [Context α] [BoundOps α] {inputDim : Nat}
     (ps : ParamStore α) (center : Tensor α [inputDim]) (eps : α) : ParamStore α :=
   ps.seedLInfBall 0 center eps
+
+/--
+Read the output box of a propagation pass as a scalar interval.
+
+Scalar-output PINN graphs have a length-one output vector, so summing its entries is the exact
+scalar readout. A missing box is reported with `ctx` as the message prefix, so callers can name the
+failing pass.
+-/
+def outputInterval (ctx : String) (boxes : Array (Option (FlatBox Float))) (outId : Nat) :
+    Except String FloatInterval :=
+  match NN.MLTheory.CROWN.Graph.outputBox? boxes outId with
+  | .ok box =>
+      .ok { lower := TorchLean.Tensor.sumSpec box.lo, upper := TorchLean.Tensor.sumSpec box.hi }
+  | .error msg => .error s!"{ctx}: {msg}"
 
 /--
 Enclose the first and second directional derivatives of the output along one input axis.
@@ -230,28 +244,22 @@ def axisDerivativeBounds (g : Graph) (ps : ParamStore Float)
   let outId := SequentialPINNArch.graphOutputId g
   let direction := FlatBox.ofTensor (TorchLean.Tensor.oneHot (α := Float) inDim axis)
   let first := NN.MLTheory.CROWN.Graph.runDirectionalDerivative (α := Float) g ps ibp direction
-  let second := NN.MLTheory.CROWN.Graph.runScalarSecondDerivative (α := Float) g ps ibp first
+  let second := NN.MLTheory.CROWN.Graph.runSecondDirectionalDerivative (α := Float) g ps ibp first
   let intervalAt (boxes : Array (Option (FlatBox Float))) : Option FloatInterval :=
-    match NN.MLTheory.CROWN.Graph.outputBox? boxes outId with
-    | .ok box =>
-        some
-          { lower := TorchLean.Tensor.sumSpec box.lo
-            upper := TorchLean.Tensor.sumSpec box.hi }
-    | .error _ => none
+    (outputInterval "derivative" boxes outId).toOption
   (intervalAt first, intervalAt second)
 
 /-- Parse the JSON certificate consumed by the PINN verification CLI. -/
 def parseCertificate (j : Json) : Except String Certificate := do
   let _ ← TorchLean.Json.expectObject "PINN certificate" j
   let po ← parseObjectField "PINN certificate" "pinn" j
+  -- The PDE expression is required. The former default `u''(x) = 0` uses prime and equality
+  -- syntax that `PdeParse` rejects, so a missing field could only fail later with a parse error.
   let pdeStr ←
     match Std.TreeMap.Raw.get? po "pde" with
-    | none => pure "u''(x) = 0"
-    | some Json.null => pure "u''(x) = 0"
-    | some pdeJ =>
-        match pdeJ with
-        | .str s => pure s
-        | _ => throw "PINN certificate.pinn.pde: expected string"
+    | some (.str s) => pure s
+    | some Json.null | none => throw "PINN certificate.pinn.pde: missing PDE expression string"
+    | some _ => throw "PINN certificate.pinn.pde: expected string"
   let spacing ← NN.Verification.Json.parseFieldFiniteFloat "PINN certificate.pinn" "h" (.obj po)
   let radius ← NN.Verification.Json.parseFieldFiniteFloat "PINN certificate.pinn" "eps" (.obj po)
   unless spacing > 0.0 do

@@ -61,25 +61,25 @@ variable {n : Nat}
 
 /-! ## List/Finset bridges -/
 
+/-- A left fold `acc + h x` accumulates the mapped list sum. -/
+theorem foldl_addf_eq_sum {β : Type _} (h : β → ℝ) (l : List β) (a : ℝ) :
+    l.foldl (fun acc x => acc + h x) a = a + (l.map h).sum := by
+  rw [List.foldl_add_init, List.sum_eq_foldl, List.foldl_map]
+
 /-- A left `+`-fold accumulates the list sum. -/
 theorem foldl_add_eq_sum (l : List ℝ) (a : ℝ) :
     l.foldl (· + ·) a = a + l.sum := by
-  induction l generalizing a with
-  | nil => simp
-  | cons x t ih => rw [List.foldl_cons, ih, List.sum_cons]; ring
+  simpa using foldl_addf_eq_sum id l a
 
 /-- A left `s + x*x`-fold accumulates the sum of squares. -/
 theorem foldl_addsq_eq_sum (l : List ℝ) (a : ℝ) :
-    l.foldl (fun s x => s + x * x) a = a + (l.map (fun x => x * x)).sum := by
-  induction l generalizing a with
-  | nil => simp
-  | cons x t ih => rw [List.foldl_cons, ih, List.map_cons, List.sum_cons]; ring
+    l.foldl (fun s x => s + x * x) a = a + (l.map (fun x => x * x)).sum :=
+  foldl_addf_eq_sum (fun x => x * x) l a
 
-/-- A `Fin n` sum is the foldl-sum over `finRange n`. -/
+/-- A `Fin n` sum is the list sum over `finRange n`. -/
 theorem finsum_eq_finRange_sum (h : Fin n → ℝ) :
     ∑ i, h i = ((List.finRange n).map h).sum := by
-  rw [← List.sum_toFinset _ (List.nodup_finRange n)]
-  · simp [List.toFinset_finRange]
+  rw [← List.ofFn_eq_map, Fin.sum_ofFn]
 
 /-! ## Cholesky: the column-building step
 
@@ -128,12 +128,8 @@ noncomputable def prefixCols (A : Fin n → Fin n → ℝ) (j : Fin n) : List (F
 /-- Entry `(i, j)` of the executable Cholesky factor equals `cholStep` evaluated on the prefix. -/
 theorem choleskyFn_eq_step (A : Fin n → Fin n → ℝ) (i j : Fin n) :
     Spec.choleskyFn A i j = cholStep A (prefixCols A j) j i := by
-  have hlen : j.val < (List.finRange n).length := by rw [List.length_finRange]; exact j.isLt
   show (Spec.choleskyColsFn A).getD j.val (fun _ => 0) i = _
-  rw [choleskyColsFn_eq, getD_foldl_snoc_read (fun cols k => cholStep A cols k) (fun _ => 0)
-    (List.finRange n) j.val hlen]
-  have hj : (List.finRange n)[j.val]'hlen = j := by simp [List.getElem_finRange]
-  rw [hj]
+  rw [choleskyColsFn_eq, getD_foldl_finRange (fun cols k => cholStep A cols k) (fun _ => 0) j]
   rfl
 
 /-- The prefix of Cholesky columns is exactly the first `j` columns of the final factor `L`,
@@ -434,13 +430,6 @@ theorem rTail_getD (A : Fin m → Fin n → ℝ) (q0 : List (Fin m → ℝ)) (l 
 theorem gtBool_true_iff {x y : ℝ} : Context.gtBool x y = true ↔ y < x := by
   unfold Context.gtBool; exact decide_eq_true_iff
 
-/-- A left fold `acc + h x` accumulates the mapped list sum. -/
-theorem foldl_addf_eq_sum {β : Type _} (h : β → ℝ) (l : List β) (a : ℝ) :
-    l.foldl (fun acc x => acc + h x) a = a + (l.map h).sum := by
-  induction l generalizing a with
-  | nil => simp
-  | cons x t ih => rw [List.foldl_cons, ih, List.map_cons, List.sum_cons]; ring
-
 /-! ### Entries of the executable `Q` and `R` factors -/
 
 /-- Entry `(i, k)` of the `Q` factor produced by `gramSchmidtFn`. -/
@@ -461,11 +450,8 @@ theorem Qmat_eq (A : Fin m → Fin n → ℝ) (i : Fin m) (k : Fin n) :
       = (List.finRange n).foldl (fun qs j => qs ++ [qStep A qs j]) [] := by
     rw [gramSchmidtFn_eq]; exact gs_proj_qs A (List.finRange n) [] []
   unfold Qmat
-  rw [hqs, getD_foldl_snoc_read (fun qs j => qStep A qs j) (fun _ => 0) (List.finRange n) k.val
-    (by rw [List.length_finRange]; exact k.isLt)]
-  have hk : (List.finRange n)[k.val]'(by rw [List.length_finRange]; exact k.isLt) = k := by
-    simp [List.getElem_finRange]
-  rw [hk]; rfl
+  rw [hqs, getD_foldl_finRange (fun qs j => qStep A qs j) (fun _ => 0) k]
+  rfl
 
 /-- Closed form of an `R` entry: `rStep` evaluated on the `Q`-prefix. -/
 theorem Rmat_eq (A : Fin m → Fin n → ℝ) (k j : Fin n) :

@@ -29,8 +29,8 @@ The executable loops need only addition, multiplication, and the scalar
 literals zero and one. Their row-major order is part of the program, which
 makes the same kernel available to IEEE floating-point types without
 installing false algebraic instances. Stronger correctness theorems recover
-the order-independent `Rep.push` denotation whenever the scalar operations
-form additive and multiplicative monoids.
+the order-independent `Rep.push` fiber sum whenever addition forms a
+commutative monoid. Operand products retain their source order.
 
 ## References
 

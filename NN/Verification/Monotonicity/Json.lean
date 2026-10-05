@@ -8,7 +8,6 @@ module
 
 public import NN.Verification.Monotonicity
 public import NN.Verification.Cert.RationalJson
-import Mathlib.Analysis.SpecialFunctions.Trigonometric.DerivHyp
 
 /-!
 # JSON acceptance implies real monotonicity

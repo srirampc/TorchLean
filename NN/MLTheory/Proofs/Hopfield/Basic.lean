@@ -49,6 +49,23 @@ the new value. Stating it this way lets the Mathlib `Function.update` lemmas do 
     updateAt (α := α) p s u v = s v := by
   simp [updateAt, h]
 
+/-- When an update changes the state, the old value of the updated unit is the negation of the
+threshold test: every other unit is untouched, so the change must happen at `u` itself. -/
+theorem apply_eq_not_decide_of_updateAt_ne {α : Type} [AddCommMonoid α] [Mul α] [One α] [Neg α]
+    [LE α] [DecidableRel ((· ≤ ·) : α → α → Prop)]
+    {n : Nat} (p : Params α n) (s : State n) (u : Fin n)
+    (h : updateAt (α := α) p s u ≠ s) :
+    s u = !decide (p.θ u ≤ net (α := α) p s u) := by
+  have hu : updateAt (α := α) p s u u ≠ s u := by
+    intro hEq
+    apply h
+    funext i
+    by_cases hi : i = u
+    · subst hi; exact hEq
+    · exact updateAt_apply_ne p s hi
+  rw [updateAt_apply_self] at hu
+  exact Bool.eq_not_of_ne hu.symm
+
 /-- Flipping a unit from `false` to `true` raises the count of active units by one.
 
 The active count is the tie-breaking measure in the convergence proof: when the energy stays flat, a
@@ -61,11 +78,7 @@ theorem pluses_updateAt_eq_succ_of_set_true {α : Type} [AddCommMonoid α] [Mul 
     pluses (n := n) (updateAt (α := α) p s u) = pluses (n := n) s + 1 := by
   classical
   -- `updateAt` only changes coordinate `u`, and it is set to `true`.
-  have hu' : updateAt (α := α) p s u u = true := by
-    have hu'' :
-        updateAt (α := α) p s u u = decide (p.θ u ≤ net (α := α) p s u) := by
-      simp [updateAt]
-    exact hu''.trans hdec
+  have hu' : updateAt (α := α) p s u u = true := (updateAt_apply_self p s u).trans hdec
   -- Describe the filtered true-set after the update.
   let A : Finset (Fin n) := Finset.univ.filter fun i : Fin n => s i = true
   let A' : Finset (Fin n) := Finset.univ.filter fun i : Fin n => updateAt (α := α) p s u i = true
@@ -81,9 +94,8 @@ theorem pluses_updateAt_eq_succ_of_set_true {α : Type} [AddCommMonoid α] [Mul 
         exact Finset.mem_insert_self u A
       · intro _
         -- `u ∈ A'` since `u ∈ univ` and the predicate holds by `hu'`.
-        have hupred : updateAt (α := α) p s u u = true := hu'
         have : u ∈ (Finset.univ.filter fun i : Fin n => updateAt (α := α) p s u i = true) :=
-          Finset.mem_filter.2 ⟨by simp, hupred⟩
+          Finset.mem_filter.2 ⟨by simp, hu'⟩
         simpa [A'] using this
     · simp [A', A, hi, Finset.mem_insert]
   -- Convert back to `pluses`.
@@ -100,11 +112,7 @@ theorem pluses_updateAt_eq_pred_of_set_false {α : Type} [AddCommMonoid α] [Mul
     pluses (n := n) (updateAt (α := α) p s u) + 1 = pluses (n := n) s := by
   classical
   -- `updateAt` only changes coordinate `u`, and it is set to `false`.
-  have hu' : updateAt (α := α) p s u u = false := by
-    have hu'' :
-        updateAt (α := α) p s u u = decide (p.θ u ≤ net (α := α) p s u) := by
-      simp [updateAt]
-    exact hu''.trans hdec
+  have hu' : updateAt (α := α) p s u u = false := (updateAt_apply_self p s u).trans hdec
   let A : Finset (Fin n) := Finset.univ.filter fun i : Fin n => s i = true
   let A' : Finset (Fin n) := Finset.univ.filter fun i : Fin n => updateAt (α := α) p s u i = true
   have huA : u ∈ A := by

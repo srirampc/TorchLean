@@ -9,26 +9,26 @@ a second verification library.
 List the commands available in the current checkout:
 
 ```bash
-lake exe verify -- list
+scripts/lake.sh exe verify -- list
 ```
 
 Start with a small model whose bounds Lean recomputes:
 
 ```bash
-lake exe verify -- torchlean-ibp
+scripts/lake.sh exe verify -- torchlean-ibp
 ```
 
 Then run the routine local suite:
 
 ```bash
-lake exe verify -- all
+scripts/lake.sh exe verify -- all
 ```
 
 The example runner and verifier are intentionally separate:
 
 ```text
-lake exe torchlean ...   runs models, training, data, and numerical demonstrations
-lake exe verify -- ...   checks a stated property or certificate
+scripts/lake.sh exe torchlean ...   runs models, training, data, and numerical demonstrations
+scripts/lake.sh exe verify -- ...   checks a stated property or certificate
 ```
 
 Successful training is not a verification result.
@@ -49,12 +49,12 @@ Successful training is not a verification result.
 Representative commands:
 
 ```bash
-lake exe verify -- torchlean-mlp-workflow
-lake exe verify -- digits --eps=0.02 --max=360
-lake exe verify -- abcrown-leaf
-lake exe verify -- vnncomp-mnistfc
-lake exe verify -- pinn-cert
-lake exe verify -- spline-cert
+scripts/lake.sh exe verify -- torchlean-mlp-workflow
+scripts/lake.sh exe verify -- digits --eps=0.02 --max=360
+scripts/lake.sh exe verify -- abcrown-leaf
+scripts/lake.sh exe verify -- vnncomp-mnistfc
+scripts/lake.sh exe verify -- pinn-cert
+scripts/lake.sh exe verify -- spline-cert
 ```
 
 Some commands accept a positional artifact path and others accept flags; `verify -- list` shows

@@ -28,24 +28,24 @@ runs.
 ## Commands
 
 ```bash
-lake exe torchlean cnn --n-total 1 --steps 1
-lake exe torchlean resnet --n-total 1 --steps 1
-lake exe torchlean vit --n-total 1 --steps 1
+scripts/lake.sh exe torchlean cnn --n-total 1 --steps 1
+scripts/lake.sh exe torchlean resnet --n-total 1 --steps 1
+scripts/lake.sh exe torchlean vit --n-total 1 --steps 1
 ```
 
 The same commands can target CUDA when TorchLean was built with CUDA support:
 
 ```bash
-lake -R -K cuda=true exe torchlean cnn --device cuda --n-total 1 --steps 1
-lake -R -K cuda=true exe torchlean resnet --device cuda --n-total 1 --steps 1
-lake -R -K cuda=true exe torchlean vit --device cuda --n-total 1 --steps 1
+scripts/lake.sh -Kcuda=true exe torchlean cnn --device cuda --n-total 1 --steps 1
+scripts/lake.sh -Kcuda=true exe torchlean resnet --device cuda --n-total 1 --steps 1
+scripts/lake.sh -Kcuda=true exe torchlean vit --device cuda --n-total 1 --steps 1
 ```
 
 ## What To Inspect
 
 These examples own the image-classification training path. Useful outputs are:
 
-- the training loss and accuracy trace;
+- the before/after training loss;
 - the `TrainLog` JSON if `--log PATH` is passed;
 - the typed image shapes in the Lean source;
 - CPU/CUDA parity and regression evidence when changing image kernels.

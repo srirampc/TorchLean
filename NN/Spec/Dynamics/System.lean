@@ -39,7 +39,7 @@ This file provides two complementary layers:
 
 - executable semantics (`iterate`, `trajectory`, `iterateWithInput`, and adapters such as
   `DrivenSystem.freeze`), and
-- proof interfaces (`IsFixedPoint`, contraction, Lyapunov stability).
+- proof interfaces (`Function.IsFixedPt`, contraction, Lyapunov stability).
 
 The predicates remain propositions because stability is a mathematical claim, but the file should
 not stop at predicates.  It also proves the algebra of discrete trajectories, so SSMs, diffusion
@@ -77,11 +77,7 @@ def iterate {s : Shape} (sys : DynamicalSystem s) (n : Nat) (x : SpecTensor s) :
 @[simp] theorem iterate_succ {s : Shape} (sys : DynamicalSystem s) (n : Nat)
     (x : SpecTensor s) :
     iterate sys (n + 1) x = sys.step (iterate sys n x) := by
-  dsimp [iterate]
-  induction n generalizing x with
-  | zero => rfl
-  | succ n ih =>
-      simp only [Function.iterate_succ_apply, ih]
+  exact Function.iterate_succ_apply' sys.step n x
 
 /-- Running `m+n` steps is the same as running `n` steps and then `m` more. -/
 theorem iterate_add {s : Shape} (sys : DynamicalSystem s) (m n : Nat) (x : SpecTensor s) :
@@ -170,40 +166,31 @@ theorem drivenTrajectory_const_eq_trajectory {s u : Shape} (sys : DrivenSystem s
       trajectory (sys.freeze input) x0 n := by
   exact iterateWithInput_const_eq_iterate sys input n x0
 
-/-- `x` is a fixed point (equilibrium) of `sys` if `step x = x`. -/
-def IsFixedPoint {s : Shape} (sys : DynamicalSystem s) (x : SpecTensor s) : Prop :=
-  sys.step x = x
-
-/-- A proof-carrying fixed-point witness. -/
-structure FixedPointCertificate {s : Shape} (sys : DynamicalSystem s) where
-  /-- Candidate equilibrium. -/
-  point : SpecTensor s
-  /-- Machine-checked proof that the candidate is a fixed point. -/
-  isFixed : IsFixedPoint sys point
-
 /-- Fixed points remain fixed under any number of iterations. -/
 theorem fixedPoint_iterate {s : Shape} {sys : DynamicalSystem s} {x : SpecTensor s}
-    (h : IsFixedPoint sys x) (n : Nat) :
+    (h : Function.IsFixedPt sys.step x) (n : Nat) :
     iterate sys n x = x := by
-  induction n with
-  | zero =>
-      rfl
-  | succ n ih =>
-      rw [iterate_succ, ih, h]
+  exact Function.iterate_fixed h n
 
 /-- A trajectory initialized at a fixed point is constant. -/
 theorem fixedPoint_trajectory {s : Shape} {sys : DynamicalSystem s} {x : SpecTensor s}
-    (h : IsFixedPoint sys x) (n : Nat) :
+    (h : Function.IsFixedPt sys.step x) (n : Nat) :
     trajectory sys x n = x := by
   exact fixedPoint_iterate h n
 
-/-- Distance between two states induced by a norm on spec tensors. -/
+/-- Apply the supplied size function to the difference of two states.
+
+No norm laws are assumed here. This defines a metric distance only when the supplied function
+has the required laws; the stability predicates below also retain this explicit parameter. -/
 def distance {s : Shape}
     (norm : ∀ {s : Shape}, SpecTensor s → SpecScalar)
     (x y : SpecTensor s) : SpecScalar :=
   norm (TorchLean.Tensor.subSpec x y)
 
-/-- Contraction property for spec dynamics. -/
+/-- A contraction inequality for the supplied size function.
+
+This predicate requires `factor < 1` but does not impose `0 ≤ factor` or norm laws. Those
+additional hypotheses are needed when relating it to a metric contraction theorem. -/
 def isContractive {s : Shape}
     (sys : DynamicalSystem s)
     (norm : ∀ {s : Shape}, SpecTensor s → SpecScalar)

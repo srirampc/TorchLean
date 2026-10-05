@@ -39,8 +39,8 @@ residual block remain architecture terms that graph passes, exporters, and proof
 Run:
 
 ```bash
-lake exe torchlean graphspec --execution eager
-lake exe torchlean graphspec --execution typed-graph
+scripts/lake.sh exe torchlean graphspec --execution eager
+scripts/lake.sh exe torchlean graphspec --execution typed-graph
 ```
 
 You can also pass the standard TorchLean runtime flags such as `--arithmetic ieee`,
@@ -64,12 +64,12 @@ def usage : String :=
     [ "TorchLean GraphSpec tutorial"
     , ""
     , "Usage:"
-    , "  lake exe torchlean graphspec [options]"
+    , "  scripts/lake.sh exe torchlean graphspec [options]"
     , ""
     , "Options:"
     , "  --arithmetic native|ieee"
     , "  --execution eager|typed-graph"
-    , "  --device auto|cpu|cuda|rocm|metal|wasm|tpu|trainium|custom|external"
+    , "  --device auto|cpu|gpu|cuda|rocm|metal|wasm|tpu|trainium|custom|external"
     , "  --show-backend                    print backend capsules as they execute"
     ]
 
@@ -96,13 +96,18 @@ linear head. The ugly-looking type is the point: the parameter shapes and interm
 arithmetic are checked before the model can be used.
 -/
 def cnn :=
-  NN.GraphSpec.Models.twoConvCnn
-    (inChannels := 1) (firstChannels := 2) (secondChannels := 3) (outputSize := 4)
-    [8, 8] [3, 3] [1, 1] [1, 1] [1, 1] [1, 1]
-    [2, 2] [2, 2] [0, 0] [2, 2] [0, 0]
-    (hPoolKernel := by intro i; fin_cases i <;> decide)
-    (hPoolStride₁ := by intro i; fin_cases i <;> decide)
-    (hPoolStride₂ := by intro i; fin_cases i <;> decide)
+  let features :=
+    NN.GraphSpec.Chain.conv 1 2 [3, 3] [1, 1] [1, 1] [8, 8] >>>
+    NN.GraphSpec.Chain.relu [2, 8, 8] >>>
+    NN.GraphSpec.Chain.maxPool 2 [2, 2] [2, 2] [0, 0] [8, 8]
+      (hKernel := by intro i; fin_cases i <;> decide)
+      (hStride := by intro i; fin_cases i <;> decide) >>>
+    NN.GraphSpec.Chain.conv 2 3 [3, 3] [1, 1] [1, 1] [4, 4] >>>
+    NN.GraphSpec.Chain.relu [3, 4, 4] >>>
+    NN.GraphSpec.Chain.maxPool 3 [2, 2] [2, 2] [0, 0] [4, 4]
+      (hKernel := by intro i; fin_cases i <;> decide)
+      (hStride := by intro i; fin_cases i <;> decide)
+  NN.GraphSpec.Models.cnn features 4
 
 /--
 The minimal DAG-native skip-connection example:
@@ -137,37 +142,20 @@ def dataset : Trainer.Dataset [2] [1] :=
 
 /-- Run the compact MLP lowering/training path. -/
 def runMlpTrainingPath (args : List String) : IO Unit := do
-  let inputWidth : Nat := 2
-  let hiddenWidth : Nat := 3
-  let outputWidth : Nat := 1
-
-  let input : Shape := [inputWidth]
-  let output : Shape := [outputWidth]
-
-  -- GraphSpec is the source architecture. This exact graph also has pure semantics and an
-  -- executable program view; here we ask for the additional `nn.Sequential` training view.
-  let graph :=
-    NN.GraphSpec.Models.mlp
-      (inputWidth := inputWidth) (hiddenWidth := hiddenWidth) (outputWidth := outputWidth)
-
-  match NN.GraphSpec.ToSequential.toSeq (σ := input) (τ := output) graph with
-  | .error msg =>
-      throw <| IO.userError s!"GraphSpec.ToSequential.toSeq failed: {msg}"
-  | .ok seqR =>
-      let network : nn.Sequential [inputWidth] [outputWidth] := by
-        -- `nn.Sequential` is the public API name for the same runtime `Seq` type.
-        simpa using seqR
-      let runConfig ← TorchLean.CLI.Trainer.parseCommandLine exeName
-        (CLI.dropDashDash args)
-        { optimizer := optim.sgd { learningRate := 0.1 } }
-      let trainer :=
-        Trainer.new network <|
-        Trainer.RunConfig.forObjective runConfig .meanSquaredError
-      trainer.printSummary
-      let trained ←
-        trainer.train dataset { steps := 3, logTitle := "GraphSpec tutorial" }
-      IO.println "forward: GraphSpec MLP lowered to TorchLean and executed"
-      trained.printSummary
+  -- Lower the same architecture term shown above; its parameter ABI stays visible in `mlp`.
+  match NN.GraphSpec.ToSequential.toSeq (σ := [2]) (τ := [1]) mlp with
+  | .error message => CLI.orThrow "GraphSpec.ToSequential.toSeq failed" (.error message)
+  | .ok network =>
+    let runConfig ← TorchLean.CLI.Trainer.parseCommandLine exeName
+      (CLI.dropDashDash args)
+      { optimizer := optim.sgd { learningRate := 0.1 } }
+    let trainer :=
+      Trainer.new network <|
+      Trainer.RunConfig.forObjective runConfig .mse
+    trainer.printSummary
+    let trained ← trainer.train dataset { steps := 3, logTitle := "GraphSpec tutorial" }
+    IO.println "forward: GraphSpec MLP lowered to TorchLean and executed"
+    trained.printSummary
 
 /--
 Entry point: print the operation catalogue, then lower a GraphSpec MLP and train it for a few steps.

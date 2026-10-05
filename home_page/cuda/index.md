@@ -5,31 +5,32 @@ layout: default
 
 # CUDA
 
-CUDA runs supported Float32 operations on an NVIDIA GPU without changing the model's tensor types
-or graph. The linked guide chapters give the full provider and trust account; the material below
-collects the commands used to build and test the native path.
+LibTorch evaluates supported Float32 tensor operations on an NVIDIA GPU. TorchLean owns the
+differentiation tape, chooses the local backward operations, and manages their saved tensors.
+Model shapes and graph construction use the same Lean API as CPU execution.
 
 ## Build and Run
 
-Build with CUDA support:
+Select a CUDA-enabled LibTorch SDK and build:
 
 ```bash
-lake -R -K cuda=true build
+export TORCHLEAN_LIBTORCH_HOME=/opt/libtorch
+scripts/lake.sh -Kcuda=true build
 ```
 
-Run a small CUDA example:
+Run a small CUDA example with a built-in dataset:
 
 ```bash
-lake -R -K cuda=true exe torchlean mlp --device cuda --steps 100
+scripts/lake.sh -Kcuda=true exe torchlean quickstart_mlp --device cuda --execution eager --steps 100
 ```
 
 Run the maintained numerical and native-boundary suite:
 
 ```bash
-scripts/lake.sh -R -K cuda=true test
+TORCHLEAN_REQUIRE_CUDA=1 scripts/lake.sh -Kcuda=true test
 ```
 
-Run the CUDA sanitizer suite when changing native kernels:
+Run the CUDA sanitizer suite when changing the native adapter:
 
 ```bash
 scripts/checks/cuda_sanitize_tests.sh --all-tools
@@ -37,31 +38,41 @@ scripts/checks/cuda_sanitize_tests.sh --all-tools
 
 ## What CUDA Covers
 
-The CUDA path is used for supported Float32 tensor operations: elementwise arithmetic, reductions,
-matmul/cuBLAS paths, convolution/pooling kernels, shape/view operations, attention kernels, FFT/FNO
-support where enabled, and model examples that choose `--device cuda`.
+The adapter calls ATen for elementwise arithmetic, reductions, matrix products, convolutions,
+pooling, shape operations, and FFTs. Lean composes attention from matrix products and softmax,
+including its explicit local VJP, and spectral layers from FFT, frequency mixing, and inverse FFT.
+The tape owns their saved buffers. LibTorch supplies the numerical primitives without recording
+an autograd graph. Model examples select this path with `--device cuda`.
+
+Attention materializes full score and probability matrices, so its memory use is quadratic in
+sequence length. It does not select a fused attention implementation.
 
 ## Determinism
 
-Some CUDA reduction and backward paths use floating-point accumulation. Because Float32 addition is
-not associative, atomic accumulation can be schedule-dependent. TorchLean also provides an opt-in
-deterministic reductions mode for the covered reduction, gather/scatter, and pooling-backward paths:
+Float32 addition is not associative, so a reduction's evaluation order can affect its result.
+Request strict deterministic algorithms through the typed LibTorch controls:
 
 ```lean
-Runtime.Autograd.Cuda.Buffer.setDeterministicReductions true
+import NN.Runtime
+
+def enableDeterminism : IO Unit :=
+  Runtime.Autograd.LibTorch.setDeterministic true
 ```
 
-`setDeterministicReductions : Bool → IO Unit` fails when the native runtime did not accept the
-setting. Use this IO setter from application code with `import NN.Runtime`.
+`setDeterministic : Bool → IO Unit` checks the native setting and disables convolution
+benchmarking. A subsequent operation fails if the SDK cannot meet the request.
+Use this IO setter from application code with `import NN.Runtime`.
 
-or:
+The same policy can be selected at process startup:
 
 ```bash
-TORCHLEAN_CUDA_DETERMINISTIC_REDUCTIONS=1 lake -R -K cuda=true exe torchlean mlp --device cuda
+TORCHLEAN_CUDA_DETERMINISTIC_REDUCTIONS=1 \
+  scripts/lake.sh -Kcuda=true exe torchlean quickstart_mlp --device cuda --steps 100
 ```
 
-The setting covers the reduction, gather/scatter, and pooling-backward paths named in the
-[GPU chapter]({{ '/blueprint/Floating-Point-and-Native-Boundaries/From-A-Tensor-Operation-To-A-GPU-Kernel/' | relative_url }}),
-which also explains what the CUDA tests establish. For provider selection, VJP ownership, and
+Deterministic execution does not establish bitwise agreement with a particular FloatLib reference
+or across different SDKs and devices. The
+[GPU chapter]({{ '/blueprint/Floating-Point-and-Native-Boundaries/From-A-Tensor-Operation-To-A-GPU-Kernel/' | relative_url }})
+explains the numerical contracts and what the CUDA tests establish. For provider selection, VJP ownership, and
 assurance policies, read
 [Inside the Backend Planner]({{ '/blueprint/Runtime___-Autograd___-and-Interop/Inside-The-Backend-Planner/' | relative_url }}).

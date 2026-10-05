@@ -31,8 +31,8 @@ title: Tools
     <p>
       TorchLean Verified Examples develops larger case studies outside the core library. They range
       from batch-invariant inference and replayable checkpoints to GPT training and a formal Kimi
-      K3 architecture specification. Each project pairs the runnable experiment with the exact Lean
-      statements proved about it.
+      K3 architecture specification. Each project identifies its Lean statements and remaining
+      runtime assumptions; the Kimi K3 case study formalizes architecture properties.
     </p>
     <nav class="tool-links" aria-label="TorchLean Verified Examples links">
       <a href="https://github.com/Robertboy18/TorchLean-Verified-Examples">

@@ -52,7 +52,7 @@ def rowCoordinate : {s : Shape} → Shape.Coord s → Fin (rowWidth s) → Shape
 /-- Read one last-axis row from a tensor's coordinate function. -/
 def rowVector {s : Shape} (x : Shape.Coord s → ℝ) (p : Shape.Coord s) :
     Vec (rowWidth s) :=
-  softmaxVecOfFun fun j => x (rowCoordinate p j)
+  vecOfFun fun j => x (rowCoordinate p j)
 
 /-- Row selection is linear and continuous on the finite coordinate space. -/
 def rowCLM {s : Shape} (p : Shape.Coord s) :
@@ -83,9 +83,9 @@ theorem softmaxVec_one (x : Vec 1) (j : Fin 1) : softmaxVec x j = 1 := by
 /-- A rank-one tensor's selected row is its ordinary Euclidean vectorization. -/
 theorem rowVector_vector {n : Nat} (x : Tensor ℝ [n]) (p : Shape.Coord [n]) :
     rowVector (fun q => x q) p = getScalarE x := by
-  change (softmaxVecOfFun fun j : Fin n => x (j, PUnit.unit)) = getScalarE x
+  change (vecOfFun fun j : Fin n => x (j, PUnit.unit)) = getScalarE x
   ext j
-  rw [softmaxVecOfFun_apply, getScalarE_ofLp, Tensor.getScalar_eq_apply]
+  rw [vecOfFun_apply, getScalarE_ofLp, Tensor.getScalar_eq_apply]
 
 /-- Selecting a row after taking a leading slice selects the same coordinates. -/
 theorem rowVector_unstack {n m : Nat} {s : Shape} (x : Tensor ℝ (.dim n (.dim m s)))
@@ -93,7 +93,7 @@ theorem rowVector_unstack {n m : Nat} {s : Shape} (x : Tensor ℝ (.dim n (.dim 
     rowVector (fun q => x q) p =
       rowVector (fun q => x.unstack p.1 q) p.2 := by
   ext j
-  simp only [rowVector, softmaxVecOfFun_apply, rowCoordinate]
+  simp only [rowVector, vecOfFun_apply, rowCoordinate]
   exact (TorchLean.Tensor.Internal.Rep.unstack_apply x p.1 _).symm
 
 /--

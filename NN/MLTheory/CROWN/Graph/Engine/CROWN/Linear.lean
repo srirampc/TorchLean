@@ -60,8 +60,6 @@ def affAdd {n m : Nat} (a1 a2 : AffineVec α n m) : AffineVec α n m :=
 def affSub {n m : Nat} (a1 a2 : AffineVec α n m) : AffineVec α n m :=
   { A := Tensor.subSpec a1.A a2.A, c := Tensor.subSpec a1.c a2.c }
 
--- Affine helpers for linear/matmul are handled by the explicit transfer rules below.
-
 /--
 Flatten a typed convolution into the affine map it denotes.
 
@@ -69,33 +67,31 @@ The CROWN pass uses this when a convolution is linear in the selected input. Kee
 here lets convolution share the same affine machinery as linear and matmul nodes.
 
 -/
-def affOfConv (config : NN.IR.ConvParams α) :
-    let inShape := Shape.ofList (config.inChannels :: Tensor.to config.inputSpatial (List Nat))
-    let outSpatial :=
-      Spec.convOutSpatial config.inputSpatial config.kernel config.stride config.padding
-    let outShape := Shape.ofList (config.outChannels :: Tensor.to outSpatial (List Nat))
-    AffineVec α inShape.size outShape.size :=
-  let inShape := Shape.ofList (config.inChannels :: Tensor.to config.inputSpatial (List Nat))
+@[expose] def affOfConv (config : NN.IR.ConvParams α) (leading : Shape) :
+    AffineVec α (config.input leading).size (config.output leading).size :=
   let outSpatial :=
-    Spec.convOutSpatial config.inputSpatial config.kernel config.stride config.padding
-  let outShape := Shape.ofList (config.outChannels :: Tensor.to outSpatial (List Nat))
+    Spec.convOutSpatialDilated config.inputSpatial config.kernel config.stride config.dilation
+      config.padding config.paddingAfter
   let W :=
-    NN.MLTheory.CROWN.convLinearMatrix (α := α) (inSpatial := config.inputSpatial) config.spec
-  let b := NN.MLTheory.CROWN.convBiasBroadcast (α := α) (outSpatial := outSpatial) config.spec.bias
+    NN.MLTheory.CROWN.convLinearMatrix (α := α) (inSpatial := config.inputSpatial)
+      config.spec config.dilation config.paddingAfter config.groups leading
+  let b := NN.MLTheory.CROWN.convBiasBroadcast (α := α) (outSpatial := outSpatial)
+    config.spec.bias leading
   AffineVec.ofLinear (α:=α)
-    (inDim := inShape.size)
-    (outDim := outShape.size)
+    (inDim := (config.input leading).size)
+    (outDim := (config.output leading).size)
     W b
 
 /-!
 For a chosen flattened input node `ctx.inputId`, the pass computes a pair of affine forms
-`loAff(x) ≤ node(x) ≤ hiAff(x)` for each supported node.  The transfer rules below use the usual
-CROWN/DeepPoly ingredients:
+`loAff(x) ≤ node(x) ≤ hiAff(x)` for each supported node.
 
-- Linear layers use sign-splitting (`W⁺/W⁻`) to combine parent bounds.
-- ReLU uses the standard triangle upper bound and a simple evidence-based lower choice (0 vs x).
-- Exp/log use secant/tangent bounds (convex/concave).
-- Softmax and LayerNorm use conservative last-axis relaxations.
+- Linear, matmul, convolution and eval-mode BatchNorm nodes use sign-splitting (`W⁺/W⁻`) to
+  combine parent bounds.
+- Elementwise and batched products use one McCormick plane per product term.
+- Nonlinear activations, softmax and LayerNorm keep their directed IBP enclosure as constant
+  affine bounds in the forward pass; the ReLU triangle relaxation is used only by the backward
+  alpha entry point.
 
 Unsupported axes or shape mismatches fall back to constant affine bounds derived from the IBP box.
 -/
@@ -116,15 +112,21 @@ def boundsConst (inputDim outDim : Nat) (lo hi : Tensor α [outDim]) :
 
 /-- Algebraic composition of affine bounds through `W*x + b` on exact scalar backends.
 
+If the parent has affine bounds `ℓ(x) = Aₗ x + cₗ ≤ v ≤ u(x) = Aᵤ x + cᵤ` in the global input `x`,
+the sign split `W = W⁺ + W⁻` (`W⁺ ≥ 0`, `W⁻ ≤ 0`) gives the componentwise enclosure
+`W⁺ ℓ(x) + W⁻ u(x) + b ≤ W v + b ≤ W⁺ u(x) + W⁻ ℓ(x) + b`, the same rule IBP uses on boxes.
+This is also the transfer rule replayed by the α-CROWN certificate checker.
+
 Rounded backends must account for coefficient errors as well as final evaluation errors.
 The graph runner selects directed backward propagation for those backends.
 -/
+@[expose]
 def propagateLinearBounds
   {n m : Nat}
   (W : Tensor α [m, n])
   (b : Tensor α [m])
   (xB : FlatAffineBounds α)
-  (hout : xB.outDim = n) : FlatAffineBounds α := by
+  (hout : xB.outDim = n) : FlatAffineBounds α :=
   -- Align parent affines to outDim=n.
   let xLo : AffineVec α xB.inDim n :=
     castAffineOut (α:=α) (n:=xB.inDim) (m:=xB.outDim) (m':=n) hout xB.loAff
@@ -146,57 +148,9 @@ def propagateLinearBounds
       (Tensor.addSpec (Spec.matVecMulSpec (α:=α) Wpos xLo.c) (Spec.matVecMulSpec (α:=α)
         Wneg xHi.c))
       b
-  exact
-    { inDim := xB.inDim
-      outDim := m
-      loAff := { A := A_lo, c := c_lo }
-      hiAff := { A := A_hi, c := c_hi } }
-
-/-- Compose an affine form with a diagonal affine relaxation `slope * x + bias`. -/
-def affApplyDiag {inDim outDim : Nat}
-  (slopes bias : Tensor α [outDim])
-  (aff : AffineVec α inDim outDim) : AffineVec α inDim outDim :=
-  let A' :=
-    Tensor.dim fun i =>
-      Tensor.dim fun j =>
-        Tensor.scalar (Tensor.getScalar slopes i * Spec.get2 aff.A i j)
-  let c' :=
-    Tensor.dim fun i =>
-      Tensor.scalar
-        (Tensor.getScalar slopes i * Tensor.getScalar aff.c i + Tensor.getScalar bias i)
-  { A := A', c := c' }
-
-/-- Apply a diagonal relaxation for an upper bound, selecting parent rows by slope sign. -/
-def affApplyDiagSignedUpper {inDim outDim : Nat}
-  (slopes bias : Tensor α [outDim])
-  (xLo xHi : AffineVec α inDim outDim) : AffineVec α inDim outDim :=
-  let A' :=
-    Tensor.dim fun i =>
-      let si := Tensor.getScalar slopes i
-      let rows := if decide (si > 0) then xHi.A else xLo.A
-      Tensor.dim fun j => Tensor.scalar (si * Spec.get2 rows i j)
-  let c' :=
-    Tensor.dim fun i =>
-      let si := Tensor.getScalar slopes i
-      let constants := if decide (si > 0) then xHi.c else xLo.c
-      Tensor.scalar (si * Tensor.getScalar constants i + Tensor.getScalar bias i)
-  { A := A', c := c' }
-
-/-- Apply a diagonal relaxation for a lower bound, selecting parent rows by slope sign. -/
-def affApplyDiagSignedLower {inDim outDim : Nat}
-  (slopes bias : Tensor α [outDim])
-  (xLo xHi : AffineVec α inDim outDim) : AffineVec α inDim outDim :=
-  let A' :=
-    Tensor.dim fun i =>
-      let si := Tensor.getScalar slopes i
-      let rows := if decide (si > 0) then xLo.A else xHi.A
-      Tensor.dim fun j => Tensor.scalar (si * Spec.get2 rows i j)
-  let c' :=
-    Tensor.dim fun i =>
-      let si := Tensor.getScalar slopes i
-      let constants := if decide (si > 0) then xLo.c else xHi.c
-      Tensor.scalar (si * Tensor.getScalar constants i + Tensor.getScalar bias i)
-  { A := A', c := c' }
-
+  { inDim := xB.inDim
+    outDim := m
+    loAff := { A := A_lo, c := c_lo }
+    hiAff := { A := A_hi, c := c_hi } }
 
 end NN.MLTheory.CROWN.Graph

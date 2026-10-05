@@ -10,6 +10,10 @@ This layer is independent of any particular runtime tape, typed graph, CUDA kern
 provider. It is the mathematical contract that runtime code should implement or reuse so executable
 training stays aligned with the spec.
 
+The record contains no proof that its backward function is the derivative of its forward
+function. Derivative theorems carry their own scalar and domain hypotheses; selected subgradients
+and floating-point backward rules can use the same interface.
+
 PyTorch analogy:
 
 - `OpSpec.forward` is like `torch.autograd.Function.forward`.

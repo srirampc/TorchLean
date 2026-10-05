@@ -97,15 +97,7 @@ $$
 -/
 def tensorDistance (norm : ∀ {s : Shape}, Tensor α s → α) {s : Shape}
     (t1 t2 : Tensor α s) : α :=
-  norm (tensorSub t1 t2)
-where
-  tensorSub {s : Shape} (t1 t2 : Tensor α s) : Tensor α s :=
-    TorchLean.Tensor.subSpec t1 t2
-
-/-- The compatibility subtraction helper delegates to the shared tensor subtraction. -/
-@[simp] theorem tensor_distance_tensor_sub_eq_sub_spec {s : Shape} (t1 t2 : Tensor α s) :
-    tensorDistance.tensorSub t1 t2 = TorchLean.Tensor.subSpec t1 t2 := by
-  rfl
+  norm (TorchLean.Tensor.subSpec t1 t2)
 
 /--
 Distance is the norm of the library difference: the form every downstream robustness proof uses.
@@ -113,7 +105,7 @@ Distance is the norm of the library difference: the form every downstream robust
 @[simp] theorem tensor_distance_eq_norm_sub_spec (norm : ∀ {s : Shape}, Tensor α s → α) {s : Shape}
     (t1 t2 : Tensor α s) :
     tensorDistance (α := α) norm t1 t2 = norm (TorchLean.Tensor.subSpec t1 t2) := by
-  simp [tensorDistance]
+  rfl
 
 /--
 Closed $\varepsilon$-ball around `center` for the given norm:
@@ -134,7 +126,7 @@ Lipschitz continuity (global), phrased using `tensorDistance`.
 If $f$ is $L$-Lipschitz and $d_1(x_0,x)\leq\varepsilon$, then
 $d_2(f(x_0),f(x))\leq L\varepsilon$.
 -/
-def isLipschitzContinuous {s₁ s₂ : Shape}
+def IsLipschitzContinuous {s₁ s₂ : Shape}
     (f : Tensor α s₁ → Tensor α s₂)
     (norm₁ : ∀ {s : Shape}, Tensor α s → α)
     (norm₂ : ∀ {s : Shape}, Tensor α s → α)
@@ -198,12 +190,12 @@ Contraction mapping under a norm: $f$ shrinks distances by a factor $c<1$.
 This is a standard sufficient condition for convergence of iterated dynamics and robustness of
 fixed points.
 -/
-def isContractive {s : Shape}
+def IsContractive {s : Shape}
     (f : Tensor α s → Tensor α s)
     (norm : ∀ {s : Shape}, Tensor α s → α)
     (contractionFactor : α) : Prop :=
   contractionFactor < 1 ∧
-  isLipschitzContinuous f norm norm contractionFactor
+  IsLipschitzContinuous f norm norm contractionFactor
 
 /--
 Sensitivity ratio for a specific additive perturbation.
@@ -223,7 +215,5 @@ def sensitivity {s₁ s₂ : Shape}
   let outputChange := tensorDistance norm₂ (f x) (f (TorchLean.Tensor.addSpec x perturbation))
   let inputChange := norm₁ perturbation
   outputChange / inputChange
-
-
 
 end NN.MLTheory.Robustness.Spec

@@ -44,24 +44,28 @@ public import NN.Proofs.Autograd.Tape.Ops.Norm.BatchNorm
 public import NN.Proofs.Autograd.Tape.Ops.Norm.LayerNorm
 public import NN.Proofs.Autograd.Tape.Ops.Norm.LayerNormBounds
 public import NN.Proofs.Autograd.Tape.Ops.Norm.LayerNormRuntime
+public import NN.Proofs.Autograd.Tape.Ops.Norm.LayerNormSecondBounds
 public import NN.Proofs.Autograd.Training.StepAlgebra
+public import NN.Proofs.Backend.Attention
+public import NN.Proofs.Backend.Grouping
+public import NN.Proofs.Backend.NumericalPolicy
 public import NN.Proofs.Gradients.Activation
 public import NN.Proofs.Gradients.Linear
 public import NN.Proofs.Models
 public import NN.Proofs.Probability
-public import NN.Proofs.RuntimeApprox
+public import NN.Proofs.RL.Algorithms.DQN
 public import NN.Proofs.RL.Boundary
-public import NN.Proofs.RL.Gymnasium
 public import NN.Proofs.RL.Core
-public import NN.Proofs.RL.Replay
 public import NN.Proofs.RL.Environment
 public import NN.Proofs.RL.Envs.GridWorld
-public import NN.Proofs.RL.Algorithms.DQN
+public import NN.Proofs.RL.FiniteStochasticMDP
+public import NN.Proofs.RL.Floats.CheckedRuntime
+public import NN.Proofs.RL.Floats.IEEE32Exec
+public import NN.Proofs.RL.Gymnasium
 public import NN.Proofs.RL.MDP
 public import NN.Proofs.RL.MarkovMDP
-public import NN.Proofs.RL.FiniteStochasticMDP
-public import NN.Proofs.RL.Floats.IEEE32Exec
-public import NN.Proofs.RL.Floats.CheckedRuntime
+public import NN.Proofs.RL.Replay
+public import NN.Proofs.RuntimeApprox
 public import NN.Proofs.Tensor
 public import NN.Proofs.Verification
 
@@ -78,13 +82,18 @@ Proof landmarks:
 - real-analysis and numerics helper theorems: `NN.Proofs.Analysis`,
 - analytic autograd correctness fragments: `NN.Proofs.Autograd.FDeriv.*`,
 - tape/DAG reverse-mode correctness fragments: `NN.Proofs.Autograd.Tape.*`,
+- backend selection and lossless contract grouping: `NN.Proofs.Backend.*`,
 - model-level invariants: `NN.Proofs.Models`,
 - probability-kernel facts: `NN.Proofs.Probability`,
 - runtime-approximation bounds: `NN.Proofs.RuntimeApprox.*`,
 - verification envelopes: `NN.Proofs.Verification`.
 
-Backend contract data lives under `NN.Backend`. It is not re-exported here until the proof layer has
-semantic/refinement theorems rather than planner metadata.
+Backend proofs establish properties of the production Lean planner and its declared contracts.
+Successful plans respect the requested operations, registry, availability, and policy.
+Coalescing preserves node order, multiplicity, and complete capsules, so group acceptance
+applies to every original node. The numerical certificate consumer retains its selected capsule's
+reduction-policy guard. These proofs do not establish correctness of native kernels, numerical
+algorithms, or the FFI.
 
 References:
 - PyTorch autograd background:

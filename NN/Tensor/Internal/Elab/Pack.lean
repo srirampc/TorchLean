@@ -95,109 +95,18 @@ private def checkedPackFromDimensionsExpr
   return checked
 
 /--
-Resolve the optional unpack dimension and retain every arithmetic fact needed
-to justify the exact packed-axis partition.
--/
-private def resolveSymbolicUnpackShapes (packedAxisLength : Expr)
-    (requestedShapes : List (List (Option Expr))) :
-    TermElabM (List (List Expr) × List (Expr × Expr)) := do
-  let inferredShape? :=
-    requestedShapes.find? fun shape =>
-      shape.any fun dimension => dimension.isNone
-  match inferredShape? with
-  | none =>
-      let resolvedShapes :=
-        requestedShapes.map fun shape => shape.filterMap id
-      let segmentLengths ←
-        resolvedShapes.mapM fun shape => natProductExpr shape
-      let totalLength ← natSumExpr segmentLengths
-      let partition ← mkEq totalLength packedAxisLength
-      let hPartition ←
-        certifyGeneratedInvariant
-          "that the requested unpack segments partition the packed axis"
-          partition
-      return (resolvedShapes, [(partition, hPartition)])
-  | some inferredShape =>
-      let knownShapes :=
-        requestedShapes.filter fun shape =>
-          shape.all fun dimension => dimension.isSome
-      let knownSegmentLengths ←
-        knownShapes.mapM fun shape =>
-          natProductExpr (shape.filterMap id)
-      let knownTotal ← natSumExpr knownSegmentLengths
-      let knownDimensions := inferredShape.filterMap id
-      let explicitResidual? ←
-        explicitResidual? packedAxisLength knownSegmentLengths
-      let explicitInferred? ←
-        match explicitResidual? with
-        | none => pure none
-        | some residual =>
-            explicitMissingFactor? residual knownDimensions
-      if let some inferred := explicitInferred? then
-        let resolvedShapes :=
-          requestedShapes.map fun shape =>
-            shape.map fun dimension => dimension.getD inferred
-        let segmentLengths ←
-          resolvedShapes.mapM fun shape => natProductExpr shape
-        let totalLength ← natSumExpr segmentLengths
-        let partition ← mkEq totalLength packedAxisLength
-        let hPartition ←
-          certifyGeneratedInvariant
-            "that the explicitly inferred unpack segments partition the packed axis"
-            partition
-        return (resolvedShapes, [(partition, hPartition)])
-      let knownTotalBound ← mkAppM ``LE.le #[knownTotal, packedAxisLength]
-      let hKnownTotalBound ←
-        certifyGeneratedInvariant
-          "that the known unpack segments fit inside the packed axis"
-          knownTotalBound
-      let knownFactor ← natProductExpr knownDimensions
-      let knownFactorPositive ←
-        mkAppM ``LT.lt #[mkNatLit 0, knownFactor]
-      let hKnownFactorPositive ←
-        certifyGeneratedInvariant
-          "that the known factor around the inferred unpack dimension is positive"
-          knownFactorPositive
-      let residual ←
-        mkAppM ``Nat.sub #[packedAxisLength, knownTotal]
-      let remainder ← mkAppM ``Nat.mod #[residual, knownFactor]
-      let divisible ← mkEq remainder (mkNatLit 0)
-      let hDivisible ←
-        certifyGeneratedInvariant
-          "that the remaining packed length is divisible by the known factor"
-          divisible
-      let inferred ← mkAppM ``Nat.div #[residual, knownFactor]
-      let resolvedShapes :=
-        requestedShapes.map fun shape =>
-          shape.map fun dimension => dimension.getD inferred
-      let segmentLengths ←
-        resolvedShapes.mapM fun shape => natProductExpr shape
-      let totalLength ← natSumExpr segmentLengths
-      let partition ← mkEq totalLength packedAxisLength
-      let hPartition ←
-        certifyGeneratedInvariant
-          "that the inferred unpack segments partition the packed axis"
-          partition
-      return (resolvedShapes,
-        [(knownTotalBound, hKnownTotalBound),
-         (knownFactorPositive, hKnownFactorPositive),
-         (divisible, hDivisible),
-         (partition, hPartition)])
-
-/--
 Construct symbolic unpack metadata while using a concrete rank witness for
 the parser and structural checker.
 -/
 private def symbolicCheckedUnpackExpr (source : String)
     (pattern : Syntax.PackPattern) (packedDimensions : List Expr)
-    (requestedShapes : List (List (Option Expr))) :
+    (requestedShapes : List (List Expr)) :
     TermElabM (Expr × Expr × List (Expr × Expr)) := do
   let expectedRank :=
     pattern.before.length + 1 + pattern.after.length
   let dummyRequestedShapes : Check.RequestedShapes :=
     requestedShapes.map fun shape =>
-      shape.map fun dimension =>
-        if dimension.isNone then -1 else 1
+      shape.map fun _ => 1
   if packedDimensions.length != expectedRank then
     match
         Check.checkUnpack pattern
@@ -222,14 +131,18 @@ private def symbolicCheckedUnpackExpr (source : String)
         diagnostic.message diagnostic.span
   | .ok _ => pure ()
   let packedAxisLength := packedDimensions[pattern.before.length]!
-  let (resolvedStarShapes, arithmeticFacts) ←
-    resolveSymbolicUnpackShapes packedAxisLength requestedShapes
+  let segmentLengths ← requestedShapes.mapM fun shape => natProductExpr shape
+  let totalLength ← natSumExpr segmentLengths
+  let partition ← mkEq totalLength packedAxisLength
+  let hPartition ←
+    certifyGeneratedInvariant
+      "that the unpack metadata partitions the packed axis" partition
   let leadingDimensions :=
     packedDimensions.take pattern.before.length
   let trailingDimensions :=
     packedDimensions.drop (pattern.before.length + 1)
   let inputDimensions :=
-    resolvedStarShapes.map fun starShape =>
+    requestedShapes.map fun starShape =>
       leadingDimensions ++ starShape ++ trailingDimensions
   let checked ←
     checkedPackFromDimensionsExpr pattern inputDimensions leadingDimensions
@@ -251,34 +164,7 @@ private def symbolicCheckedUnpackExpr (source : String)
     certifyGeneratedInvariant
       "that unpack metadata reconstructs the packed tensor shape"
       outputShapeAgreement
-  return (checked, hOutputShape, arithmeticFacts)
-
-/--
-Transport a packed tensor across the certified equality between its declared
-shape and the shape reconstructed by unpack metadata.
--/
-private def castTensorToShape
-    (scalarType storage packedTensor shapeEquality : Expr) : MetaM Expr := do
-  let equalityType ← withTransparency .reducible <| whnf (← inferType shapeEquality)
-  let some (_, outputShape, _) := equalityType.eq?
-    | throwError "internal error: expected an unpack shape equality"
-  let tensorConstant := Lean.mkConst ``Rep [← getDecLevel scalarType]
-  let outputTensorType :=
-    mkAppN tensorConstant #[scalarType, outputShape, storage]
-  let packedTensorType ← inferType packedTensor
-  if ← withTransparency .reducible <|
-      isDefEq packedTensorType outputTensorType then
-    return packedTensor
-  let shapeType ← mkAppM ``List #[mkConst ``Nat]
-  let tensorFamily ←
-    withLocalDeclD `shape shapeType fun shape => do
-      let tensorType :=
-        mkAppN tensorConstant #[scalarType, shape, storage]
-      mkLambdaFVars #[shape] tensorType
-  let reversedEquality ← mkAppM ``Eq.symm #[shapeEquality]
-  let tensorTypeEquality ←
-    mkAppM ``congrArg #[tensorFamily, reversedEquality]
-  mkAppM ``cast #[tensorTypeEquality, packedTensor]
+  return (checked, hOutputShape, [(partition, hPartition)])
 
 /--
 Retain generated arithmetic certificates as nondependent lets in the emitted
@@ -437,7 +323,7 @@ def elabPack : TermElab := fun stx expectedType? => withRef stx do
           mkLetFVars (generalizeNondepLet := false) #[checked] result
 
 /--
-Elaborate unpack metadata, infer its optional `-1` dimension, and return the
+Elaborate the stored component shapes and return the
 heterogeneous component family certified by the reconstructed packed shape.
 -/
 @[term_elab TorchLean.Tensor.unpackStx]
@@ -469,7 +355,7 @@ def elabUnpack : TermElab := fun stx expectedType? => withRef stx do
         "packed component shapes must have a statically known list structure"
   let integerListType ← mkAppM ``List #[mkConst ``Int]
   let mut integerShapeExpressions : List Expr := []
-  let mut symbolicRequestedShapes : List (List (Option Expr)) := []
+  let mut symbolicRequestedShapes : List (List Expr) := []
   for naturalShape in naturalShapeExpressions do
     let naturalShapeList ← mkAppM ``Spec.Shape.toList #[naturalShape]
     let some shapeDimensions ← staticListElements? naturalShapeList
@@ -482,7 +368,7 @@ def elabUnpack : TermElab := fun stx expectedType? => withRef stx do
       mkListLit (mkConst ``Int) integerDimensions
     integerShapeExpressions := integerShapeExpressions.concat integerShape
     symbolicRequestedShapes :=
-      symbolicRequestedShapes.concat (shapeDimensions.map some)
+      symbolicRequestedShapes.concat shapeDimensions
   let requestedShapes ←
     mkListLit integerListType integerShapeExpressions
   let source := sourceSyntax.getString
@@ -521,7 +407,7 @@ def elabUnpack : TermElab := fun stx expectedType? => withRef stx do
             symbolicRequestedShapes
         pure (checked, hOutputShape, arithmeticFacts, none, none)
   let packedTensor ←
-    castTensorToShape scalarType storage packedTensor hOutputShape
+    mkAppM ``Rep.castShape #[← mkAppM ``Eq.symm #[hOutputShape], packedTensor]
   let result ←
     match checkedValue? with
     | some checkedValue =>

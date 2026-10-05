@@ -11,10 +11,9 @@ public import NN.MLTheory.Proofs.ReLU.Bridge.ReLUMlpBridge
 /-!
 # Approximating multiplication with a 2-layer ReLU MLP (2D box)
 
-This file gives a constructive, fully proved approximation result:
-on $[-M,M]^2$, the function $(x_0,x_1)\mapsto x_0x_1$ can be uniformly approximated by a
-  single-hidden-layer
-ReLU MLP on `Tensor ℝ [2]`.
+This file gives a constructive, fully proved approximation result: on $[-M,M]^2$, the function
+$(x_0,x_1)\mapsto x_0x_1$ can be uniformly approximated by a single-hidden-layer ReLU MLP on
+`Tensor ℝ [2]`.
 -/
 
 @[expose] public section
@@ -66,36 +65,21 @@ theorem dot_wMinus (x : Tensor ℝ [2]) : dot wMinus x = firstCoordinate x - sec
 theorem mul_identity (x y : ℝ) : x * y = ((x + y) * (x + y) - (x - y) * (x - y)) / 4 := by
   ring
 
-/-- Unpack the defining bounds of membership in `box M`. -/
-theorem box_bounds {M : ℝ} (_hM : 0 ≤ M) {x : Tensor ℝ [2]} (hx : x ∈ box M) :
-    firstCoordinate x ∈ Set.Icc (-M) M ∧ secondCoordinate x ∈ Set.Icc (-M) M := hx
-
 /-- If $x\in\operatorname{box}(M)$, then $x_0+x_1\in[-2M,2M]$. -/
-theorem sum_mem_Icc {M : ℝ} (_hM : 0 ≤ M) {x : Tensor ℝ [2]} (hx : x ∈ box M) :
+theorem sum_mem_Icc {M : ℝ} {x : Tensor ℝ [2]} (hx : x ∈ box M) :
     dot wPlus x ∈ Set.Icc (-2*M) (2*M) := by
-  have hx0 := hx.1
-  have hx1 := hx.2
-  have hx0l : -M ≤ firstCoordinate x := hx0.1
-  have hx0u : firstCoordinate x ≤ M := hx0.2
-  have hx1l : -M ≤ secondCoordinate x := hx1.1
-  have hx1u : secondCoordinate x ≤ M := hx1.2
-  -- bounds on sum
-  have hl : -(2*M) ≤ firstCoordinate x + secondCoordinate x := by linarith
-  have hu : firstCoordinate x + secondCoordinate x ≤ 2*M := by linarith
-  simpa [dot_wPlus] using And.intro hl hu
+  have hx0 : firstCoordinate x ∈ Set.Icc (-M) M := hx.1
+  have hx1 : secondCoordinate x ∈ Set.Icc (-M) M := hx.2
+  rw [dot_wPlus]
+  exact ⟨by linarith [hx0.1, hx1.1], by linarith [hx0.2, hx1.2]⟩
 
 /-- If $x\in\operatorname{box}(M)$, then $x_0-x_1\in[-2M,2M]$. -/
-theorem diff_mem_Icc {M : ℝ} (_hM : 0 ≤ M) {x : Tensor ℝ [2]} (hx : x ∈ box M) :
+theorem diff_mem_Icc {M : ℝ} {x : Tensor ℝ [2]} (hx : x ∈ box M) :
     dot wMinus x ∈ Set.Icc (-2*M) (2*M) := by
-  have hx0 := hx.1
-  have hx1 := hx.2
-  have hx0l : -M ≤ firstCoordinate x := hx0.1
-  have hx0u : firstCoordinate x ≤ M := hx0.2
-  have hx1l : -M ≤ secondCoordinate x := hx1.1
-  have hx1u : secondCoordinate x ≤ M := hx1.2
-  have hl : -(2*M) ≤ firstCoordinate x - secondCoordinate x := by linarith
-  have hu : firstCoordinate x - secondCoordinate x ≤ 2*M := by linarith
-  simpa [dot_wMinus] using And.intro hl hu
+  have hx0 : firstCoordinate x ∈ Set.Icc (-M) M := hx.1
+  have hx1 : secondCoordinate x ∈ Set.Icc (-M) M := hx.2
+  rw [dot_wMinus]
+  exact ⟨by linarith [hx0.1, hx1.2], by linarith [hx0.2, hx1.1]⟩
 
 /-- Lipschitz bound for `square` on $[-R,R]$: $|x^2-y^2|\leq 2R|x-y|$. -/
 theorem square_lipschitz_Icc {R : ℝ} (_hR : 0 ≤ R) :
@@ -145,7 +129,7 @@ noncomputable def mat1Get {n : Nat} (A : Tensor ℝ [1, n]) (j : Fin n) : ℝ :=
   Spec.get2 A ⟨0, by decide⟩ j
 
 /-- `mat1Get` agrees with the `Tensor.matrix` constructor. -/
-theorem singleRowMatrix_get_matrix {n : Nat} (f : Fin 1 → Fin n → ℝ) (j : Fin n) :
+theorem mat1Get_matrix {n : Nat} (f : Fin 1 → Fin n → ℝ) (j : Fin n) :
     mat1Get (Tensor.matrix (m := 1) (n := n) f) j = f 0 j := by
   simp [mat1Get, Tensor.matrix, Spec.get2]
 
@@ -184,7 +168,7 @@ theorem getScalar_relu {n : Nat} (z : Tensor ℝ [n]) (i : Fin n) :
   simp [Activation.reluSpec, relu]
 
 /-- Matrix-vector multiplication for a `1 × n` matrix produces a single scalar coordinate. -/
-theorem mat_vec_mul_spec_oneRow {n : Nat} (A : Tensor ℝ [1, n]) (v : Tensor ℝ [n]) :
+theorem matVecMulSpec_one_row {n : Nat} (A : Tensor ℝ [1, n]) (v : Tensor ℝ [n]) :
     Spec.matVecMulSpec A v =
       Tensor.dim (fun _ : Fin 1 =>
         Tensor.scalar (∑ j : Fin n, mat1Get A j * TorchLean.Tensor.getScalar v j)) := by
@@ -195,12 +179,12 @@ theorem mat_vec_mul_spec_oneRow {n : Nat} (A : Tensor ℝ [1, n]) (v : Tensor �
   simp [Spec.getScalar_mat_vec_mul_spec, mat1Get]
 
 /--
-Expand `mlp_eval_nd` into “bias + sum over hidden units” form.
+Expand `mlpEval` into “bias + sum over hidden units” form.
 
 This is the main normalization lemma used to prove that `appendLinearSpec` together with
 `combineOutput` implements affine combinations of subnetworks.
 -/
-theorem mlp_eval_nd_eq_bias_sum
+theorem mlp_eval_eq_bias_sum
     {inDim hidDim : Nat} (l1 : LinearSpec ℝ inDim hidDim) (l2 : LinearSpec ℝ hidDim 1)
     (x : Tensor ℝ [inDim]) :
     mlpEval (n := inDim) (hidDim := hidDim) l1 l2 x =
@@ -222,7 +206,7 @@ theorem mlp_eval_nd_eq_bias_sum
               TorchLean.Tensor.getScalar
                 (Activation.reluSpec (α := ℝ) (s := .dim hidDim .scalar)
                   (Spec.linearSpec (α := ℝ) l1 x)) j)) := by
-    simpa using mat_vec_mul_spec_oneRow (A := l2.weights)
+    simpa using matVecMulSpec_one_row (A := l2.weights)
       (v := Activation.reluSpec (α := ℝ) (s := .dim hidDim .scalar) (Spec.linearSpec (α := ℝ) l1
         x))
   change extractScalarOutput
@@ -236,7 +220,7 @@ theorem mlp_eval_nd_eq_bias_sum
   simp [getScalar_relu, add_comm]
 
 /-- Selecting the left block of a linear spec appended via `appendLinearSpec`. -/
-theorem getScalar_linear_spec_append_left
+theorem getScalar_linearSpec_append_left
     {inDim m n : Nat} (l1a : LinearSpec ℝ inDim m) (l1b : LinearSpec ℝ inDim n)
     (x : Tensor ℝ [inDim]) (i : Fin m) :
     TorchLean.Tensor.getScalar
@@ -252,7 +236,7 @@ theorem getScalar_linear_spec_append_left
     Fin.append]
 
 /-- Selecting the right block of a linear spec appended via `appendLinearSpec`. -/
-theorem getScalar_linear_spec_append_right
+theorem getScalar_linearSpec_append_right
     {inDim m n : Nat} (l1a : LinearSpec ℝ inDim m) (l1b : LinearSpec ℝ inDim n)
     (x : Tensor ℝ [inDim]) (i : Fin n) :
     TorchLean.Tensor.getScalar
@@ -288,10 +272,10 @@ theorem mlp_eval_append_linear
   -- appending hidden units + picking an output layer via `combineOutput` implements an affine
   -- combination of two subnetworks’ scalar outputs.
   -- Expand all three evaluations into “bias + sum of hidden units”.
-  rw [mlp_eval_nd_eq_bias_sum (l1 := appendLinearSpec (inDim := inDim) l1a l1b)
+  rw [mlp_eval_eq_bias_sum (l1 := appendLinearSpec (inDim := inDim) l1a l1b)
         (l2 := combineOutput (m := m) (n := n) α β γ l2a l2b) (x := x)]
-  rw [mlp_eval_nd_eq_bias_sum (l1 := l1a) (l2 := l2a) (x := x)]
-  rw [mlp_eval_nd_eq_bias_sum (l1 := l1b) (l2 := l2b) (x := x)]
+  rw [mlp_eval_eq_bias_sum (l1 := l1a) (l2 := l2a) (x := x)]
+  rw [mlp_eval_eq_bias_sum (l1 := l1b) (l2 := l2b) (x := x)]
   -- Split the combined sum over `Fin (m+n)` into left/right parts.
   -- The combined weights are `Fin.addCases` and the combined hidden pre-activations come from
   -- `appendLinearSpec`.
@@ -318,9 +302,9 @@ theorem mlp_eval_append_linear
               (Spec.linearSpec (α := ℝ) (appendLinearSpec (inDim := inDim) l1a l1b) x) j)))
     -- Rewrite the `castAdd` / `natAdd` branches using the selector lemmas above.
     -- `combineOutput` uses `Fin.addCases` in its weights.
-    simpa [combineOutput, singleRowMatrix_get_matrix, relu,
-      getScalar_linear_spec_append_left (l1a := l1a) (l1b := l1b) (x := x),
-      getScalar_linear_spec_append_right (l1a := l1a) (l1b := l1b) (x := x),
+    simpa [combineOutput, mat1Get_matrix, relu,
+      getScalar_linearSpec_append_left (l1a := l1a) (l1b := l1b) (x := x),
+      getScalar_linearSpec_append_right (l1a := l1a) (l1b := l1b) (x := x),
       Fin.addCases_left, Fin.addCases_right, mul_assoc, mul_left_comm, mul_comm] using hsum
   -- Factor out the scalars `α`/`β` from the two sums.
   let sumA : ℝ :=
@@ -378,9 +362,7 @@ theorem relu_mul_universal_approximation_box
       ∀ x ∈ box M, |mulFun x - mlpEval (n := 2) (hidDim := hidDim) l1 l2 x| < ε := by
   intro ε hε
   have hM0 : 0 ≤ M := le_of_lt hM
-  -- Step 1: approximate `square` on `[-2M,2M]` with error `δ = 2ε`.
-  let δ : ℝ := 2*ε
-  have hδ : 0 < δ := by nlinarith
+  -- Step 1: approximate `square` on `[-2M,2M]` with error `2ε`.
   have h_ab : (-2*M) < (2*M) := by nlinarith
   have hL : 0 < (4*M) := by nlinarith
   have h_lip :
@@ -394,7 +376,7 @@ theorem relu_mul_universal_approximation_box
     -- `2*(2M) = 4M`
     convert h using 1; ring
   rcases relu_universal_approximation_Icc (f := fun u => u*u) (a := -2*M) (b := 2*M) (L := 4*M)
-      h_ab hL h_lip δ hδ with ⟨hidSq, l1Sq, l2Sq, hSq⟩
+      h_ab hL h_lip (2 * ε) (by linarith) with ⟨hidSq, l1Sq, l2Sq, hSq⟩
   -- Step 2: lift to `u = firstCoordinate+secondCoordinate` and
   -- `u = firstCoordinate-secondCoordinate`.
   let l1Plus : LinearSpec ℝ 2 hidSq := liftScalarLayer1 (n := 2) l1Sq wPlus 0
@@ -406,8 +388,8 @@ theorem relu_mul_universal_approximation_box
   refine ⟨hidSq + hidSq, l1Prod, l2Prod, ?_⟩
   intro x hx
   -- Abbreviate the two ridge inputs.
-  have hx_plus : dot wPlus x ∈ Set.Icc (-2*M) (2*M) := sum_mem_Icc (M := M) hM0 hx
-  have hx_minus : dot wMinus x ∈ Set.Icc (-2*M) (2*M) := diff_mem_Icc (M := M) hM0 hx
+  have hx_plus : dot wPlus x ∈ Set.Icc (-2*M) (2*M) := sum_mem_Icc hx
+  have hx_minus : dot wMinus x ∈ Set.Icc (-2*M) (2*M) := diff_mem_Icc hx
   -- Use the lifted equality to rewrite the lifted nets as 1D evaluations.
   have hplus_eval :
       mlpEval (n := 2) (hidDim := hidSq) l1Plus l2Sq x =
@@ -432,79 +414,39 @@ theorem relu_mul_universal_approximation_box
     simpa [l1Prod, l2Prod, add_assoc, add_left_comm, add_comm] using this
   -- Apply the square approximation bounds.
   have hsq_plus :
-      |(dot wPlus x) * (dot wPlus x) - mlpEvalScalar hidSq l1Sq l2Sq (dot wPlus x)| < δ :=
+      |(dot wPlus x) * (dot wPlus x) - mlpEvalScalar hidSq l1Sq l2Sq (dot wPlus x)| < 2 * ε :=
     hSq (dot wPlus x) hx_plus
   have hsq_minus :
-      |(dot wMinus x) * (dot wMinus x) - mlpEvalScalar hidSq l1Sq l2Sq (dot wMinus x)| < δ :=
+      |(dot wMinus x) * (dot wMinus x) - mlpEvalScalar hidSq l1Sq l2Sq (dot wMinus x)| < 2 * ε :=
     hSq (dot wMinus x) hx_minus
-  -- Now finish via `xy = ((x+y)^2 - (x-y)^2)/4` and triangle inequality.
-  -- Expand `mulFun` and rewrite the network output using `hcomb` and the lift equalities.
+  -- Finish via `xy = ((x+y)^2 - (x-y)^2)/4` and the triangle inequality.
   have hmul : mulFun x = ((dot wPlus x) * (dot wPlus x) - (dot wMinus x) * (dot wMinus x)) / 4 := by
     -- Convert to scalar coordinates and use the algebraic identity.
     have := mul_identity (firstCoordinate x) (secondCoordinate x)
     -- Rewrite `x+y` / `x-y` as `dot` expressions.
     simpa [mulFun, dot_wPlus, dot_wMinus, sub_eq_add_neg, add_comm, add_left_comm, add_assoc] using
       this
-  -- Rewrite goal into an error between the true formula and the approximated formula.
-  -- Use `δ = 2ε` so the final bound is `< ε`.
-  have : |mulFun x - mlpEval (n := 2) (hidDim := hidSq + hidSq) l1Prod l2Prod x| < ε := by
-    -- Replace `mulFun` and the network output by the “difference of squares” forms.
-    rw [hmul, hcomb, hplus_eval, hminus_eval]
-    -- Let `e₁,e₂` be the square approximation errors.
-    set e1 := (dot wPlus x) * (dot wPlus x) - mlpEvalScalar hidSq l1Sq l2Sq (dot wPlus x) with he1
-    set e2 := (dot wMinus x) * (dot wMinus x) - mlpEvalScalar hidSq l1Sq l2Sq (dot wMinus x)
-      with he2
-    -- Reduce to bounding `|(e1 - e2)/4|`.
-    have hrew :
-        ((dot wPlus x) * (dot wPlus x) - (dot wMinus x) * (dot wMinus x)) / 4
-          - ((1 / 4 : ℝ) * mlpEvalScalar hidSq l1Sq l2Sq (dot wPlus x) +
-              (-1 / 4 : ℝ) * mlpEvalScalar hidSq l1Sq l2Sq (dot wMinus x))
-        =
-        (e1 - e2) / 4 := by
-      -- Pure ring arithmetic.
-      subst e1 e2
-      ring
-    -- Convert to abs and apply triangle inequality.
-    have htri : |e1 - e2| ≤ |e1| + |e2| := by
-      simpa [sub_eq_add_neg, abs_neg] using (abs_add_le e1 (-e2))
-    have habs : |(e1 - e2) / 4| = |e1 - e2| / 4 := by
-      simp [abs_div]
-    -- Use the square approximation bounds to show `|e1|<δ` and `|e2|<δ`.
-    have he1lt : |e1| < δ := by simpa [he1] using hsq_plus
-    have he2lt : |e2| < δ := by simpa [he2] using hsq_minus
-    -- Combine.
-    have hsumlt : |e1| + |e2| < 2*δ := by linarith
-    have : |(e1 - e2) / 4| < ε := by
-      -- `|(e1-e2)/4| = |e1-e2|/4 ≤ (|e1|+|e2|)/4 < (2δ)/4 = ε` since `δ=2ε`.
-      have hle : |e1 - e2| / 4 ≤ (|e1| + |e2|) / 4 := by
-        have := div_le_div_of_nonneg_right htri (by norm_num : (0:ℝ) ≤ 4)
-        simpa [div_eq_mul_inv, mul_assoc, mul_left_comm, mul_comm] using this
-      have hlt : (|e1| + |e2|) / 4 < ε := by
-        -- `(|e1|+|e2|) < 2δ` and `2δ/4 = ε`.
-        have h' : (|e1| + |e2|) / 4 < (2*δ) / 4 :=
-          div_lt_div_of_pos_right hsumlt (by norm_num : (0:ℝ) < 4)
-        have hEq : (2*δ) / 4 = ε := by
-          simp [δ]
-          ring
-        exact lt_of_lt_of_eq h' hEq
-      exact lt_of_le_of_lt (by simpa [habs] using hle) hlt
-    -- Return to the original abs goal.
-    -- `hrew` turns the raw difference into `(e1-e2)/4`.
-    -- Then `abs` agrees with `|·|`.
-    have : |((dot wPlus x) * (dot wPlus x) - (dot wMinus x) * (dot wMinus x)) / 4
-          - ((1 / 4 : ℝ) * mlpEvalScalar hidSq l1Sq l2Sq (dot wPlus x) +
-              (-1 / 4 : ℝ) * mlpEvalScalar hidSq l1Sq l2Sq (dot wMinus x))| < ε := by
-      -- rewrite to `(e1-e2)/4`
-      have hrew' :
-          ((dot wPlus x) * (dot wPlus x) - (dot wMinus x) * (dot wMinus x)) / 4
-              - ((4 : ℝ)⁻¹ * mlpEvalScalar hidSq l1Sq l2Sq (dot wPlus x) +
-                  (-1 / 4 : ℝ) * mlpEvalScalar hidSq l1Sq l2Sq (dot wMinus x))
-            =
-          (e1 - e2) / 4 := by
-        simpa [one_div] using hrew
-      -- avoid `simp [inv_eq_one_div]` (loops with `one_div`)
-      simpa [hrew'] using this
-    simpa [sub_eq_add_neg, add_assoc, add_comm, add_left_comm] using this
-  exact this
+  -- Replace `mulFun` and the network output by the “difference of squares” forms.
+  rw [hmul, hcomb, hplus_eval, hminus_eval]
+  -- Let `e₁,e₂` be the square approximation errors.
+  set e1 := (dot wPlus x) * (dot wPlus x) - mlpEvalScalar hidSq l1Sq l2Sq (dot wPlus x) with he1
+  set e2 := (dot wMinus x) * (dot wMinus x) - mlpEvalScalar hidSq l1Sq l2Sq (dot wMinus x)
+    with he2
+  -- The remaining difference is `(e1 - e2)/4`.
+  have hrew :
+      ((dot wPlus x) * (dot wPlus x) - (dot wMinus x) * (dot wMinus x)) / 4
+        - ((1 / 4 : ℝ) * mlpEvalScalar hidSq l1Sq l2Sq (dot wPlus x) +
+            (-1 / 4 : ℝ) * mlpEvalScalar hidSq l1Sq l2Sq (dot wMinus x))
+      =
+      (e1 - e2) / 4 := by
+    subst e1 e2
+    ring
+  have habs : |(e1 - e2) / 4| = |e1 - e2| / 4 := by
+    simp [abs_div]
+  have he1lt : |e1| < 2 * ε := by simpa [he1] using hsq_plus
+  have he2lt : |e2| < 2 * ε := by simpa [he2] using hsq_minus
+  -- `|e1 - e2| ≤ |e1| + |e2| < 4ε`, and dividing by `4` gives the claim.
+  rw [hrew, habs]
+  linarith [abs_sub e1 e2]
 
 end NN.MLTheory.Proofs.ReLUMulApprox

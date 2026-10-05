@@ -7,7 +7,6 @@ Authors: TorchLean Team
 module
 
 public import NN.Proofs.RuntimeApprox.NF.Ops -- shake: keep
-public import NN.Proofs.RuntimeApprox.NF.FoldLemmas -- shake: keep
 
 /-!
 # NF Shape Operators
@@ -29,7 +28,6 @@ https://pytorch.org/docs/stable/generated/torch.permute.html
 -/
 
 @[expose] public section
-
 
 namespace Proofs
 namespace RuntimeApprox
@@ -86,25 +84,16 @@ theorem approxTensor_full_const {cS : ℝ} {cR : R} {eps : ℝ}
         simp [Tensor.full, Tensor.unstack]
       simpa [hfillS, hfillR] using ih
 
-private theorem toSpec_one_bound :
-    abs (toSpec (β := β) (fexp := fexp) (rnd := rnd) (1 : R) - (1 : ℝ)) ≤
-      ulp β fexp (1 : ℝ) / 2 := by
-  convert
-    (Proofs.RuntimeRoundingApprox.roundR_abs_error
-      (β := β) (fexp := fexp) (rnd := rnd) (1 : ℝ)) using 1
-  · simp [NFBackend.toSpec, NF.toReal,
-      Proofs.RuntimeRoundingApprox.roundR]
-    exact congrArg (fun x => abs (x - (1 : ℝ)))
-      (show (1 : R).val = Flocq.round (β := β) (fexp := fexp) rnd 1 from rfl)
+/-- A tensor filled with runtime one differs from exact one by at most one construction rounding.
 
-/-- A tensor filled with runtime one differs from exact one by at most one construction rounding. -/
+`(1 : R)` is `NF.ofReal 1`, so the scalar bound is the generic `approx_ofReal_nf`. -/
 theorem approxTensor_full_one :
     ∀ {s : Shape},
       approxTensor (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd))
         (Tensor.full s (1 : ℝ)) (Tensor.full s (1 : R)) (ulp β fexp (1 : ℝ) / 2) := by
   intro s
-  apply approxTensor_full_const (β := β) (fexp := fexp) (rnd := rnd)
-  exact toSpec_one_bound (β := β) (fexp := fexp) (rnd := rnd)
+  exact approxTensor_full_const (β := β) (fexp := fexp) (rnd := rnd)
+    (approx_ofReal_nf (β := β) (fexp := fexp) (rnd := rnd) 1)
 
 /-- Zero is exactly representable in every valid neural floating-point format. -/
 theorem approxTensor_full_zero :
@@ -181,14 +170,14 @@ theorem approxTensor_broadcastTo
               refine approxTensor_dim_of_forall (n := m) (s := t) (eps := eps) hε ?_
               intro i
               simpa using ih _
-                (approxTensor_dim_get (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd)) hx i)
+                (approxTensor_unstack (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd)) hx i)
             · subst hm1
               rw [TorchLean.Tensor.broadcastTo_dim_one hRank cb,
                 TorchLean.Tensor.broadcastTo_dim_one hRank cb]
               refine approxTensor_dim_of_forall (n := n) (s := t) (eps := eps) hε ?_
               intro _
               simpa using ih _
-                (approxTensor_dim_get (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd)) hx
+                (approxTensor_unstack (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd)) hx
                   (0 : Fin 1))
           · have hTail := (Shape.canBroadcastTo_dim_dim_of_rank_ne hRank).mp cb
             rw [TorchLean.Tensor.broadcastTo_expand hTail.rank_le cb,
@@ -224,7 +213,7 @@ theorem approxTensor_applyBoolMask {s : Shape}
           apply (approxTensor_scalar_iff (α := R)
             (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd))).2
           change abs (toSpec (β := β) (fexp := fexp) (rnd := rnd) (0 : R) - (0 : ℝ)) ≤ eps
-          simpa [toSpec_zero] using approxTensor_eps_nonneg hx
+          simpa using approxTensor_eps_nonneg hx
       | true =>
           simpa only [map2Spec_scalar, maskValue, ite_true] using hx
   | dim n inner ih =>
@@ -237,7 +226,7 @@ theorem approxTensor_applyBoolMask {s : Shape}
       intro i
       have hlocal :=
         ih (mask.unstack i)
-          (approxTensor_dim_get (α := R)
+          (approxTensor_unstack (α := R)
             (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd)) hx i)
       rw [show
         (map2Spec maskValue xS mask).unstack i =

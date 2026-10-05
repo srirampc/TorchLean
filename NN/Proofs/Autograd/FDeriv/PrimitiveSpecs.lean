@@ -36,6 +36,12 @@ noncomputable section
 def coordinatewise {n : Nat} (f : Fin n → ℝ → ℝ) (x : Vec n) : Vec n :=
   (euclideanEquiv n).symm fun i => f i (x i)
 
+/-- Coordinate evaluation removes the Euclidean wrapper around a pointwise function. -/
+@[simp] theorem coordinatewise_apply {n : Nat} (f : Fin n → ℝ → ℝ)
+    (x : Vec n) (i : Fin n) :
+    coordinatewise f x i = f i (x i) := by
+  simp [coordinatewise, euclideanEquiv]
+
 /-- The diagonal linear map with the supplied scalar coefficients. -/
 def coordinateDeriv {n : Nat} (coefficients : Fin n → ℝ) : Vec n →L[ℝ] Vec n :=
   (euclideanEquiv n).symm.toContinuousLinearMap.comp

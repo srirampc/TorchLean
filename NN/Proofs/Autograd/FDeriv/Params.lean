@@ -40,15 +40,6 @@ noncomputable section
 /-- Weight matrices as a real Hilbert space (Frobenius/$\ell_2$ inner product). -/
 abbrev Mat (m n : Nat) := PiLp 2 (fun _ : Fin m => PiLp 2 (fun _ : Fin n => ℝ))
 
-/-- Convert a coordinate function `Fin n → ℝ` into the bundled vector type `Vec n`. -/
-def vecOfFunMat {n : Nat} (f : Fin n → ℝ) : Vec n :=
-  (euclideanEquiv n).symm f
-
-/-- Coordinates of `vecOfFunMat f` are the values of `f`. -/
-@[simp] theorem vecOfFunMat_ofLp {n : Nat} (f : Fin n → ℝ) (i : Fin n) :
-    (vecOfFunMat (n := n) f).ofLp i = f i := by
-  simp [vecOfFunMat, euclideanEquiv]
-
 /-- View `Mat m n` as a Mathlib `Matrix` with the same coordinate function. -/
 def toMatrix {m n : Nat} (W : Mat m n) : Matrix (Fin m) (Fin n) ℝ := fun i j => W i j
 
@@ -66,21 +57,20 @@ theorem toMatrix_smul {m n : Nat} (a : ℝ) (W : Mat m n) :
 
 /-- Linear map `W ↦ W.mulVec x` (matrix-vector product, linear in `W`). -/
 def matApplyLM {m n : Nat} (x : Vec n) : Mat m n →ₗ[ℝ] Vec m :=
-{ toFun := fun W => vecOfFunMat (n := m) ((toMatrix W).mulVec x.ofLp)
+{ toFun := fun W => vecOfFun ((toMatrix W).mulVec x.ofLp)
   map_add' := by
     intro W1 W2
     ext i
-    simp [vecOfFunMat_ofLp, toMatrix_add, Matrix.add_mulVec]
+    simp [toMatrix_add, Matrix.add_mulVec]
   map_smul' := by
     intro a W
     ext i
-    simp [vecOfFunMat_ofLp, toMatrix_smul, Matrix.smul_mulVec, smul_eq_mul] }
+    simp [toMatrix_smul, Matrix.smul_mulVec, smul_eq_mul] }
 
 /-- Continuous version of `matApplyLM`. -/
-def matApplyLin {m n : Nat} (x : Vec n) : Mat m n →L[ℝ] Vec m := by
-  refine ⟨matApplyLM (m := m) (n := n) x, ?_⟩
-  simpa using
-    (LinearMap.continuous_of_finiteDimensional (matApplyLM (m := m) (n := n) x))
+def matApplyLin {m n : Nat} (x : Vec n) : Mat m n →L[ℝ] Vec m :=
+  ⟨matApplyLM (m := m) (n := n) x,
+    (matApplyLM (m := m) (n := n) x).continuous_of_finiteDimensional⟩
 
 /--
 Outer product `δ ⊗ x` (as a matrix in `Mat`).
@@ -155,11 +145,6 @@ theorem inner_matApply_eq {m n : Nat} (x : Vec n) (dW : Mat m n) (δ : Vec m) :
     _ = inner ℝ dW (outer (m := m) (n := n) δ x) := by
           simp [hR]
 
-/-!
-Main adjoint lemma:
-
-`(W ↦ W x)† δ = δ ⊗ x`.
--/
 /--
 Adjoint of `W ↦ W x` under Frobenius/$\ell_2$ inner products.
 
@@ -168,31 +153,10 @@ This is the mathematical core of the “weight gradient is outer product” rule
 -/
 theorem matApplyLin_adjoint_apply {m n : Nat} (x : Vec n) (δ : Vec m) :
     (matApplyLin (m := m) (n := n) x).adjoint δ = outer (m := m) (n := n) δ x := by
-  classical
-  let A := matApplyLin (m := m) (n := n) x
-  have hforall :
-      ∀ dW : Mat m n, inner ℝ dW (A.adjoint δ) = inner ℝ dW (outer (m := m) (n := n) δ x) := by
-    intro dW
-    calc
-      inner ℝ dW (A.adjoint δ) = inner ℝ (A dW) δ := by
-        simpa [A] using
-          (ContinuousLinearMap.adjoint_inner_right (A := A) (x := dW) (y := δ))
-      _ = inner ℝ dW (outer (m := m) (n := n) δ x) := by
-        simpa [A] using (inner_matApply_eq (m := m) (n := n) (x := x) (dW := dW) (δ := δ))
-
-  set u := A.adjoint δ
-  set v := outer (m := m) (n := n) δ x
-  have h0 : inner ℝ (u - v) (u - v) = 0 := by
-    have hEq := hforall (dW := (u - v))
-    have : inner ℝ (u - v) u - inner ℝ (u - v) v = 0 := by
-      simpa [sub_eq_zero] using congrArg (fun t => t - inner ℝ (u - v) v) hEq
-    have hinnerSub :
-        inner ℝ (u - v) (u - v) = inner ℝ (u - v) u - inner ℝ (u - v) v := by
-      rw [inner_sub_right]
-    exact hinnerSub.trans this
-  have huv : u - v = 0 := (inner_self_eq_zero (𝕜 := ℝ) (x := (u - v))).1 h0
-  have : u = v := sub_eq_zero.mp huv
-  simpa [u, v, A] using this
+  apply ext_inner_left ℝ
+  intro dW
+  rw [ContinuousLinearMap.adjoint_inner_right]
+  exact inner_matApply_eq x dW δ
 
 end
 end Autograd

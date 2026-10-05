@@ -48,13 +48,6 @@ container.
     (updateTile totals values)[lane] = totals[lane] + values lane := by
   simp [updateTile]
 
-/-- Equal lane families determine equal function-backed vectors. -/
-theorem ofFn_congr
-    {α : Type u} {lanes : Nat} {values reference : Fin lanes → α}
-    (h : values = reference) :
-    Vector.ofFn values = Vector.ofFn reference :=
-  congrArg Vector.ofFn h
-
 /--
 The additive coordinate fold is the executable presentation of
 `Semantics.coordinateSum`.

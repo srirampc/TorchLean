@@ -9,8 +9,7 @@ on:
       - "csrc/**"
       - "home_page/**"
       - "docs/**"
-      - "scripts/docs/**"
-      - "scripts/checks/dependency_audit.py"
+      - "scripts/**"
       - "lakefile.lean"
       - "lake-manifest.json"
       - "lean-toolchain"
@@ -23,8 +22,7 @@ on:
       - "csrc/**"
       - "home_page/**"
       - "docs/**"
-      - "scripts/docs/**"
-      - "scripts/checks/dependency_audit.py"
+      - "scripts/**"
       - "lakefile.lean"
       - "lake-manifest.json"
       - "lean-toolchain"
@@ -60,11 +58,13 @@ jobs:
           df -h
 
       - name: Install elan
-        run: curl https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -sSf | sh -s -- -y
+        run: |
+          curl https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -sSf | sh -s -- -y
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
 
       - name: Get Mathlib cache
         run: |
-          ~/.elan/bin/lake exe cache get || true
+          scripts/lake.sh -Kcuda=false exe cache get || true
           rm -f ~/.cache/mathlib/*.ltar || true
 
       - name: Cache API docs
@@ -84,7 +84,7 @@ jobs:
       - name: Build project API documentation
         run: |
           rm -rf .lake/build/doc-data .lake/build/api-docs.db
-          DISABLE_EQUATIONS=1 ~/.elan/bin/lake -R -Kenv=dev build TorchLeanDocs:docs
+          DISABLE_EQUATIONS=1 scripts/lake.sh -Kcuda=false -Kenv=dev build TorchLeanDocs:docs
 
       - name: Detect homepage folder
         id: check_home_page
@@ -100,10 +100,12 @@ jobs:
       - name: Build Verso guide from `home_page/blueprint`
         run: |
           cd home_page/blueprint
-          ~/.elan/bin/lake exe cache get || true
+          export TORCHLEAN_PACKAGE_ROOT="$PWD"
+          ../../scripts/lake.sh exe cache get || true
           rm -f ~/.cache/mathlib/*.ltar || true
-          ~/.elan/bin/lake exe vbp build --output ../../_out/blueprint
-          ~/.elan/bin/lake exe vbp check --site ../../_out/blueprint
+          ../../scripts/lake.sh exe vbp build --output ../../_out/blueprint
+          ../../scripts/lake.sh exe vbp check --site ../../_out/blueprint
+          unset TORCHLEAN_PACKAGE_ROOT
           cd ../..
           test -s _out/blueprint/html-multi/-verso-data/blueprint-manifest.json
           test -s _out/blueprint/html-multi/-verso-data/blueprint-html-cache.json
@@ -139,7 +141,7 @@ jobs:
       - name: Build interactive import graph HTML
         run: |
           mkdir -p home_page/importgraph
-          ~/.elan/bin/lake exe graph --to NN home_page/importgraph/index.html
+          scripts/lake.sh -Kcuda=false exe graph --to NN home_page/importgraph/index.html
           python3 scripts/docs/postprocess_importgraph.py home_page/importgraph/index.html
 
       - name: Bundle dependencies

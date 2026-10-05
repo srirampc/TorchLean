@@ -9,7 +9,6 @@ module
 public import NN.Verification.PINN.Core
 public import NN.Verification.PINN.Dataset
 public import NN.API.CLI -- shake: keep
-public import NN.Verification.PINN.PdeParse -- shake: keep
 public import NN.MLTheory.CROWN.Graph -- shake: keep
 public import NN.Verification.PINN.PyTorch -- shake: keep
 
@@ -41,7 +40,6 @@ namespace NN.Verification.PINN.DatasetCheck
 open NN.MLTheory.CROWN
 open NN.MLTheory.CROWN.Graph
 open NN.Verification.PINN
-open NN.Verification.PINN.PdeParse
 open Import
 open Spec TorchLean
 open TorchLean.Tensor
@@ -125,15 +123,10 @@ def checkSection
         TorchLean.Tensor.scalar <| if i.val = 0 then point.x else point.yOrT
     let ps := seedInput baseParams center options.eps
     let ibp := runIBP (α := Float) g ps
-    let outB ←
-      match NN.MLTheory.CROWN.Graph.outputBox? ibp outId with
-      | .ok outB => pure outB
-      | .error msg => throw <| IO.userError s!"IBP failed at output for {sectionName}: {msg}"
-    let lo := TorchLean.Tensor.sumSpec outB.lo
-    let hi := TorchLean.Tensor.sumSpec outB.hi
-    let mid := (lo + hi) / 2.0
-    maxAbsErr := max maxAbsErr (Dataset.absDiff mid point.u)
-    if Dataset.containsWithTol point.u lo hi options.tol then
+    let box ← IO.ofExcept (outputInterval s!"IBP failed at output for {sectionName}" ibp outId)
+    let mid := (box.lower + box.upper) / 2.0
+    maxAbsErr := max maxAbsErr (Float.abs (mid - point.u))
+    if Dataset.containsWithTol point.u box.lower box.upper options.tol then
       okCount := okCount + 1
     else
       badCount := badCount + 1

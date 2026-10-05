@@ -107,8 +107,8 @@ theorem betaVae_loss_mono_beta_of_kl_nonneg
     (model : Model ℝ obs latent) (x : Tensor ℝ obs) (eps : Tensor ℝ latent)
     {beta₁ beta₂ : ℝ} (hbeta : beta₁ ≤ beta₂) (hkl : 0 ≤ klLoss model x) :
     loss model beta₁ x eps ≤ loss model beta₂ x eps := by
-  simp [loss]
-  exact mul_le_mul_of_nonneg_right hbeta hkl
+  rw [betaVae_loss_eq_weightedTwoTerm, betaVae_loss_eq_weightedTwoTerm]
+  exact weightedTwoTerm_mono_weight (vaeObjectiveTerms model x eps) hbeta hkl
 
 /-! ## Real-valued KL facts for diagonal Gaussian posteriors -/
 
@@ -134,27 +134,14 @@ noncomputable def diagonalGaussianKlToStandardReal
     {n : Nat} (mu logvar : Fin n → ℝ) : ℝ :=
   ∑ i, coordinateKlToStandard (mu i) (logvar i)
 
-/-- The elementary inequality behind VAE KL nonnegativity: $\exp x\geq 1+x$. -/
-theorem exp_minus_one_minus_nonneg (x : ℝ) : 0 ≤ Real.exp x - 1 - x := by
-  have h := Real.add_one_le_exp x
-  linarith
-
-/-- Strict form of $\exp x\geq 1+x$; equality occurs only at $x=0$. -/
-theorem exp_minus_one_minus_pos {x : ℝ} (hx : x ≠ 0) :
-    0 < Real.exp x - 1 - x := by
-  have h := Real.add_one_lt_exp hx
-  linarith
-
 /-- A single diagonal-Gaussian KL coordinate is nonnegative. -/
 theorem coordinateKlToStandard_nonneg (mu logvar : ℝ) :
     0 ≤ coordinateKlToStandard mu logvar := by
   unfold coordinateKlToStandard
-  have hvar : 0 ≤ Real.exp logvar - 1 - logvar :=
-    exp_minus_one_minus_nonneg logvar
+  -- `exp x ≥ 1 + x` and `mu ^ 2 ≥ 0` make the numerator nonnegative.
+  have hexp := Real.add_one_le_exp logvar
   have hmu : 0 ≤ mu ^ 2 := sq_nonneg mu
-  have hsum : 0 ≤ Real.exp logvar + mu ^ 2 - 1 - logvar := by
-    linarith
-  positivity
+  linarith
 
 /--
 The one-coordinate KL vanishes exactly when the approximate posterior coordinate is already
@@ -166,16 +153,15 @@ theorem coordinateKlToStandard_eq_zero_iff (mu logvar : ℝ) :
   · intro h
     unfold coordinateKlToStandard at h
     have hnum : Real.exp logvar + mu ^ 2 - 1 - logvar = 0 := by
-      nlinarith
+      linarith
     by_cases hl : logvar = 0
     · subst hl
       simp at hnum
       exact ⟨hnum, rfl⟩
-    · have hpos_l : 0 < Real.exp logvar - 1 - logvar :=
-        exp_minus_one_minus_pos hl
+    · -- Off `logvar = 0` the strict bound `exp x > 1 + x` makes the numerator positive.
+      have hexp := Real.add_one_lt_exp hl
       have hmu : 0 ≤ mu ^ 2 := sq_nonneg mu
-      have : 0 < Real.exp logvar + mu ^ 2 - 1 - logvar := by
-        linarith
+      exfalso
       linarith
   · rintro ⟨rfl, rfl⟩
     unfold coordinateKlToStandard

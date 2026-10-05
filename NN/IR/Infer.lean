@@ -56,20 +56,21 @@ namespace Infer
 ## Node-local inference
 
 Most IR ops are “shape transparent” (elementwise, permute, etc.). A few need special handling:
-- `matmul` preserves an arbitrary shared leading shape around its final matrix axes,
+- `matmul` broadcasts the leading batch shapes of its operands and promotes 1D operands as
+  `torch.matmul` does,
 - `concat` needs to merge multiple parents along an axis,
 - pooling and convolution use centralized rank-polymorphic spatial arithmetic from `OpContracts`.
 -/
 
-/-- Read the sole parent shape of a unary operation. -/
-def expectUnaryParent (tag : String) (parents : Array Shape) : Except String Shape :=
+/-- Read the sole parent of a unary operation. -/
+def expectUnaryParent {α : Type} (tag : String) (parents : Array α) : Except String α :=
   if h : parents.size = 1 then
     .ok (parents[0]'(by simp [h]))
   else
     .error s!"{tag}: expected 1 parent"
 
-/-- Read both parent shapes of a binary operation. -/
-def expectBinaryParents (tag : String) (parents : Array Shape) : Except String (Shape × Shape) :=
+/-- Read both parents of a binary operation. -/
+def expectBinaryParents {α : Type} (tag : String) (parents : Array α) : Except String (α × α) :=
   if h : parents.size = 2 then
     .ok (parents[0]'(by simp [h]), parents[1]'(by simp [h]))
   else

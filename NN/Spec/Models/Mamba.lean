@@ -199,10 +199,6 @@ def projectZ (m : SelectiveMambaBlockSpec α inputDim innerDim stateDim outputDi
     (x : Tensor α [inputDim]) : Tensor α [innerDim] :=
   vecMatMulSpec x m.zProj
 
-/-- SiLU/Swish applied channelwise. -/
-def siluVec (x : Tensor α [innerDim]) : Tensor α [innerDim] :=
-  Tensor.mapSpec Activation.Math.swishSpec x
-
 /--
 Causal depthwise convolution from a newest-first history of projected tokens.
 
@@ -284,10 +280,10 @@ def stepWithHistory
     (history : Array (Tensor α [innerDim]))
     (z : Tensor α [innerDim]) :
     Tensor α [innerDim, stateDim] × Tensor α [outputDim] :=
-  let u := siluVec (m.causalDepthwiseConv history)
+  let u := Activation.swishSpec (m.causalDepthwiseConv history)
   let h' := m.selectiveStateStep h u
   let y := m.stateReadout h' u
-  let gated := Tensor.mulSpec y (siluVec z)
+  let gated := Tensor.mulSpec y (Activation.swishSpec z)
   (h', vecMatMulSpec gated m.outProj)
 
 /-- One recurrent step while carrying the newest-first convolution history.

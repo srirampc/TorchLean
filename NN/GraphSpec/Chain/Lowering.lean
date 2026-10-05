@@ -29,7 +29,7 @@ namespace Chain
 def toProgram
     {ps : List Shape} {σ τ : Shape}
     (g : Chain ps σ τ)
-    {α : Type 0} [TorchLean.Storage α] [Context α] :
+    {α : Type 0} [Storage α] [Context α] :
     Runtime.Autograd.Model.Program α (ps ++ [σ]) τ :=
   fun {m} _instM _instOps =>
     let Ref := fun s => Runtime.Autograd.Torch.Ops.Ref (m := m) (α := α) s

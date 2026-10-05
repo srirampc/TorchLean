@@ -19,6 +19,8 @@ trace construction. Most users should import
 @[expose] public section
 
 open FloatLib.Floats (ExecFloat)
+open FloatLib.Floats.ExecFloat (Binary)
+open FloatLib.Numerics (Interval)
 open FloatLib.Floats.Formats.BinaryInterchange (Model FloatFormat)
 
 
@@ -30,7 +32,6 @@ open NN
 open NN.Backend
 open NN.IR
 open Spec TorchLean
-open TorchLean.Floats.IEEE754
 
 /-! ## Canonical local transfer rules -/
 
@@ -67,19 +68,18 @@ structure NodeRange where
   nodeId : Nat
   outShape : Shape
   rule : RangeRule
-  enclosure : IEEE32Exec.Interval32
+  enclosure : Interval (Binary 8 23)
   deriving Repr
 
 /-- A node range whose executable interval has passed the finite/order check. -/
 structure CheckedNodeRange extends NodeRange where
-  valid : enclosure.Valid
+  valid : Binary.Interval.Valid enclosure
 
 instance : Repr CheckedNodeRange where
   reprPrec r _ := repr r.toNodeRange
 
 /-- Check a dynamic graph value against the declared shape and interval of one certificate row. -/
-def dvalWithinRange (range : CheckedNodeRange) (value : Spec.SomeTensor (ExecFloat.Binary 8 23)) :
-  Bool :=
+def dvalWithinRange (range : CheckedNodeRange) (value : Spec.SomeTensor (Binary 8 23)) : Bool :=
   if h : value.shape = range.outShape then
     tensorWithinRange range.enclosure (h ▸ value.tensor)
   else
@@ -94,7 +94,7 @@ def SomeTensorEnclosed (range : CheckedNodeRange) (value : Spec.SomeTensor Real)
 /-- Pointwise approximation relation for real and IEEE dynamic graph values at one certificate
 row. -/
 def SomeTensorErrorLe (range : CheckedNodeRange) (exact : Spec.SomeTensor Real)
-    (computed : Spec.SomeTensor (ExecFloat.Binary 8 23)) : Prop :=
+    (computed : Spec.SomeTensor (Binary 8 23)) : Prop :=
   ∃ hexact : exact.shape = range.outShape,
     ∃ hcomputed : computed.shape = range.outShape,
       TensorErrorLe (intervalWidth range.enclosure)
@@ -103,7 +103,7 @@ def SomeTensorErrorLe (range : CheckedNodeRange) (exact : Spec.SomeTensor Real)
 /-- One successful dynamic replay row yields a pointwise error bound whenever the corresponding
 real graph value has the proved enclosure. -/
 theorem dval_error_le_of_range_check {range : CheckedNodeRange}
-    {exact : Spec.SomeTensor Real} {computed : Spec.SomeTensor (ExecFloat.Binary 8 23)}
+    {exact : Spec.SomeTensor Real} {computed : Spec.SomeTensor (Binary 8 23)}
     (hexact : SomeTensorEnclosed range exact)
     (hcomputed : dvalWithinRange range computed = true) :
     SomeTensorErrorLe range exact computed := by
@@ -117,7 +117,7 @@ theorem dval_error_le_of_range_check {range : CheckedNodeRange}
 
 /-- Check every value produced by `IR.Graph.denoteAll` against the corresponding certificate row. -/
 def executionWithinRanges (ranges : Array CheckedNodeRange)
-    (values : Array (Spec.SomeTensor (ExecFloat.Binary 8 23))) : Bool :=
+    (values : Array (Spec.SomeTensor (Binary 8 23))) : Bool :=
   decide (ranges.size = values.size) &&
     (Array.zipWith dvalWithinRange ranges values).all id
 
@@ -129,7 +129,7 @@ def ArraysRelated {α β : Type} (relation : α → β → Prop)
 
 /-- A successful replay check is exactly a size match plus a successful check at every node. -/
 theorem executionWithinRanges_eq_true_iff
-    (ranges : Array CheckedNodeRange) (values : Array (Spec.SomeTensor (ExecFloat.Binary 8 23))) :
+    (ranges : Array CheckedNodeRange) (values : Array (Spec.SomeTensor (Binary 8 23))) :
     executionWithinRanges ranges values = true ↔
       ArraysRelated (fun range value => dvalWithinRange range value = true) ranges values := by
   constructor
@@ -153,7 +153,7 @@ theorem executionWithinRanges_eq_true_iff
 /-- Graph-wide pointwise approximation evidence, one row per intermediate value. -/
 def ExecutionErrorTrace (ranges : Array CheckedNodeRange)
     (exact : Array (Spec.SomeTensor Real))
-    (computed : Array (Spec.SomeTensor (ExecFloat.Binary 8 23))) : Prop :=
+    (computed : Array (Spec.SomeTensor (Binary 8 23))) : Prop :=
   ranges.size = exact.size ∧ ranges.size = computed.size ∧
     ∀ (i : Nat) (hrange : i < ranges.size) (hexact : i < exact.size)
       (hcomputed : i < computed.size),
@@ -162,7 +162,7 @@ def ExecutionErrorTrace (ranges : Array CheckedNodeRange)
 /-- Compose real enclosure proofs and successful IEEE replay checks into an error trace. -/
 theorem execution_error_trace_of_check
     {ranges : Array CheckedNodeRange} {exact : Array (Spec.SomeTensor Real)}
-    {computed : Array (Spec.SomeTensor (ExecFloat.Binary 8 23))}
+    {computed : Array (Spec.SomeTensor (Binary 8 23))}
     (hexact : ArraysRelated SomeTensorEnclosed ranges exact)
     (hcomputed : executionWithinRanges ranges computed = true) :
     ExecutionErrorTrace ranges exact computed := by
@@ -181,33 +181,32 @@ def sameNodeRange (checked : CheckedNodeRange) (raw : NodeRange) : Bool :=
     decide (checked.rule = raw.rule) &&
     sameIntervalBits checked.enclosure raw.enclosure
 
-/-- Read a previously checked parent enclosure. Graph well-formedness guarantees that successful
-lookups refer only to earlier rows; the explicit error still protects this API when called alone. -/
-def parentRange (ranges : Array CheckedNodeRange) (nodeId : Nat) :
-    Except String IEEE32Exec.Interval32 :=
-  match ranges[nodeId]? with
-  | some range => pure range.enclosure
-  | none => throw s!"numerical certificate: missing range for parent node {nodeId}"
-
-/-- Read the complete checked row for a parent node. -/
+/-- Read the complete checked row for a parent node. Graph well-formedness guarantees that
+successful lookups refer only to earlier rows; the explicit error still protects this API when
+called alone. -/
 def parentNodeRange (ranges : Array CheckedNodeRange) (nodeId : Nat) :
     Except String CheckedNodeRange :=
   match ranges[nodeId]? with
   | some range => pure range
   | none => throw s!"numerical certificate: missing range for parent node {nodeId}"
 
+/-- Read a previously checked parent enclosure. -/
+def parentRange (ranges : Array CheckedNodeRange) (nodeId : Nat) :
+    Except String (Interval (Binary 8 23)) :=
+  (·.enclosure) <$> parentNodeRange ranges nodeId
+
 /-- Outward-rounded left-fold range for a sum of `count` values from one enclosure. The initial
 point interval at positive zero matches `Tensor.sumSpec`. -/
-def sumLeftRange (count : Nat) (range : IEEE32Exec.Interval32) : IEEE32Exec.Interval32 :=
+def sumLeftRange (count : Nat) (range : Interval (Binary 8 23)) : Interval (Binary 8 23) :=
   (List.range count).foldl
-    (fun acc _ => IEEE32Exec.Interval32.add acc range)
-    (IEEE32Exec.Interval32.point (ExecFloat.Binary.zero false : ExecFloat.Binary 8 23))
+    (fun acc _ => Binary.Interval.add acc range)
+    (Binary.Interval.point (ExecFloat.Binary.zero false : Binary 8 23))
 
 /-- Left-fold mean range, using the same binary32 conversion of the divisor as the tensor
 context. -/
-def meanLeftRange (count : Nat) (range : IEEE32Exec.Interval32) : IEEE32Exec.Interval32 :=
-  IEEE32Exec.Interval32.div (sumLeftRange count range)
-    (IEEE32Exec.Interval32.point (count : ExecFloat.Binary 8 23))
+def meanLeftRange (count : Nat) (range : Interval (Binary 8 23)) : Interval (Binary 8 23) :=
+  Binary.Interval.div (sumLeftRange count range)
+    (Binary.Interval.point (count : Binary 8 23))
 
 /-- Numerical policy selected for a runtime-relevant graph node. -/
 def nodeNumericalPolicy (plan : AcceptedGraphKernelPlan) (nodeId : Nat) : Option NumericalPolicy :=
@@ -248,14 +247,14 @@ def matmulInnerDim (left right : Shape) : Except String Nat :=
 
 /-- Hull of a nonempty array of parent ranges. -/
 def hullParents (ranges : Array CheckedNodeRange) (parents : Array Nat) :
-    Except String IEEE32Exec.Interval32 := do
+    Except String (Interval (Binary 8 23)) := do
   let parent <- match parents[0]? with
     | some parent => pure parent
     | none => throw "numerical certificate: an interval hull requires at least one parent"
   let first <- parentRange ranges parent
   (parents.extract 1 parents.size).foldlM (fun acc id => do
     let next <- parentRange ranges id
-    pure (IEEE32Exec.Interval32.hull acc next)) first
+    pure (Binary.Interval.hull acc next)) first
 
 /-! ## Graph range contracts
 
@@ -313,7 +312,7 @@ structure NumericalRangeContext where
   ranges : Array CheckedNodeRange
 
 /-- Result computed by one numerical operation contract. -/
-abbrev RangeTransferResult := Prod RangeRule IEEE32Exec.Interval32
+abbrev RangeTransferResult := Prod RangeRule (Interval (Binary 8 23))
 
 /-- Executable range transfer for one operation family.
 
@@ -400,6 +399,15 @@ def arityError (contractName : String) (node : Node) (expected : String) : Strin
   s!"numerical contract {contractName}: node {node.id} ({node.kind.describe}) " ++
     s!"expected {expected}, got {node.parents.size} parent(s)"
 
+/-- Shared transfer for one-parent operations whose output keeps the parent enclosure. -/
+def preserveTransfer (contractName : String) (context : NumericalRangeContext) (node : Node) :
+    Except String RangeTransferResult :=
+  match node.parents with
+  | #[parent] => do
+      let enclosure <- parentRange context.ranges parent
+      pure (.preserve parent, enclosure)
+  | _ => throw (arityError contractName node "one parent")
+
 /-- Shared source-node contract. The source interval remains an explicit certificate assumption. -/
 def sourceContract : GraphRangeContract where
   key := .source
@@ -412,27 +420,17 @@ def sourceContract : GraphRangeContract where
 def structuralContract : GraphRangeContract where
   key := .structural
   name := "structural identity"
-  derive := fun context node =>
-    match node.parents with
-    | #[parent] => do
-        let enclosure <- parentRange context.ranges parent
-        pure (.preserve parent, enclosure)
-    | _ => throw (arityError "structural identity" node "one parent")
+  derive := preserveTransfer "structural identity"
 
 /-- Reusable contract constructor for value-preserving graph operations. -/
 def preserveContract (op : BackendOp) : GraphRangeContract where
   key := .backend op
   name := s!"{op.name} value preservation"
-  derive := fun context node =>
-    match node.parents with
-    | #[parent] => do
-        let enclosure <- parentRange context.ranges parent
-        pure (.preserve parent, enclosure)
-    | _ => throw (arityError op.name node "one parent")
+  derive := preserveTransfer op.name
 
 /-- Reusable contract constructor for pointwise binary interval operations. -/
 def binaryContract (op : BackendOp) (rule : Nat -> Nat -> RangeRule)
-    (transfer : IEEE32Exec.Interval32 -> IEEE32Exec.Interval32 -> IEEE32Exec.Interval32) :
+    (transfer : Interval (Binary 8 23) -> Interval (Binary 8 23) -> Interval (Binary 8 23)) :
     GraphRangeContract where
   key := .backend op
   name := s!"{op.name} binary transfer"
@@ -452,17 +450,11 @@ def hullContract (op : BackendOp) : GraphRangeContract where
     let enclosure <- hullParents context.ranges node.parents
     pure (.hull node.parents, enclosure)
 
-
 /-- Max pooling without padding selects existing values and therefore preserves the input hull. -/
 def maxPoolContract : GraphRangeContract where
   key := .maxPool
   name := "max-pool value preservation"
-  derive := fun context node =>
-    match node.parents with
-    | #[parent] => do
-        let enclosure <- parentRange context.ranges parent
-        pure (.preserve parent, enclosure)
-    | _ => throw (arityError "max pool" node "one parent")
+  derive := preserveTransfer "max pool"
 
 /-- Padded max pooling may additionally select the padding value zero. -/
 def maxPoolPadContract : GraphRangeContract where
@@ -472,8 +464,8 @@ def maxPoolPadContract : GraphRangeContract where
     match node.parents with
     | #[parent] => do
         let input <- parentRange context.ranges parent
-        let enclosure := IEEE32Exec.Interval32.hull input
-          (IEEE32Exec.Interval32.point (ExecFloat.Binary.zero false : ExecFloat.Binary 8 23))
+        let enclosure := Binary.Interval.hull input
+          (Binary.Interval.point (ExecFloat.Binary.zero false : Binary 8 23))
         pure (.hullZero parent, enclosure)
     | _ => throw (arityError "padded max pool" node "one parent")
 
@@ -493,8 +485,8 @@ def averagePoolContract (padded : Bool) : GraphRangeContract where
         let hasPadding := (Tensor.to config.padding (List Nat)).any (fun padding => padding != 0)
         let source :=
           if hasPadding then
-            IEEE32Exec.Interval32.hull input
-              (IEEE32Exec.Interval32.point (ExecFloat.Binary.zero false : ExecFloat.Binary 8 23))
+            Binary.Interval.hull input
+              (Binary.Interval.point (ExecFloat.Binary.zero false : Binary 8 23))
           else
             input
         pure (.averageWindowLeft parent count hasPadding, meanLeftRange count source)
@@ -508,9 +500,9 @@ def inverseContract : GraphRangeContract where
     match node.parents with
     | #[parent] => do
         let enclosure <- parentRange context.ranges parent
-        if enclosure.containsZero then
+        if (Binary.Interval.containsZero enclosure) then
           throw s!"numerical certificate: node {node.id} reciprocal range contains zero"
-        pure (.inv parent, IEEE32Exec.Interval32.inv enclosure)
+        pure (.inv parent, Binary.Interval.inv enclosure)
     | _ => throw (arityError "reciprocal" node "one parent")
 
 /-- Whole-tensor fixed-left sum contract. -/
@@ -563,7 +555,7 @@ def matmulContract : GraphRangeContract where
         let a <- parentNodeRange context.ranges left
         let b <- parentNodeRange context.ranges right
         let innerDim <- matmulInnerDim a.outShape b.outShape
-        let product := IEEE32Exec.Interval32.mul a.enclosure b.enclosure
+        let product := Binary.Interval.mul a.enclosure b.enclosure
         pure (.matmulLeft left right innerDim, sumLeftRange innerDim product)
     | _ => throw (arityError "matrix multiplication" node "two parents")
 
@@ -579,14 +571,14 @@ def mseContract : GraphRangeContract where
         let t <- parentNodeRange context.ranges target
         if y.outShape != t.outShape then
           throw s!"numerical certificate: node {node.id} MSE parents have different shapes"
-        let residual := IEEE32Exec.Interval32.sub y.enclosure t.enclosure
+        let residual := Binary.Interval.sub y.enclosure t.enclosure
         -- The two residual occurrences are dependent. Generic interval multiplication forgets
         -- that dependency; the proved ReLU transfer restores nonnegativity of the square.
-        let squared := (IEEE32Exec.Interval32.mul residual residual).relu
+        let squared := (Binary.Interval.relu (Binary.Interval.mul residual residual))
         let count := y.outShape.size
         let enclosure :=
-          if count = 0 then IEEE32Exec.Interval32.point (ExecFloat.Binary.zero false :
-            ExecFloat.Binary 8 23)
+          if count = 0 then Binary.Interval.point (ExecFloat.Binary.zero false :
+            Binary 8 23)
           else meanLeftRange count squared
         pure (.mseLeft prediction target count, enclosure)
     | _ => throw (arityError "mean squared error" node "two parents")
@@ -608,18 +600,18 @@ def layerNormContract : GraphRangeContract where
         if normalizedSize = 0 then
           throw s!"numerical certificate: node {node.id} cannot normalize an empty suffix"
         let mean := meanLeftRange normalizedSize input.enclosure
-        let centered := IEEE32Exec.Interval32.sub input.enclosure mean
-        let squared := (IEEE32Exec.Interval32.mul centered centered).relu
+        let centered := Binary.Interval.sub input.enclosure mean
+        let squared := (Binary.Interval.relu (Binary.Interval.mul centered centered))
         let variance := meanLeftRange normalizedSize squared
-        let epsilon : ExecFloat.Binary 8 23 := TorchLean.normalizationEpsilon
-        let stabilized := IEEE32Exec.Interval32.add variance
-          (IEEE32Exec.Interval32.point epsilon)
+        let epsilon : Binary 8 23 := TorchLean.normalizationEpsilon
+        let stabilized := Binary.Interval.add variance
+          (Binary.Interval.point epsilon)
         if nonnegativeEndpoint stabilized.lo && nonnegativeEndpoint stabilized.hi then
-          let denominator := stabilized.sqrt
-          if denominator.containsZero then
+          let denominator := (Binary.Interval.sqrt stabilized)
+          if (Binary.Interval.containsZero denominator) then
             throw s!"numerical certificate: node {node.id} layernorm denominator may be zero"
           pure (.layerNormLeft parent axis normalizedSize,
-            IEEE32Exec.Interval32.div centered denominator)
+            Binary.Interval.div centered denominator)
         else
           throw s!"numerical certificate: node {node.id} layernorm variance range became negative"
     | _, _ => throw (arityError "layer normalization" node "one parent")
@@ -648,7 +640,7 @@ def reluContract : GraphRangeContract where
     match node.parents with
     | #[parent] => do
         let input <- parentRange context.ranges parent
-        pure (.relu parent, input.relu)
+        pure (.relu parent, (Binary.Interval.relu input))
     | _ => throw (arityError "ReLU" node "one parent")
 
 /-- Absolute-value interval contract. -/
@@ -659,7 +651,7 @@ def absContract : GraphRangeContract where
     match node.parents with
     | #[parent] => do
         let input <- parentRange context.ranges parent
-        pure (.abs parent, input.abs)
+        pure (.abs parent, (Binary.Interval.abs input))
     | _ => throw (arityError "absolute value" node "one parent")
 
 /-- Square-root contract with a checked nonnegative domain. -/
@@ -671,14 +663,14 @@ def sqrtContract : GraphRangeContract where
     | #[parent] => do
         let input <- parentRange context.ranges parent
         if nonnegativeEndpoint input.lo && nonnegativeEndpoint input.hi then
-          pure (.sqrtNonnegative parent, input.sqrt)
+          pure (.sqrtNonnegative parent, (Binary.Interval.sqrt input))
         else
           throw s!"numerical certificate: node {node.id} square-root range contains negative values"
     | _ => throw (arityError "square root" node "one parent")
 
 /-- Constructor for bounded transcendental contracts. -/
 def boundedUnaryContract (op : BackendOp) (rule : Nat -> RangeRule)
-    (enclosure : IEEE32Exec.Interval32) : GraphRangeContract where
+    (enclosure : Interval (Binary 8 23)) : GraphRangeContract where
   key := .backend op
   name := s!"{op.name} codomain"
   derive := fun _ node =>
@@ -697,9 +689,9 @@ def defaultContracts : Array GraphRangeContract :=
   , maxPoolPadContract
   , averagePoolContract false
   , averagePoolContract true
-  , binaryContract .add .add IEEE32Exec.Interval32.add
-  , binaryContract .sub .sub IEEE32Exec.Interval32.sub
-  , binaryContract .mul .mul IEEE32Exec.Interval32.mul
+  , binaryContract .add .add Binary.Interval.add
+  , binaryContract .sub .sub Binary.Interval.sub
+  , binaryContract .mul .mul Binary.Interval.mul
   , inverseContract
   , hullContract .max
   , hullContract .min

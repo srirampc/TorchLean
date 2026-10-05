@@ -424,9 +424,10 @@ b^2 = 0.64
 off-diagonal max |cov| = 0.00081
 ```
 
-Read the columns against the two theorems. The empirical mean approaches `a • x0`, which is
-`integral_id_forwardNoising`. Each empirical variance approaches $`b^2=0.64` and the three agree
-with each other, which is `variance_dual_forwardNoising` read along the three coordinate directions.
+Read this recorded Python output against the two theorems. The empirical mean is near `a • x0`,
+the exact mean given by `integral_id_forwardNoising`. The three empirical variances are near
+$`b^2=0.64`, the value given by `variance_dual_forwardNoising` along each coordinate direction.
+This finite sample illustrates those identities; it does not prove convergence.
 The largest off-diagonal covariance is $`8\times10^{-4}`, consistent with the same theorem read
 along the diagonal directions $`(e_i\pm e_j)/\sqrt2`, whose equal variances imply zero
 cross-covariance by expansion. Gaussianity then connects
@@ -647,8 +648,9 @@ theorem would need to relate their definitions across all inputs, including thei
 
 The rules above are for one vector. Real training passes a batch, and the interesting part is that
 the three gradients do not batch the same way: the input gradient gets one row per sample, while the
-weight and bias gradients *accumulate* across samples. `linearDerivSpec` does this over any nonempty
-leading shape by flattening the leading axes:
+weight and bias gradients *accumulate* across samples. `linearDerivSpec` does this over any
+leading shape
+with positive total size by flattening the leading axes:
 
 ```lean (name := batchRun)
 -- Accumulate shared parameter gradients while keeping one
@@ -771,8 +773,9 @@ that merely unfolds the definition of a derivative helper. In the sigmoid signat
 the executable formula's real interpretation to calculus. The universal `∀ x` means no input
 point is omitted from this real-valued result.
 
-The proof constructs derivatives of negation, exponential, addition, and inverse, then uses the
-chain rule. The form $`\sigma(1-\sigma)` can reuse the forward sigmoid value without evaluating
+The proof identifies both branches of `sigmoidSpec` with Mathlib's `Real.sigmoid` over the reals
+using `sigmoid_eq_inv_exp`, then reuses `Real.hasDerivAt_sigmoid`. The form $`\sigma(1-\sigma)`
+can reuse the forward sigmoid value without evaluating
 $`e^{-x}/(1+e^{-x})^2` separately. The theorem's right-hand side uses this factored expression.
 
 ReLU is different:
@@ -799,7 +802,8 @@ relu_deriv_correct : ∀ (x : ℝ), x ≠ 0 →
     (Activation.Math.reluDerivSpec x) x
 ```
 
-The same kind of nonzero hypothesis appears for leaky ReLU and general-parameter ELU. Smooth
+The same kind of nonzero hypothesis appears for leaky ReLU (also requiring a positive slope) and
+general-parameter ELU. Smooth
 activations such as sigmoid, tanh, softplus, SiLU, and the chosen GELU formula have global
 derivative theorems; guarded functions such as `safe_log` expose their domain parameter instead.
 
@@ -865,8 +869,8 @@ That convention is outside the derivative theorem:
 0.250000
 ```
 
-PyTorch makes the same choice: `torch.relu` at `0.0` has gradient `0.0`, and
-`torch.sigmoid(0.).backward()` gives `0.25`, matching the two sigmoid values above. So the
+In the recorded PyTorch comparison, ReLU at a scalar tensor containing `0.0` has gradient `0.0`,
+and sigmoid at that input has gradient `0.25`, matching the two sigmoid values above. So the
 ReLU subgradient convention agrees. The forward value at signed zero has a separate behavior:
 
 ```lean (name := signedZero)
@@ -885,10 +889,10 @@ ReLU subgradient convention agrees. The forward value at signed zero has a separ
 inf
 ```
 
-The second `#eval` is there because the first one is not conclusive: Lean prints negative zero as
-`-0.000000`, but dividing is the way to be certain, and `inf` rather than `-inf` proves the result
-is $`+0`. PyTorch returns $`-0.0` for `torch.relu(-0.)`, because it implements ReLU as a clamp that
-passes the input through, while TorchLean's spec explicitly returns scalar zero when `x == 0`. That
+The second `#eval` checks the sign independently of decimal formatting: division yields `inf`
+for $`+0` and `-inf` for $`-0`, so the result establishes that the selected zero is positive.
+The recorded CPU comparison preserves negative zero through ReLU. This describes that execution,
+not every PyTorch backend. TorchLean's spec explicitly returns scalar zero when `x == 0`. That
 equality
 test also succeeds for `-0.0`, so the selected branch returns `+0.0`. Away from zero it uses
 `max x 0`; the real identity `reluSpec_eq_max` recovers the usual maximum formula. Both are IEEE 754
@@ -977,9 +981,10 @@ differentiability proof, while changing the input may require checking the pre-a
 
 Beyond the analytic layer, a runtime-autograd proof also has to show that the tape records the graph
 correctly, that saved tensors and cotangent accumulation are right, and that the selected provider
-implementation agrees with the operator semantics. The first two are proved in TorchLean for the
-tape model: `backwardDenseAll_lowerGraphToTape_eq_backpropAllCtx` shows the sweep the eager trainer
-actually executes equals the proved backpropagation on any lowered proof-carrying graph, and over
+implementation agrees with the operator semantics. The first two are proved for tapes lowered from a
+proof-carrying graph: `backwardDenseAll_lowerGraphToTape_eq_backpropAllCtx` shows that the dense
+reverse evaluator
+on a lowered proof-carrying graph equals its proved backpropagation, and over
 `ℝ` its companion `backwardDenseAll_lowerGraphToTape_adjoint_fderiv` equates that executed sweep
 with the adjoint of the Fréchet derivative. The algebraic equality is generic over a commutative
 semiring; the Fréchet-adjoint theorem

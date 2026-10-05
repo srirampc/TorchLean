@@ -8,6 +8,7 @@ module
 
 public import FloatLib.Floats.Formats.IEEE754.Native
 public import FloatLib.Floats.Formats.BinaryInterchange.Configured.Rounding.Runtime
+public import FloatLib.Floats.Formats.BinaryInterchange.DirectedSemantics.Rational.Conversion
 
 /-!
 # Arithmetic for nested quotient rules
@@ -30,20 +31,24 @@ inductive QuotientCoefficients : Nat → Type where
 
 namespace QuotientCoefficients
 
+/-- Constant coefficient, obtained by setting all square-zero variables to zero. -/
 def primal : {n : Nat} → QuotientCoefficients n → Rat
   | _, .scalar x => x
   | _, .dual x _ => primal x
 
+/-- Add corresponding rational coefficients without rounding. -/
 def add : {n : Nat} → QuotientCoefficients n → QuotientCoefficients n →
     QuotientCoefficients n
   | _, .scalar x, .scalar y => .scalar (x + y)
   | _, .dual x dx, .dual y dy => .dual (add x y) (add dx dy)
 
+/-- Subtract corresponding rational coefficients without rounding. -/
 def sub : {n : Nat} → QuotientCoefficients n → QuotientCoefficients n →
     QuotientCoefficients n
   | _, .scalar x, .scalar y => .scalar (x - y)
   | _, .dual x dx, .dual y dy => .dual (sub x y) (sub dx dy)
 
+/-- Multiply coefficient trees using the product rule at each square-zero extension. -/
 def mul : {n : Nat} → QuotientCoefficients n → QuotientCoefficients n →
     QuotientCoefficients n
   | _, .scalar x, .scalar y => .scalar (x * y)
@@ -88,18 +93,6 @@ instance (priority := low) {α : Type} [Add α] [Sub α] [Mul α] [Div α] :
 
 namespace QuotientArithmetic
 
-@[inline] def addChecked {α : Type} [ops : QuotientArithmetic α] (x y : α) : α × Bool :=
-  let (value, flags) := ops.addWithFlags x y
-  (value, 0 < flags)
-
-@[inline] def subChecked {α : Type} [ops : QuotientArithmetic α] (x y : α) : α × Bool :=
-  let (value, flags) := ops.subWithFlags x y
-  (value, 0 < flags)
-
-@[inline] def mulChecked {α : Type} [ops : QuotientArithmetic α] (x y : α) : α × Bool :=
-  let (value, flags) := ops.mulWithFlags x y
-  (value, 0 < flags)
-
 @[inline] def divChecked {α : Type} [ops : QuotientArithmetic α] (x y : α) : α × Bool :=
   let (value, flags) := ops.divWithFlags x y
   (value, 0 < flags)
@@ -117,176 +110,119 @@ operations available for specialization in the caller.
   let b ← encode y
   if b.primal == 0 then none else decode (QuotientCoefficients.div a b)
 
-def finiteRat? (bits : UInt64) : Option Rat :=
-  FloatLib.Floats.ExecFloat.Binary.toRat?
-    (FloatLib.Floats.ExecFloat.Binary.ofBits64 bits)
+/-- Native constants and rational rounding, selected by the scalar type. -/
+class NativeFormat (α : Type) where
+  zero : α
+  minNormal : α
+  negMinNormal : α
+  /-- Round a rational once to the native scalar type. -/
+  round : Rat → α
 
-def roundFloat (value : Rat) : Float :=
-  FloatLib.Floats.ExecFloat.Binary.toFloat <|
+-- Initialize the native constants once, outside all checked operations.
+@[noinline] instance : NativeFormat Float where
+  zero := Float.ofBits 0
+  minNormal := Float.ofBits 0x0010000000000000
+  negMinNormal := Float.ofBits 0x8010000000000000
+  round value := FloatLib.Floats.ExecFloat.Binary.toFloat <|
     FloatLib.Floats.ExecFloat.Binary.ofModel <|
-      FloatLib.Floats.Formats.BinaryInterchange.Model.roundRat
-        FloatLib.Floats.Formats.BinaryInterchange.FloatFormat.binary64
-        (value.num < 0) value.num.natAbs value.den
+      FloatLib.Floats.Formats.BinaryInterchange.Model.roundRatQ
+        FloatLib.Floats.Formats.BinaryInterchange.FloatFormat.binary64 value
 
-def roundFloat32 (value : Rat) : Float32 :=
-  FloatLib.Floats.ExecFloat.Binary.toFloat32 <|
+@[noinline] instance : NativeFormat Float32 where
+  zero := Float32.ofBits 0
+  minNormal := Float32.ofBits 0x00800000
+  negMinNormal := Float32.ofBits 0x80800000
+  round value := FloatLib.Floats.ExecFloat.Binary.toFloat32 <|
     FloatLib.Floats.ExecFloat.Binary.ofModel <|
-      FloatLib.Floats.Formats.BinaryInterchange.Model.roundRat
-        FloatLib.Floats.Formats.BinaryInterchange.FloatFormat.binary32
-        (value.num < 0) value.num.natAbs value.den
+      FloatLib.Floats.Formats.BinaryInterchange.Model.roundRatQ
+        FloatLib.Floats.Formats.BinaryInterchange.FloatFormat.binary32 value
 
--- Native constants are initialized once, outside all checked operations.
-@[noinline] def zero64 : Float := Float.ofBits 0
-@[noinline] def minNormal64 : Float := Float.ofBits 0x0010000000000000
-@[noinline] def negMinNormal64 : Float := Float.ofBits 0x8010000000000000
+export NativeFormat (round)
 
-@[noinline] def zero32 : Float32 := Float32.ofBits 0
-@[noinline] def minNormal32 : Float32 := Float32.ofBits 0x00800000
-@[noinline] def negMinNormal32 : Float32 := Float32.ofBits 0x80800000
+namespace Native
 
--- The supplied zero predicate is an actual operation and the specialization key.
--- For finite values x - x is zero; infinities and NaNs instead produce NaN.
--- Excluding zero from the interval (-minNormal, minNormal) leaves the subnormals.
-@[inline] def zeroFlag64 (x : Float) : UInt8 := (x == zero64).toUInt8
+variable {α : Type} [NativeFormat α] [BEq α] [LT α] [DecidableLT α] [Sub α]
+
+@[inline] def zeroFlag (x : α) : UInt8 := (x == NativeFormat.zero).toUInt8
 
 -- A finite self-difference is zero; a nonfinite self-difference is NaN.
 -- Reflexive equality of that difference detects NaN without a floating zero constant.
-@[inline] def nonfiniteFlag64 (x : Float) : UInt8 :=
+@[inline] def nonfiniteFlag (x : α) : UInt8 :=
   let difference := x - x
   (difference == difference).toUInt8 ^^^ 1
 
-@[inline] def rangeFlags64Using (zero : Float → UInt8) (x : Float) : UInt8 :=
-  if ((decide (negMinNormal64 < x)).toUInt8 &&&
-      (decide (x < minNormal64)).toUInt8) == 1 then
+-- Excluding zero from the interval (-minNormal, minNormal) leaves the subnormals.
+@[inline] def rangeFlags (zero : α → UInt8) (x : α) : UInt8 :=
+  if ((decide (NativeFormat.negMinNormal < x)).toUInt8 &&&
+      (decide (x < NativeFormat.minNormal)).toUInt8) == 1 then
     zero x ^^^ 1
-  else nonfiniteFlag64 x
+  else nonfiniteFlag x
 
-@[inline] def rangeFlags64 (x : Float) : UInt8 :=
-  rangeFlags64Using zeroFlag64 x
-
-@[inline] def exposed64 (x : Float) : Bool := 0 < rangeFlags64 x
+/-- Whether a native result is nonfinite or subnormal; its type selects the format. -/
+@[inline] def rangeLoss (x : α) : Bool := 0 < rangeFlags zeroFlag x
 
 -- Only predicates cross this boundary. Value-producing arithmetic remains inline.
 -- The open interval contains only finite values. Its branch needs zero checks;
 -- outside it, only nonfiniteness can raise a flag.
-@[noinline, specialize zero] def addSub64Flags (zero : Float → UInt8)
-    (z : Float) : UInt8 :=
-  rangeFlags64Using zero z
+@[noinline, specialize] def addSubFlags (zero : α → UInt8) (z : α) : UInt8 :=
+  rangeFlags zero z
 
 /-- Range flags for the actual native product `z = x * y`, using native zero equality.
 The open subnormal interval includes zero; nonzero inputs detect a product rounded to zero.
 This formula requires the actual product, not an independently supplied third value. -/
-@[noinline, specialize zero] def product64Flags (zero : Float → UInt8)
-    (x y z : Float) : UInt8 :=
-  if ((decide (negMinNormal64 < z)).toUInt8 &&&
-      (decide (z < minNormal64)).toUInt8) == 1 then
+@[noinline, specialize] def productFlags (zero : α → UInt8) (x y z : α) : UInt8 :=
+  if ((decide (NativeFormat.negMinNormal < z)).toUInt8 &&&
+      (decide (z < NativeFormat.minNormal)).toUInt8) == 1 then
     (zero x ^^^ 1) &&& (zero y ^^^ 1)
-  else nonfiniteFlag64 z
+  else nonfiniteFlag z
 
 /-- Range flags for the actual native quotient `z = x / y`, using native zero equality.
 A zero denominator already makes the result nonfinite. A zero or subnormal result with a
 nonzero numerator requires replay. This formula assumes `z` is the actual division result. -/
-@[noinline, specialize zero] def quotient64Flags (zero : Float → UInt8)
-    (x z : Float) : UInt8 :=
-  if ((decide (negMinNormal64 < z)).toUInt8 &&&
-      (decide (z < minNormal64)).toUInt8) == 1 then
+@[noinline, specialize] def quotientFlags (zero : α → UInt8) (x z : α) : UInt8 :=
+  if ((decide (NativeFormat.negMinNormal < z)).toUInt8 &&&
+      (decide (z < NativeFormat.minNormal)).toUInt8) == 1 then
     zero x ^^^ 1
-  else nonfiniteFlag64 z
+  else nonfiniteFlag z
 
-@[inline] def add64WithFlags (x y : Float) : Float × UInt8 :=
+@[inline] def addWithFlags [Add α] (x y : α) : α × UInt8 :=
   let z := x + y
-  (z, addSub64Flags zeroFlag64 z)
+  (z, addSubFlags zeroFlag z)
 
-@[inline] def sub64WithFlags (x y : Float) : Float × UInt8 :=
+@[inline] def subWithFlags (x y : α) : α × UInt8 :=
   let z := x - y
-  (z, addSub64Flags zeroFlag64 z)
+  (z, addSubFlags zeroFlag z)
 
-@[inline] def mul64WithFlags (x y : Float) : Float × UInt8 :=
+@[inline] def mulWithFlags [Mul α] (x y : α) : α × UInt8 :=
   let z := x * y
-  (z, product64Flags zeroFlag64 x y z)
+  (z, productFlags zeroFlag x y z)
 
-@[inline] def div64WithFlags (x y : Float) : Float × UInt8 :=
+@[inline] def divWithFlags [Div α] (x y : α) : α × UInt8 :=
   let z := x / y
-  (z, quotient64Flags zeroFlag64 x z)
+  (z, quotientFlags zeroFlag x z)
 
-@[inline] def zeroFlag32 (x : Float32) : UInt8 := (x == zero32).toUInt8
-
--- A finite self-difference is zero; a nonfinite self-difference is NaN.
--- Reflexive equality of that difference detects NaN without a floating zero constant.
-@[inline] def nonfiniteFlag32 (x : Float32) : UInt8 :=
-  let difference := x - x
-  (difference == difference).toUInt8 ^^^ 1
-
-@[inline] def rangeFlags32Using (zero : Float32 → UInt8) (x : Float32) : UInt8 :=
-  if ((decide (negMinNormal32 < x)).toUInt8 &&&
-      (decide (x < minNormal32)).toUInt8) == 1 then
-    zero x ^^^ 1
-  else nonfiniteFlag32 x
-
-@[inline] def rangeFlags32 (x : Float32) : UInt8 :=
-  rangeFlags32Using zeroFlag32 x
-
-@[inline] def exposed32 (x : Float32) : Bool := 0 < rangeFlags32 x
-
--- Only predicates cross this boundary. Value-producing arithmetic remains inline.
-@[noinline, specialize zero] def addSub32Flags (zero : Float32 → UInt8)
-    (z : Float32) : UInt8 :=
-  rangeFlags32Using zero z
-
-/-- Range flags for the actual native product `z = x * y`, using native zero equality.
-The open subnormal interval includes zero; nonzero inputs detect a product rounded to zero.
-This formula requires the actual product, not an independently supplied third value. -/
-@[noinline, specialize zero] def product32Flags (zero : Float32 → UInt8)
-    (x y z : Float32) : UInt8 :=
-  if ((decide (negMinNormal32 < z)).toUInt8 &&&
-      (decide (z < minNormal32)).toUInt8) == 1 then
-    (zero x ^^^ 1) &&& (zero y ^^^ 1)
-  else nonfiniteFlag32 z
-
-/-- Range flags for the actual native quotient `z = x / y`, using native zero equality.
-A zero denominator already makes the result nonfinite. A zero or subnormal result with a
-nonzero numerator requires replay. This formula assumes `z` is the actual division result. -/
-@[noinline, specialize zero] def quotient32Flags (zero : Float32 → UInt8)
-    (x z : Float32) : UInt8 :=
-  if ((decide (negMinNormal32 < z)).toUInt8 &&&
-      (decide (z < minNormal32)).toUInt8) == 1 then
-    zero x ^^^ 1
-  else nonfiniteFlag32 z
-
-@[inline] def add32WithFlags (x y : Float32) : Float32 × UInt8 :=
-  let z := x + y
-  (z, addSub32Flags zeroFlag32 z)
-
-@[inline] def sub32WithFlags (x y : Float32) : Float32 × UInt8 :=
-  let z := x - y
-  (z, addSub32Flags zeroFlag32 z)
-
-@[inline] def mul32WithFlags (x y : Float32) : Float32 × UInt8 :=
-  let z := x * y
-  (z, product32Flags zeroFlag32 x y z)
-
-@[inline] def div32WithFlags (x y : Float32) : Float32 × UInt8 :=
-  let z := x / y
-  (z, quotient32Flags zeroFlag32 x z)
+end Native
 
 @[inline] instance : QuotientArithmetic Float where
   supported := true
-  addWithFlags := add64WithFlags
-  subWithFlags := sub64WithFlags
-  mulWithFlags := mul64WithFlags
-  divWithFlags := div64WithFlags
-  encode x := (finiteRat? x.toBits).map QuotientCoefficients.scalar
-  decode | .scalar x => some (roundFloat x)
+  addWithFlags x y := Native.addWithFlags x y
+  subWithFlags x y := Native.subWithFlags x y
+  mulWithFlags x y := Native.mulWithFlags x y
+  divWithFlags x y := Native.divWithFlags x y
+  encode x := (FloatLib.Floats.ExecFloat.Binary.toRat?
+    (FloatLib.Floats.ExecFloat.Binary.ofFloat x)).map QuotientCoefficients.scalar
+  decode | .scalar x => some (round x)
   copyPrimal x _ := x
 
 @[inline] instance : QuotientArithmetic Float32 where
   supported := true
-  addWithFlags := add32WithFlags
-  subWithFlags := sub32WithFlags
-  mulWithFlags := mul32WithFlags
-  divWithFlags := div32WithFlags
-  encode x := (finiteRat? x.toFloat.toBits).map QuotientCoefficients.scalar
-  decode | .scalar x => some (roundFloat32 x)
+  addWithFlags x y := Native.addWithFlags x y
+  subWithFlags x y := Native.subWithFlags x y
+  mulWithFlags x y := Native.mulWithFlags x y
+  divWithFlags x y := Native.divWithFlags x y
+  encode x := (FloatLib.Floats.ExecFloat.Binary.toRat?
+    (FloatLib.Floats.ExecFloat.Binary.ofFloat x.toFloat)).map QuotientCoefficients.scalar
+  decode | .scalar x => some (round x)
   copyPrimal x _ := x
 
 section Configured
@@ -338,8 +274,7 @@ instance configured : QuotientArithmetic Value where
     (outcome.1, configuredFlags outcome ||| lostZero.toUInt8)
   encode x := (ExecFloat.Binary.toRat? x).map QuotientCoefficients.scalar
   decode
-    | .scalar x => some <| ExecFloat.Binary.ofModel <|
-        Model.roundRat format (x.num < 0) x.num.natAbs x.den
+    | .scalar x => some <| ExecFloat.Binary.ofModel <| Model.roundRatQ format x
   copyPrimal x _ := x
 
 end Configured

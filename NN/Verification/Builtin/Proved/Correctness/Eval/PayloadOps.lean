@@ -62,6 +62,16 @@ def singletonBatchNormEvalPayload {α : Type} [TorchLean.Storage α] [Context α
 def constGraph (s : Shape) : Graph :=
   { nodes := #[{ id := 0, parents := #[], kind := .const s, outShape := s }] }
 
+/-- Local IR semantics for a flat `const` node whose payload entry is present. -/
+theorem evalConst_eq_unflatten_of_const?
+    {α : Type} [TorchLean.Storage α] [Context α]
+    (payload : Payload α) (id : Nat) (s : Shape)
+    (v : Tensor α [Spec.Shape.size s])
+    (hPayload : payload.const? id = some { n := Spec.Shape.size s, v := v }) :
+    Graph.evalConst (α := α) (payload := payload) (id := id) (s := s) =
+      Except.ok (Tensor.unflattenSpec (α := α) s v) := by
+  simp [Graph.evalConst, hPayload, Graph.castDimScalar, Pure.pure, Except.pure]
+
 /-- Local IR semantics for a payload-backed flat `const` node. -/
 theorem evalConst_eq_unflatten
     {α : Type} [TorchLean.Storage α] [Context α]
@@ -71,7 +81,9 @@ theorem evalConst_eq_unflatten
     Graph.evalConst (α := α) (payload := singletonConstPayload (α := α) id c) (id := id) (s := s)
       =
       Except.ok (Tensor.unflattenSpec (α := α) s v) := by
-  simp [Graph.evalConst, singletonConstPayload, Graph.castDimScalar, Pure.pure, Except.pure]
+  intro c
+  exact evalConst_eq_unflatten_of_const? (singletonConstPayload (α := α) id c) id s v
+    (singletonAt_self id c)
 
 /-- Local IR semantics for a payload-backed flat `const` node. -/
 theorem evalAt_const_eq_unflatten
@@ -101,6 +113,28 @@ theorem evalConst_missing_payload
   simp [Graph.evalConst, hMissing]
   rfl
 
+/-- Local IR semantics for a `linear` node whose payload entry is present. -/
+theorem evalLinear_eq_affine_of_linear?
+    {α : Type} [TorchLean.Storage α] [Context α]
+    (payload : Payload α) (id outDim inDim : Nat)
+    (W : Tensor α [outDim, inDim])
+    (b : Tensor α [outDim])
+    (x : Tensor α [inDim])
+    (hPayload :
+      payload.linear? id = some { outDim := outDim, inDim := inDim, W := W, b := b }) :
+    Graph.evalLinear (α := α) (payload := payload) (id := id)
+        (x := Spec.SomeTensor.mk (α := α) (.dim inDim .scalar) x)
+        (outShape := .dim outDim .scalar)
+      =
+      Except.ok
+        (Spec.SomeTensor.mk (α := α) (.dim outDim .scalar)
+          (Tensor.addSpec (α := α)
+            (Spec.matVecMulSpec (α := α) (m := outDim) (n := inDim) W x) b)) := by
+  simp [Graph.evalLinear, Graph.linearLeading, hPayload, Graph.expectShape,
+    Shape.toList, Shape.ofList, Shape.concat, Bind.bind, Except.bind, Pure.pure, Except.pure]
+  cases x
+  rfl
+
 /-- Local IR semantics for a payload-backed `linear` node. -/
 theorem evalLinear_eq_affine
     {α : Type} [TorchLean.Storage α] [Context α]
@@ -117,10 +151,9 @@ theorem evalLinear_eq_affine
         (Spec.SomeTensor.mk (α := α) (.dim outDim .scalar)
           (Tensor.addSpec (α := α)
             (Spec.matVecMulSpec (α := α) (m := outDim) (n := inDim) W x) b)) := by
-  simp [Graph.evalLinear, Graph.linearLeading, singletonLinearPayload, Graph.expectShape,
-    Shape.toList, Shape.ofList, Shape.concat, Bind.bind, Except.bind, Pure.pure, Except.pure]
-  cases x
-  rfl
+  intro p
+  exact evalLinear_eq_affine_of_linear? (singletonLinearPayload (α := α) id p) id outDim inDim
+    W b x (singletonAt_self id p)
 
 /-- Local IR semantics for a payload-backed `linear` node. -/
 theorem evalAt_linear_eq_affine
@@ -203,63 +236,15 @@ theorem evalConv_eq_spec
             (dilation := params.dilation) (paddingBefore := params.padding)
             (paddingAfter := params.paddingAfter) params.groups params.spec.kernel params.spec.bias)
           x)) := by
-  have hInfer' :
-      OpContracts.inferConvConfigOutShape "conv"
-          { spatialRank := params.spatialRank
-            kernel := params.kernel
-            stride := params.stride
-            padding := params.padding
-            dilation := params.dilation
-            paddingAfter := params.paddingAfter
-            groups := params.groups
-            channelAxis := 0
-            inChannels := params.inChannels
-            outChannels := params.outChannels }
-          (Shape.ofList (params.inChannels :: Tensor.to params.inputSpatial (List Nat))) =
-            .ok outShape := by
-    simpa only [convolutionConfig] using hInfer
-  have hInferData :
-      OpContracts.inferConvConfigOutShape "conv"
-          { spatialRank := params.spatialRank
-            kernel := params.kernel
-            stride := params.stride
-            padding := params.padding
-            dilation := params.dilation
-            paddingAfter := params.paddingAfter
-            groups := params.groups
-            channelAxis := 0
-            inChannels := params.inChannels
-            outChannels := params.outChannels }
-          (Shape.ofList (params.inChannels :: params.inputSpatial.data.toList)) =
-            .ok outShape := by
-    simpa only [Tensor.to_list_eq_data] using hInfer'
   have hMatches : params.matchesConfig (convolutionConfig params) = true := by
-    change
-      (params.spatialRank == params.spatialRank &&
-        params.inChannels == params.inChannels &&
-        params.outChannels == params.outChannels &&
-        Tensor.to params.kernel (List Nat) == Tensor.to params.kernel (List Nat) &&
-        Tensor.to params.stride (List Nat) == Tensor.to params.stride (List Nat) &&
-        Tensor.to params.padding (List Nat) == Tensor.to params.padding (List Nat) &&
-        Tensor.to params.paddingAfter (List Nat) == Tensor.to params.paddingAfter (List Nat) &&
-        Tensor.to params.dilation (List Nat) == Tensor.to params.dilation (List Nat) &&
-        params.groups == params.groups) = true
-    simp
-  have hMatchesData :
-      params.matchesConfig
-          { spatialRank := params.spatialRank
-            kernel := params.kernel
-            stride := params.stride
-            padding := params.padding
-            dilation := params.dilation
-            paddingAfter := params.paddingAfter
-            groups := params.groups
-            channelAxis := 0
-            inChannels := params.inChannels
-            outChannels := params.outChannels } = true := by
-    simpa only [convolutionConfig] using hMatches
-  simp [Graph.evalConv, hInferData, singletonConvPayload, convolutionConfig,
-    hMatchesData, Tensor.to_list_eq_data, ConvParams.input, Shape.ofList, Shape.concat,
+    simp [ConvParams.matchesConfig, convolutionConfig, Tensor.to_list_eq_data]
+    exact ⟨⟨⟨⟨rfl, rfl⟩, rfl⟩, rfl⟩, rfl⟩
+  -- The evaluator reads the configuration fields directly, so expose the record (and the spatial
+  -- list underlying `Tensor.to`) in the hypotheses before rewriting with them.
+  simp only [convolutionConfig] at hInfer hMatches
+  simp only [Tensor.to_list_eq_data] at hInfer
+  simp [Graph.evalConv, hInfer, singletonConvPayload, convolutionConfig,
+    hMatches, Tensor.to_list_eq_data, ConvParams.input, Shape.ofList, Shape.concat,
     Bind.bind, Except.bind, Pure.pure, Except.pure]
   split
   · rfl

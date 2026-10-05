@@ -31,8 +31,11 @@ PyTorch analogies:
 - `torch.softmax` for turning per-component log-probabilities into responsibilities.
 
 Mixture weights must be positive and normalized within the scalar backend's validation tolerance.
-Covariances must be symmetric positive definite. Parameters outside this domain are reported as
-`none`. Scores use the stored weights directly: when the weights sum to one, their exponential sum
+Covariances must pass `covariancePositiveDefiniteSpec`: backend equality tests symmetry and computed
+leading principal determinants must compare positive. For exact real arithmetic this is Sylvester's
+criterion; passing the rounded test does not certify positive definiteness over the reals.
+Parameters failing the gate are reported as `none`. Scores use the stored weights directly:
+mathematically, when the weights sum to one, their exponential sum
 is a probability density. The default normalization tolerance also applies to exact scalar
 backends; callers needing a stricter gate can check `mixtureWeightsValidSpec` with zero tolerance.
 
@@ -94,9 +97,10 @@ def matrixSymmetricSpec {n : Nat}
 /--
 Executable Sylvester-criterion check for a symmetric positive-definite covariance matrix.
 
-The matrix must be symmetric and every nonempty leading principal minor must be positive. This is
-the domain on which the Gaussian density, inverse, and logarithmic determinant used below have
-their usual meaning.
+The matrix must compare symmetric and every computed nonempty leading principal determinant must
+compare positive. Over exact real arithmetic, Sylvester's criterion gives positive definiteness.
+For rounded backends, this is an executable domain check using backend equality, determinant, and
+order operations; it is not a certificate about an exact real matrix.
 -/
 def covariancePositiveDefiniteSpec {n : Nat}
     (matrix : Tensor α [n, n]) : Bool :=
@@ -145,7 +149,8 @@ def mixtureWeightsValidSpec {n : Nat} (weights : Tensor α [n])
 Check the dimensions, mixing weights, and covariance matrices before evaluating the model.
 
 The model needs at least one component and one feature. Its weights must be positive and satisfy
-the configured normalization tolerance, and every covariance must be symmetric positive definite.
+the configured normalization tolerance, and every covariance must pass
+`covariancePositiveDefiniteSpec`.
 Accepted weights are used as stored; this check does not rescale them to sum to exactly one.
 -/
 def gmmParametersValidSpec {nComponents nFeatures : Nat}
@@ -434,21 +439,18 @@ def logSumExpReduce {n : Nat} (logProbs : Tensor α [n]) (h : n ≠ 0) : α :=
   -- Step 1: Find maximum for numerical stability
   have inst : Shape.HasNonemptyAxis 0 (Shape.dim n .scalar) := by
     apply Shape.hasNonemptyAxisZeroOfNe h
-  let maxLogProb := reduceMax 0 logProbs inst.proof
-  have h_shape : shapeAfterSum (Shape.dim n Shape.scalar) 0 = Shape.scalar := by
-    simp [shapeAfterSum]
-  let max_log_prob' := item (tensorCast (Shape.scalar) h_shape.symm maxLogProb)
+  let maxLogProb := item (reduceMax 0 logProbs inst.proof)
 
   -- Step 2: Compute sum of exp(logProb - maxLogProb)
   let shiftedProbs := mapSpec
-    (fun logProb => MathFunctions.exp (logProb - max_log_prob')) logProbs
+    (fun logProb => MathFunctions.exp (logProb - maxLogProb)) logProbs
   let sumShifted := sumSpec shiftedProbs
 
   -- Step 3: Compute log(sumShifted) + maxLogProb
   if sumShifted > 0 then
-    MathFunctions.log sumShifted + max_log_prob'
+    MathFunctions.log sumShifted + maxLogProb
   else
-    max_log_prob'  -- Fallback if sum is zero
+    maxLogProb  -- Fallback when the sum does not compare positive
 
 /--
 Mixture log-likelihood $\log p(x)$ computed via log-sum-exp over components.
@@ -484,11 +486,12 @@ This file already provides `gmmExpectationSpec` (responsibilities for one sample
 below lift that to a batched dataset and implement a deterministic EM update step.
 
 Numerical notes:
-- If a component gets (near) zero total responsibility ($N_k\approx 0$), we keep that component’s
-  parameters unchanged (otherwise we’d divide by zero).
-- We add a small diagonal “jitter,” $\mathtt{Context.defaultEpsilon}\,I$,
-  to covariances to keep them
-  well-behaved.
+- When a component's total responsibility does not compare strictly positive, its mean, covariance,
+  and raw weight are retained. All raw weights then pass through the common normalization step.
+  There is no near-zero cutoff.
+- For a positive total, the covariance update adds diagonal jitter
+  $\mathtt{Context.defaultEpsilon}\,I$. This does not certify that the next model will pass the
+  rounded covariance-domain check.
 -/
 
 /--
@@ -506,14 +509,6 @@ def gmmResponsibilitiesBatchedSpec {nSamples nComponents nFeatures : Nat}
       (nFeatures := nFeatures) m (Tensor.unstack data i) hK)
   else
     none
-
-/-- Build a vector tensor from a function `Fin n -> α`. -/
-private def vecFromFn {n : Nat} (f : Fin n → α) : Tensor α [n] :=
-  Tensor.dim (fun i => Tensor.scalar (f i))
-
-/-- Build a matrix tensor from a function `Fin n -> Fin m -> α`. -/
-private def matFromFn {n m : Nat} (f : Fin n → Fin m → α) : Tensor α [n, m] :=
-  Tensor.dim (fun i => Tensor.dim (fun j => Tensor.scalar (f i j)))
 
 /--
 One EM step for a batched dataset.
@@ -533,7 +528,7 @@ def gmmEmStepSpec {nSamples nComponents nFeatures : Nat}
 
     -- N_k = Σ_i r_{ik}
     let Nk : Tensor α [nComponents] :=
-      vecFromFn (n := nComponents) (fun k =>
+      Tensor.ofFn (fun k =>
         (List.finRange nSamples).foldl (fun acc i =>
           acc + get2 resp i k
         ) 0)
@@ -573,7 +568,7 @@ def gmmEmStepSpec {nSamples nComponents nFeatures : Nat}
         let μ := Tensor.unstack means k
         if nk > 0 then
           let base :=
-            matFromFn (n := nFeatures) (m := nFeatures) (fun row column =>
+            Tensor.matrix (m := nFeatures) (n := nFeatures) (fun row column =>
               -- Both entries of a symmetric pair use the same ordered product and reduction.
               -- Computing the two triangles separately can round them differently, causing the
               -- covariance-domain check to reject the next EM step.

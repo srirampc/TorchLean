@@ -10,6 +10,7 @@ module -- shake: keep-downstream
 
 public import NN.API.Runtime -- shake: keep
 public import NN.Spec.RL.FiniteStochasticMDP -- shake: keep
+public import NN.Spec.RL.MarkovMDP -- shake: keep
 public import NN.Runtime.RL.Algorithms -- shake: keep
 public import NN.Runtime.RL.DQN.Autograd -- shake: keep
 public import NN.Runtime.RL.Eval -- shake: keep
@@ -70,6 +71,16 @@ export Spec.RL.FiniteStochastic
    bellmanPolicy bellmanOptimality)
 end finiteStochastic
 
+/-! The measure-theoretic MDP from `NN.Spec.RL.MarkovMDP`: a general state space whose transitions
+are probability kernels, with the expected next value as a Bochner integral. -/
+namespace markov
+export Spec.RL.Markov
+  (ValueFunction Policy MDP Valid
+   transitionMeasure
+   expectedNextValue actionValue
+   bellmanPolicy bellmanOptimality)
+end markov
+
 namespace bandits
 export Runtime.RL.Bandits
   (ValueState PreferenceState
@@ -100,16 +111,14 @@ export Runtime.RL.ValueLearning
 end value
 
 namespace replay
-export Runtime.RL.Replay (Transition Buffer)
+export Runtime.RL.Replay (Transition Buffer ofObservedTransition)
 export Runtime.RL.Replay.Buffer
   (empty size isEmpty isFull push pushMany getModulo? sampleContiguous sampleRandom)
 end replay
 
 namespace dqn
 export Runtime.RL.DQN
-  (transitionMSELoss transitionHuberLoss transitionDoubleHuberLoss
-   minibatchMSELoss minibatchHuberLoss minibatchDoubleHuberLoss
-   softUpdateScalar)
+  (loss softUpdateScalar)
 
 namespace autograd
 /-!
@@ -118,15 +127,14 @@ Differentiable DQN losses over TorchLean backend references.
 These helpers build scalar semi-gradient losses for eager or typed graph autograd. Targets and
 action indicators are detached; the selected online Q values receive the loss gradient.
 -/
-export Runtime.RL.DQN.Autograd (huberTDLoss actionHuberLossBatch)
+export Runtime.RL.DQN.Autograd (huberTDLoss actionHuberLoss)
 end autograd
 end dqn
 
 namespace policy
 export Runtime.RL.PolicyGradient
-  (actionPolicy actionProbability actionLogProbability entropyBonus
-   reinforceLoss actorLoss criticLoss actorCriticLoss
-   a2cLoss
+  (actionPolicy actionProbability actionLogProbability actionLogSoftmax entropyBonus
+   reinforceLoss criticLoss actorCriticLoss
    importanceRatio categoricalKL categoricalKLFromLogits
    trpoSurrogateFromRatio klPenalizedPolicyLoss sacCategoricalActorLoss
    ppoClippedObjectiveFromRatio ppoClippedObjective ppoLoss)
@@ -142,16 +150,16 @@ counterpart: they build scalar losses from backend refs, so the same formulas ca
 or typed graph autograd.
 -/
 export Runtime.RL.PolicyGradient.Autograd
-  (actionLogProbOneHotBatch
+  (actionLogProbOneHot
    entropyMean
-   ppoClippedObjectiveBatch
-   ppoLossBatch)
+   ppoClippedObjective
+   ppoLoss)
 end autograd
 end policy
 
 namespace eval
 export Runtime.RL.Eval
-  (greedyActionFromLogits episodeTotalReward episodeSessPath averageEpisodeTotalReward)
+  (greedyActionFromLogits episodeTotalReward episodePath averageEpisodeTotalReward)
 end eval
 
 end rl

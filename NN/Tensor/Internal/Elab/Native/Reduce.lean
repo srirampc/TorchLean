@@ -148,12 +148,6 @@ open Lean.Elab
 open Lean.Elab.Term
 open Lean.Meta
 
-/-- Name one generated native reduction callback for compact elaboration. -/
-def sealNativeReductionCallback (callback : Expr) :
-    TermElabM Expr := do
-  let name ← mkAuxName `_einops_native_reduce_callback
-  mkAuxDefinitionFor name callback (zetaDelta := true)
-
 /--
 Compile an ordered flat-reader reduction to nested native loops.
 
@@ -162,8 +156,7 @@ map recovered from a preceding shape-only transform.
 -/
 def compileNativeReduceFold?
     (step initial finish checked hKind inputTensor semanticInputTensor
-      hInputTensor read hRead sourceTensor inputFlatMap : Expr)
-    (checkedValue : Check.CheckedTransform) :
+      hInputTensor read hRead sourceTensor inputFlatMap : Expr) :
     TermElabM (Option Expr) := do
   let value ← mkAppM ``Check.CheckedTransform.value #[checked]
   let outputShape ← mkAppM ``Check.TransformPlan.output #[value]
@@ -216,12 +209,11 @@ def compileNativeReduceFold?
               mkAppOptM ``Fin.mk #[
                 some fiberSize, some fiberIndexNat, some hFiberIndex]
             let (compiledLogicalValue, logicalIndex, hCompiledLogicalValue) ←
-              compileReductionLogicalIndex checked checkedValue
+              compileReductionLogicalIndex checked
                 outputFin fiberFin outputIndexNat fiberIndexNat
             let logicalIndexBound ← mkAppM ``Fin.isLt #[logicalIndex]
             let compiledLogicalBound ←
-              indexBoundFromValueEquality logicalInputSize
-                hCompiledLogicalValue logicalIndexBound
+              mkAppM ``lt_of_eq_of_lt #[hCompiledLogicalValue, logicalIndexBound]
             let hNativeCompiledLogicalBound ←
               nativeLoopIndexBound compiledLogicalValue
                 hLogicalInputBound compiledLogicalBound
@@ -254,8 +246,8 @@ def compileNativeReduceFold?
                 hOptimizedRuntimeSourceIndex, hSourceIndex]
             let sourceIndexBound ← mkAppM ``Fin.isLt #[sourceIndex]
             let optimizedSourceIndexBound ←
-              indexBoundFromValueEquality sourceSize
-                hOptimizedRuntimeSourceIndex sourceIndexBound
+              mkAppM ``lt_of_eq_of_lt #[
+                hOptimizedRuntimeSourceIndex, sourceIndexBound]
             let (sourceValue, hSourceValue) ←
               compileInputRead sourceTensor sourceSize
                 optimizedSourceIndexValue optimizedSourceIndexValue
@@ -280,7 +272,8 @@ def compileNativeReduceFold?
                 hSourceValue
             return (nativeRead, hNativeRead)
   let (nativeRead, hNativeRead) := nativeReadData
-  let nativeRead ← sealNativeReductionCallback nativeRead
+  let callbackName ← mkAuxName `_einops_native_reduce_callback
+  let nativeRead ← mkAuxDefinitionFor callbackName nativeRead (zetaDelta := true)
   let hNativeReadType ← inferType hNativeRead
   let hNativeRead ← sealCertificate hNativeReadType hNativeRead
   let implementation ←

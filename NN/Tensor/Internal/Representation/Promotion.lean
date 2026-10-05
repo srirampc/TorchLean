@@ -5,6 +5,8 @@ Authors: TorchLean contributors
 -/
 module
 
+public import FloatLib.Floats.Formats.BinaryInterchange.Dyadic.Rational
+public import FloatLib.Floats.Formats.IEEE754.Native.Model
 public import NN.Tensor.Internal.Elab.Native.Pointwise
 
 /-!
@@ -57,15 +59,6 @@ class ElementPromotion (α β : Type) (γ : outParam Type) where
   /-- Convert the right element to the common type. -/
   right : β → γ
 
-namespace ElementCast
-
-/-- Apply the registered element conversion. -/
-@[inline] def apply {α : Type u} {β : Type v} [conversion : ElementCast α β]
-    (value : α) : β :=
-  conversion.cast value
-
-end ElementCast
-
 namespace ElementPromotion
 
 /-- Build a promotion from two explicit conversions to one result type. -/
@@ -116,39 +109,30 @@ instance : ElementCast Int Float32 where
 instance : ElementCast Int Float where
   cast := Float.ofInt
 
-/-- Round an exact rational through Lean's quotient and residual-bit model. -/
-def Rat.roundToFormat (format : Float.Model.Format) (value : Rat) :
-    Float.Model.UnpackedFloat :=
-  if value.num = 0 then
-    .zero .positive
-  else
-    let (mantissa, exponent, accuracy) :=
-      Float.Model.UnpackedFloat.divCore format value.num.natAbs 0 value.den 0
-    Float.Model.UnpackedFloat.roundWithAccuracy format
-      (if value.num < 0 then .negative else .positive) mantissa exponent accuracy
-
 /-- Convert an exact rational to binary32, rounding once to nearest with ties to even.
 
-Small exactly representable integers use native division. Larger values use Lean's float model
-before packing, so a finite ratio near one does not become `∞ / ∞`. -/
-def Rat.toFloat32 (value : Rat) : Float32 :=
-  if value.num.natAbs ≤ 2^24 && value.den ≤ 2^24 then
-    Float32.ofInt value.num / Float32.ofNat value.den
-  else
-    Float32.ofModel (Float32.Model.pack (Rat.roundToFormat .binary32 value))
+Small exactly representable integers use native division. Larger values use FloatLib's exact
+rational rounder, so a finite ratio near one does not become `∞ / ∞`. -/
+instance : ElementCast Rat Float32 where
+  cast value :=
+    if value.num.natAbs ≤ 2^24 && value.den ≤ 2^24 then
+      Float32.ofInt value.num / Float32.ofNat value.den
+    else
+      let rounded := FloatLib.Floats.Formats.BinaryInterchange.Model.roundRat
+        .binary32 (decide (value.num < 0)) value.num.natAbs value.den
+      Float32.ofModel
+        (FloatLib.Floats.Formats.BinaryInterchange.Model.toFloat32Model rounded)
 
 /-- Convert an exact rational to binary64, rounding once to nearest with ties to even. -/
-def Rat.toFloat (value : Rat) : Float :=
-  if value.num.natAbs ≤ 2^53 && value.den ≤ 2^53 then
-    Float.ofInt value.num / Float.ofNat value.den
-  else
-    Float.ofModel (Float.Model.pack (Rat.roundToFormat .binary64 value))
-
-instance : ElementCast Rat Float32 where
-  cast := Rat.toFloat32
-
 instance : ElementCast Rat Float where
-  cast := Rat.toFloat
+  cast value :=
+    if value.num.natAbs ≤ 2^53 && value.den ≤ 2^53 then
+      Float.ofInt value.num / Float.ofNat value.den
+    else
+      let rounded := FloatLib.Floats.Formats.BinaryInterchange.Model.roundRat
+        .binary64 (decide (value.num < 0)) value.num.natAbs value.den
+      Float.ofModel
+        (FloatLib.Floats.Formats.BinaryInterchange.Model.toFloatModel rounded)
 
 instance : ElementCast Float32 Float where
   cast := Float32.toFloat
@@ -273,18 +257,6 @@ class PointwiseAdd (α β : Type) (γ : outParam Type)
     apply left right coordinate =
       scalar (left coordinate) (right coordinate)
 
-namespace PointwiseAdd
-
-/-- Use the selected pointwise addition strategy. -/
-@[inline] def run {α β γ : Type}
-    [Storage α] [Storage β] [Storage γ]
-    [operation : PointwiseAdd α β γ]
-    {shape : Shape} (left : Rep α shape) (right : Rep β shape) :
-    Rep γ shape :=
-  operation.apply left right
-
-end PointwiseAdd
-
 /-- Execution strategy for pointwise tensor subtraction. -/
 class PointwiseSub (α β : Type) (γ : outParam Type)
     [Storage α] [Storage β] [Storage γ] where
@@ -299,18 +271,6 @@ class PointwiseSub (α β : Type) (γ : outParam Type)
     (coordinate : Coord shape) :
     apply left right coordinate =
       scalar (left coordinate) (right coordinate)
-
-namespace PointwiseSub
-
-/-- Use the selected pointwise subtraction strategy. -/
-@[inline] def run {α β γ : Type}
-    [Storage α] [Storage β] [Storage γ]
-    [operation : PointwiseSub α β γ]
-    {shape : Shape} (left : Rep α shape) (right : Rep β shape) :
-    Rep γ shape :=
-  operation.apply left right
-
-end PointwiseSub
 
 /-- Execution strategy for pointwise tensor multiplication. -/
 class PointwiseMul (α β : Type) (γ : outParam Type)
@@ -327,18 +287,6 @@ class PointwiseMul (α β : Type) (γ : outParam Type)
     apply left right coordinate =
       scalar (left coordinate) (right coordinate)
 
-namespace PointwiseMul
-
-/-- Use the selected pointwise multiplication strategy. -/
-@[inline] def run {α β γ : Type}
-    [Storage α] [Storage β] [Storage γ]
-    [operation : PointwiseMul α β γ]
-    {shape : Shape} (left : Rep α shape) (right : Rep β shape) :
-    Rep γ shape :=
-  operation.apply left right
-
-end PointwiseMul
-
 /-- Execution strategy for pointwise tensor division. -/
 class PointwiseDiv (α β : Type) (γ : outParam Type)
     [Storage α] [Storage β] [Storage γ] where
@@ -353,18 +301,6 @@ class PointwiseDiv (α β : Type) (γ : outParam Type)
     (coordinate : Coord shape) :
     apply left right coordinate =
       scalar (left coordinate) (right coordinate)
-
-namespace PointwiseDiv
-
-/-- Use the selected pointwise division strategy. -/
-@[inline] def run {α β γ : Type}
-    [Storage α] [Storage β] [Storage γ]
-    [operation : PointwiseDiv α β γ]
-    {shape : Shape} (left : Rep α shape) (right : Rep β shape) :
-    Rep γ shape :=
-  operation.apply left right
-
-end PointwiseDiv
 
 namespace Rep
 
@@ -384,25 +320,25 @@ instance (priority := low) {α β γ : Type}
 /-- Packed Float addition uses one exact-size native output loop. -/
 instance : PointwiseAdd Float Float Float where
   scalar := (· + ·)
-  apply := Tensor.Internal.Elab.Impl.nativeFloatAdd
+  apply := Tensor.Internal.Elab.Impl.nativeAdd
   apply_at left right coordinate := by
-    exact Tensor.Internal.Elab.Impl.nativeFloatAdd_apply
+    exact Tensor.Internal.Elab.Impl.nativeAdd_apply
       left right coordinate
 
 /-- Packed byte-to-float promotion is fused with packed Float addition. -/
 instance : PointwiseAdd UInt8 Float Float where
   scalar x y := x.toFloat + y
-  apply := Tensor.Internal.Elab.Impl.nativeUInt8FloatAdd
+  apply := Tensor.Internal.Elab.Impl.nativePromoteLeftAdd
   apply_at left right coordinate := by
-    exact Tensor.Internal.Elab.Impl.nativeUInt8FloatAdd_apply
+    exact Tensor.Internal.Elab.Impl.nativePromoteLeftAdd_apply
       left right coordinate
 
 /-- Packed Float addition is fused with packed byte-to-float promotion. -/
 instance : PointwiseAdd Float UInt8 Float where
   scalar x y := x + y.toFloat
-  apply := Tensor.Internal.Elab.Impl.nativeFloatUInt8Add
+  apply := Tensor.Internal.Elab.Impl.nativePromoteRightAdd
   apply_at left right coordinate := by
-    exact Tensor.Internal.Elab.Impl.nativeFloatUInt8Add_apply
+    exact Tensor.Internal.Elab.Impl.nativePromoteRightAdd_apply
       left right coordinate
 
 /-- Generic one-pass fallback for every supported subtraction promotion. -/
@@ -421,9 +357,9 @@ instance (priority := low) {α β γ : Type}
 /-- Packed Float subtraction uses one exact-size native output loop. -/
 instance : PointwiseSub Float Float Float where
   scalar := (· - ·)
-  apply := Tensor.Internal.Elab.Impl.nativeFloatSub
+  apply := Tensor.Internal.Elab.Impl.nativeSub
   apply_at left right coordinate := by
-    exact Tensor.Internal.Elab.Impl.nativeFloatSub_apply
+    exact Tensor.Internal.Elab.Impl.nativeSub_apply
       left right coordinate
 
 /-- Generic one-pass fallback for every supported multiplication promotion. -/
@@ -442,9 +378,9 @@ instance (priority := low) {α β γ : Type}
 /-- Packed Float multiplication uses one exact-size native output loop. -/
 instance : PointwiseMul Float Float Float where
   scalar := (· * ·)
-  apply := Tensor.Internal.Elab.Impl.nativeFloatMul
+  apply := Tensor.Internal.Elab.Impl.nativeMul
   apply_at left right coordinate := by
-    exact Tensor.Internal.Elab.Impl.nativeFloatMul_apply
+    exact Tensor.Internal.Elab.Impl.nativeMul_apply
       left right coordinate
 
 /-- Generic one-pass fallback for every supported division promotion. -/
@@ -463,9 +399,9 @@ instance (priority := low) {α β γ : Type}
 /-- Packed Float division uses one exact-size native output loop. -/
 instance : PointwiseDiv Float Float Float where
   scalar := (· / ·)
-  apply := Tensor.Internal.Elab.Impl.nativeFloatDiv
+  apply := Tensor.Internal.Elab.Impl.nativeDiv
   apply_at left right coordinate := by
-    exact Tensor.Internal.Elab.Impl.nativeFloatDiv_apply
+    exact Tensor.Internal.Elab.Impl.nativeDiv_apply
       left right coordinate
 
 /--
@@ -478,14 +414,14 @@ cast to `Float` writes a `FloatArray` and a cast to `UInt8` writes a
 def cast {α : Type u} [Storage α] {shape : Shape}
     (tensor : Rep α shape) (target : Type v) [Storage target]
     [ElementCast α target] : Rep target shape :=
-  tensor.map (β := target) (ElementCast.apply (β := target))
+  tensor.map (β := target) (ElementCast.cast (β := target))
 
 /-- Reading a cast tensor converts the element at the same coordinate. -/
 @[simp, grind =] theorem cast_apply
     {α : Type u} [Storage α] {shape : Shape}
     (tensor : Rep α shape) (target : Type v) [Storage target]
     [ElementCast α target] (coordinate : Coord shape) :
-    tensor.cast target coordinate = ElementCast.apply (tensor coordinate) := by
+    tensor.cast target coordinate = ElementCast.cast (tensor coordinate) := by
   simp [cast]
 
 /--
@@ -497,7 +433,7 @@ def add {α β γ : Type} [Storage α] [Storage β] [Storage γ]
     [PointwiseAdd α β γ] {shape : Shape}
     (left : Rep α shape) (right : Rep β shape) :
     Rep γ shape :=
-  PointwiseAdd.run left right
+  PointwiseAdd.apply left right
 
 /-- Coordinate semantics of pointwise tensor addition. -/
 @[simp, grind =] theorem add_apply
@@ -525,7 +461,7 @@ def sub {α β γ : Type} [Storage α] [Storage β] [Storage γ]
     [PointwiseSub α β γ] {shape : Shape}
     (left : Rep α shape) (right : Rep β shape) :
     Rep γ shape :=
-  PointwiseSub.run left right
+  PointwiseSub.apply left right
 
 /-- Coordinate semantics of pointwise tensor subtraction. -/
 @[simp, grind =] theorem sub_apply
@@ -552,7 +488,7 @@ def mul {α β γ : Type} [Storage α] [Storage β] [Storage γ]
     [PointwiseMul α β γ] {shape : Shape}
     (left : Rep α shape) (right : Rep β shape) :
     Rep γ shape :=
-  PointwiseMul.run left right
+  PointwiseMul.apply left right
 
 /-- Coordinate semantics of pointwise tensor multiplication. -/
 @[simp, grind =] theorem mul_apply
@@ -579,7 +515,7 @@ def div {α β γ : Type} [Storage α] [Storage β] [Storage γ]
     [PointwiseDiv α β γ] {shape : Shape}
     (left : Rep α shape) (right : Rep β shape) :
     Rep γ shape :=
-  PointwiseDiv.run left right
+  PointwiseDiv.apply left right
 
 /-- Coordinate semantics of pointwise tensor division. -/
 @[simp, grind =] theorem div_apply

@@ -96,14 +96,9 @@ theorem reduceTensorFromFlat_eq {α : Type u} {β : Type v}
     (hRead : ∀ inputIndex, read inputIndex = inputTensor.getFlat inputIndex) :
     reduceTensorFromFlat aggregate checked hKind inputTensor read hRead =
       reduceTensor aggregate checked hKind inputTensor := by
-  ext outputCoordinate
-  simp only [reduceTensorFromFlat, reduceTensor, Rep.get_ofFlatFn,
-    Coord.unlinearize_linearize, reductionValues]
-  apply congrArg aggregate
-  unfold reductionValuesFromFlat
-  apply Multiset.map_congr rfl
-  intro inputIndex _
-  exact hRead _
+  have hReadEq : read = inputTensor.getFlat := funext hRead
+  subst read
+  rfl
 
 /--
 Pointwise-equal flat readers produce the same ordered accumulator reduction.
@@ -122,17 +117,9 @@ theorem reduceFoldTensorFromFlat_eq
     reduceFoldTensorFromFlat step initial finish checked hKind inputTensor
         read hRead =
       reduceFoldTensor step initial finish checked hKind inputTensor := by
-  ext outputCoordinate
-  simp only [reduceFoldTensorFromFlat, reduceFoldTensor,
-    Rep.get_ofFlatFn, Coord.unlinearize_linearize, reductionFoldl]
-  apply congrArg (fun total => finish total checked.reductionFiberSize)
-  unfold reductionFoldlFromFlat
-  apply congrArg
-    (fun update =>
-      Fin.foldl (Shape.size checked.reductionShape) update initial)
-  funext total inputIndex
-  congr 1
-  exact hRead _
+  have hReadEq : read = inputTensor.getFlat := funext hRead
+  subst read
+  rfl
 
 /--
 Pointwise-equal flat readers produce the same ordered nonempty reduction.
@@ -150,12 +137,9 @@ theorem reduceNonemptyFoldTensorFromFlat_eq
     reduceNonemptyFoldTensorFromFlat step checked hKind hPositive inputTensor
         read hRead =
       reduceNonemptyFoldTensor step checked hKind hPositive inputTensor := by
-  ext outputCoordinate
-  simp only [reduceNonemptyFoldTensorFromFlat, reduceNonemptyFoldTensor,
-    Rep.get_ofFlatFn, Coord.unlinearize_linearize,
-    reductionFoldlNonempty]
-  unfold reductionFoldlNonemptyFromFlat
-  simp only [hRead]
+  have hReadEq : read = inputTensor.getFlat := funext hRead
+  subst read
+  rfl
 
 /--
 The fused flat-reader kernel implements the independent multiset reduction

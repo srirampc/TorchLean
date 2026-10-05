@@ -31,32 +31,6 @@ open Lean.Elab
 open Lean.Elab.Term
 open Lean.Meta
 
-/--
-Insert an axis into a descending, stable stride-cost order.
-
-Equal-cost axes retain their source order, making generated kernels
-deterministic across compiler runs.
--/
-private def insertContractionAxis
-    (item : Check.EinsumAxis × Nat)
-    (items : List (Check.EinsumAxis × Nat)) :
-    List (Check.EinsumAxis × Nat) :=
-  match items with
-  | [] => [item]
-  | current :: remaining =>
-      if item.2 ≥ current.2 then
-        item :: items
-      else
-        current :: insertContractionAxis item remaining
-
-/-- Stable descending insertion sort for the small logical-axis lists. -/
-private def sortContractionAxes :
-    List (Check.EinsumAxis × Nat) →
-      List (Check.EinsumAxis × Nat)
-  | [] => []
-  | item :: items =>
-      insertContractionAxis item (sortContractionAxes items)
-
 /-- Project one bounded component from a nested contraction coordinate. -/
 private def contractionCoordinateComponent : Nat → Expr → MetaM Expr
   | 0, coordinate =>
@@ -103,7 +77,8 @@ def contractionAxisOrder
   let weighted :=
     contractedAxes.map fun axis =>
       (axis, contractionAxisStrideCost axis inputAxes inputShapes)
-  (sortContractionAxes weighted).map fun item => item.1
+  -- Stable sorting preserves source order when stride costs agree.
+  (weighted.mergeSort fun a b => a.2 ≥ b.2).map Prod.fst
 
 /--
 Choose a certified contraction-axis order when exact algebra permits it.

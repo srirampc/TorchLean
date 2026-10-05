@@ -10,12 +10,14 @@ interpretation, and allowed operations are part of the object being specified.
 ## Files
 
 - `Context.lean`: the `Context` typeclass for scalar backends: algebraic operations, comparisons,
-  casts (including `NatCast`), and the small amount of structure needed by specs; the
-  `LawfulContext` class with its instance for `ℝ`; and the `Spec.RationalAlgebraic` helpers.
-- `Scalar.lean`: scalar helpers and instances used across the spec layer.
-- `Shape.lean`: the `Shape` datatype, runtime axis validation (`validAxis?`), axis-permutation
-  planning (`swapAdjacentAxes`), well-formedness, and broadcasting: the decidable proposition
-  `CanBroadcastTo` with its typeclass wrapper `BroadcastTo`.
+  casts (including `NatCast`), and the small amount of structure needed by specs; and the
+  `LawfulContext` class. `Context/Real.lean` supplies the real instances, while
+  `Context/Rational.lean` supplies the `Spec.RationalAlgebraic` helpers.
+- `Scalar.lean`: the real-valued proof aliases `Spec.SpecScalar` and `Spec.SpecTensor`; it does not
+  select a real `Context` instance.
+- `Shape.lean`: the list-based `Shape` representation, runtime axis validation (`axisInBounds?`),
+  axis-permutation planning (`swapAdjacentAxes`), well-formedness, and broadcasting: the decidable
+  proposition `CanBroadcastTo` with its typeclass wrapper `BroadcastTo`.
 - `Tensor/`: the core tensor datatype plus constructors, rank-one operations, linear algebra, and
   factorizations.
 - `Tensor/SomeTensor.lean`: internal runtime shape erasure for evaluators that must store tensors of
@@ -25,10 +27,9 @@ interpretation, and allowed operations are part of the object being specified.
 - `TensorReductionShape.lean` and `TensorReductionShape/`: reductions, reshape/flatten/unflatten,
   concat/slice, broadcasting, and shape-changing helpers.
 - `Sequence.lean`: helpers for common time and sequence-axis patterns.
-- `Tensor/Constructors.lean`: total builders, including checked flat-list and flat-array
-  boundaries. `Tensor.full`, `Tensor.zeros`, and `Tensor.ones` are the canonical constant
-  constructors.
-- `TensorGrad.lean`: gradient-related specs, including clipping helpers.
+- `Tensor/Constructors.lean`: total builders, including coordinate generators, stacking, and
+  rectangular-row validation. `Tensor.full`, `Tensor.zeros`, and `Tensor.ones` are the canonical
+  constant constructors. In-memory list and array conversion lives under `NN.Tensor`.
 - `Complex.lean`: small complex-number support used by FFT/FNO-style specifications.
 - `Random.lean`: the deterministic `Spec.Random` helpers (`splitmix64`, `keyOf`, `nextSeed`,
   `sampleNat`, uniform sampling, dropout keep bits) shared by the spec layer and the runtime.

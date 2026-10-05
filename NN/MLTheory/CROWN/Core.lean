@@ -55,18 +55,6 @@ namespace Box
 
 variable {s : Shape}
 
-/-- Pointwise box width `hi - lo`. -/
-def width (b : Box α s) : Tensor α s :=
-  Tensor.subSpec b.hi b.lo
-
-/-- Pointwise box center `(lo + hi)/2`. -/
-def center (b : Box α s) : Tensor α s :=
-  Tensor.scaleSpec (Tensor.addSpec b.lo b.hi) ((1 / 2))
-
-/-- Pointwise box radius `(hi - lo)/2`. -/
-def radius (b : Box α s) : Tensor α s :=
-  Tensor.scaleSpec (Tensor.subSpec b.hi b.lo) ((1 / 2))
-
 /--
 Boolean `a <= b` using the backend's strict order and Boolean equality.
 
@@ -106,24 +94,14 @@ checker that uses `≤` directly. We implement it by structural recursion (rathe
 `decide (Box.contains ...)`) so it remains executable.
 -/
 
-/-- Boolean `a ≤ b` using an explicit `DecidableRel (· ≤ ·)` argument. -/
-@[inline] def leDecBool [DecidableRel ((· ≤ ·) : α → α → Prop)] (a b : α) : Bool :=
-  decide (a ≤ b)
-
 /-- Boolean containment check using decidable `≤` and a finite fold over indices. -/
 def containsDecBool [DecidableRel ((· ≤ ·) : α → α → Prop)] :
     ∀ {s : Shape}, Box α s → Tensor α s → Bool
 | .scalar, b, x =>
-    leDecBool b.lo.item x.item && leDecBool x.item b.hi.item
+    decide (b.lo.item ≤ x.item) && decide (x.item ≤ b.hi.item)
 | .dim n inner, b, x =>
     (List.finRange n).all (fun i =>
       containsDecBool (s := inner) ⟨b.lo.unstack i, b.hi.unstack i⟩ (x.unstack i))
-
-omit [Storage α] in
-private theorem le_decBool_sound [DecidableRel ((· ≤ ·) : α → α → Prop)] (a b : α) :
-    leDecBool a b = true → a ≤ b := by
-  intro h
-  exact of_decide_eq_true (by simpa [leDecBool] using h)
 
 /-- Soundness of `containsDecBool`: if the Boolean checker returns `true`, then `Box.contains`
   holds. -/
@@ -131,13 +109,7 @@ theorem containsDecBool_sound [DecidableRel ((· ≤ ·) : α → α → Prop)] 
     ∀ {s : Shape} (b : Box α s) (x : Tensor α s),
       containsDecBool (s := s) b x = true → contains (α := α) b x
   | .scalar, b, x, hv => by
-      have hEq : (leDecBool b.lo.item x.item && leDecBool x.item b.hi.item) = true := by
-        simpa [containsDecBool] using hv
-      have h' : leDecBool b.lo.item x.item = true ∧ leDecBool x.item b.hi.item = true :=
-        Eq.mp (Bool.and_eq_true _ _) hEq
-      constructor
-      · exact le_decBool_sound b.lo.item x.item h'.1
-      · exact le_decBool_sound x.item b.hi.item h'.2
+      simpa [containsDecBool, contains] using hv
   | .dim n inner, b, x, hv => by
       intro i
       have hi' :
@@ -185,9 +157,15 @@ def getScalarBox (B : FlatBox α) {m : Nat} (h : B.dim = m) : Box α (.dim m .sc
 
 end FlatBox
 
-/-! We primarily target vector inputs/outputs for CROWN in this initial
-integration. To avoid over-generalizing shapes, we use a specialized
-variant for 1D (flat) vectors. -/
+/-!
+CROWN affine bounds use one matrix row per output scalar and one column per input scalar.
+A tensor of shape `s` contributes `s.size` coordinates to this flat representation. Graph nodes
+retain their tensor shapes, and each transfer checks its operator's shape contract.
+
+The graph `matmul` contract requires rank at least two and exactly the same leading shape on both
+operands: `(...×m×n) · (...×n×p) → (...×m×p)`. The leading shape can contain any number of axes;
+implicit broadcasting and vector operands are not supported.
+-/
 
 /--
 Affine form `y = A*x + c` over flat vectors.
@@ -199,68 +177,6 @@ structure AffineVec (α : Type) [TorchLean.Storage α] (inDim outDim : Nat) wher
   A : Tensor α [outDim, inDim]
   /-- Constant offset vector. -/
   c : Tensor α [outDim]
-
-namespace AffineVec
-
-variable {inDim outDim : Nat}
-variable [BoundOps α]
-open BoundOps
-
--- Evaluate affine upper/lower bound over a box using interval arithmetic splitting
-/--
-Evaluate an affine form on an input box, producing an output box.
-
-This performs the standard interval evaluation for linear forms by taking, per coefficient `a`,
-the appropriate endpoint (`lo` or `hi`) to minimize/maximize `a*x`.
--/
-def evalOnBox (aff : AffineVec α inDim outDim) (B : Box α (.dim inDim .scalar)) : Box α (.dim
-  outDim .scalar) :=
-  let outLo := Tensor.dim (fun i =>
-    let sum := (List.finRange inDim).foldl
-      (fun acc j =>
-        let aij := get2 aff.A i j
-        let lo := B.lo.getScalar j
-        let hi := B.hi.getScalar j
-        BoundOps.addDown acc (min2 (BoundOps.mulDown aij lo) (BoundOps.mulDown aij hi)))
-      0
-    Tensor.scalar (BoundOps.addDown sum (aff.c.getScalar i)))
-  let outHi := Tensor.dim (fun i =>
-    let sum := (List.finRange inDim).foldl
-      (fun acc j =>
-        let aij := get2 aff.A i j
-        let lo := B.lo.getScalar j
-        let hi := B.hi.getScalar j
-        BoundOps.addUp acc (max2 (BoundOps.mulUp aij lo) (BoundOps.mulUp aij hi)))
-      0
-    Tensor.scalar (BoundOps.addUp sum (aff.c.getScalar i)))
-  { lo := outLo, hi := outHi }
-
-/--
-Evaluate an affine form on a flattened graph box after checking the input dimension.
-
-Graph-level CROWN stores boxes as `FlatBox`; affine evaluation works over vector-shaped boxes. This
-helper keeps that cast at the CROWN boundary instead of repeating it in verifier workflows.
--/
-def evalOnFlatBox (aff : AffineVec α inDim outDim) (B : FlatBox α) (h : B.dim = inDim) :
-    Box α (.dim outDim .scalar) :=
-  aff.evalOnBox (B.getScalarBox h)
-
--- Compose two affine bounds: aff2 ∘ aff1 where aff1 maps R^{n}→R^{h}, aff2 maps R^{h}→R^{m}
-/-- Compose two affine forms: `(aff2 ∘ aff1)(x) = aff2(aff1(x))`. -/
-def compose {n h m : Nat}
-  (aff2 : AffineVec α h m) (aff1 : AffineVec α n h) : AffineVec α n m :=
-  let newA := Spec.matMulSpec aff2.A aff1.A
-  let newc := Tensor.addSpec (Spec.matVecMulSpec aff2.A aff1.c) aff2.c
-  { A := newA, c := newc }
-
--- Affine for linear layer: y = W x + b
-/-- Build an affine form from a linear layer `y = W*x + b`. -/
-def ofLinear (W : Tensor α [outDim, inDim]) (b : Tensor α [outDim])
-  :
-  AffineVec α inDim outDim :=
-  { A := W, c := b }
-
-end AffineVec
 
 /- Interval arithmetic (IBP) for vectors -/
 namespace IBP
@@ -319,6 +235,44 @@ def linear {m n : Nat}
   { lo := loOut, hi := hiOut }
 
 end IBP
+
+namespace AffineVec
+
+variable {inDim outDim : Nat}
+variable [BoundOps α]
+open BoundOps
+
+-- Evaluate affine upper/lower bound over a box using interval arithmetic splitting
+/--
+Evaluate an affine form on an input box, producing an output box.
+
+This performs the standard interval evaluation for linear forms by taking, per coefficient `a`,
+the appropriate endpoint (`lo` or `hi`) to minimize/maximize `a*x`.
+-/
+def evalOnBox (aff : AffineVec α inDim outDim) (B : Box α (.dim inDim .scalar)) :
+    Box α (.dim outDim .scalar) :=
+  IBP.linear aff.A B (Box.point aff.c)
+
+/--
+Evaluate an affine form on a flattened graph box after checking the input dimension.
+
+Graph-level CROWN stores boxes as `FlatBox`; affine evaluation works over vector-shaped boxes. This
+helper keeps that cast at the CROWN boundary instead of repeating it in verifier workflows.
+-/
+def evalOnFlatBox (aff : AffineVec α inDim outDim) (B : FlatBox α) (h : B.dim = inDim) :
+    Box α (.dim outDim .scalar) :=
+  aff.evalOnBox (B.getScalarBox h)
+
+-- Affine for linear layer: y = W x + b
+/-- Build an affine form from a linear layer `y = W*x + b`. -/
+def ofLinear (W : Tensor α [outDim, inDim]) (b : Tensor α [outDim])
+  :
+  AffineVec α inDim outDim :=
+  { A := W, c := b }
+
+end AffineVec
+
+
 
 
 end NN.MLTheory.CROWN

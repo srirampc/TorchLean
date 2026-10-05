@@ -99,17 +99,17 @@ Run one greedy-policy episode (up to `maxSteps`) and record the visited **sessio
 The returned path includes the initial session state from `sess.start`, and then each state after
 every checked step.
 
-Note: for `Session.CheckedSession.ofEnv`, `Sess` is the Lean-native environment's latent state.
-For Gymnasium-backed sessions, `Sess` is the session record (it stores the last observation, etc.),
+Note: for `Session.CheckedSession.ofEnv`, `State` is the Lean-native environment's latent state.
+For Gymnasium-backed sessions, `State` is the session record (it stores the last observation, etc.),
 not the underlying Python environment's internal state.
 -/
-def episodeSessPath {obsShape : Shape} {nActions : Nat} [NeZero nActions]
+def episodePath {obsShape : Shape} {nActions : Nat} [NeZero nActions]
     (sess : Session.CheckedSession obsShape nActions)
     (policyLogits : Tensor Float obsShape → Tensor Float [nActions])
     (maxSteps : Nat := 1000) :
-    IO (Array sess.Sess) := do
+    IO (Array sess.State) := do
   let mut s ← sess.start
-  let mut path : Array sess.Sess := #[s]
+  let mut path : Array sess.State := #[s]
   for _t in [0:maxSteps] do
     let obs : Tensor Float obsShape := sess.observe s
     let logits := policyLogits obs

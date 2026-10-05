@@ -35,7 +35,7 @@ row-major index. Its theorem composes with the checked reduction law, so no
 generated arithmetic proof depends on a tensor's rank or concrete dimensions.
 -/
 def compileReductionLogicalIndex
-    (checked : Expr) (_checkedValue : Check.CheckedTransform)
+    (checked : Expr)
     (outputFin fiberFin outputValue fiberValue : Expr) :
     TermElabM (Expr × Expr × Expr) := do
   let value ← mkAppM ``Check.CheckedTransform.value #[checked]

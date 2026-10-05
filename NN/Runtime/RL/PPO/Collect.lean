@@ -52,21 +52,20 @@ fully-observed, contract-checked transitions.
 
 The caller provides:
 
-- `start`: how to initialize the session (often `reset`),
-- `observe`: how to read the current observation from the session,
-- `stepChecked`: one checked step returning an observed transition and the updated session,
+- `session`: initialization, observation, and checked stepping for the environment,
 - `castObservation` to inject host `Float` observations into the chosen scalar backend `α`,
 - `castReward` to inject host `Float` rewards into the chosen scalar backend `α`,
 - `predictLogits` for the current actor,
 - `predictValue` for the current critic (returns a scalar `α`).
 
 The API supports the “typed graph + parameters” calling convention used throughout TorchLean.
+Stored log-probabilities use `actionLogSoftmax` without clamping. When using this rollout with
+`Autograd.ppoClippedObjective`, selected log-probabilities must lie inside its `[-10^30, 10^30]`
+clamp and the policy reductions must agree for identical parameters to yield a unit ratio.
 -/
-def collectRolloutFromCallbacks {obsShape : Shape} {nActions horizon : Nat} {Sess : Type}
+def collect {obsShape : Shape} {nActions horizon : Nat}
     [NeZero horizon] [NeZero nActions]
-    (start : IO Sess)
-    (observe : Sess → Tensor Float obsShape)
-    (stepChecked : Sess → Fin nActions → IO (Boundary.Transition obsShape nActions × Sess))
+    (session : Session.CheckedSession obsShape nActions)
     (castObservation : Float → α)
     (castReward : Float → α)
     (predictLogits : Tensor α obsShape → Tensor α [nActions])
@@ -74,13 +73,13 @@ def collectRolloutFromCallbacks {obsShape : Shape} {nActions horizon : Nat} {Ses
     (rngSeed rngCounter : Nat) :
     IO (Rollout α obsShape nActions horizon × Nat) := do
 
-  let mut sess ← start
+  let mut state ← session.start
 
   let mut steps : Array (Step α obsShape nActions) := #[]
   let mut counter := rngCounter
 
   for _t in [0:horizon] do
-    let obsF := observe sess
+    let obsF := session.observe state
     let obs : Tensor α obsShape := TorchLean.Tensor.map castObservation obsF
 
     let logits : Tensor α [nActions] := predictLogits obs
@@ -89,11 +88,12 @@ def collectRolloutFromCallbacks {obsShape : Shape} {nActions horizon : Nat} {Ses
         (seed := rngSeed) (counter := counter) logits
     counter := counter'
 
-    let lp : α := PolicyGradient.actionLogProbability (α := α) (nActions := nActions) logits a
+    -- Cache the raw behavior-policy value; the autograd objective clamps its new value.
+    let lp : α := PolicyGradient.actionLogSoftmax (α := α) (nActions := nActions) logits a
     let v : α := predictValue obs
 
-    let (tr, sess') ← stepChecked sess a
-    sess := sess'
+    let (tr, nextState) ← session.stepChecked state a
+    state := nextState
 
     let done : Bool := tr.terminated || tr.truncated
     let nextObs : Tensor α obsShape := TorchLean.Tensor.map castObservation tr.nextObservation
@@ -114,30 +114,8 @@ def collectRolloutFromCallbacks {obsShape : Shape} {nActions horizon : Nat} {Ses
   else
     throw <|
       IO.userError
-        (s!"PPO.collectRolloutFromCallbacks: internal error (steps.size={steps.size}, "
+        (s!"PPO.collect: internal error (steps.size={steps.size}, "
           ++ s!"horizon={horizon})")
-
-/-!
-## Rollout collection from a checked session
--/
-
-/--
-Collect a fixed-horizon rollout from a unified `Runtime.RL.Session.CheckedSession`.
--/
-def collectRolloutFromSession {obsShape : Shape} {nActions horizon : Nat}
-    [NeZero horizon] [NeZero nActions]
-    (sess : Session.CheckedSession obsShape nActions)
-    (castObservation : Float → α)
-    (castReward : Float → α)
-    (predictLogits : Tensor α obsShape → Tensor α [nActions])
-    (predictValue : Tensor α obsShape → α)
-    (rngSeed rngCounter : Nat) :
-    IO (Rollout α obsShape nActions horizon × Nat) :=
-  collectRolloutFromCallbacks (α := α) (obsShape := obsShape) (nActions := nActions)
-    (horizon := horizon)
-    (Sess := sess.Sess)
-    (start := sess.start) (observe := sess.observe) (stepChecked := sess.stepChecked)
-    castObservation castReward predictLogits predictValue rngSeed rngCounter
 
 /-!
 ## Rollout collection from Gymnasium (subprocess bridge)
@@ -146,7 +124,7 @@ def collectRolloutFromSession {obsShape : Shape} {nActions horizon : Nat}
 /--
 Collect a fixed-horizon rollout from a Gymnasium subprocess environment.
 
-This specializes `collectRolloutFromCallbacks` to `Gymnasium.Session`.
+This specializes `collect` to `Gymnasium.Session`.
 -/
 def collectRolloutFromGymnasium {obsShape : Shape} {nActions horizon : Nat}
     [NeZero horizon] [NeZero nActions]
@@ -161,7 +139,7 @@ def collectRolloutFromGymnasium {obsShape : Shape} {nActions horizon : Nat}
   let sess : Session.CheckedSession obsShape nActions :=
     Session.CheckedSession.gymnasium (obsShape := obsShape) (nActions := nActions) gym
       (seed? := some resetSeed) (resetOnDone := true)
-  collectRolloutFromSession (α := α) (obsShape := obsShape) (nActions := nActions)
+  collect (α := α) (obsShape := obsShape) (nActions := nActions)
     (horizon := horizon)
     sess castObservation castReward predictLogits predictValue rngSeed rngCounter
 

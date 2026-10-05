@@ -28,6 +28,12 @@ namespace TorchLean.TensorPack
 
 variable {E : Type*} [NormedAddCommGroup E] [NormedSpace ℝ E] {n : Nat}
 
+/-- A family of empty packs is constantly `nil`. -/
+private theorem eq_nil_fun {ι : Type*} (f : ι → TensorPack ℝ []) : f = fun _ => .nil := by
+  funext y
+  cases f y
+  rfl
+
 /-- Each saved tensor is smooth and its nested-dual value contains its mixed derivatives. -/
 def JetRelated (directions : Fin n → E) (x : E) :
     {shapes : List Shape} → (E → TensorPack ℝ shapes) →
@@ -64,16 +70,12 @@ theorem append {left right : List Shape} {directions : Fin n → E} {x : E}
     JetRelated directions x (fun y => TensorPack.append (f y) (g y)) (TensorPack.append fv gv) := by
   induction left with
   | nil =>
-      have hfun : f = fun _ => .nil := by funext y; cases f y; rfl
+      have hfun := eq_nil_fun f
       subst f
       cases fv
       exact hg
   | cons shape shapes ih =>
-      have hfun : f = fun y => .cons (f y).head (f y).tail := by
-        funext y
-        cases f y
-        rfl
-      rw [hfun] at hf ⊢
+      rw [TensorPack.eta_cons f] at hf ⊢
       cases fv with
       | cons value rest => exact ⟨hf.1, ih hf.2⟩
 
@@ -94,16 +96,12 @@ theorem snoc {shapes : List Shape} {shape : Shape} {directions : Fin n → E} {x
       (TensorPack.snoc values (DualTensor.jet directions g x)) := by
   induction shapes with
   | nil =>
-      have hf : f = fun _ => .nil := by funext y; cases f y; rfl
+      have hf := eq_nil_fun f
       subst f
       cases values
       exact ⟨⟨hg, rfl⟩, trivial⟩
   | cons shape shapes ih =>
-      have hf : f = fun y => .cons (f y).head (f y).tail := by
-        funext y
-        cases f y
-        rfl
-      rw [hf] at h ⊢
+      rw [TensorPack.eta_cons f] at h ⊢
       cases values with
       | cons value rest => exact ⟨h.1, ih h.2⟩
 
@@ -118,11 +116,7 @@ theorem get {shapes : List Shape} {shape : Shape} {directions : Fin n → E} {x 
   induction shapes with
   | nil => exact Fin.elim0 i
   | cons shape shapes ih =>
-      have hf : f = fun y => .cons (f y).head (f y).tail := by
-        funext y
-        cases f y
-        rfl
-      rw [hf] at h ⊢
+      rw [TensorPack.eta_cons f] at h ⊢
       cases values with
       | cons value rest =>
           cases i using Fin.cases with
@@ -142,11 +136,7 @@ theorem of_get {shapes : List Shape} {directions : Fin n → E} {x : E}
   induction shapes with
   | nil => cases values; trivial
   | cons shape shapes ih =>
-    have hf : f = fun y => .cons (f y).head (f y).tail := by
-      funext y
-      cases f y
-      rfl
-    rw [hf] at h ⊢
+    rw [TensorPack.eta_cons f] at h ⊢
     cases values with
     | cons value rest =>
       refine ⟨?_, ih ?_⟩

@@ -20,26 +20,30 @@ namespace Runtime.Autograd.Torch
 
 open Spec TorchLean TorchLean.Tensor
 
+/-- A curried function accepting one `Ref s` argument per shape in `ss`. -/
+def CurriedRef (Ref : Shape → Type) : List Shape → Type → Type
+  | [], β => β
+  | s :: ss, β => Ref s → CurriedRef Ref ss β
+
 namespace Curried
 
 /--
 Type of a curried function accepting one tensor argument per shape in `ss`.
 
-For example, `Fn α [s₁, s₂] β` is `Tensor α s₁ → Tensor α s₂ → β`.
+For example, `Function α [s₁, s₂] β` is `Tensor α s₁ → Tensor α s₂ → β`.
 -/
-def Fn (α : Type) [Storage α] : List Shape → Type → Type
-  | [], β => β
-  | s :: ss, β => Tensor α s → Fn α ss β
+abbrev Function (α : Type) [Storage α] : List Shape → Type → Type :=
+  CurriedRef (fun s => Tensor α s)
 
 /-- Convert a function on tensor-pack inputs into its curried form. -/
 def curry {α : Type} [Storage α] {β : Type} : {ss : List Shape} →
-    (TensorPack α ss → β) → Fn α ss β
+    (TensorPack α ss → β) → Function α ss β
   | [], f => f .nil
   | _s :: ss, f => fun x => curry (ss := ss) (fun xs => f (.cons x xs))
 
 /-- Convert a curried function into a function on tensor-pack inputs. -/
 def uncurry {α : Type} [Storage α] {β : Type} : {ss : List Shape} →
-    Fn α ss β → TensorPack α ss → β
+    Function α ss β → TensorPack α ss → β
   | [], f, .nil => f
   | _s :: ss, f, .cons x xs => uncurry (ss := ss) (f x) xs
 
@@ -118,11 +122,6 @@ theorem append_assoc {Ref : Shape → Type} {a b c : List Shape}
 
 end RefList
 
-/-- A curried function accepting one `Ref s` argument per shape in `ss`. -/
-def CurriedRef (Ref : Shape → Type) : List Shape → Type → Type
-  | [], β => β
-  | s :: ss, β => Ref s → CurriedRef Ref ss β
-
 namespace CurriedRef
 
 /-- Uncurry a curried reference function to accept a `RefList`. -/
@@ -146,10 +145,9 @@ def curry {Ref : Shape → Type} {β : Type} : {ss : List Shape} →
   | cons x xs ih => exact ih (fun ys => f (.cons x ys))
 
 /-- Apply a tensor-valued `CurriedRef` to its shape-indexed tensor pack. -/
-def uncurryPack {α β : Type} [Storage α] : {ss : List Shape} →
-    CurriedRef (fun s => Tensor α s) ss β → TensorPack α ss → β
-  | [], f, .nil => f
-  | _s :: ss, f, .cons x xs => uncurryPack (ss := ss) (f x) xs
+def uncurryPack {α β : Type} [Storage α] {ss : List Shape}
+    (f : CurriedRef (fun s => Tensor α s) ss β) (xs : TensorPack α ss) : β :=
+  Curried.uncurry f xs
 
 end CurriedRef
 

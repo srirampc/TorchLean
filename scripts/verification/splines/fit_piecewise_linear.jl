@@ -10,7 +10,7 @@
 #   julia --color=no --startup-file=no scripts/verification/splines/fit_piecewise_linear.jl
 #
 # The Lean checker calls this script via `IO.Process` when invoked with `--regen`:
-#   `lake exe verify -- spline-cert --regen`
+#   `scripts/lake.sh exe verify -- spline-cert --regen`
 
 function rat_str(q::Rational{T}) where {T}
   n = numerator(q)

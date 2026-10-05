@@ -34,13 +34,11 @@ theorem sum_spec_vec {n : Nat} (v : Tensor ℝ [n]) :
   rw [sum_spec_eq_coord_sum]
   simp [getScalar_eq_apply, get, Tensor.unstack]
 
--- Pointwise product of vectors under `getScalar`.
 /-- `getScalar` of `mulSpec` is pointwise multiplication of coordinate functions. -/
 theorem getScalar_mul_spec {n : Nat} (a b : Tensor ℝ [n]) (i : Fin n) :
   getScalar (mulSpec a b) i = getScalar a i * getScalar b i := by
   simp [getScalar_eq_apply, mulSpec, map2Spec]
 
--- Dot product of vectors as a `Finset` sum over coordinates.
 /-- Dot product of vectors is the coordinate-wise sum `∑ i, a[i] * b[i]`. -/
 theorem dot_vec_eq_sum {n : Nat} (a b : Tensor ℝ [n]) :
   dot a b = ∑ i : Fin n, getScalar a i * getScalar b i := by
@@ -49,16 +47,6 @@ theorem dot_vec_eq_sum {n : Nat} (a b : Tensor ℝ [n]) :
       exact dot_eq_tensorAlgebra_dot (a := a) (b := b)
     _ = ∑ i : Fin n, getScalar a i * getScalar b i := by
       simpa using Proofs.TensorAlgebra.dot_vec_eq_sum (α := ℝ) (a := a) (b := b)
-
--- Converting the spec-level `List.finRange` fold for `vec_mat_mul_spec` into a `Finset.univ` sum.
-/-- Coordinate formula for `vecMatMulSpec` as a `Finset` sum: `(v @ A)[j] = ∑ i, v[i] * A[i,j]`.
-  -/
-theorem getScalar_vec_mat_mul_spec {m n : Nat}
-  (v : Tensor ℝ [m])
-  (A : Tensor ℝ [m, n]) (j : Fin n) :
-  getScalar (vecMatMulSpec v A) j = ∑ i : Fin m, (getScalar v i) * (get2 A i j) := by
-  simpa using
-    (Proofs.TensorAlgebra.getScalar_vec_mat_mul_spec (α := ℝ) (v := v) (A := A) (j := j))
 
 /--
 Adjointness of matrix-vector and vector-matrix multiplication under the `dot` product:
@@ -94,43 +82,6 @@ theorem shapeOf_eq_shape {α : Type} [TorchLean.Storage α]
   shapeOf t = s := by
   rfl
 
-
-/-- Indexing the outer dimension of a tensor exposes a subtensor with the declared inner shape. -/
-theorem get_preserves_inner_shape {n : Nat} {s : Shape}
-  (t : Tensor ℝ (.dim n s)) (i : Fin n) :
-  shapeOf (get t i) = s := by
-  rfl
-
-/-! ## Map and elementwise operation laws -/
-
-/-- Functor identity law for `mapSpec`: mapping `id` is a no-op. -/
-theorem map_spec_id {s : Shape} (t : Tensor ℝ s) :
-  mapSpec id t = t := by
-  exact TorchLean.Tensor.Internal.Rep.map_id t
-
-/-- Functor law for `mapSpec`: mapping `g` then `f` equals mapping `f ∘ g`. -/
-theorem map_spec_comp {s : Shape} (f g : ℝ → ℝ) (t : Tensor ℝ s) :
-  mapSpec f (mapSpec g t) = mapSpec (f ∘ g) t := by
-  exact TorchLean.Tensor.Internal.Rep.map_map f g t
-
-/-- A scalar additivity law lifts pointwise through `mapSpec` and `addSpec`. -/
-theorem map_spec_add_distrib {s : Shape} (f : ℝ → ℝ) (a b : Tensor ℝ s)
-  (h : ∀ x y, f (x + y) = f x + f y) :
-  mapSpec f (addSpec a b) = addSpec (mapSpec f a) (mapSpec f b) := by
-  apply TorchLean.Tensor.Internal.Rep.ext
-  intro coordinate
-  simp only [mapSpec, Tensor.map, addSpec, map2Spec,
-    TorchLean.Tensor.Internal.Rep.map_apply, TorchLean.Tensor.Internal.Rep.zipWith_apply]
-  exact h _ _
-
-/-- Commutativity transfer: if `f` is commutative, then `map2_spec f` is commutative on tensors. -/
-theorem map2_spec_comm {s : Shape} (f : ℝ → ℝ → ℝ) (a b : Tensor ℝ s)
-  (h : ∀ x y, f x y = f y x) :
-  map2Spec f a b = map2Spec f b a := by
-  apply TorchLean.Tensor.Internal.Rep.ext
-  intro coordinate
-  simp [map2Spec, h]
-
 /-! ## Matrix and vector algebra -/
 
 /-- Associativity of matrix-vector multiplication: `A (B x) = (A B) x`. -/
@@ -140,94 +91,13 @@ theorem mat_vec_assoc {m n p : Nat}
   (x : Tensor ℝ [p]) :
   matVecMulSpec A (matVecMulSpec B x) =
   matVecMulSpec (matMulSpec A B) x := by
-  classical
-  have hto :
-      getScalar (matVecMulSpec A (matVecMulSpec B x)) =
-        getScalar (matVecMulSpec (matMulSpec A B) x) := by
-    funext i
-    have hBx : ∀ k : Fin n,
-        getScalar (matVecMulSpec B x) k = ∑ j : Fin p, (get2 B k j) * (getScalar x j) := by
-      intro k
-      simpa using (getScalar_mat_vec_mul_spec (A := B) (v := x) (i := k))
-
-    -- Expand both sides into finite sums and use a Fubini-style swap.
-    have h_expand :
-        (∑ k : Fin n, (get2 A i k) * (∑ j : Fin p, (get2 B k j) * (getScalar x j))) =
-          (∑ j : Fin p, (∑ k : Fin n, (get2 A i k) * (get2 B k j)) * (getScalar x j)) := by
-      -- This is a finite-dimensional distributivity/commutation identity.
-      -- We follow the standard pattern: expand, swap sums, factor.
-      classical
-      -- Expand `get2 A i k * (∑ j, ...)` into a double sum.
-      have h1 :
-          (∑ k : Fin n, (get2 A i k) * (∑ j : Fin p, (get2 B k j) * (getScalar x j))) =
-            (∑ k : Fin n, ∑ j : Fin p, (get2 A i k) * ((get2 B k j) * (getScalar x j))) := by
-        simp [Finset.mul_sum]
-      -- Swap the order of summation.
-      have h2 :
-          (∑ k : Fin n, ∑ j : Fin p, (get2 A i k) * ((get2 B k j) * (getScalar x j))) =
-            (∑ j : Fin p, ∑ k : Fin n, (get2 A i k) * ((get2 B k j) * (getScalar x j))) := by
-        simpa using
-          (Finset.sum_comm (s := (Finset.univ : Finset (Fin n))) (t := (Finset.univ : Finset (Fin
-            p)))
-            (f := fun k j => (get2 A i k) * ((get2 B k j) * (getScalar x j))))
-      -- Factor `(getScalar x j)` out of the inner sum.
-      have h3 :
-          (∑ j : Fin p, ∑ k : Fin n, (get2 A i k) * ((get2 B k j) * (getScalar x j))) =
-            (∑ j : Fin p, (∑ k : Fin n, (get2 A i k) * (get2 B k j)) * (getScalar x j)) := by
-        refine Finset.sum_congr rfl ?_
-        intro j _
-        have h_reassoc :
-            (∑ k : Fin n, (get2 A i k) * ((get2 B k j) * (getScalar x j))) =
-              (∑ k : Fin n, ((get2 A i k) * (get2 B k j)) * (getScalar x j)) := by
-          refine Finset.sum_congr rfl ?_
-          intro k _
-          simpa using (mul_assoc (get2 A i k) (get2 B k j) (getScalar x j)).symm
-        have h_pull :
-            (∑ k : Fin n, ((get2 A i k) * (get2 B k j)) * (getScalar x j)) =
-              (∑ k : Fin n, (get2 A i k) * (get2 B k j)) * (getScalar x j) := by
-          simp [Finset.sum_mul]
-        exact h_reassoc.trans h_pull
-
-      exact h1.trans (h2.trans h3)
-
-    -- Turn the vector components into the needed sum forms, then apply `h_expand`.
-    have lhs :
-        getScalar (matVecMulSpec A (matVecMulSpec B x)) i =
-          ∑ k : Fin n, (get2 A i k) * (∑ j : Fin p, (get2 B k j) * (getScalar x j)) := by
-      -- start from `getScalar_mat_vec_mul_spec` and rewrite each inner component via `hBx`
-      have hA :
-          getScalar (matVecMulSpec A (matVecMulSpec B x)) i =
-            ∑ k : Fin n, (get2 A i k) * (getScalar (matVecMulSpec B x) k) := by
-        simpa using (getScalar_mat_vec_mul_spec (A := A) (v := matVecMulSpec B x) (i := i))
-      -- rewrite `getScalar (mat_vec_mul_spec B x) k`
-      classical
-      refine hA.trans ?_
-      refine Finset.sum_congr rfl ?_
-      intro k _
-      simp [hBx k]
-
-    have rhs :
-        getScalar (matVecMulSpec (matMulSpec A B) x) i =
-          ∑ j : Fin p, (∑ k : Fin n, (get2 A i k) * (get2 B k j)) * (getScalar x j) := by
-      -- rewrite the matrix multiplication entry via `get2_mat_mul_spec`
-      have hR :
-          getScalar (matVecMulSpec (matMulSpec A B) x) i =
-            ∑ j : Fin p, (get2 (matMulSpec A B) i j) * (getScalar x j) := by
-        simpa using (getScalar_mat_vec_mul_spec (A := matMulSpec A B) (v := x) (i := i))
-      -- now rewrite `get2 (mat_mul_spec A B) i j`
-      classical
-      refine hR.trans ?_
-      refine Finset.sum_congr rfl ?_
-      intro j _
-      simp [get2_mat_mul_spec]
-
-    -- Combine.
-    simpa [lhs, rhs] using h_expand
-
-  -- Lift pointwise equality back to tensors via `ofFn`.
-  have h := congrArg ofFn hto
-  -- `ofFn (getScalar t) = t` for vectors.
-  simpa [ofFn_getScalar] using h
+  apply Tensor.ext_vector
+  intro i
+  -- Both coordinates are the double sum `∑ k, ∑ j, A i k * (B k j * x j)`; only the order of
+  -- summation differs.
+  simp only [getScalar_mat_vec_mul_spec, get2_mat_mul_spec, Finset.mul_sum, Finset.sum_mul,
+    mul_assoc]
+  exact Finset.sum_comm
 
 /-- Coordinate rule for the matrix transpose `swapAdjacentAxes A 0`: `(Aᵀ)[i,j] = A[j,i]`. -/
 theorem get2_matrix_transpose_spec {m n : Nat}
@@ -406,20 +276,55 @@ theorem dot_mat_mul_left_adjoint
           -- `transpose (Cᵀ·A) = Aᵀ·C`
           simp [matrix_transpose_mul, hCinv]
 
-/--
-Outer product properties.
-Essential for proving weight gradient correctness.
--/
-theorem outer_product_transpose {m n : Nat}
-  (a : Tensor ℝ [m])
-  (b : Tensor ℝ [n]) :
-  swapAdjacentAxes (outerProductSpec a b) 0 = outerProductSpec b a := by
+/-! ## Entry rules for matrix-shaped tensor operations -/
+
+section MatrixEntries
+
+variable {α : Type} [Storage α]
+
+/-- Entries of the identity matrix, in the `get2` form the certificate proofs consume. -/
+theorem get2_identityTensorSpec [Zero α] [One α] {n : Nat} (i j : Fin n) :
+    get2 (identityTensorSpec (α := α) n) i j = if i = j then 1 else 0 := by
+  by_cases h : i = j
+  · subst j
+    simp [identityTensorSpec, get2, Tensor.getScalar, Spec.get, Tensor.unstack,
+      Tensor.item]
+  · have hval : i.val ≠ j.val := fun hval => h (Fin.ext hval)
+    simp [identityTensorSpec, get2, Tensor.getScalar, Spec.get, Tensor.unstack,
+      Tensor.item, h, hval]
+
+/-- Entry rule for matrix-shaped tensor addition. -/
+theorem get2_addSpec [Add α] {m n : Nat} (A B : Tensor α [m, n]) (i : Fin m) (j : Fin n) :
+    get2 (addSpec A B) i j = get2 A i j + get2 B i j := by
+  simp [addSpec]
+
+/-- Entry rule for matrix-shaped tensor scaling. -/
+theorem get2_scaleSpec [Mul α] {m n : Nat} (A : Tensor α [m, n]) (c : α) (i : Fin m) (j : Fin n) :
+    get2 (scaleSpec A c) i j = get2 A i j * c := by
+  simp [scaleSpec]
+
+/-- Entry rule for matrix-shaped tensor subtraction. -/
+theorem get2_subSpec [Sub α] {m n : Nat} (A B : Tensor α [m, n]) (i : Fin m) (j : Fin n) :
+    get2 (subSpec A B) i j = get2 A i j - get2 B i j := by
+  simp [subSpec]
+
+end MatrixEntries
+
+/-! ## Real matrix identities -/
+
+/-- Right multiplication by the identity matrix leaves a real matrix unchanged. -/
+theorem matMulSpec_identityTensorSpec {m n : Nat} (A : Tensor ℝ [m, n]) :
+    matMulSpec A (identityTensorSpec (α := ℝ) n) = A := by
+  classical
   apply matrix_ext
   intro i j
-  rw [get2_matrix_transpose_spec]
-  simp [mul_comm]
+  rw [get2_mat_mul_spec]
+  simp [get2_identityTensorSpec]
 
-/-! ## Reductions and aggregation -/
-
+/-- Scaling a real matrix by `1` returns the matrix. -/
+theorem scaleSpec_one {m n : Nat} (Q : Tensor ℝ [m, n]) : scaleSpec Q 1 = Q := by
+  apply matrix_ext
+  intro i j
+  rw [get2_scaleSpec, mul_one]
 
 end Spec

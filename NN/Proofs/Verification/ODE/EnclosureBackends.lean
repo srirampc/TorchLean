@@ -7,9 +7,8 @@ Authors: TorchLean Team
 module
 
 public import NN.Proofs.Verification.ODE.Enclosure
-public import NN.Floats.FP32.Core
+public import NN.Floats.FP32
 public import FloatLib.Floats.Formats.BinaryInterchange.Configured
-public import FloatLib.Floats.Formats.IEEE754.Native
 
 /-!
 # Backend Views for ODE Enclosures
@@ -33,12 +32,9 @@ while the ODE comparison theorem consumes the resulting real inequalities.
 @[expose] public section
 
 open FloatLib.Floats (ExecFloat)
-open FloatLib.Floats.Formats.BinaryInterchange (Model FloatFormat)
-
 
 namespace NN.Proofs.Verification.ODE.Enclosure
 
-open scoped Topology
 open Set
 
 namespace Backend
@@ -65,7 +61,7 @@ interpretation.
 -/
 theorem fromRealView
     {α : Type} (toReal : α → ℝ)
-    {T : ℝ} (hT : 0 ≤ T) {f : ℝ → ℝ → ℝ}
+    {T : ℝ} {f : ℝ → ℝ → ℝ}
     {u uL uU uL' uU' : ℝ → α} {a : ℝ}
     (hu_cont : ContinuousOn (realView toReal u) (Icc 0 T))
     (hu_der :
@@ -94,7 +90,7 @@ theorem fromRealView
       (∀ t ∈ Ico 0 T, HasDerivWithinAt (realView toReal u) (f t ((realView toReal u) t)) (Ici t)
         t) := by
   simpa [realView] using
-    (localSolutionEnclosed_fromClampedDynamics (T := T) hT (f := f)
+    (localSolutionEnclosed_fromClampedDynamics (T := T) (f := f)
       (u := realView toReal u)
       (uL := realView toReal uL) (uU := realView toReal uU)
       (uL' := realView toReal uL') (uU' := realView toReal uU') (a := a)
@@ -102,7 +98,7 @@ theorem fromRealView
 
 /-- Specialization of `fromRealView` to TorchLean's proof-level `FP32` model. -/
 theorem forFP32
-    {T : ℝ} (hT : 0 ≤ T) {f : ℝ → ℝ → ℝ}
+    {T : ℝ} {f : ℝ → ℝ → ℝ}
     {u uL uU uL' uU' : ℝ → FP32} {a : ℝ}
     (hu_cont : ContinuousOn (realView FP32.toReal u) (Icc 0 T))
     (hu_der :
@@ -132,7 +128,7 @@ theorem forFP32
         HasDerivWithinAt (realView FP32.toReal u) (f t ((realView FP32.toReal u) t)) (Ici t) t)
           := by
   simpa using
-    (fromRealView (α := FP32) FP32.toReal (T := T) hT (f := f)
+    (fromRealView (α := FP32) FP32.toReal (T := T) (f := f)
       (u := u) (uL := uL) (uU := uU) (uL' := uL') (uU' := uU') (a := a)
       hu_cont hu_der hu0 hL_cont hL_der hL_sub hL0 hU_cont hU_der hU_sup hU0 hLU)
 
@@ -151,7 +147,7 @@ outside this proof.
 -/
 theorem fromRealView
     {α : Type} (toReal : α → ℝ)
-    {T τ : ℝ} (hT : 0 ≤ T) (hτ : T ≤ τ) {f : ℝ → ℝ → ℝ}
+    {T τ : ℝ} (hT : 0 ≤ T) {f : ℝ → ℝ → ℝ}
     {u uL uU uL' uU' : ℝ → α} {a : ℝ}
     (hu_cont : ContinuousOn (realView toReal u) (Icc 0 τ))
     (hu_der : ∀ t ∈ Ico 0 τ,
@@ -188,7 +184,7 @@ theorem fromRealView
       (∀ t ∈ Ico 0 τ,
         HasDerivWithinAt (realView toReal u) (f t ((realView toReal u) t)) (Ici t) t) := by
   simpa [realView] using
-    (extendedSolutionEnclosed_fromClampedDynamics (T := T) (τ := τ) hT hτ (f := f)
+    (extendedSolutionEnclosed_fromClampedDynamics (T := T) (τ := τ) hT (f := f)
       (u := realView toReal u)
       (uL := realView toReal uL) (uU := realView toReal uU)
       (uL' := realView toReal uL') (uU' := realView toReal uU') (a := a)
@@ -196,7 +192,7 @@ theorem fromRealView
 
 /-- Specialization of `fromRealView` to TorchLean's proof-level `FP32` model. -/
 theorem forFP32
-    {T τ : ℝ} (hT : 0 ≤ T) (hτ : T ≤ τ) {f : ℝ → ℝ → ℝ}
+    {T τ : ℝ} (hT : 0 ≤ T) {f : ℝ → ℝ → ℝ}
     {u uL uU uL' uU' : ℝ → FP32} {a : ℝ}
     (hu_cont : ContinuousOn (realView FP32.toReal u) (Icc 0 τ))
     (hu_der : ∀ t ∈ Ico 0 τ,
@@ -236,7 +232,7 @@ theorem forFP32
         HasDerivWithinAt (realView FP32.toReal u) (f t ((realView FP32.toReal u) t)) (Ici t) t)
           := by
   simpa using
-    (fromRealView (α := FP32) FP32.toReal (T := T) (τ := τ) hT hτ (f := f)
+    (fromRealView (α := FP32) FP32.toReal (T := T) (τ := τ) hT (f := f)
       (u := u) (uL := uL) (uU := uU) (uL' := uL') (uU' := uU') (a := a)
       hu_cont hu_der hu0 hL_cont hL_der hL_sub hL0 hU_cont hU_der hU_sup hU0 hLU hLower hUpper)
 
@@ -257,7 +253,7 @@ namespace LocalCorridor
 
 /-- Local corridor theorem specialized to the executable IEEE-754 binary32 backend. -/
 theorem forIEEE32Exec
-    {T : ℝ} (hT : 0 ≤ T) {f : ℝ → ℝ → ℝ}
+    {T : ℝ} {f : ℝ → ℝ → ℝ}
     {u uL uU uL' uU' : ℝ → (ExecFloat.Binary 8 23)} {a : ℝ}
     (hu_cont : ContinuousOn (ieee32RealView u) (Icc 0 T))
     (hu_der :
@@ -282,11 +278,10 @@ theorem forIEEE32Exec
           (ieee32RealView u) t ≤ (ieee32RealView uU) t) ∧
       (∀ t ∈ Ico 0 T, HasDerivWithinAt (ieee32RealView u) (f t ((ieee32RealView u) t)) (Ici t)
         t) := by
-  simpa [ieee32RealView] using
-    (localSolutionEnclosed_fromClampedDynamics (T := T) hT (f := f)
-      (u := ieee32RealView u) (uL := ieee32RealView uL) (uU := ieee32RealView uU)
-      (uL' := ieee32RealView uL') (uU' := ieee32RealView uU') (a := a)
-      hu_cont hu_der hu0 hL_cont hL_der hL_sub hL0 hU_cont hU_der hU_sup hU0 hLU)
+  exact fromRealView (α := ExecFloat.Binary 8 23)
+    (fun x => (ExecFloat.Binary.toModel x).toReal) (T := T) (f := f)
+    (u := u) (uL := uL) (uU := uU) (uL' := uL') (uU' := uU') (a := a)
+    hu_cont hu_der hu0 hL_cont hL_der hL_sub hL0 hU_cont hU_der hU_sup hU0 hLU
 
 end LocalCorridor
 
@@ -294,7 +289,7 @@ namespace ConstantExtension
 
 /-- Constant-extension theorem specialized to the executable IEEE-754 binary32 backend. -/
 theorem forIEEE32Exec
-    {T τ : ℝ} (hT : 0 ≤ T) (hτ : T ≤ τ) {f : ℝ → ℝ → ℝ}
+    {T τ : ℝ} (hT : 0 ≤ T) {f : ℝ → ℝ → ℝ}
     {u uL uU uL' uU' : ℝ → (ExecFloat.Binary 8 23)} {a : ℝ}
     (hu_cont : ContinuousOn (ieee32RealView u) (Icc 0 τ))
     (hu_der : ∀ t ∈ Ico 0 τ,
@@ -326,12 +321,10 @@ theorem forIEEE32Exec
           (ieee32RealView u) t ≤ constantExtensionAfter T (ieee32RealView uU) t) ∧
       (∀ t ∈ Ico 0 τ, HasDerivWithinAt (ieee32RealView u) (f t ((ieee32RealView u) t)) (Ici t) t)
         := by
-  simpa [ieee32RealView] using
-    (extendedSolutionEnclosed_fromClampedDynamics (T := T) (τ := τ) hT hτ (f := f)
-      (u := ieee32RealView u)
-      (uL := ieee32RealView uL) (uU := ieee32RealView uU)
-      (uL' := ieee32RealView uL') (uU' := ieee32RealView uU') (a := a)
-      hu_cont hu_der hu0 hL_cont hL_der hL_sub hL0 hU_cont hU_der hU_sup hU0 hLU hLower hUpper)
+  exact fromRealView (α := ExecFloat.Binary 8 23)
+    (fun x => (ExecFloat.Binary.toModel x).toReal) (T := T) (τ := τ) hT (f := f)
+    (u := u) (uL := uL) (uU := uU) (uL' := uL') (uU' := uU') (a := a)
+    hu_cont hu_der hu0 hL_cont hL_der hL_sub hL0 hU_cont hU_der hU_sup hU0 hLU hLower hUpper
 
 end ConstantExtension
 

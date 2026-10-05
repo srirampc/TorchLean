@@ -68,16 +68,20 @@ def mkIdx
 
 /-- Package a typed forward closure as one node of the executable IR graph. -/
 def mkForwardNode {α : Type} [TorchLean.Storage α] {Γ : List Shape} {τ : Shape}
-    (forward : TorchLean.TensorPack α Γ → Tensor α τ) : ForwardNode α Γ τ :=
+    (forward : TensorReader α Γ → Tensor α τ) : ForwardNode α Γ τ :=
   ⟨forward⟩
+
+/-- Running a constructed forward node applies its reader closure. -/
+@[simp] theorem mkForwardNode_run {α : Type} [TorchLean.Storage α] {Γ : List Shape} {τ : Shape}
+    (f : TensorReader α Γ → Tensor α τ) (ctx : TensorReader α Γ) :
+    (mkForwardNode f).run ctx = f ctx := rfl
 
 /--
 Evaluation projection for `mkForwardNode`.
 -/
 @[simp] theorem mkForwardNode_eval {α : Type} [TorchLean.Storage α] {Γ : List Shape} {τ : Shape}
-    (f : TorchLean.TensorPack α Γ → Tensor α τ) (ctx : TorchLean.TensorPack α Γ) :
-    (mkForwardNode (α := α) (Γ := Γ) (τ := τ) f).eval ctx = f ctx := by
-  rfl
+    (f : TensorReader α Γ → Tensor α τ) (ctx : TorchLean.TensorPack α Γ) :
+    (mkForwardNode (α := α) (Γ := Γ) (τ := τ) f).eval ctx = f ctx := rfl
 
 /-- Internal list recursion used to track the dependent output shape of adjacent swaps. -/
 def swapShapeBySwapsList (s : Shape) : List Nat → Shape
@@ -107,7 +111,7 @@ extent from the runtime context. Inputs for a nonzero concat axis permute the pa
 returning it, so the closure is the common shape for every concat branch.
 -/
 abbrev ConcatInput (α : Type) [TorchLean.Storage α] (Γ : List Shape) (rest : Shape) : Type :=
-  Sigma fun nP => TorchLean.TensorPack α Γ → Tensor α (.dim nP rest)
+  Sigma fun nP => TensorReader α Γ → Tensor α (.dim nP rest)
 
 /--
 Concatenate typed tensors along their leading axis, folding from the first tensor.
@@ -115,7 +119,7 @@ Concatenate typed tensors along their leading axis, folding from the first tenso
 The empty list yields the empty tensor with leading extent `0`. This is the same fold shape as
 the IR evaluator's `NN.IR.Graph.evalConcatLeadingAxisFold`.
 -/
-def concatLeadingAxisList {α : Type} [TorchLean.Storage α] [Context α] {rest : Shape} :
+def concatList {α : Type} [TorchLean.Storage α] [Context α] {rest : Shape} :
     List (Sigma fun n => Tensor α (.dim n rest)) → Sigma fun nSum => Tensor α (.dim nSum rest)
   | [] => ⟨0, Tensor.full (α := α) (.dim 0 rest) 0⟩
   | first :: others =>
@@ -125,52 +129,36 @@ def concatLeadingAxisList {α : Type} [TorchLean.Storage α] [Context α] {rest 
             (suffix := rest) acc.2 nxt.2⟩)
         first
 
-/-- The leading extent of the fold in `concatLeadingAxisList` is a plain sum of extents. -/
-theorem concatLeadingAxisList_fst {α : Type} [TorchLean.Storage α] [Context α] {rest : Shape}
+/-- The leading extent of the fold in `concatList` is a plain sum of extents. -/
+theorem concatList_fst {α : Type} [TorchLean.Storage α] [Context α] {rest : Shape}
     (tensors : List (Sigma fun n => Tensor α (.dim n rest))) :
-    (concatLeadingAxisList (α := α) (rest := rest) tensors).1 =
+    (concatList (α := α) (rest := rest) tensors).1 =
       tensors.foldl (fun acc t => acc + t.1) 0 := by
   cases tensors with
-  | nil => simp [concatLeadingAxisList]
+  | nil => simp [concatList]
   | cons first others =>
-      have hfold :
-          ∀ acc0 : Sigma fun n => Tensor α (.dim n rest),
-            (others.foldl
-                (fun acc nxt =>
-                  (⟨acc.1 + nxt.1, Tensor.concatAxisSpec .scalar (α := α) (n := acc.1)
-                    (m := nxt.1) (suffix := rest) acc.2 nxt.2⟩ :
-                    Sigma fun n => Tensor α (.dim n rest)))
-                acc0).1 =
-              others.foldl (fun acc nxt => acc + nxt.1) acc0.1 := by
-        intro acc0
-        induction others generalizing acc0 with
-        | nil => rfl
-        | cons nxt others ih => simp [List.foldl, ih]
-      simpa [concatLeadingAxisList, List.foldl] using hfold first
+      simp only [concatList, List.foldl_cons, Nat.zero_add]
+      exact (List.foldl_hom Sigma.fst (fun _ _ => rfl)).symm
 
 /-- Concatenate the tensors produced by concat inputs along their leading axis. -/
-def concatLeadingAxisFromInputs
+def concatInputs
     {α : Type} [TorchLean.Storage α] [Context α] {Γ : List Shape} {rest : Shape}
-    (ctx : TorchLean.TensorPack α Γ) (inputs : Array (ConcatInput α Γ rest)) :
+    (ctx : TensorReader α Γ) (inputs : Array (ConcatInput α Γ rest)) :
     Sigma fun nSum => Tensor α (.dim nSum rest) :=
-  concatLeadingAxisList (inputs.toList.map fun input => ⟨input.1, input.2 ctx⟩)
+  concatList (inputs.toList.map fun input => ⟨input.1, input.2 ctx⟩)
 
 /--
-The concatenated size reported by `concatLeadingAxisFromInputs` is the sum of the input extents.
+The concatenated size reported by `concatInputs` is the sum of the input extents.
 
 This theorem justifies the output-shape cast in the concat lowering branches.
 -/
-theorem concatLeadingAxisFromInputs_size_eq_sum
+theorem concatInputs_size_eq_sum
     {α : Type} [TorchLean.Storage α] [Context α] {Γ : List Shape} {rest : Shape}
-    (ctx : TorchLean.TensorPack α Γ) (inputs : Array (ConcatInput α Γ rest)) :
-    (concatLeadingAxisFromInputs (α := α) (Γ := Γ) (rest := rest) ctx inputs).1 =
+    (ctx : TensorReader α Γ) (inputs : Array (ConcatInput α Γ rest)) :
+    (concatInputs (α := α) (Γ := Γ) (rest := rest) ctx inputs).1 =
       inputs.foldl (fun acc input => acc + input.1) 0 := by
-  rw [← Array.foldl_toList]
-  unfold concatLeadingAxisFromInputs
-  rw [concatLeadingAxisList_fst]
-  induction inputs.toList using List.reverseRecOn with
-  | nil => rfl
-  | append_singleton xs x ih => simp [List.foldl_append, ih]
+  simpa only [concatInputs, concatList_fst, List.foldl_map] using
+    (Array.foldl_toList (xs := inputs) (f := fun acc input => acc + input.1) (init := 0))
 
 end Internal
 end IRExec

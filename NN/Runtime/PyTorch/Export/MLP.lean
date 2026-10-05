@@ -54,16 +54,19 @@ def secondBiasKey : KeyStyle → String
   | .sequential => "layers.2.bias"
 
 /--
-Emit the Python class body for a basic `Linear → ReLU → Linear` MLP.
+Emit the Python class body for a `Linear → ReLU → Linear` MLP, optionally ending in softmax.
 
 This returns *lines* (not a single string) so callers can splice it into larger scripts.
 -/
 def classLines
-    (inputWidth hiddenWidth outputWidth : Nat) (className : String) : Array String :=
+    (inputWidth hiddenWidth outputWidth : Nat) (className : String)
+    (withSoftmax : Bool := false) : Array String :=
   #[
     s!"class {className}(nn.Module):",
-    indentTwo (s!"\"\"\"Multi-Layer Perceptron with {inputWidth} input, " ++
-      s!"{hiddenWidth} hidden, {outputWidth} output dimensions\"\"\""),
+    indentTwo (if withSoftmax then
+      "\"\"\"Multi-Layer Perceptron with softmax output for classification\"\"\""
+      else s!"\"\"\"Multi-Layer Perceptron with {inputWidth} input, " ++
+        s!"{hiddenWidth} hidden, {outputWidth} output dimensions\"\"\""),
     indentTwo "",
     indentTwo (s!"def __init__(self, input_dim: int = {inputWidth}, hidden_dim: int = " ++
       s!"{hiddenWidth}, output_dim: int = {outputWidth}):"),
@@ -75,12 +78,16 @@ def classLines
     indentFour "# Define layers",
     indentFour "self.fc1 = nn.Linear(input_dim, hidden_dim)",
     indentFour "self.relu = nn.ReLU()",
-    indentFour "self.fc2 = nn.Linear(hidden_dim, output_dim)",
+    indentFour "self.fc2 = nn.Linear(hidden_dim, output_dim)"
+  ] ++
+    (if withSoftmax then #[indentFour "self.softmax = nn.Softmax(dim=-1)"] else #[]) ++ #[
     indentFour "",
     indentTwo "def forward(self, x):",
     indentFour "x = self.fc1(x)",
     indentFour "x = self.relu(x)",
-    indentFour "x = self.fc2(x)",
+    indentFour "x = self.fc2(x)"
+  ] ++
+    (if withSoftmax then #[indentFour "x = self.softmax(x)"] else #[]) ++ #[
     indentFour "return x",
     indentFour "",
     indentTwo "@property",
@@ -93,13 +100,14 @@ def classLines
     indentFour "",
     indentTwo "@property",
     indentTwo "def layer_count(self):",
-    indentFour "return 3",  -- fc1, relu, fc2
+    indentFour (if withSoftmax then "return 4" else "return 3"),
     indentFour "",
     indentTwo "@property",
     indentTwo "def operation_types(self):",
-    indentFour "return [\"Linear\", \"ReLU\", \"Linear\"]",
-    indentFour ""
+    indentFour (if withSoftmax then "return [\"Linear\", \"ReLU\", \"Linear\", \"Softmax\"]"
+      else "return [\"Linear\", \"ReLU\", \"Linear\"]")
   ] ++
+    (if withSoftmax then #[] else #[indentFour ""]) ++
     generateGetModelInfoMethodLines className
       #[ ("input_dim", "self.input_dim")
       , ("hidden_dim", "self.hidden_dim")
@@ -167,50 +175,6 @@ def withParameters {inputWidth hiddenWidth outputWidth : Nat}
     indentTwo "print(f\"Model info: {model.get_model_info()}\")"
   ]
 
-/-- Render a line-based MLP class with a terminal softmax. -/
-def softmaxClassLines
-    {inputWidth hiddenWidth outputWidth : Nat} (className : String) : Array String :=
-  #[
-    s!"class {className}(nn.Module):",
-    indentTwo s!"\"\"\"Multi-Layer Perceptron with softmax output for classification\"\"\"",
-    indentTwo "",
-    indentTwo (s!"def __init__(self, input_dim: int = {inputWidth}, hidden_dim: int = " ++
-      s!"{hiddenWidth}, output_dim: int = {outputWidth}):"),
-    indentFour "super().__init__()",
-    indentFour "self.input_dim = input_dim",
-    indentFour "self.hidden_dim = hidden_dim",
-    indentFour "self.output_dim = output_dim",
-    indentFour "",
-    indentFour "# Define layers",
-    indentFour "self.fc1 = nn.Linear(input_dim, hidden_dim)",
-    indentFour "self.relu = nn.ReLU()",
-    indentFour "self.fc2 = nn.Linear(hidden_dim, output_dim)",
-    indentFour "self.softmax = nn.Softmax(dim=-1)",
-    indentFour "",
-    indentTwo "def forward(self, x):",
-    indentFour "x = self.fc1(x)",
-    indentFour "x = self.relu(x)",
-    indentFour "x = self.fc2(x)",
-    indentFour "x = self.softmax(x)",
-    indentFour "return x",
-    indentFour "",
-    indentTwo "@property",
-    indentTwo "def input_shape(self):",
-    indentFour "return (self.input_dim,)",
-    indentFour "",
-    indentTwo "@property",
-    indentTwo "def output_shape(self):",
-    indentFour "return (self.output_dim,)",
-    indentFour "",
-    indentTwo "@property",
-    indentTwo "def layer_count(self):",
-    indentFour "return 4",  -- fc1, relu, fc2, softmax
-    indentFour "",
-    indentTwo "@property",
-    indentTwo "def operation_types(self):",
-    indentFour "return [\"Linear\", \"ReLU\", \"Linear\", \"Softmax\"]"
-  ]
-
 /--
 Generate a complete Python script for MLP examples.
 
@@ -227,9 +191,8 @@ def completeSource {inputWidth hiddenWidth outputWidth : Nat}
     "",
     joinLines (classLines inputWidth hiddenWidth outputWidth className),
     "",
-    joinLines (softmaxClassLines
-      (inputWidth := inputWidth) (hiddenWidth := hiddenWidth) (outputWidth := outputWidth)
-      s!"{className}WithSoftmax"),
+    joinLines (classLines inputWidth hiddenWidth outputWidth
+      s!"{className}WithSoftmax" (withSoftmax := true)),
     "",
     generateWeightLoadingUtils,
     "",

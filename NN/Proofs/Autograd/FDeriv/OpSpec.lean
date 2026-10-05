@@ -40,18 +40,6 @@ open scoped _root_.Autograd
 
 noncomputable section
 
-/-!
-## Basic tensor/vector roundtrip
-
-Most analytic statements here are written in Euclidean space (`Vec n`) because Mathlib’s `fderiv`
-and adjoint API lives there. The following lemma just re-exports the `ofFnE/getScalarE` roundtrip
-in a form that is convenient for rewriting.
--/
-
-@[simp] theorem ofFnE_getScalar {n : Nat} (t : Tensor ℝ [n]) :
-    ofFnE (n := n) (getScalarE t) = t := by
-  simp
-
 /--
 A proved `OpSpec` (`OpSpecCorrect`) together with the analytic fact that its JVP is `fderiv`.
 
@@ -125,44 +113,16 @@ theorem backward_eq_adjoint_fderiv {inDim outDim : Nat} (C : OpSpecFDerivCorrect
             inner ℝ (getScalarE (ofFnE dxV)) (getScalarE (C.correct.op.backward (ofFnE xV) δ)) := by
         simpa [dot_eq_inner_vec] using hdot
       -- Replace the JVP with the analytic derivative and simplify `getScalarE (ofFnE dxV)`.
-      have hinner'' := hinner'
-      -- Rewrite the JVP term using the analytic identification.
-      rw [C.jvp_eq xV dxV] at hinner''
-      simpa using hinner''
+      rw [C.jvp_eq xV dxV] at hinner'
+      simpa using hinner'
 
-    -- Identify the unique element satisfying the adjointness law.
-    let A : Vec inDim →L[ℝ] Vec outDim := C.deriv xV
-    let u : Vec inDim := getScalarE (C.correct.op.backward (ofFnE xV) δ)
-    let v : Vec inDim := A.adjoint (getScalarE δ)
-    have hforall : ∀ dxV : Vec inDim, inner ℝ dxV u = inner ℝ dxV v := by
-      intro dxV
-      -- Both sides equal `⟪A dxV, δ⟫`.
-      calc
-        inner ℝ dxV u
-            = inner ℝ ((C.deriv xV) dxV) (getScalarE δ) := by
-                simpa [u] using (hinner (dxV := dxV)).symm
-        _ = inner ℝ dxV (A.adjoint (getScalarE δ)) := by
-              simpa [A] using
-                (ContinuousLinearMap.adjoint_inner_right (A := A) (x := dxV)
-                  (y := getScalarE δ)).symm
-        _ = inner ℝ dxV v := by simp [v]
-
-    have h0 : inner ℝ (u - v) (u - v) = 0 := by
-      have hEq := hforall (dxV := (u - v))
-      have : inner ℝ (u - v) u - inner ℝ (u - v) v = 0 := by
-        simpa [sub_eq_zero] using congrArg (fun t => t - inner ℝ (u - v) v) hEq
-      have hinnerSub :
-          inner ℝ (u - v) (u - v) = inner ℝ (u - v) u - inner ℝ (u - v) v := by
-        rw [inner_sub_right]
-      exact hinnerSub.trans this
-    have huv : u - v = 0 := (inner_self_eq_zero (𝕜 := ℝ) (x := (u - v))).1 h0
-    have huv' : u = v := sub_eq_zero.mp huv
-
-    -- Rewrite `v` using `fderiv` and finish.
-    calc
-      getScalarE (C.correct.op.backward (ofFnE xV) δ) = v := by simpa [u] using huv'
-      _ = (fderiv ℝ (C.forwardVec) xV).adjoint (getScalarE δ) := by
-            simp [v, A, hfderiv]
+    -- The backward cotangent has the same inner product with every tangent as the adjoint.
+    change getScalarE (C.correct.op.backward (ofFnE xV) δ) =
+      (fderiv ℝ (C.forwardVec) xV).adjoint (getScalarE δ)
+    apply ext_inner_left ℝ
+    intro dxV
+    rw [ContinuousLinearMap.adjoint_inner_right, hfderiv]
+    exact (hinner dxV).symm
 
   -- Rewrite `x` to `ofFnE xV` everywhere.
   rw [hx]

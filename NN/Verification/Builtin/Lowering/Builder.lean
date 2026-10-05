@@ -7,6 +7,7 @@ Authors: TorchLean Team
 module
 
 public import NN.MLTheory.CROWN.Graph.Engine.Base
+public import NN.Runtime.Autograd.Batch
 public import NN.Runtime.Autograd.Model.Program -- shake: keep
 
 /-!
@@ -117,12 +118,13 @@ def ensureNode {α : Type} [TorchLean.Storage α] [Context α]
       pushNode (α := α) node
       pure id
 
-/-- Emit a unary IR operation with one parent node. -/
+/-- Emit a unary IR operation with one parent node. The node's `outShape` is the typed result
+shape `t`, so the `Ref` index and the emitted IR node cannot disagree. -/
 def emitUnary {α : Type} [TorchLean.Storage α] [Context α]
-    {s t : Shape} (kind : OpKind) (x : Ref α s) (outShape : Shape := t) : BuildM α (Ref α t) := do
+    {s t : Shape} (kind : OpKind) (x : Ref α s) : BuildM α (Ref α t) := do
   let pid ← ensureNode (α := α) x
   let id ← freshId (α := α)
-  let node : Node := { id := id, parents := #[pid], kind := kind, outShape := outShape }
+  let node : Node := { id := id, parents := #[pid], kind := kind, outShape := t }
   pushNode (α := α) node
   pure (.node id)
 
@@ -136,14 +138,13 @@ def emitBinary {α : Type} [TorchLean.Storage α] [Context α]
   pushNode (α := α) node
   pure (.node id)
 
-/-- Emit a matrix-multiplication IR node. -/
+/-- Emit a matrix-multiplication IR node whose `outShape` is the typed result shape `sOut`. -/
 def emitMatmul {α : Type} [TorchLean.Storage α] [Context α]
-    {sA sB sOut : Shape} (a : Ref α sA) (b : Ref α sB) (outShape : Shape := sOut) :
-    BuildM α (Ref α sOut) := do
+    {sA sB sOut : Shape} (a : Ref α sA) (b : Ref α sB) : BuildM α (Ref α sOut) := do
   let pa ← ensureNode (α := α) a
   let pb ← ensureNode (α := α) b
   let id ← freshId (α := α)
-  let node : Node := { id := id, parents := #[pa, pb], kind := .matmul, outShape := outShape }
+  let node : Node := { id := id, parents := #[pa, pb], kind := .matmul, outShape := sOut }
   pushNode (α := α) node
   pure (.node id)
 
@@ -166,7 +167,7 @@ def getConst {α : Type} [TorchLean.Storage α] [Context α] {s : Shape} (r : Re
     "TorchLean IR lowering: expected a compile-time constant tensor (got a graph node)"
 
 /-- Lower one sample of multi-head attention into the verifier IR. -/
-def emitMultiHeadAttention {α : Type} [TorchLean.Storage α] [Context α]
+def Internal.emitAttention {α : Type} [TorchLean.Storage α] [Context α]
     {n numHeads dModel headDim : Nat}
     (wq : Ref α (.dim dModel (.dim (numHeads * headDim) .scalar)))
     (wk : Ref α (.dim dModel (.dim (numHeads * headDim) .scalar)))
@@ -177,9 +178,9 @@ def emitMultiHeadAttention {α : Type} [TorchLean.Storage α] [Context α]
     BuildM α (Ref α (.dim n (.dim dModel .scalar))) := do
   let sX : Shape := .dim n (.dim dModel .scalar)
   let sBig : Shape := .dim n (.dim (numHeads * headDim) .scalar)
-  let Q : Ref α sBig ← emitMatmul (α := α) (a := x) (b := wq) (sOut := sBig) (outShape := sBig)
-  let K : Ref α sBig ← emitMatmul (α := α) (a := x) (b := wk) (sOut := sBig) (outShape := sBig)
-  let V : Ref α sBig ← emitMatmul (α := α) (a := x) (b := wv) (sOut := sBig) (outShape := sBig)
+  let Q : Ref α sBig ← emitMatmul (α := α) (a := x) (b := wq) (sOut := sBig)
+  let K : Ref α sBig ← emitMatmul (α := α) (a := x) (b := wk) (sOut := sBig)
+  let V : Ref α sBig ← emitMatmul (α := α) (a := x) (b := wv) (sOut := sBig)
 
   -- The projection coordinate is `(head, coordinate-within-head)`. Preserve that row-major
   -- interpretation by reshaping each token first, then moving the head axis outward. Directly
@@ -189,30 +190,21 @@ def emitMultiHeadAttention {α : Type} [TorchLean.Storage α] [Context α]
   let sHeads : Shape := .dim numHeads (.dim n (.dim headDim .scalar))
   let QProjected : Ref α sProjected ←
     emitUnary (α := α) (kind := .reshape sBig sProjected) (x := Q) (t := sProjected)
-      (outShape := sProjected)
   let KProjected : Ref α sProjected ←
     emitUnary (α := α) (kind := .reshape sBig sProjected) (x := K) (t := sProjected)
-      (outShape := sProjected)
   let VProjected : Ref α sProjected ←
     emitUnary (α := α) (kind := .reshape sBig sProjected) (x := V) (t := sProjected)
-      (outShape := sProjected)
   let Qh : Ref α sHeads ←
     emitUnary (α := α) (kind := .transpose 0 1) (x := QProjected) (t := sHeads)
-      (outShape := sHeads)
   let Kh : Ref α sHeads ←
     emitUnary (α := α) (kind := .transpose 0 1) (x := KProjected) (t := sHeads)
-      (outShape := sHeads)
   let Vh : Ref α sHeads ←
     emitUnary (α := α) (kind := .transpose 0 1) (x := VProjected) (t := sHeads)
-      (outShape := sHeads)
 
   let sKt : Shape := .dim numHeads (.dim headDim (.dim n .scalar))
-  let Kt : Ref α sKt ←
-    emitUnary (α := α) (kind := .transpose 1 2) (x := Kh) (t := sKt)
-      (outShape := sKt)
+  let Kt : Ref α sKt ← emitUnary (α := α) (kind := .transpose 1 2) (x := Kh) (t := sKt)
   let sScores : Shape := .dim numHeads (.dim n (.dim n .scalar))
-  let scores : Ref α sScores ←
-    emitMatmul (α := α) (a := Qh) (b := Kt) (sOut := sScores) (outShape := sScores)
+  let scores : Ref α sScores ← emitMatmul (α := α) (a := Qh) (b := Kt) (sOut := sScores)
 
   let invScale : α := 1 / Spec.attentionScaleDenom (α := α) headDim
   let scaleTensor : Tensor α sScores := Tensor.full (α := α) sScores invScale
@@ -224,26 +216,22 @@ def emitMultiHeadAttention {α : Type} [TorchLean.Storage α] [Context α]
     match mask with
     | none =>
         emitUnary (α := α) (kind := .softmax (axis := 2)) (x := scaledScores) (t := sScores)
-          (outShape := sScores)
     | some m => do
         let mask3D : Tensor Bool sScores := Tensor.dim (fun _ => m)
         emitUnary (α := α)
           (kind := .hardMaskedSoftmax (NN.IR.HardMask.ofTensor mask3D))
-          (x := scaledScores) (t := sScores) (outShape := sScores)
+          (x := scaledScores) (t := sScores)
 
-  let outHeads : Ref α sHeads ←
-    emitMatmul (α := α) (a := attn) (b := Vh) (sOut := sHeads) (outShape := sHeads)
-  let sSwap : Shape := .dim n (.dim numHeads (.dim headDim .scalar))
-  let swapped : Ref α sSwap ←
-    emitUnary (α := α) (kind := .transpose 0 1) (x := outHeads) (t := sSwap)
-      (outShape := sSwap)
+  let outHeads : Ref α sHeads ← emitMatmul (α := α) (a := attn) (b := Vh) (sOut := sHeads)
+  -- Moving the head axis back inward returns to the token-major projected layout.
+  let swapped : Ref α sProjected ←
+    emitUnary (α := α) (kind := .transpose 0 1) (x := outHeads) (t := sProjected)
   let concat : Ref α sBig ←
-    emitUnary (α := α) (kind := .reshape sSwap sBig) (x := swapped) (t := sBig)
-      (outShape := sBig)
-  emitMatmul (α := α) (a := concat) (b := wo) (sOut := sX) (outShape := sX)
+    emitUnary (α := α) (kind := .reshape sProjected sBig) (x := swapped) (t := sBig)
+  emitMatmul (α := α) (a := concat) (b := wo) (sOut := sX)
 
 /-- Exact leading-axis slice expressed through the verifier's affine matrix fragment. -/
-def emitLeadingSlice {α : Type} [TorchLean.Storage α] [Context α]
+def emitSlice {α : Type} [TorchLean.Storage α] [Context α]
     {n len : Nat} {s : Shape} (start : Nat) (_h : start + len ≤ n)
     (x : Ref α (.dim n s)) : BuildM α (Ref α (.dim len s)) := do
   let block : Nat := Spec.Shape.size s
@@ -251,7 +239,6 @@ def emitLeadingSlice {α : Type} [TorchLean.Storage α] [Context α]
     emitUnary (α := α)
       (kind := .reshape (.dim n s) (.dim n (.dim block .scalar)))
       (x := x) (t := .dim n (.dim block .scalar))
-      (outShape := .dim n (.dim block .scalar))
   let selector : Tensor α [len, n] :=
     Tensor.dim (fun row =>
       Tensor.dim (fun col =>
@@ -259,13 +246,12 @@ def emitLeadingSlice {α : Type} [TorchLean.Storage α] [Context α]
   let yMat : Ref α (.dim len (.dim block .scalar)) ←
     emitMatmul (α := α) (a := .const selector) (b := xMat)
       (sOut := .dim len (.dim block .scalar))
-      (outShape := .dim len (.dim block .scalar))
   emitUnary (α := α)
     (kind := .reshape (.dim len (.dim block .scalar)) (.dim len s))
-    (x := yMat) (t := .dim len s) (outShape := .dim len s)
+    (x := yMat) (t := .dim len s)
 
 /-- Emit a verifier-IR concatenation along the leading axis. -/
-def emitLeadingConcat {α : Type} [TorchLean.Storage α] [Context α]
+def emitConcat {α : Type} [TorchLean.Storage α] [Context α]
     {n m : Nat} {s : Shape} (a : Ref α (.dim n s)) (b : Ref α (.dim m s)) :
     BuildM α (Ref α (.dim (n + m) s)) := do
   let pa ← ensureNode (α := α) a
@@ -277,46 +263,30 @@ def emitLeadingConcat {α : Type} [TorchLean.Storage α] [Context α]
   pure (.node id)
 
 /--
-Lower batched attention as the leading-axis map of the single-sample verifier graph.
+Lower attention to the verifier's existing matrix and softmax operations.
 
-This is intentionally a semantic lowering rather than a claim that the verifier understands a new
-opaque fused kernel.
+Batched inputs use the shared balanced traversal. A singleton needs only reshapes around its
+attention graph; larger batches split into two parts without constructing a trailing empty graph.
 -/
-def emitBatchedMultiHeadAttention {α : Type} [TorchLean.Storage α] [Context α]
-    {batch n numHeads dModel headDim : Nat}
-    (wq : Ref α (.dim dModel (.dim (numHeads * headDim) .scalar)))
-    (wk : Ref α (.dim dModel (.dim (numHeads * headDim) .scalar)))
-    (wv : Ref α (.dim dModel (.dim (numHeads * headDim) .scalar)))
-    (wo : Ref α (.dim (numHeads * headDim) (.dim dModel .scalar)))
-    (x : Ref α (.dim batch (.dim n (.dim dModel .scalar))))
+def emitAttention {α : Type} [TorchLean.Storage α] [Context α]
+    {n numHeads dModel headDim : Nat}
+    (wq wk wv : Ref α [dModel, numHeads * headDim])
+    (wo : Ref α [numHeads * headDim, dModel])
+    (batch : Option Nat := none)
+    (x : Ref α (match batch with | none => [n, dModel] | some b => [b, n, dModel]))
     (mask : Option (Tensor Bool [n, n])) :
-    BuildM α (Ref α (.dim batch (.dim n (.dim dModel .scalar)))) :=
-  match batch with
-  | 0 =>
-      pure <| .const <| Tensor.dim (fun i : Fin 0 => Fin.elim0 i)
-  | batch + 1 => do
-      let head1 ← emitLeadingSlice (α := α) (n := batch + 1) (len := 1) 0 (by simp) x
-      let head : Ref α (.dim n (.dim dModel .scalar)) ←
-        emitUnary (α := α)
-          (kind := .reshape
-            (.dim 1 (.dim n (.dim dModel .scalar)))
-            (.dim n (.dim dModel .scalar)))
-          (x := head1) (t := .dim n (.dim dModel .scalar))
-          (outShape := .dim n (.dim dModel .scalar))
-      let yHead ← emitMultiHeadAttention (α := α) wq wk wv wo head mask
-      let yHead1 : Ref α (.dim 1 (.dim n (.dim dModel .scalar))) ←
-        emitUnary (α := α)
-          (kind := .reshape
-            (.dim n (.dim dModel .scalar))
-            (.dim 1 (.dim n (.dim dModel .scalar))))
-          (x := yHead) (t := .dim 1 (.dim n (.dim dModel .scalar)))
-          (outShape := .dim 1 (.dim n (.dim dModel .scalar)))
-      let tail ← emitLeadingSlice (α := α) (n := batch + 1) (len := batch) 1
-        (by simp [Nat.add_comm]) x
-      let yTail ← emitBatchedMultiHeadAttention (α := α) wq wk wv wo tail mask
-      let y ← emitLeadingConcat (α := α)
-        (n := 1) (m := batch) (s := .dim n (.dim dModel .scalar)) yHead1 yTail
-      return (by simpa [Nat.one_add] using y)
+    BuildM α (Ref α (match (generalizing := false) batch with
+      | none => [n, dModel] | some b => [b, n, dModel])) :=
+  match batch, x with
+  | none, sample => Internal.emitAttention wq wk wv wo sample mask
+  | some _, samples =>
+      Runtime.Autograd.mapBatch
+        (pure (.const (Tensor.dim (fun i : Fin 0 => Fin.elim0 i))))
+        (fun x start _ h => emitSlice start h x)
+        (fun {s₁ s₂} x _h => emitUnary (kind := .reshape s₁ s₂) (x := x) (t := s₂))
+        (fun x y => emitConcat x y)
+        (fun sample => Internal.emitAttention wq wk wv wo sample mask)
+        samples
 
 instance {α : Type} [TorchLean.Storage α] [Context α] :
     Runtime.Autograd.Torch.Ops (m := BuildM α) (α := α) where
@@ -336,10 +306,8 @@ instance {α : Type} [TorchLean.Storage α] [Context α] :
     let cT : Tensor α s := Tensor.full s c
     emitBinary (α := α) (kind := .mulElem) (a := x) (b := .const cT)
 
-  abs := fun {s} _x =>
-    emitUnary (α := α) (kind := .abs) (x := _x) (t := s) (outShape := s)
-  sqrt := fun {s} x =>
-    emitUnary (α := α) (kind := .sqrt) (x := x) (t := s) (outShape := s)
+  abs := fun {s} x => emitUnary (α := α) (kind := .abs) (x := x) (t := s)
+  sqrt := fun {s} x => emitUnary (α := α) (kind := .sqrt) (x := x) (t := s)
   clamp := fun {s} x lo hi => do
     -- Lower to `min(max(x, lo), hi)` using const-filled tensors.
     let loT : Tensor α s := Tensor.full (α := α) s lo
@@ -351,12 +319,10 @@ instance {α : Type} [TorchLean.Storage α] [Context α] :
   min := fun {_s} a b =>
     emitBinary (α := α) (kind := .minElem) (a := a) (b := b)
 
-  broadcastTo := fun {s₁ s₂} _cb x => do
-    emitUnary (α := α) (kind := .broadcastTo s₁ s₂) (x := x) (t := s₂) (outShape := s₂)
+  broadcastTo := fun {s₁ s₂} _cb x =>
+    emitUnary (α := α) (kind := .broadcastTo s₁ s₂) (x := x) (t := s₂)
 
-  reshape := fun {s₁ s₂} x _h => do
-    let out : Shape := s₂
-    emitUnary (α := α) (kind := .reshape s₁ s₂) (x := x) (t := s₂) (outShape := out)
+  reshape := fun {s₁ s₂} x _h => emitUnary (α := α) (kind := .reshape s₁ s₂) (x := x) (t := s₂)
 
   swapAdjacentAtDepth := fun {s} depth x => do
     let out := s.swapAdjacentAtDepth depth
@@ -364,7 +330,7 @@ instance {α : Type} [TorchLean.Storage α] [Context α] :
     -- transposing a square matrix must retain the exchange of its off-diagonal entries.
     if depth + 1 < s.rank then
       let kind := OpKind.transpose depth (depth + 1)
-      emitUnary (α := α) (kind := kind) (x := x) (t := out) (outShape := out)
+      emitUnary (α := α) (kind := kind) (x := x) (t := out)
     else if h : out = s then
       -- The total source operation leaves a tensor unchanged when the depth is out of range.
       pure (Eq.mp (congrArg (fun sh => Ref α sh) h.symm) x)
@@ -374,14 +340,14 @@ instance {α : Type} [TorchLean.Storage α] [Context α] :
 
   reduceSum := fun {s} axis _valid _wf x => do
     let out : Shape := TorchLean.Tensor.shapeAfterSum s axis
-    emitUnary (α := α) (kind := .reduceSum axis) (x := x) (t := out) (outShape := out)
+    emitUnary (α := α) (kind := .reduceSum axis) (x := x) (t := out)
   reduceMean := fun {s} axis _valid _wf x => do
     let out : Shape := TorchLean.Tensor.shapeAfterSum s axis
-    emitUnary (α := α) (kind := .reduceMean axis) (x := x) (t := out) (outShape := out)
+    emitUnary (α := α) (kind := .reduceMean axis) (x := x) (t := out)
 
   -- A `select` with a statically known index is a constant one-hot projection, not a data-dependent
   -- gather, so it does belong to the verifier fragment: we reuse the same selector-matmul encoding
-  -- that `sliceLeadingAxisRange` uses and then drop the length-one axis with a reshape. Only the
+  -- that `slice` uses and then drop the length-one axis with a reshape. Only the
   -- leading axis is handled. An inner axis would need the projection applied under the outer
   -- dimensions, which the fragment cannot express without a stack/unstack pair, so that case still
   -- reports a fragment error rather than silently lowering to something else.
@@ -393,9 +359,8 @@ instance {α : Type} [TorchLean.Storage α] [Context α] :
     | .dim n rest, 0 =>
         if h : idx + 1 ≤ n then do
           let sliced : Ref α (.dim 1 rest) ←
-            emitLeadingSlice (α := α) (n := n) (len := 1) (s := rest) idx h x
-          emitUnary (α := α) (kind := .reshape (.dim 1 rest) rest)
-            (x := sliced) (t := rest) (outShape := rest)
+            emitSlice (α := α) (n := n) (len := 1) (s := rest) idx h x
+          emitUnary (α := α) (kind := .reshape (.dim 1 rest) rest) (x := sliced) (t := rest)
         else
           -- Unreachable: `index : Fin (axisSize s 0)` already bounds `idx` by `n`.
           fail (α := α) s!"TorchLean→IR: select index {idx} out of range for leading axis {n}"
@@ -411,13 +376,13 @@ instance {α : Type} [TorchLean.Storage α] [Context α] :
 
   matmul := fun {_batchA _batchB batch mDim _nDim pDim} _broadcastA _broadcastB a b => do
     let out : Shape := batch.concat [mDim, pDim]
-    emitMatmul (α := α) (a := a) (b := b) (sOut := out) (outShape := out)
+    emitMatmul (α := α) (a := a) (b := b) (sOut := out)
 
-  concatLeadingAxis := fun {_nDim _mDim} {_s} a b =>
-    emitLeadingConcat (α := α) a b
+  concat := fun {_nDim _mDim} {_s} a b =>
+    emitConcat (α := α) a b
 
-  sliceLeadingAxisRange := fun {_nDim} {_s} start _len h x =>
-    emitLeadingSlice (α := α) start h x
+  slice := fun {_nDim} {_s} start _len h x =>
+    emitSlice (α := α) start h x
 
   maxPool := fun {d C} {inSpatial kernel stride padding} x => do
     let config : WindowConfig :=
@@ -429,7 +394,6 @@ instance {α : Type} [TorchLean.Storage α] [Context α] :
     requireContract (α := α) <|
       NN.IR.OpContracts.inferPoolOutShape "max_pool" kernel stride padding inputShape
     emitUnary (α := α) (kind := .maxPool config) (x := x) (t := outputShape)
-      (outShape := outputShape)
 
   avgPool := fun {d C} {inSpatial kernel stride padding} x => do
     let config : WindowConfig :=
@@ -441,15 +405,14 @@ instance {α : Type} [TorchLean.Storage α] [Context α] :
     requireContract (α := α) <|
       NN.IR.OpContracts.inferPoolOutShape "avg_pool" kernel stride padding inputShape
     emitUnary (α := α) (kind := .avgPool config) (x := x) (t := outputShape)
-      (outShape := outputShape)
 
   smoothMaxPool := fun {_d _C} {_inSpatial _kernel _stride _padding}
       [_decidableEq : DecidableEq α] _x _beta =>
     fail (α := α) "TorchLean→IR: smooth_max_pool is outside the verifier IR fragment"
 
-  relu := fun {s} x => emitUnary (α := α) (kind := .relu) (x := x) (t := s) (outShape := s)
-  sigmoid := fun {s} x => emitUnary (α := α) (kind := .sigmoid) (x := x) (t := s) (outShape := s)
-  tanh := fun {s} x => emitUnary (α := α) (kind := .tanh) (x := x) (t := s) (outShape := s)
+  relu := fun {s} x => emitUnary (α := α) (kind := .relu) (x := x) (t := s)
+  sigmoid := fun {s} x => emitUnary (α := α) (kind := .sigmoid) (x := x) (t := s)
+  tanh := fun {s} x => emitUnary (α := α) (kind := .tanh) (x := x) (t := s)
   gelu := fun {s} x => do
     -- Keep GELU explicit in verifier IR until the IR itself gains a dedicated opcode. Runtime
     -- backends use one tape node; this expansion remains transparent to graph proofs.
@@ -462,7 +425,7 @@ instance {α : Type} [TorchLean.Storage α] [Context α] :
     let inner ← emitBinary (α := α) (kind := .add) (a := x) (b := scaledX3)
     let c1Tensor : Tensor α s := Tensor.full s c1
     let tanhInput ← emitBinary (α := α) (kind := .mulElem) (a := inner) (b := .const c1Tensor)
-    let tanhOut ← emitUnary (α := α) (kind := .tanh) (x := tanhInput) (t := s) (outShape := s)
+    let tanhOut ← emitUnary (α := α) (kind := .tanh) (x := tanhInput) (t := s)
     let ones : Tensor α s := Tensor.full s 1
     let onePlus ← emitBinary (α := α) (kind := .add) (a := tanhOut) (b := .const ones)
     let mid ← emitBinary (α := α) (kind := .mulElem) (a := x) (b := onePlus)
@@ -473,7 +436,7 @@ instance {α : Type} [TorchLean.Storage α] [Context α] :
       match Spec.Shape.rank s with
       | 0 => 0
       | Nat.succ r => r
-    emitUnary (α := α) (kind := .softmax axis) (x := x) (t := s) (outShape := s)
+    emitUnary (α := α) (kind := .softmax axis) (x := x) (t := s)
   logSoftmaxLast := fun {s} x => do
     -- The verifier IR represents `log_softmax` by lowering it through
     -- `softmax` followed by `log` so the semantic graph remains expressible; eager/typed graph
@@ -482,27 +445,24 @@ instance {α : Type} [TorchLean.Storage α] [Context α] :
       match Spec.Shape.rank s with
       | 0 => 0
       | Nat.succ r => r
-    let probs ← emitUnary (α := α) (kind := .softmax axis) (x := x) (t := s) (outShape := s)
-    emitUnary (α := α) (kind := .log) (x := probs) (t := s) (outShape := s)
-  softplus := fun {s} x =>
-    emitUnary (α := α) (kind := .softplus) (x := x) (t := s) (outShape := s)
-  exp := fun {s} x => emitUnary (α := α) (kind := .exp) (x := x) (t := s) (outShape := s)
-  sin := fun {s} x => emitUnary (α := α) (kind := .sin) (x := x) (t := s) (outShape := s)
-  cos := fun {s} x => emitUnary (α := α) (kind := .cos) (x := x) (t := s) (outShape := s)
-  log := fun {s} x => emitUnary (α := α) (kind := .log) (x := x) (t := s) (outShape := s)
-  inv := fun {s} x => emitUnary (α := α) (kind := .inv) (x := x) (t := s) (outShape := s)
-  detach := fun {s} x => emitUnary (α := α) (kind := .detach) (x := x) (t := s) (outShape := s)
+    let probs ← emitUnary (α := α) (kind := .softmax axis) (x := x) (t := s)
+    emitUnary (α := α) (kind := .log) (x := probs) (t := s)
+  softplus := fun {s} x => emitUnary (α := α) (kind := .softplus) (x := x) (t := s)
+  exp := fun {s} x => emitUnary (α := α) (kind := .exp) (x := x) (t := s)
+  sin := fun {s} x => emitUnary (α := α) (kind := .sin) (x := x) (t := s)
+  cos := fun {s} x => emitUnary (α := α) (kind := .cos) (x := x) (t := s)
+  log := fun {s} x => emitUnary (α := α) (kind := .log) (x := x) (t := s)
+  inv := fun {s} x => emitUnary (α := α) (kind := .inv) (x := x) (t := s)
+  detach := fun {s} x => emitUnary (α := α) (kind := .detach) (x := x) (t := s)
   safeLog := fun {s} x epsilon => do
     let px ← ensureNode (α := α) x
     let pe ← ensureNode (α := α) (.const (Tensor.scalar epsilon))
     let id ← freshId (α := α)
     pushNode (α := α) { id, parents := #[px, pe], kind := .safeLog, outShape := s }
     pure (.node id)
-  sum := fun {_s} x =>
-    emitUnary (α := α) (kind := .sum) (x := x) (t := Shape.scalar) (outShape := Shape.scalar)
-  flatten := fun {s} x => do
-    let outShape : Shape := .dim (Spec.Shape.size s) .scalar
-    emitUnary (α := α) (kind := .flatten s) (x := x) (t := outShape) (outShape := outShape)
+  sum := fun {_s} x => emitUnary (α := α) (kind := .sum) (x := x) (t := Shape.scalar)
+  flatten := fun {s} x =>
+    emitUnary (α := α) (kind := .flatten s) (x := x) (t := .dim (Spec.Shape.size s) .scalar)
 
   linear := fun {inDim outDim} w b x => do
     let wT ← getConst (α := α) (s := .dim outDim (.dim inDim .scalar)) w
@@ -546,12 +506,8 @@ instance {α : Type} [TorchLean.Storage α] [Context α] :
         "x) is outside the verifier IR fragment. For inference-time BN, " ++
         "use the eval-mode batch-normalization operation with explicit running statistics.")
 
-  multiHeadAttention := fun {_n _numHeads _dModel _headDim} _h1 wq wk wv wo x mask =>
-    emitMultiHeadAttention (α := α) wq wk wv wo x mask
-
-  batchedMultiHeadAttention :=
-    fun {_batch _n _numHeads _dModel _headDim} _hBatch _h1 wq wk wv wo x mask =>
-      emitBatchedMultiHeadAttention (α := α) wq wk wv wo x mask
+  attention := fun {_n _numHeads _dModel _headDim batch} _hBatch _h1 wq wk wv wo x mask =>
+    emitAttention (α := α) (batch := batch) wq wk wv wo x mask
 
   conv := fun {d inC outC} {kernel stride padding} {inSpatial} w b x => do
     if hKernel : ∀ i : Fin d, kernel.getScalar i ≠ 0 then

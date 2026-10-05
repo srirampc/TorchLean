@@ -39,9 +39,7 @@ namespace Proofs
 namespace Autograd
 namespace Algebra
 
-open Spec TorchLean
-open TorchLean TorchLean.Tensor
-open TensorAlgebra
+open Spec TorchLean TorchLean.Tensor TensorAlgebra
 
 noncomputable section
 
@@ -56,10 +54,10 @@ Seed cotangent for a scalar-loss graph.
 
 The full context has shape list `Γ ++ ss ++ [scalar]`: original inputs/parameters, intermediate
 nodes, and the final scalar loss. Reverse-mode training seeds all non-output cotangents with zero
-and the scalar-loss output cotangent with `1`, matching `loss.backward()` in PyTorch.
+and the scalar-loss output cotangent with `1`, matching `loss.backward()` in PyTorch. The seed
+depends only on the shape lists `Γ` and `ss`, not on the graph or its inputs.
 -/
-def seedScalarLoss {ss : List Shape} (_g : Graph (α := α) Δ Γ (ss ++ [Shape.scalar]))
-    (_x : TorchLean.TensorPack α Γ) : TorchLean.TensorPack α (Γ ++ (ss ++ [Shape.scalar])) :=
+def seedScalarLoss {ss : List Shape} : TorchLean.TensorPack α (Γ ++ (ss ++ [Shape.scalar])) :=
   let zPrev : TorchLean.TensorPack α (Γ ++ ss) := TorchLean.TensorPack.zero (α := α) (ss := Γ ++ ss)
   let one : Tensor α .scalar := Tensor.scalar (1 : α)
   let seed' : TorchLean.TensorPack α ((Γ ++ ss) ++ [Shape.scalar]) :=
@@ -76,7 +74,7 @@ backprop is the cotangent for the scalar loss”.
 -/
 theorem scalarLoss_grad_correct {ss : List Shape} (g : Graph (α := α) Δ Γ (ss ++ [Shape.scalar])) :
     ∀ x dx d,
-      let seed := seedScalarLoss (α := α) (Γ := Γ) (ss := ss) g x
+      let seed := seedScalarLoss (α := α) (Γ := Γ) (ss := ss)
       TensorPack.dotList (α := α)
         (jvpCtx (α := α) (Δ := Δ) (Γ := Γ) (ss := ss ++ [Shape.scalar]) g x dx d) seed
         =

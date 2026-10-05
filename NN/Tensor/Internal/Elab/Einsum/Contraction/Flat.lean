@@ -37,7 +37,7 @@ and `Fin.modNat` coordinates used by `Coord.unlinearize`.
 def nativeCoordinateComponents
     (lengths : List Expr) (flatIndex hFlatIndex : Expr) :
     TermElabM (List Expr × List Expr × List Expr) := do
-  let flatSize ← shapeSizeExpr lengths
+  let flatSize ← mkAppM ``Shape.size #[← shapeExpr lengths]
   let flatIndexNat ← mkAppM ``USize.toNat #[flatIndex]
   let nativeFlatIndex ←
     mkAppOptM ``Fin.mk #[
@@ -111,7 +111,7 @@ def nativeCoordinateComponents
               (← mkEq nativeHead semanticHead)
         return ([nativeHead], [semanticHead], [hHead])
     | length :: tailLengths => do
-        let tailSize ← shapeSizeExpr tailLengths
+        let tailSize ← mkAppM ``Shape.size #[← shapeExpr tailLengths]
         let some (tailBound, hTailBound) ← nativeLoopBound? tailSize
           | throwError
               "internal error: a portable flattened contraction has a \
@@ -223,7 +223,7 @@ def compileFlatCoordinateFold?
   if Shape.size concreteLengths < minimumTerms then
     return none
   let shape ← shapeExpr lengths
-  let flatSize ← shapeSizeExpr lengths
+  let flatSize ← mkAppM ``Shape.size #[shape]
   let some (nativeBound, hBound) ← nativeLoopBound? flatSize
     | return none
   let stateType ← inferType initial

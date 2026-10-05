@@ -3,7 +3,6 @@
 from typing import Any
 
 from common import (
-    affine_interval,
     centered_box,
     mul_down,
     mul_up,
@@ -16,13 +15,6 @@ from common import (
 # input -> gate linear -> sigmoid; input -> candidate linear -> tanh; multiply both branches.
 
 n = 3
-
-
-def seed_params():
-    """Return deterministic shared gate weights and biases."""
-    weight = [[float(1 + (i + j)) for j in range(n)] for i in range(n)]
-    bias = [float(i) for i in range(n)]
-    return weight, bias
 
 
 def seed_input_box(eps: float = 0.5):
@@ -66,11 +58,9 @@ def ibp_mul_elem(
 
 def run_ibp() -> dict[str, Any]:
     """Compute the GRU-gate certificate payload consumed by Lean."""
-    weight, bias = seed_params()
     x_lo, x_hi = seed_input_box(0.5)
-    affine_interval(weight, bias, x_lo, x_hi)
+    # These conservative activation ranges are independent of the preceding affine bounds.
     sigmoid_lo, sigmoid_hi = sigmoid_range_interval(n)
-    affine_interval(weight, bias, x_lo, x_hi)
     tanh_lo, tanh_hi = tanh_range_interval(n)
     output_lo, output_hi = ibp_mul_elem(sigmoid_lo, sigmoid_hi, tanh_lo, tanh_hi)
     return {

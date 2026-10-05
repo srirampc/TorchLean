@@ -40,11 +40,7 @@ def usage : String :=
 
 /-- CLI entrypoint that dispatches between the TwoStage pipeline variants. -/
 def main (args : List String) : IO Unit := do
-  let args :=
-    match args with
-    | "--" :: rest => rest
-    | _ => args
-  match args with
+  match TorchLean.CLI.dropDashDash args with
   | .nil =>
       IO.println usage
   | "allinlean" :: rest =>

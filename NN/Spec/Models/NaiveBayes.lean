@@ -7,7 +7,7 @@ Authors: TorchLean Team
 module
 
 public import NN.Spec.Core.Context
-public import NN.Tensor.Internal.Representation.Storage
+public import Std.Data.HashMap
 
 /-!
 # Multinomial Naive Bayes
@@ -139,11 +139,6 @@ def fit (data : Array Example) : Except Error Model :=
   let vocab := distinctFeatures data
   .ok { labelCounts, featureCounts, totalCounts, labels, vocab, totalExamples := data.size }
 
-/-- Vocabulary size (number of distinct features). -/
-private def vocabularySize (m : Model) : Nat := m.vocab.size
-/-- Number of distinct labels. -/
-private def nLabels (m : Model) : Nat := m.labels.size
-
 /-!
 ## Scoring and prediction
 
@@ -156,19 +151,19 @@ Scores are in log space. For prediction we only need relative ordering.
 -/
 
 /-- Log prior probability `log P(lbl)` with Laplace smoothing. -/
-private def logPrior {α : Type} [TorchLean.Storage α] [Context α] (m : Model) (lbl : String) : α :=
+private def logPrior {α : Type} [Context α] (m : Model) (lbl : String) : α :=
   MathFunctions.log (((m.labelCounts.getD lbl 0 + 1) : α) /
-    ((m.totalExamples + nLabels m) : α))
+    ((m.totalExamples + m.labels.size) : α))
 
 /-- Log conditional probability `log P(f | lbl)` with Laplace smoothing. -/
-private def logCond {α : Type} [TorchLean.Storage α] [Context α] (m : Model) (lbl : String)
+private def logCond {α : Type} [Context α] (m : Model) (lbl : String)
     (f : String) : α :=
   let countF := m.featureCounts.getD lbl {} |>.getD f 0
   let totalF := m.totalCounts.getD lbl 0
-  MathFunctions.log (((countF + 1) : α) / ((totalF + vocabularySize m) : α))
+  MathFunctions.log (((countF + 1) : α) / ((totalF + m.vocab.size) : α))
 
 /-- Unnormalized log score `log P(lbl) + Σ log P(f|lbl)` for a bag of features. -/
-private def scoreUnchecked {α : Type} [TorchLean.Storage α] [Context α]
+private def scoreUnchecked {α : Type} [Context α]
     (m : Model) (input : Array String)
     (lbl : String) : α :=
   let prior := logPrior (α := α) m lbl
@@ -186,7 +181,7 @@ private def scoreUnchecked {α : Type} [TorchLean.Storage α] [Context α]
 private def predictUnchecked
   (m : Model)
   (input : Array String)
-  (α : Type) [TorchLean.Storage α] [Context α] : String :=
+  (α : Type) [Context α] : String :=
   match m.labels[0]? with
   | none => ""
   | some lbl0 =>
@@ -207,7 +202,7 @@ private def validateInput (m : Model) (input : Array String) : Except Error Unit
     unless m.vocab.contains feature do throw (.unknownFeature feature)
 
 /-- Compute a log score for a fitted class and a bag of known feature tokens. -/
-def score {α : Type} [TorchLean.Storage α] [Context α]
+def score {α : Type} [Context α]
     (m : Model) (input : Array String) (label : String) : Except Error α := do
   validateInput m input
   unless m.labels.contains label do throw (.unknownLabel label)
@@ -218,7 +213,7 @@ def score {α : Type} [TorchLean.Storage α] [Context α]
 The empty string remains a valid class label; it is never used to signal failure.
 -/
 def predict (m : Model) (input : Array String)
-    (α : Type) [TorchLean.Storage α] [Context α] : Except Error String := do
+    (α : Type) [Context α] : Except Error String := do
   validateInput m input
   return predictUnchecked m input α
 
@@ -236,12 +231,8 @@ objective is useful for:
 - unit tests / runtime checks
 -/
 
-/-- Sum an array by left-folding with `+` (used by `logSumExp`). -/
-private def arraySum {α : Type} [Add α] [Zero α] (xs : Array α) : α :=
-  xs.foldl (fun acc x => acc + x) 0
-
 /-- Numerically stable `log (sum_i exp xs[i])`. -/
-private def logSumExp {α : Type} [TorchLean.Storage α] [Context α] (xs : Array α) : α :=
+private def logSumExp {α : Type} [Context α] (xs : Array α) : α :=
   -- Numerically-stable log-sum-exp:
   --   log Σ exp(x_i) = m + log Σ exp(x_i - m), where m = max_i x_i.
   match xs[0]? with
@@ -249,7 +240,7 @@ private def logSumExp {α : Type} [TorchLean.Storage α] [Context α] (xs : Arra
   | some x0 =>
       let m :=
         xs.foldl (fun cur x => if x > cur then x else cur) x0
-      let s := arraySum (xs.map (fun x => MathFunctions.exp (x - m)))
+      let s := (xs.map (fun x => MathFunctions.exp (x - m))).foldl (fun acc x => acc + x) 0
       m + MathFunctions.log s
 
 /-- Negative log-likelihood over fitted classes and known feature tokens.
@@ -258,7 +249,7 @@ Every target label belongs to the same class support used in the normalization. 
 targets are rejected, rather than producing a value that can be negative. Empty evaluation
 data has loss zero for a model with at least one fitted class.
 -/
-def negLogLikelihood {α : Type} [TorchLean.Storage α] [Context α] (m : Model)
+def negLogLikelihood {α : Type} [Context α] (m : Model)
     (data : Array Example) : Except Error α := do
   if m.labels.isEmpty then throw .noLabels
   let mut loss := 0

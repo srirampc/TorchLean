@@ -39,14 +39,14 @@ express. Ordinary floating-point models should use `Trainer.new` and `trainer.tr
 Quick check:
 
 ```bash
-lake -R -K cuda=true build torchlean:exe
-lake -R -K cuda=true exe torchlean chargpt --device cuda --tiny-shakespeare --preset smoke
+scripts/lake.sh -Kcuda=true build torchlean:exe
+scripts/lake.sh -Kcuda=true exe torchlean chargpt --device cuda --tiny-shakespeare --preset smoke
 ```
 
 Full lecture experiment:
 
 ```bash
-lake -R -K cuda=true exe torchlean chargpt --device cuda --tiny-shakespeare --preset karpathy
+scripts/lake.sh -Kcuda=true exe torchlean chargpt --device cuda --tiny-shakespeare --preset karpathy
 ```
 
 Reference: <https://github.com/karpathy/ng-video-lecture/blob/master/gpt.py>.
@@ -140,7 +140,7 @@ def usage : String :=
     [ "torchlean chargpt: character-level GPT training"
     , ""
     , "Usage:"
-    , "  lake -R -K cuda=true exe torchlean chargpt --device cuda --tiny-shakespeare "
+    , "  scripts/lake.sh -Kcuda=true exe torchlean chargpt --device cuda --tiny-shakespeare "
         ++ "--preset PRESET [flags]"
     , ""
     , "Presets:"
@@ -200,56 +200,37 @@ def parse (args : List String) (defaults : Preset)
 
 end Options
 
-/-- Decode token ids for terminal output with control characters escaped. -/
-def escapeCharIdsForDisplay (t : text.Tokenizer) (ids : Array Nat) : String :=
-  text.escape (t.decode ids)
-
-/-- Printable-ASCII generation filter used by `--ascii-only`. -/
-def asciiAllowed (c : Char) : Bool :=
-  c = '\n' || (32 ≤ c.toNat && c.toNat ≤ 126)
-
 /-- Fitted predictor for a runtime-sized character GPT model. -/
-abbrev Predictor (α : Type) (batchSize contextLength vocabularySize : Nat) :=
+abbrev Predictor (α : Type) [Storage α] (batchSize contextLength vocabularySize : Nat) :=
   Tensor (Fin vocabularySize) [batchSize, contextLength] →
     IO (Tensor α [batchSize, contextLength, vocabularySize])
 
 /-- Autoregressively extend character token ids using a trained CharGPT model. -/
-def generateSampledFromIds {α : Type} {promptLength : Nat}
+def generate {α : Type} [Storage α] {promptLength : Nat}
     (toFloat : α → Float)
     (batchSize contextLength vocabularySize : Nat) [NeZero vocabularySize]
     (predict : Predictor α batchSize contextLength vocabularySize)
     (promptTokens : Tensor (Fin vocabularySize) [promptLength])
-    (steps : Nat) (temperature : Float) (topK seed repeatWindow : Nat)
-    (repeatPenalty : Float)
+    (options : text.GenerationOptions)
     (allowToken : Fin vocabularySize → Bool := fun _ => true)
     (paddingTokenId : Fin vocabularySize := 0) :
-    IO (Tensor (Fin vocabularySize) [promptLength + steps]) := do
-  let gen : text.GenerationOptions :=
-    { prompt := ""
-      newTokenCount := steps
-      temperature := temperature
-      topK := topK
-      repeatPenalty := repeatPenalty
-      repeatWindow := repeatWindow
-      seed := seed
-      asciiOnly := false }
+    IO (Tensor (Fin vocabularySize) [promptLength + options.newTokenCount]) := do
   if hBatchSize : batchSize = 0 then
     throw (IO.userError "generation requires a nonempty model batch")
   else
     let firstBatchRow : Fin batchSize := ⟨0, Nat.pos_of_ne_zero hBatchSize⟩
     let ids ← text.autoregressiveTokenIds contextLength paddingTokenId.val
-      (promptTokens.map Fin.val) gen
+      (promptTokens.map Fin.val) options
       (fun padded position => do
         let bounded ← IO.ofExcept (Tensor.checkIndices vocabularySize padded)
         let logits ← predict (Tensor.repeatAxis 0 batchSize bounded)
-        pure ((text.batchLogitScoresAt logits firstBatchRow position).map toFloat))
+        pure (((logits.get firstBatchRow).get position).map toFloat))
       allowToken
-    let bounded ← IO.ofExcept (Tensor.checkIndices vocabularySize ids)
-    pure bounded
+    IO.ofExcept (Tensor.checkIndices vocabularySize ids)
 
 /-- CLI entrypoint for character-level GPT training and sampling. -/
 def main (args : List String) : IO UInt32 := do
-  if args.contains "--help" || args.contains "-h" then
+  if CLI.hasHelp args then
     IO.println usage
     return 0
   Module.Command.run
@@ -394,29 +375,38 @@ def main (args : List String) : IO UInt32 := do
           pure losses.mean
         let lossBefore ← evalLoss
         IO.println s!"  step 0: val loss={lossBefore}"
+        let watchEvery :=
+          Trainer.Memory.cadence runtime train.training.steps train.training.cudaMemorySampleEvery
+        let mut memorySample? ← Trainer.Memory.sample runtime watchEvery train.training.steps 0 none
+        let mut lastEval? : Option Float := none
         for step in [0:train.training.steps] do
           let sample := trainingBatchAt step
           trainStep sample.input sample.target
           let done := step + 1
+          memorySample? ←
+            Trainer.Memory.sample runtime watchEvery train.training.steps done memorySample?
           if evalEvery != 0 && (done % evalEvery == 0 || done == train.training.steps) then
             let loss ← evalLoss
             IO.println s!"  step {done}: val loss={loss}"
-        let lossAfter ← evalLoss
+            if done == train.training.steps then
+              lastEval? := some loss
+        let lossAfter ←
+          match lastEval? with
+          | some loss => pure loss
+          | none => evalLoss
         let predict ← module.indexedPredictor model
         let promptTokens ← CLI.orThrow exeName <|
           Tensor.checkIndices vocabularySize (Tensor.from (tok.encode train.generation.prompt))
         let allowToken : Fin vocabularySize → Bool :=
           if train.generation.asciiOnly then
-            fun i => alphabetFull[i.val]?.any asciiAllowed
+            fun i => alphabetFull[i.val]?.any (fun c => text.isPrintableAscii c.toNat)
           else
             fun _ => true
         let outIds ←
-          generateSampledFromIds Float32.toFloat batchSize contextLength vocabularySize predict
-            promptTokens train.generation.newTokenCount train.generation.temperature
-            train.generation.topK train.generation.seed train.generation.repeatWindow
-            train.generation.repeatPenalty
+          generate Float32.toFloat batchSize contextLength vocabularySize predict
+            promptTokens train.generation
             (allowToken := allowToken) (paddingTokenId := unknownTokenId)
-        let sampled := escapeCharIdsForDisplay tok ((outIds.map Fin.val).to (Array Nat))
+        let sampled := text.escape (tok.decode ((outIds.map Fin.val).to (Array Nat)))
         match train.checkpoint.saveCheckpoint? with
         | none => pure ()
         | some path =>

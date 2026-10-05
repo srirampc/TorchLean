@@ -85,24 +85,8 @@ structure Options where
   learnableConsts : Bool := true
   deriving Repr
 
-/--
-How an IR `const` node is represented in the emitted PyTorch module.
-
-- `bufferFull`: a non-learnable `register_buffer(...)` tensor
-- `paramFull`: a learnable `nn.Parameter` with the full tensor shape.
--/
-inductive ConstBinding where
-  | bufferFull (attr : String)
-  | paramFull (attr : String)
-  deriving Repr
-
-/-- Map from IR node id to how its constant should be referenced in the PyTorch module. -/
-abbrev ConstBindings := HashMap Nat ConstBinding
-
-/-- The Python attribute name used to reference a bound constant (`self.<attr>`). -/
-def ConstBinding.attr : ConstBinding → String
-  | .bufferFull a => a
-  | .paramFull a => a
+/-- Map from IR constant node id to its Python attribute name, for both buffers and parameters. -/
+abbrev ConstBindings := HashMap Nat String
 
 /-- Default attribute name for a const node: `self.const_<id>`. -/
 def constAttr (id : Nat) : String := s!"const_{id}"
@@ -119,8 +103,7 @@ def convBiasAttr (id : Nat) : String := s!"conv_{id}_bias"
 
 /-- Render a fixed-length natural-number vector as a Python tuple. -/
 def natTensorToPyTuple {n : Nat} (v : TorchLean.Tensor Nat [n]) : String :=
-  "(" ++ ", ".intercalate ((Tensor.to v (List Nat)).map toString) ++
-    (if n = 1 then "," else "") ++ ")"
+  shapeToPyTupleString (v.to Shape)
 
 /-- Attribute name for a BatchNorm scale tensor (`self.batchnorm_<id>_gamma`). -/
 def batchNormGammaAttr (id : Nat) : String := s!"batchnorm_{id}_gamma"
@@ -299,26 +282,22 @@ private def collectBindings (g : NN.IR.Graph) (ps : ParamStore Float) (options :
               let attr := constAttr n.id
               initLines := initLines ++
                 #[ indentFour s!"self.{attr} = nn.Parameter({pyTensorFromFlat flatListStr s})" ]
-              bindings := bindings.insert n.id (.paramFull attr)
+              bindings := bindings.insert n.id attr
             else
               let attr := constAttr n.id
               initLines := initLines ++
                 #[ indentFour
                   s!"self.register_buffer(\"{attr}\", {pyTensorFromFlat flatListStr s})" ]
-              bindings := bindings.insert n.id (.bufferFull attr)
+              bindings := bindings.insert n.id attr
     | _ => pure ()
 
   pure (bindings, initLines)
 
-/-- Emit the Python expression used to reference a bound constant (`self.<attr>` plus expansions).
-  -/
+/-- Emit the Python expression used to reference a bound constant (`self.<attr>`). -/
 private def constExpr (bindings : ConstBindings) (id : Nat) : Except String String := do
   match bindings.get? id with
   | none => throw s!"IR→PyTorch: missing const binding for node {id}"
-  | some b =>
-      match b with
-      | .bufferFull a => pure s!"self.{a}"
-      | .paramFull a => pure s!"self.{a}"
+  | some attr => pure s!"self.{attr}"
 
 /--
 Emit the body of a Python `forward(self, x)` function for a given IR graph.
@@ -327,12 +306,7 @@ Each IR node `id` becomes a Python local `v{id}`. We emit nodes in graph order a
 `v{outputId}`.
 -/
 private def emitForwardBody (g : NN.IR.Graph) (ps : ParamStore Float) (bindings : ConstBindings)
-    (inputId outputId : Nat) : Except String (Array String) := do
-  -- Validate that input and output nodes exist.
-  let _ ← getNode g inputId
-  let outNode ← getNode g outputId
-  let _ := outNode
-
+    (outputId : Nat) : Except String (Array String) := do
   let mut lines : Array String := #[]
 
   for n in g.nodes do
@@ -554,8 +528,7 @@ private def emitForwardBody (g : NN.IR.Graph) (ps : ParamStore Float) (bindings 
         match NN.IR.HardMask.validateAs mask n.outShape with
         | .ok _ => pure ()
         | .error message => throw s!"IR→PyTorch: node {id}: {message}"
-        let values := ", ".intercalate <| mask.allowed.toList.map fun allowed =>
-          if allowed then "True" else "False"
+        let values := ", ".intercalate <| mask.allowed.toList.map pyBool
         let shape := shapeToPyTupleString n.outShape
         let maskLine :=
           s!"mask{id} = torch.tensor([{values}], dtype=torch.bool, " ++
@@ -572,11 +545,7 @@ private def emitForwardBody (g : NN.IR.Graph) (ps : ParamStore Float) (bindings 
         let p ← expectUnary id n.parents
         let dims := Shape.toList n.outShape
         let normalized := dims.drop axis
-        let normalizedShape :=
-          match normalized with
-          | [] => "()"
-          | [d] => s!"({d},)"
-          | _ => "(" ++ ", ".intercalate (normalized.map toString) ++ ")"
+        let normalizedShape := shapeToPyTupleString (Shape.ofList normalized)
         lines := lines ++ #[indentFour
           s!"v{id} = F.layer_norm(v{p}, normalized_shape={normalizedShape})"]
     | .reshape _inShape outShape =>
@@ -627,7 +596,7 @@ def emit
   let outputShape := outNode.outShape
 
   let (bindings, initParamLines) ← collectBindings g ps options
-  let forwardBody ← emitForwardBody g ps bindings inputId outputId
+  let forwardBody ← emitForwardBody g ps bindings outputId
 
   let imports : Array String :=
     #[ "import torch"

@@ -12,7 +12,7 @@ public import NN.Examples.Support.Command
 /-!
 # Runnable Example Training Support
 
-Logging, runtime, and fixed-sample training helpers used by the runnable model examples.
+Training-log paths, runtime metadata, banners, and checks used by the runnable model examples.
 -/
 
 @[expose] public section
@@ -40,16 +40,13 @@ def trainLogPath (stem : String) : System.FilePath :=
 def deviceNote (runtime : Runtime.Config) : String :=
   s!"device={runtime.deviceName}"
 
-/-- Example banner with the executable name, a short description, and the selected device. -/
-def bannerWithDevice (exeName desc : String) (runtime : Runtime.Config) : String :=
-  s!"{exeName}: {desc} (device={runtime.deviceName})"
-
-/--
-Two-line example banner: a headline with the selected device, then one detail line.
--/
-def bannerWithDeviceDetails
-    (exeName desc details : String) (runtime : Runtime.Config) : String :=
-  bannerWithDevice exeName desc runtime ++ "\n" ++ details
+/-- Example headline with the selected device and an optional detail line. -/
+def banner (exeName description : String) (details : Option String := none)
+    (runtime : Runtime.Config) : String :=
+  let headline := s!"{exeName}: {description} (device={runtime.deviceName})"
+  match details with
+  | none => headline
+  | some line => headline ++ "\n" ++ line
 
 /-- Fail with a contextual error when an executable model check is false. -/
 def check (exeName msg : String) (b : Bool) : IO Unit :=

@@ -28,9 +28,9 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-import urllib.request
 from pathlib import Path
-from urllib.parse import urlparse
+
+from download_io import download_atomic, open_https
 
 import pyarrow.parquet as pq
 
@@ -41,33 +41,27 @@ LICENSE_NOTE = "WikiText license: CC BY-SA 3.0 / GFDL (see Hugging Face dataset 
 DEFAULT_TIMEOUT_SECONDS = 60.0
 
 
-def require_https(url: str) -> None:
-    """Reject non-HTTPS URLs before querying metadata or downloading shards."""
-    parsed = urlparse(url)
-    if parsed.scheme != "https":
-        raise SystemExit(f"refusing non-https URL: {url}")
-
-
 def fetch_json(url: str) -> dict:
     """Fetch and decode one JSON response from the Hugging Face Dataset Viewer."""
-    require_https(url)
-    with urllib.request.urlopen(url, timeout=DEFAULT_TIMEOUT_SECONDS) as response:
+    with open_https(url, timeout=DEFAULT_TIMEOUT_SECONDS) as response:
         return json.loads(response.read().decode("utf-8"))
 
 
 def download(url: str, path: Path) -> None:
     """Download a parquet shard unless a non-empty cached copy already exists."""
-    require_https(url)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if path.exists() and path.stat().st_size > 0:
-        return
-    print(f"[download] {url}", file=sys.stderr)
-    with urllib.request.urlopen(url, timeout=DEFAULT_TIMEOUT_SECONDS) as response, path.open("wb") as out:
-        while True:
-            chunk = response.read(1024 * 1024)
-            if not chunk:
-                break
-            out.write(chunk)
+    download_atomic(url, path, timeout=DEFAULT_TIMEOUT_SECONDS)
+
+
+def shard_path(cache_dir: Path, file: dict) -> Path:
+    """Keep server-provided shard names inside the requested cache directory."""
+    parts = [file[key] for key in ("config", "split", "filename")]
+    for part in parts:
+        if not isinstance(part, str) or part in ("", ".", "..") or "/" in part or "\\" in part:
+            raise ValueError(f"invalid parquet cache component: {part!r}")
+    path = cache_dir.joinpath(*parts)
+    if not path.resolve().is_relative_to(cache_dir.resolve()):
+        raise ValueError("parquet cache path escapes through a symlink")
+    return path
 
 
 def parquet_files(config: str, split: str) -> list[dict]:
@@ -86,24 +80,27 @@ def parquet_files(config: str, split: str) -> list[dict]:
 
 def export_text(files: list[dict], cache_dir: Path, output: Path, max_bytes: int | None) -> int:
     """Concatenate WikiText parquet rows into one UTF-8 corpus file."""
+    if max_bytes is not None and max_bytes < 0:
+        raise ValueError("max_bytes must be nonnegative")
     output.parent.mkdir(parents=True, exist_ok=True)
     written = 0
     with output.open("w", encoding="utf-8") as out:
         out.write("# Source: Hugging Face dataset Salesforce/wikitext\n")
         out.write(f"# {LICENSE_NOTE}\n\n")
         for file in files:
-            shard = cache_dir / file["config"] / file["split"] / file["filename"]
+            shard = shard_path(cache_dir, file)
             download(file["url"], shard)
             table = pq.read_table(shard, columns=["text"])
             for maybe_text in table.column("text").to_pylist():
                 if not maybe_text:
                     continue
                 text = str(maybe_text)
+                line = text if text.endswith("\n") else text + "\n"
                 if max_bytes is not None:
                     remaining = max_bytes - written
                     if remaining <= 0:
                         return written
-                    encoded = (text + "\n").encode("utf-8")
+                    encoded = line.encode("utf-8")
                     if len(encoded) > remaining:
                         # Byte caps can split a UTF-8 codepoint. Decode with
                         # `ignore` and return immediately so the output stays
@@ -112,10 +109,8 @@ def export_text(files: list[dict], cache_dir: Path, output: Path, max_bytes: int
                         out.write(chunk)
                         written += len(chunk.encode("utf-8"))
                         return written
-                out.write(text)
-                if not text.endswith("\n"):
-                    out.write("\n")
-                written += len((text if text.endswith("\n") else text + "\n").encode("utf-8"))
+                out.write(line)
+                written += len(line.encode("utf-8"))
     return written
 
 
@@ -128,6 +123,8 @@ def main() -> int:
     parser.add_argument("--cache-dir", type=Path, default=Path("data/real/hf_cache/wikitext"))
     parser.add_argument("--max-bytes", type=int, default=None)
     args = parser.parse_args()
+    if args.max_bytes is not None and args.max_bytes < 0:
+        parser.error("--max-bytes must be nonnegative")
 
     files = parquet_files(args.config, args.split)
     print(f"[dataset] {DATASET} config={args.config} split={args.split}", file=sys.stderr)

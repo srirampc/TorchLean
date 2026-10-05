@@ -127,28 +127,17 @@ partial def flatIndexProgramCost (map : Expr) (fuel : Nat := 1024) : Nat :=
           0
 
 /--
-Maximum inherited flat-index cost that remains cheaper to fuse than to
-materialize through the native transform kernel.
+Heuristic cost limit for fusing an inherited flat-index map.
 
 The weighted estimate reflects native arithmetic cost: quotient and remainder
 are more expensive than addition or multiplication. The threshold is
-independent of tensor rank and transformation kind.
+independent of tensor rank and transformation kind. It is not a timing guarantee.
 -/
 def maxFusedFlatIndexCost : Nat := 48
 
 /-- Report whether an inherited flat-index map should remain fused. -/
 def shouldFuseFlatIndex (map : Expr) : Bool :=
   flatIndexProgramCost map ≤ maxFusedFlatIndexCost
-
-/-- Transport a natural-number bound through equality of two index values. -/
-private def indexBoundFromEquality
-    (bound hValue rightBound : Expr) : MetaM Expr := do
-  let predicate ←
-    withLocalDeclD `index (mkConst ``Nat) fun index => do
-      let proposition ← mkLT index bound
-      mkLambdaFVars #[index] proposition
-  let hBound ← mkAppM ``congrArg #[predicate, hValue]
-  mkAppM ``Eq.mpr #[hBound, rightBound]
 
 /--
 Partially evaluate one compact checked transform index.
@@ -206,7 +195,7 @@ def checkedFlatProjection (checked hAxes : Expr) :
       mkAppM ``Eq.trans #[hCompiledCompact, hCompactSource]
     let sourceBound ← mkAppM ``Fin.isLt #[sourceIndex]
     let compiledBound ←
-      indexBoundFromEquality inputSize hCompiledSource sourceBound
+      mkAppM ``lt_of_eq_of_lt #[hCompiledSource, sourceBound]
     let compiledIndex ←
       mkAppOptM ``Fin.mk #[
         some inputSize, some compiledValue, some compiledBound]

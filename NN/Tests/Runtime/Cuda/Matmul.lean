@@ -6,8 +6,8 @@ Authors: TorchLean Team
 
 module
 
-public import NN.Runtime.Autograd.Engine.FastKernels
-public import NN.Runtime.Autograd.Engine.Cuda.Ops
+public import NN.Tests.Runtime.Cuda.MatmulSupport
+public import NN.Runtime.Autograd.Engine.LibTorch.Ops
 public import NN.Tensor
 public import NN.Tests.Runtime.Cuda.Utils
 
@@ -17,7 +17,7 @@ public import NN.Tests.Runtime.Cuda.Utils
 Compares CPU eager tape vs CUDA eager tape for:
 - ordinary matrix multiplication,
 - matrix multiplication with a batch prefix,
-- explicit fast-kernel matmul precision dispatch (`fp32`/`fp64`)
+- native matmul precision dispatch (`fp32`/`fp64`)
 -/
 
 @[expose] public section
@@ -65,19 +65,20 @@ def runMatmul : IO Unit := do
   let dBCpu ← Utils.cpuGrad (s := sB) gradsCpu bId
 
   -- CUDA
-  let t0c : Runtime.Autograd.Cuda.Tape := Runtime.Autograd.Cuda.Tape.empty
-  let (t1c, aIdc) := Runtime.Autograd.Cuda.Tape.leaf (t := t0c) (Utils.tensorToAnyBuffer a)
+  let t0c : Runtime.Autograd.LibTorch.Tape := Runtime.Autograd.LibTorch.Tape.empty
+  let (t1c, aIdc) := Runtime.Autograd.LibTorch.Tape.leaf (t := t0c) (Utils.tensorToAnyBuffer a)
     (name := some "a")
-  let (t2c, bIdc) := Runtime.Autograd.Cuda.Tape.leaf (t := t1c) (Utils.tensorToAnyBuffer b)
+  let (t2c, bIdc) := Runtime.Autograd.LibTorch.Tape.leaf (t := t1c) (Utils.tensorToAnyBuffer b)
     (name := some "b")
   let (t3c, yIdc) ← Utils.okOrThrow
-    (Runtime.Autograd.Cuda.Tape.Internal.matmul
+    (Runtime.Autograd.LibTorch.Tape.Internal.matmul
       (t := t2c) (m := m) (n := n) (p := p) aIdc bIdc)
   let yCuda ← Utils.cudaValue (s := sY) t3c yIdc
-  let seedCuda : Runtime.Autograd.Cuda.AnyBuffer :=
-    { s := sY, buf := Runtime.Autograd.Cuda.Buffer.full (UInt32.ofNat (Spec.Shape.size sY)) 1.0 }
+  let seedCuda : Runtime.Autograd.LibTorch.AnyBuffer :=
+    { s := sY, buf := Runtime.Autograd.LibTorch.Buffer.full (UInt32.ofNat (Spec.Shape.size
+      sY)) 1.0 }
   let gradsCuda ← Utils.okOrThrow
-    (Runtime.Autograd.Cuda.Tape.backwardDenseAll (t := t3c) yIdc seedCuda)
+    (Runtime.Autograd.LibTorch.Tape.backwardDenseAll (t := t3c) yIdc seedCuda)
   let dACuda ← Utils.cudaGrad (s := sA) gradsCuda aIdc
   let dBCuda ← Utils.cudaGrad (s := sB) gradsCuda bIdc
 
@@ -125,19 +126,20 @@ def runBatchedMatmul : IO Unit := do
   let dBCpu ← Utils.cpuGrad (s := sB) gradsCpu bId
 
   -- CUDA
-  let t0c : Runtime.Autograd.Cuda.Tape := Runtime.Autograd.Cuda.Tape.empty
-  let (t1c, aIdc) := Runtime.Autograd.Cuda.Tape.leaf (t := t0c) (Utils.tensorToAnyBuffer a)
+  let t0c : Runtime.Autograd.LibTorch.Tape := Runtime.Autograd.LibTorch.Tape.empty
+  let (t1c, aIdc) := Runtime.Autograd.LibTorch.Tape.leaf (t := t0c) (Utils.tensorToAnyBuffer a)
     (name := some "a")
-  let (t2c, bIdc) := Runtime.Autograd.Cuda.Tape.leaf (t := t1c) (Utils.tensorToAnyBuffer b)
+  let (t2c, bIdc) := Runtime.Autograd.LibTorch.Tape.leaf (t := t1c) (Utils.tensorToAnyBuffer b)
     (name := some "b")
   let (t3c, yIdc) ← Utils.okOrThrow
-    (Runtime.Autograd.Cuda.Tape.Internal.matmulFlattened
+    (Runtime.Autograd.LibTorch.Tape.Internal.matmulFlattened
       (t := t2c) (batch := batch) (m := m) (n := n) (p := p) aIdc bIdc)
   let yCuda ← Utils.cudaValue (s := sY) t3c yIdc
-  let seedCuda : Runtime.Autograd.Cuda.AnyBuffer :=
-    { s := sY, buf := Runtime.Autograd.Cuda.Buffer.full (UInt32.ofNat (Spec.Shape.size sY)) 1.0 }
+  let seedCuda : Runtime.Autograd.LibTorch.AnyBuffer :=
+    { s := sY, buf := Runtime.Autograd.LibTorch.Buffer.full (UInt32.ofNat (Spec.Shape.size
+      sY)) 1.0 }
   let gradsCuda ← Utils.okOrThrow
-    (Runtime.Autograd.Cuda.Tape.backwardDenseAll (t := t3c) yIdc seedCuda)
+    (Runtime.Autograd.LibTorch.Tape.backwardDenseAll (t := t3c) yIdc seedCuda)
   let dACuda ← Utils.cudaGrad (s := sA) gradsCuda aIdc
   let dBCuda ← Utils.cudaGrad (s := sB) gradsCuda bIdc
 
@@ -145,8 +147,8 @@ def runBatchedMatmul : IO Unit := do
   Utils.assertTensorApprox (s := sA) "batched matmul dA" dACuda dACpu (tol := 5e-3)
   Utils.assertTensorApprox (s := sB) "batched matmul dB" dBCuda dBCpu (tol := 5e-3)
 
-def runFastMatmulPrecision : IO Unit := do
-  IO.println "== fast matmul precision =="
+def runMatmulPrecision : IO Unit := do
+  IO.println "== native matmul precision =="
 
   let m : Nat := 2
   let n : Nat := 3
@@ -167,18 +169,18 @@ def runFastMatmulPrecision : IO Unit := do
       -0.20, 0.10
     ]).reshape [n, p] (by dsimp; decide)
 
-  let yCpu := FastKernels.matmulReference (α := Float) (m := m) (n := n) (p := p) a b
-  let yFp32 ← IO.ofExcept (FastKernels.Cuda.matmulCublas .fp32 (m := m) (n := n) (p := p) a b)
-  let yFp64 ← IO.ofExcept (FastKernels.Cuda.matmulCublas .fp64 (m := m) (n := n) (p := p) a b)
+  let yCpu := Tensor.matmul (α := Float) (m := m) (n := n) (p := p) a b
+  let yFp32 ← IO.ofExcept (MatmulSupport.matmul .fp32 (m := m) (n := n) (p := p) a b)
+  let yFp64 ← IO.ofExcept (MatmulSupport.matmul .fp64 (m := m) (n := n) (p := p) a b)
 
-  Utils.assertTensorApprox (s := sY) "fast matmul fp32" yFp32 yCpu (tol := 5e-3)
-  Utils.assertTensorApprox (s := sY) "fast matmul fp64" yFp64 yCpu (tol := 1e-9)
+  Utils.assertTensorApprox (s := sY) "native matmul fp32" yFp32 yCpu (tol := 5e-3)
+  Utils.assertTensorApprox (s := sY) "native matmul fp64" yFp64 yCpu (tol := 1e-9)
 
 def run : IO Unit := do
   IO.println "=== CUDA kernel coverage: matrix multiplication ==="
   runMatmul
   runBatchedMatmul
-  runFastMatmulPrecision
+  runMatmulPrecision
 
 end Matmul
 end Cuda

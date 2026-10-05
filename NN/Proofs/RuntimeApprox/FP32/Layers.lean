@@ -8,7 +8,7 @@ module
 
 public import NN.Proofs.RuntimeApprox.NF.Linalg
 public import NN.Spec.Layers.Linear
-public import NN.Floats.FP32.Core
+public import NN.Floats.FP32
 public import NN.Proofs.RuntimeApprox.NF.Ops.Elementwise.Binary
 
 /-!
@@ -16,9 +16,9 @@ public import NN.Proofs.RuntimeApprox.NF.Ops.Elementwise.Binary
 
 This module specializes the backend-generic runtime-approximation framework
 (`NN.Proofs.RuntimeApprox`) to the rounded-real float32 model
-`TorchLean.Floats.FP32 := NF binaryRadix fexp32 rnd32` (round-to-nearest-even with the IEEE-754
-binary32 exponent function). Every theorem in this directory, including those whose names end in
-`_fp32`, is a statement about that rounded-real model. None of them is a statement about Lean's
+`TorchLean.Floats.FP32` (round-to-nearest-even with the IEEE-754
+binary32 exponent function). Every theorem in this directory is a statement about that rounded-real
+model. None of them is a statement about Lean's
 `Float32` type or about the bit-level `ExecFloat.Binary 8 23` model. Finite binary32 add/mul
 refinements are in
 `NN/Floats/IEEEExec/Bridge/Finite.lean`; further arithmetic refinements are in
@@ -28,12 +28,14 @@ The lemmas here are *compositional*: they let you relate a real-valued spec comp
 to its float32 execution under an explicit error budget, so that larger network theorems can be
 proved by chaining smaller ones.
 
-Trust boundary: `TorchLean.Floats.FP32` is a finite rounding model exposed to Lean. These statements
-are about real-valued spec computations and their rounded counterparts, under the intended side
-condition that execution stays finite (no NaN/Inf/overflow in an IEEE-754 hardware sense).
+`TorchLean.Floats.FP32` has no upper exponent bound or NaN/Inf values. These theorems relate real
+spec computations to that rounded-real model. Applying them to IEEE execution requires a separate
+refinement argument whose hypotheses rule out exceptional results.
 -/
 
 @[expose] public section
+
+open FloatLib.Floats.Formats.BinaryInterchange (Model FloatFormat)
 
 open FloatLib FloatLib.Numerics FloatLib.Floats.Formats
 open Flocq
@@ -57,9 +59,9 @@ abbrev R : Type := TorchLean.Floats.FP32
 /-- Radix for the `FP32` rounding model (binary). -/
 abbrev β : Radix := binaryRadix
 /-- Exponent function used by the `FP32` rounding model. -/
-abbrev fexp : ℤ → ℤ := TorchLean.Floats.fexp32
+abbrev fexp : ℤ → ℤ := (Model.fexpOf FloatFormat.binary32)
 /-- Round-to-nearest-even function used by the `FP32` rounding model. -/
-abbrev rnd : ℝ → ℤ := TorchLean.Floats.rnd32
+abbrev rnd : ℝ → ℤ := FloatLib.Floats.Formats.Flocq.nearestEven
 
 /-- Interpretation of runtime scalars as real spec scalars, specialized to `FP32`. -/
 abbrev toSpec : R → ℝ :=
@@ -92,7 +94,7 @@ existential. It combines the matrix-vector product budget with the final rounded
 
 This is the base layer theorem used by the MLP and CROWN/IBP FP32 wrappers.
 -/
-theorem approxTensor_linear_fp32 {inDim outDim : Nat}
+theorem approxTensor_linear {inDim outDim : Nat}
     {WS : LinearSpec ℝ inDim outDim} {xS : SpecTensor [inDim]}
     {WR : LinearSpec R inDim outDim} {xR : Tensor R [inDim]}
     {epsW epsb epsx : ℝ}

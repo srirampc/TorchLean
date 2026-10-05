@@ -95,18 +95,7 @@ def main (args : List String) : IO Unit := do
     | .ok none => throw <| IO.userError "expected `--model <path>`"
     | .error e => throw <| IO.userError e
 
-  let baseName : String :=
-    match modelPath.splitOn "/" |>.reverse with
-    | [] => modelPath
-    | b :: _ => b
-
-  let stem : String :=
-    match baseName.splitOn "." |>.reverse with
-    | [] => baseName
-    | _ext :: restRev =>
-        match restRev.reverse with
-        | [] => baseName
-        | xs => String.intercalate "." xs
+  let stem : String := (System.FilePath.mk modelPath).fileStem.getD modelPath
 
   let safeName : String :=
     stem.replace "-" "_" |>.replace "." "_"
@@ -118,16 +107,8 @@ def main (args : List String) : IO Unit := do
     | .error e => throw <| IO.userError e
 
   -- ensure output directory exists (best-effort)
-  let outDir : String :=
-    match outPath.splitOn "/" |>.reverse with
-    | [] => "."
-    | _file :: restRev =>
-        match restRev.reverse with
-        | [] => "."
-        | xs => String.intercalate "/" xs
-  let mkdirProc ← IO.Process.spawn
-    { cmd := "mkdir", args := #["-p", outDir], stdout := .inherit, stderr := .inherit }
-  let _ ← mkdirProc.wait
+  if let some outDir := (System.FilePath.mk outPath).parent then
+    try IO.FS.createDirAll outDir catch _ => pure ()
 
   let script : String := "NN/MLTheory/CROWN/Tactics/crown_verifier.py"
   let baseArgs : Array String :=

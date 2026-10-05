@@ -63,15 +63,9 @@ theorem outputSpatial_samePadding {d : Nat} (input radius : Tensor Nat [d]) :
 end Convolution.Geometry
 
 /-- Configuration shared by arbitrary-dimensional convolution layers. -/
-structure Convolution.Config (d : Nat) where
+structure Convolution.Config (d : Nat) extends Convolution.Geometry d where
   /-- Number of output channels. Must be positive when the layer is validated. -/
   outChannels : Nat
-  /-- Kernel extent along each spatial axis. -/
-  kernelSize : Tensor Nat [d]
-  /-- Step along each spatial axis. -/
-  stride : Tensor Nat [d] := Tensor.ones [d]
-  /-- Symmetric zero-padding along each spatial axis. -/
-  padding : Tensor Nat [d] := Tensor.zeros [d]
   /-- Initialization scheme for the kernel weights. -/
   weightInitialization : Init.Scheme := .uniform (-0.1) 0.1
 
@@ -115,10 +109,7 @@ end Convolution.Config
 /-- Build a convolution configuration by adding an output-channel width to shared geometry. -/
 def Convolution.Geometry.convolution {d : Nat} (geometry : Convolution.Geometry d)
     (outChannels : Nat) : Convolution.Config d :=
-  { outChannels
-    kernelSize := geometry.kernelSize
-    stride := geometry.stride
-    padding := geometry.padding }
+  { toGeometry := geometry, outChannels }
 
 /-- Adding an output width to a geometry keeps that width. -/
 @[simp] theorem Convolution.Geometry.convolution_outChannels {d : Nat}
@@ -136,15 +127,9 @@ without unfolding the configuration the builder produced. -/
   rfl
 
 /-- Configuration shared by arbitrary-dimensional transposed-convolution layers. -/
-structure TransposedConvolution.Config (d : Nat) where
+structure TransposedConvolution.Config (d : Nat) extends Convolution.Geometry d where
   /-- Number of output channels. Must be positive when the layer is validated. -/
   outChannels : Nat
-  /-- Kernel extent along each spatial axis. -/
-  kernelSize : Tensor Nat [d]
-  /-- Step along each spatial axis. -/
-  stride : Tensor Nat [d] := Tensor.ones [d]
-  /-- Symmetric zero-padding along each spatial axis. -/
-  padding : Tensor Nat [d] := Tensor.zeros [d]
   /-- Initialization scheme for the kernel weights. -/
   weightInitialization : Init.Scheme := .uniform (-0.1) 0.1
 
@@ -172,10 +157,7 @@ end TransposedConvolution.Config
 def Convolution.Geometry.transposedConvolution {d : Nat}
     (geometry : Convolution.Geometry d)
     (outChannels : Nat) : TransposedConvolution.Config d :=
-  { outChannels
-    kernelSize := geometry.kernelSize
-    stride := geometry.stride
-    padding := geometry.padding }
+  { toGeometry := geometry, outChannels }
 
 /-- Same for the transpose direction: the requested output width survives. -/
 @[simp] theorem Convolution.Geometry.transposedConvolution_outChannels {d : Nat}

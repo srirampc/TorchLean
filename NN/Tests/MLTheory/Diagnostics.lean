@@ -7,7 +7,6 @@ Authors: TorchLean Team
 module
 
 public import NN.MLTheory.LearningTheory.Stability.Dynamics.Runtime
-public import NN.Tensor.Internal.Elab.TensorLiteral
 
 /-!
 # Empirical Diagnostic Regressions
@@ -16,7 +15,7 @@ Checks that empirical robustness and stability diagnostics distinguish failed fi
 empty or non-finite evidence.
 -/
 
-@[expose] public section
+public section
 
 namespace NN.Tests.MLTheory.Diagnostics
 
@@ -24,11 +23,11 @@ open Spec TorchLean
 open NN.MLTheory.Robustness.Runtime
 open NN.MLTheory.Stability.Runtime
 
-def expectError {α : Type} (label : String) : Except String α → IO Unit
+private def expectError {α : Type} (label : String) : Except String α → IO Unit
   | .error _ => pure ()
   | .ok _ => throw <| IO.userError s!"{label}: expected an inconclusive/error result"
 
-def expectBool (label : String) (expected : Bool) : Except String Bool → IO Unit
+private def expectBool (label : String) (expected : Bool) : Except String Bool → IO Unit
   | .ok actual =>
       unless actual = expected do
         throw <| IO.userError s!"{label}: expected {expected}, got {actual}"

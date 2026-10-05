@@ -39,7 +39,7 @@ theorem energy_seqStates_succ_le (p : Params ℝ n)
       ≤
     energy (α := ℝ) p (seqStates (α := ℝ) p useq s0 k) := by
   -- Unfold one step and apply the single-update lemma.
-  simp [Spec.Hopfield.seqStates]
+  simp only [Spec.Hopfield.seqStates]
   exact energy_updateAt_le (n := n) p hsym hdiag _ _
 
 /-- Hence energy never exceeds its starting value, for any schedule of units.

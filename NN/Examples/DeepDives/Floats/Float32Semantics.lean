@@ -35,7 +35,7 @@ rounding rules.
 The model and autograd program stay unchanged because their element type is generic.
 
 Run:
-  `lake exe torchlean float32_semantics`
+  `scripts/lake.sh exe torchlean float32_semantics`
 
 For editor inspection, put the cursor on the `#float32_*` commands below. Those widgets are for
 visualization only; the actual tutorial code uses ordinary `def` and `IO` definitions.
@@ -50,7 +50,6 @@ open FloatLib.Floats.Formats.BinaryInterchange (Model FloatFormat)
 
 open Spec TorchLean
 open TorchLean.Tensor
-open TorchLean.Floats.IEEE754
 
 namespace NN.Examples.DeepDives.Floats.Float32Semantics
 
@@ -78,19 +77,12 @@ torch.tensor(0.1, dtype=torch.float32)
 -/
 def decimalTenth : Float := 0.1
 
-/-- A simple finite binary32 value for the bit-layout widget. -/
-def one32 : Binary 8 23 := (fun x => (ofModel (Model.cast .binary64 .binary32 (toModel
-  (Binary.ofFloat x))) : Binary 8 23)) 1.0
-
-/-- Canonical quiet NaN, useful for showing classification and comparison behavior. -/
-def quietNaN32 : Binary 8 23 := (Binary.canonicalNaN : Binary 8 23)
-
 #float32_round_view decimalTenth
-#float32_view one32
-#float32_view quietNaN32
-#float32_compare_view one32, quietNaN32
+#float32_view (1 : Binary 8 23)
+#float32_view (Binary.canonicalNaN : Binary 8 23)
+#float32_compare_view (1 : Binary 8 23), (Binary.canonicalNaN : Binary 8 23)
 
-/-- The network this tutorial runs twice, once in `Float` and once in `Float32`. -/
+/-- The network run with native `Float32` and configured binary32 (`Binary 8 23`). -/
 abbrev model : nn.Sequential [2] [1] :=
   -- A compact 2-layer MLP with ReLU:
   --   Linear(2 -> 3) -> ReLU -> Linear(3 -> 1)
@@ -138,9 +130,9 @@ end RunResult
 /--
 Run one forward and backward pass over the fixed parameters at scalar type `α`.
 
-The whole tutorial rests on this being generic in `α`: the same code, the same literals and the same
-graph run at `Float` and at `Float32`, so any difference in the printed numbers comes from the
-arithmetic and nothing else.
+The scalar parameter `α` lets native `Float32` and configured binary32 (`Binary 8 23`) use the same
+code, source literals, and graph. Both runs use binary32 precision; the comparison exercises their
+scalar conversions and arithmetic implementations.
 -/
 def runOnce {α : Type}
     [Storage α] [Context α] [ToString α]
@@ -243,7 +235,7 @@ def runOnce {α : Type}
 
 /--
 Largest difference across every tensor in a run: the output, all four parameter gradients and the
-input gradient. One number summarizing how far the two precisions drifted apart.
+input gradient. Both binary32 results are converted to host `Float` before this comparison.
 -/
 def maxAbsDiffResult (a b : RunResult Float) : Float :=
   let differences : Tensor Float [6] :=
@@ -261,7 +253,7 @@ def usage : String :=
     [ "TorchLean Float32 semantics tutorial"
     , ""
     , "Usage:"
-    , "  lake exe torchlean float32_semantics"
+    , "  scripts/lake.sh exe torchlean float32_semantics"
     , ""
     , "This demo has no tutorial-specific flags."
     ]

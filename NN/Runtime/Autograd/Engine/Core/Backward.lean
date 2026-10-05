@@ -74,6 +74,24 @@ def addGradDense
   else
     throw "autograd: gradient contribution has wrong shape for parent"
 
+/-- Visit one node in the optional-gradient reverse sweep.
+Unreached nodes are skipped without running their VJP; reached contributions accumulate in order. -/
+def backwardDenseStep {α : Type} [TorchLean.Storage α] [Add α] (t : Tape α)
+    (acc : Array (Option (Spec.SomeTensor α))) (id : Nat) :
+    Result (Array (Option (Spec.SomeTensor α))) := do
+  match acc[id]? with
+  | none => throw "autograd: internal error (gradient array out of bounds)"
+  | some none => pure acc
+  | some (some dLdy) =>
+    let node ← match t.getNode? id with
+      | some n => pure n
+      | none => throw "autograd: internal error (node missing)"
+    if node.requiresGrad = false then
+      pure acc
+    else
+      let contribs ← node.backward dLdy
+      contribs.foldlM (fun acc2 (pid, pg) => addGradDense (t := t) acc2 pid pg) acc
+
 /--
 Reverse-mode backpropagation producing a dense array of optional gradients.
 
@@ -81,9 +99,8 @@ Reverse-mode backpropagation producing a dense array of optional gradients.
 - Entry `id` is `some g` if the node was reached from `outId` during reverse traversal, otherwise
   `none`.
 - When multiple paths contribute to the same node, we sum gradients via `SomeTensor.add`.
-- A node's VJP runs only if the node was reached; see the section docstring for why. The proof
-  layer names this per-node step `backwardDenseStep` and proves
-  `backwardDense` is the reverse fold of it.
+- A node's VJP runs only if the node was reached; see the section docstring for why.
+  `backwardDenseStep` implements each visit in the reverse fold.
 
 This is the variant the eager trainer executes (through `backwardDenseAll`). It is loosely
 analogous to PyTorch's autograd engine walking the dynamic graph and accumulating `.grad` for
@@ -105,21 +122,7 @@ def backwardDense {α : Type} [TorchLean.Storage α] [Add α]
       grads := grads.set outId (some seed') (h := hout)
     else
       throw "autograd: invalid output id"
-    let ids := (List.range t.nodes.size).reverse
-    ids.foldlM (fun acc id => do
-      match acc[id]? with
-      | none => throw "autograd: internal error (gradient array out of bounds)"
-      | some none => pure acc
-      | some (some dLdy) =>
-        let node ← match t.getNode? id with
-          | some n => pure n
-          | none => throw "autograd: internal error (node missing)"
-        if node.requiresGrad = false then
-          pure acc
-        else
-          let contribs ← node.backward dLdy
-          contribs.foldlM (fun acc2 (pid, pg) => addGradDense (t:=t) acc2 pid pg) acc
-    ) grads
+    (List.range t.nodes.size).reverse.foldlM (backwardDenseStep t) grads
   else
     throw "autograd: seed gradient shape mismatch for output"
 
@@ -140,19 +143,17 @@ def addGradAll
     pure grads
   else if h : g.shape = node.value.shape then
     let g' : Spec.SomeTensor α := Spec.SomeTensor.ofTensor (g.cast h)
-    match grads[id]? with
+    match hget : grads[id]? with
     | none => throw "autograd: internal error (gradient array out of bounds)"
-      | some existing =>
-          if hex : existing.shape = node.value.shape then
-            let existing' : Spec.SomeTensor α :=
-              Spec.SomeTensor.ofTensor (existing.cast hex)
-            let summed ← SomeTensor.add existing' g'
-            if hid : id < grads.size then
-              pure (grads.set id summed (h := hid))
-            else
-              throw "autograd: internal error (gradient array out of bounds)"
-          else
-            throw "autograd: gradient array has wrong shape for node"
+    | some existing =>
+        if hex : existing.shape = node.value.shape then
+          let existing' : Spec.SomeTensor α :=
+            Spec.SomeTensor.ofTensor (existing.cast hex)
+          let summed ← SomeTensor.add existing' g'
+          have hid : id < grads.size := (Array.getElem?_eq_some_iff.mp hget).1
+          pure (grads.set id summed (h := hid))
+        else
+          throw "autograd: gradient array has wrong shape for node"
   else
     throw "autograd: gradient contribution has wrong shape for parent"
 

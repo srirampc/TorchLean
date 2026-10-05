@@ -28,7 +28,8 @@ parameters, input, and output. Tools can inspect that description and interpret 
 execution targets.
 
 Every Lean block on this page is elaborated when the guide is built, and every printed value below
-was produced by that elaboration. The command transcripts come from the same checkout.
+is checked against that elaboration. Command transcripts below are recorded runs, separate from
+the page build.
 
 # Architecture Representation
 
@@ -97,11 +98,12 @@ parameter ABI for every choice of widths:
 ```leanOutput gsMlpType (whitespace := lax)
 Models.mlp : (inputWidth hiddenWidth outputWidth : ℕ) →
   Chain
-    [[hiddenWidth, inputWidth], [hiddenWidth],
-      [outputWidth, hiddenWidth], [outputWidth]]
+    (Models.mlpParams inputWidth hiddenWidth outputWidth)
     [inputWidth] [outputWidth]
 ```
 
+`Models.mlpParams` abbreviates the ordered shape list
+`[[hiddenWidth, inputWidth], [hiddenWidth], [outputWidth, hiddenWidth], [outputWidth]]`.
 Read the type from the outside in:
 
 - the chain consumes one tensor of shape `[inputWidth]`;
@@ -521,11 +523,11 @@ The initializer theorem identifies the two layer occurrences:
 ```lean (name := gsInitThm)
 -- The theorem identifies the actual per-layer initializers,
 -- including their occurrence indices.
-#check @Models.mlp_detInitParams_eq_torchlean_linear_inits
+#check @Models.mlp_detInitParams
 ```
 
 ```leanOutput gsInitThm (whitespace := lax)
-Models.mlp_detInitParams_eq_torchlean_linear_inits :
+Models.mlp_detInitParams :
   ∀ (inputWidth hiddenWidth outputWidth : ℕ),
     LowerToDAG.Chain.detInitParams?
         (Models.mlp inputWidth hiddenWidth outputWidth) =
@@ -598,7 +600,7 @@ The repository contains an executable GraphSpec tutorial:
 ```terminal
 # Run the GraphSpec example through its eager execution
 # interpretation.
-lake exe torchlean graphspec --device cpu --execution eager
+scripts/lake.sh exe torchlean graphspec --device cpu --execution eager
 ```
 
 The recorded run prints:
@@ -649,7 +651,7 @@ Now run it again on the other execution target:
 ```terminal
 # Run the same example through the typed-graph
 # interpretation.
-lake exe torchlean graphspec --device cpu --execution typed-graph
+scripts/lake.sh exe torchlean graphspec --device cpu --execution typed-graph
 ```
 
 The recorded runs print the same losses. The runtime chooses a different interpreter for the
@@ -685,21 +687,21 @@ $$`\operatorname{linearSpec}
   \left(\operatorname{ReLU}
     \left(\operatorname{linearSpec}(W_1,b_1,x)\right)\right).`
 
-`Models.mlp_interp_eq_spec_mlp_forward` identifies this composition with TorchLean's hand-written
+`Models.mlp_interp` identifies this composition with TorchLean's hand-written
 MLP specification:
 
 ```lean (name := gsEquivThm)
 -- Inspect the specification equality with its
 -- parameter-pack pattern match exposed.
-#check @Models.mlp_interp_eq_spec_mlp_forward
+#check @Models.mlp_interp
 ```
 
 ```leanOutput gsEquivThm (whitespace := lax)
-@Models.mlp_interp_eq_spec_mlp_forward :
+@Models.mlp_interp :
   ∀ {α : Type} [inst : Storage α] [inst_1 : Context α]
     {inputWidth hiddenWidth outputWidth : ℕ}
     (params : TensorPack α
-      (Models.MLPParams inputWidth hiddenWidth outputWidth))
+      (Models.mlpParams inputWidth hiddenWidth outputWidth))
     (x : Tensor α [inputWidth]),
     Interp.spec
         (Models.mlp inputWidth hiddenWidth outputWidth) params x =
@@ -730,11 +732,11 @@ the interpreter's parameter splits and both model definitions reduce to the same
 ```lean (name := gsAxioms)
 -- List the logical dependencies of this particular
 -- equivalence theorem.
-#print axioms Models.mlp_interp_eq_spec_mlp_forward
+#print axioms Models.mlp_interp
 ```
 
 ```leanOutput gsAxioms (whitespace := lax)
-'NN.GraphSpec.Models.mlp_interp_eq_spec_mlp_forward' depends on
+'NN.GraphSpec.Models.mlp_interp' depends on
 axioms: [propext, Classical.choice, Quot.sound]
 ```
 
@@ -837,7 +839,7 @@ data input, and one output:
 
 ```leanOutput gsResidualType (whitespace := lax)
 Models.residualLinear : (d : ℕ) →
-  DAG.Model (Models.ResidualLinearParams d) [[d]] [d]
+  DAG.Model (Models.residualLinearParams d) [[d]] [d]
 ```
 
 Its body, in {src "NN/GraphSpec/Models/ResidualLinear.lean"}[`ResidualLinear.lean`], reads
@@ -937,22 +939,20 @@ pipeline that was written with `>>>`:
 
 The environment of the result is `ps ++ [σ]`: the parameters that were type-level in the chain
 become ordinary variables, and the data input is last. Each sequential primitive is embedded as a
-DAG operation with inputs `ps ++ [σ]`, and that embedding does have a proof that nothing is lost:
+DAG operation with inputs `ps ++ [σ]`. Unfolding that embedding and splitting the appended
+parameter pack proves that it preserves the forward function:
 
 ```lean (name := gsEmbedThm)
 -- The primitive embedding preserves the pure forward
 -- function by construction.
-#check @Primitive.toDAGPrimOp_specFwd_eq
-```
-
-```leanOutput gsEmbedThm (whitespace := lax)
-@Primitive.toDAGPrimOp_specFwd_eq :
-  ∀ {α : Type} [inst : Storage α] [inst_1 : Context α]
+example {α : Type} [Storage α] [Context α]
     {ps : List Shape} {σ τ : Shape} (p : Primitive ps σ τ)
-    (params : TensorPack α ps) (x : Tensor α σ),
+    (params : TensorPack α ps) (x : Tensor α σ) :
     (LowerToDAG.Primitive.toDAGPrimOp p).specFwd
         (params.append (TensorPack.cons x TensorPack.nil)) =
-      p.specFwd params x
+      p.specFwd params x := by
+  simp only [LowerToDAG.Primitive.toDAGPrimOp,
+    TensorPack.split_append]
 ```
 
 The primitive statement holds for every primitive, including one supplied by a user. The
@@ -1034,50 +1034,56 @@ tensors, which is what a recurrent layer needs when it produces an updated state
 observable output. Keeping those as a typed list rather than flattening them into one buffer means
 the shared `let1` binding that computes the new state is still shared after the model is inlined
 into a larger graph, and `MultiModel.eval_inline` is the theorem that says inlining preserves every
-output.
+output. The terms passed in as parameters and inputs are copied into each use, so pass variables
+when an argument is expensive.
 
 # Convolution And Pooling Shapes
 
-The sequential vocabulary is not limited to dense layers. `NN.GraphSpec.Core` supplies `linear`,
-`relu`, and axis-wise `softmax`; {src "NN/GraphSpec/Primitives/Spatial.lean"}[`Primitives/Spatial`]
-adds spatial-rank-polymorphic convolution and max pooling, flattening, and BatchNorm with an
-explicit channel axis. Rank-polymorphic means the same definition applies to signals, images, and
-volumes: the spatial extents are a `Tensor Nat [d]` rather than a fixed pair.
+The sequential vocabulary is not limited to dense layers. `NN.GraphSpec.Chain.Primitives` supplies
+`linear`, `relu`, and axis-wise `softmax`;
+{src "NN/GraphSpec/Primitives/Spatial.lean"}[`Primitives/Spatial`] adds spatial-rank-polymorphic
+convolution and max pooling, flattening, and BatchNorm with an explicit channel axis.
+Rank-polymorphic means the same definition applies to signals, images, and volumes: the spatial
+extents are a `Tensor Nat [d]` rather than a fixed pair.
 
-The intermediate spatial arithmetic is part of the type. For
-the CNN in the tutorial ladder, an `8x8` single-channel input, `3x3` kernels with stride 1 and
-padding 1, and `2x2` pooling with stride 2, the feature map that reaches the linear head is:
+The intermediate spatial arithmetic is part of the type. `Models.cnn` accepts a feature chain
+and attaches flattening and a linear head. The chain determines its own depth and spatial
+operations. Here are the tutorial's two stages, with their different channel widths:
 
-```lean (name := gsCnnShape)
--- Compute the feature shape produced by the two spatial
--- stages.
-#eval Models.twoConvFeatureShape (channels := 3)
-  [8, 8] [3, 3] [1, 1] [1, 1] [1, 1] [1, 1]
-  [2, 2] [2, 2] [0, 0] [2, 2] [0, 0]
-```
+```lean (name := gsCnnFeatures)
+/-- Two spatial stages ending in three 2-by-2 maps. -/
+def gsCnnFeatures :
+    Chain [[2, 1, 3, 3], [2], [3, 2, 3, 3], [3]]
+      [1, 8, 8] [3, 2, 2] :=
+  Chain.conv 1 2 [3, 3] [1, 1] [1, 1] [8, 8] >>>
+  Chain.relu [2, 8, 8] >>>
+  Chain.maxPool 2 [2, 2] [2, 2] [0, 0] [8, 8]
+    (hKernel := by intro i; fin_cases i <;> decide)
+    (hStride := by intro i; fin_cases i <;> decide) >>>
+  Chain.conv 2 3 [3, 3] [1, 1] [1, 1] [4, 4] >>>
+  Chain.relu [3, 4, 4] >>>
+  Chain.maxPool 3 [2, 2] [2, 2] [0, 0] [4, 4]
+    (hKernel := by intro i; fin_cases i <;> decide)
+    (hStride := by intro i; fin_cases i <;> decide)
 
-```leanOutput gsCnnShape (whitespace := lax)
-[3, 2, 2]
-```
-
-```lean (name := gsCnnSize)
--- Flattening that shape determines the linear head’s input
--- width.
-#eval Models.twoConvFeatureSize (channels := 3)
-  [8, 8] [3, 3] [1, 1] [1, 1] [1, 1] [1, 1]
-  [2, 2] [2, 2] [0, 0] [2, 2] [0, 0]
-```
-
-```leanOutput gsCnnSize (whitespace := lax)
-12
+example :
+    Chain
+      ([[2, 1, 3, 3], [2], [3, 2, 3, 3], [3]] ++
+        [[4, 12], [4]])
+      [1, 8, 8] [4] :=
+  Models.cnn gsCnnFeatures 4
 ```
 
 Padding 1 with a `3x3` kernel preserves the extent, so the two pooling stages halve `8` to `4` and
-`4` to `2`. Three channels of `2x2` give twelve features. This is the
-value of `twoConvFeatureSize` applied to the same arguments the convolutions were given, and it
-appears inside the type of the linear head, so editing the input size or the pooling stride changes
-the head's weight shape automatically. Get one of them wrong and the mismatch is a compile error of
-the same kind as the width typo earlier in this chapter.
+`4` to `2`. Three channels of `2x2` give twelve features. The feature chain's output shape
+determines the head's weight shape `[4, 12]`; its parameters follow the four feature tensors.
+Changing the chain changes that inferred head width. The explicit type above asks Lean to check
+the complete parameter list and output shape, so an inconsistent annotation gives the same kind
+of compile error as the width typo earlier in this chapter.
+
+The feature chain can contain any composable sequence supported by its chosen interpretation.
+An identity chain gives a classifier on the flattened input. The general chain-to-DAG conversion
+applies to the resulting model; it does not require a separate CNN conversion.
 
 # Checkpoint Import And Parameter Mapping
 
@@ -1137,8 +1143,8 @@ semantic preservation using the same architectures.
 4. Run the tutorial with `--arithmetic ieee` and compare the two losses against the transcript
    above. A difference here is a floating-point story, and {ref "floats"}[the floating-point
    chapter] is where that story is told.
-5. Change the pooling stride in the CNN arguments from `[2, 2]` to `[3, 3]` and re-evaluate
-   `twoConvFeatureSize`. The head's weight shape follows the arithmetic without being edited.
+5. Change a pooling stride in `gsCnnFeatures` from `[2, 2]` to `[3, 3]` and update the following
+   spatial annotations. Inspect the head's inferred weight shape before annotating the classifier.
 6. Apply `LowerToDAG.Chain.eval_toDAGTerm` to a chain containing your own primitive. Inspect why
    it needs no premise about that primitive's `program`, then state the additional agreement
    needed to transfer the pure equality to execution.

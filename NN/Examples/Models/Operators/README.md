@@ -5,7 +5,8 @@ This folder contains operator learning and physics-informed neural field example
 ## Files
 
 - `ComplexRegression.lean`: fits both components of complex binary32 weights and bias using a
-  real loss, then checks a held-out complex prediction and an optional checkpoint round trip.
+  real loss, then reports a held-out complex prediction and checks an optional checkpoint round
+  trip.
 - `Fno1dBurgers.lean`: native TorchLean 1D Fourier neural operator for the viscous Burgers dataset.
   The command learns the operator `u0(x) -> u(x,T)` on a fixed grid and can export prediction CSVs
   for plotting.
@@ -66,13 +67,13 @@ burgers_meta.json
 Quick CUDA check:
 
 ```bash
-lake -R -K cuda=true exe torchlean fno1d_burgers --device cuda --steps 1
+scripts/lake.sh -Kcuda=true exe torchlean fno1d_burgers --device cuda --steps 1
 ```
 
 Longer run with a prediction artifact:
 
 ```bash
-lake -R -K cuda=true exe torchlean fno1d_burgers --device cuda \
+scripts/lake.sh -Kcuda=true exe torchlean fno1d_burgers --device cuda \
   --steps 700 --lr 0.003 \
   --plot-csv data/real/fno/predictions.csv \
   --log data/real/fno/trainlog.json
@@ -83,17 +84,17 @@ python3 NN/Examples/Data/plot_fno1d_burgers.py \
 
 ## Runtime and Verification Boundary
 
-On CUDA, this example uses a real-split FNO path with fused `spectralConv1dRfft` autograd support
-and cuFFT-backed kernels. The fused runtime owns tensor parameters, cached Adam moments, prediction,
-and tape disposal. Host updates retain their documented floating-point operation order. The generic
-real-split `nn.models.fno` model supports any spatial rank and any batch shape. Its default
-`spectralPath := .automatic` transforms each spatial axis separately, using cuFFT in eager CUDA
-execution and dense per-axis operations otherwise. Set `spectralPath := .denseReference` to use
-the full-grid DFT matrices instead. These two implementations share weights and checkpoint layout;
-tests compare their predictions, input gradients, and every parameter gradient.
-The Burgers command's fused one-sided model has a different parameter layout.
-Dataset metadata and prediction artifacts are visible in TorchLean; CUDA/cuFFT remain native runtime
-boundaries.
+This example trains the shared `nn.models.fno` model on a one-dimensional Burgers grid. The model
+supports arbitrary spatial rank and batch shape; the dataset determines the dimensions used here.
+Its default `spectralPath := .automatic` transforms each spatial axis separately, calling LibTorch
+FFT operations in eager CUDA execution and dense per-axis operations otherwise. Set
+`spectralPath := .denseReference` in the model configuration to use full-grid DFT matrices instead.
+Both paths share weights and checkpoint layout; tests compare their predictions, input gradients,
+and every parameter gradient.
+
+TorchLean records the differentiation tape and runs the trainer and optimizer. LibTorch computes
+native tensor values, including FFTs. Dataset metadata and prediction artifacts are visible in
+TorchLean; native execution remains outside the Lean proof checker.
 
 For PINN residual certificates and scientific ML verification artifacts, use
 `NN/Examples/Verification/PINN` and `NN/Verification/PINN`. The FNO command is a training/prediction

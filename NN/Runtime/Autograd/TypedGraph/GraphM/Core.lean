@@ -120,13 +120,22 @@ def run {α : Type} [TorchLean.Storage α] {Γ : List Shape} {β : Type} (m : M 
 def ctxLen {Γ : List Shape} (ss : List Shape) : Nat :=
   (Γ ++ ss).length
 
+/-- Count inputs and intermediates without allocating their concatenation. -/
+def Internal.ctxLenFast {Γ : List Shape} (ss : List Shape) : Nat :=
+  Γ.length + ss.length
+
+/-- Keep the dependent index definition while avoiding a temporary list during execution. -/
+@[csimp] theorem ctxLen_eq_fast : @ctxLen = @Internal.ctxLenFast := by
+  funext Γ ss
+  simp only [ctxLen, Internal.ctxLenFast, List.length_append]
+
 /--
 Convert a `Var s` into a dependent `Idx (Γ ++ ss) s`.
 
 This performs bounds checking and a runtime shape check, returning a structured error if the
 variable points outside the current context or has the wrong shape.
 -/
-def mkIdx {_α : Type} {Γ : List Shape} (ss : List Shape) {s : Shape}
+def mkIdx {Γ : List Shape} (ss : List Shape) {s : Shape}
     (v : Var s) : Runtime.Autograd.Result (Idx (Γ ++ ss) s) := by
   let n := v.id
   if h : n < ctxLen (Γ := Γ) ss then
@@ -212,23 +221,20 @@ def const {α : Type} [TorchLean.Storage α]
     MWith α Δ Γ (Var s) := do
   let ⟨ss, g, _⟩ ← get
   let node : NodeData α Δ (Γ ++ ss) s :=
-    { forward := fun _ctx _d => t
-      jvp := fun _ctx _dctx _d => Tensor.full s (0 : α)
-      vjp := fun _ctx _d _δ => TorchLean.TensorPack.zero (α := α) (ss := Γ ++ ss) }
+    NodeData.ofLocalCompact (fun _ => ())
+      (forward := fun _ctx _d => t)
+      (jvp := fun _ctx _dctx _d => Tensor.full s (0 : α))
+      (vjp := fun _ctx _d _δ => Contributions.zero (α := α) (shapes := Γ ++ ss))
   push (α := α) (Δ := Δ) (Γ := Γ) (ss := ss) (s := s) g node
 
 /-- Deterministic `U[0,1)` tensor generator (seeded, pure). -/
 def randUniform {α : Type} [TorchLean.Storage α] [Context α] {Δ : Type} {Γ : List Shape} {s : Shape}
     (seed : Nat) : MWith α Δ Γ (Var s) := do
-  let ⟨ss, g, _⟩ ← get
+  let ⟨ss, _, _⟩ ← get
   let counter := ss.length
   let key := Spec.Random.keyOf seed counter
   let t : Tensor α s := Spec.Random.uniform (α := α) key (s := s)
-  let node : NodeData α Δ (Γ ++ ss) s :=
-    { forward := fun _ctx _d => t
-      jvp := fun _ctx _dctx _d => Tensor.full s (0 : α)
-      vjp := fun _ctx _d _δ => TorchLean.TensorPack.zero (α := α) (ss := Γ ++ ss) }
-  push (α := α) (Δ := Δ) (Γ := Γ) (ss := ss) (s := s) g node
+  const (α := α) (Δ := Δ) (Γ := Γ) t
 
 /--
 Deterministic `{0,1}` mask generator (seeded, pure).
@@ -245,14 +251,15 @@ def bernoulliMask {α : Type} [TorchLean.Storage α] [Context α]
   let ⟨ss, g, _⟩ ← get
   let counter := ss.length
   let key := Spec.Random.keyOf seed counter
-  let ikp ← liftM (mkIdx (_α := α) (Γ := Γ) ss keepProb)
+  let ikp ← liftM (mkIdx (Γ := Γ) ss keepProb)
   let node : NodeData α Δ (Γ ++ ss) s :=
-    { forward := fun ctx _d =>
-        let kpT := getIdx (α := α) (xs := ctx) ikp
+    NodeData.ofLocalCompact (fun lookup => lookup.read ikp)
+      (forward := fun ctx _d =>
+        let kpT := ctx
         let kp : α := kpT.item
-        Spec.Random.mask (α := α) key kp (s := s)
-      jvp := fun _ctx _dctx _d => Tensor.full s (0 : α)
-      vjp := fun _ctx _d _δ => TorchLean.TensorPack.zero (α := α) (ss := Γ ++ ss) }
+        Spec.Random.mask (α := α) key kp (s := s))
+      (jvp := fun _ctx _dctx _d => Tensor.full s (0 : α))
+      (vjp := fun _ctx _d _δ => Contributions.zero (α := α) (shapes := Γ ++ ss))
   push (α := α) (Δ := Δ) (Γ := Γ) (ss := ss) (s := s) g node
 
 /--
@@ -265,11 +272,12 @@ def detach {α : Type} [TorchLean.Storage α] [Context α]
     {Δ : Type} {Γ : List Shape} {s : Shape}
     (x : Var s) : MWith α Δ Γ (Var s) := do
   let ⟨ss, g, _⟩ ← get
-  let ix ← liftM (mkIdx (_α := α) (Γ := Γ) ss x)
+  let ix ← liftM (mkIdx (Γ := Γ) ss x)
   let node : NodeData α Δ (Γ ++ ss) s :=
-    { forward := fun ctx _d => Tensor.detachSpec (getIdx (α := α) (xs := ctx) ix)
-      jvp := fun _ctx _dctx _d => Tensor.full s (0 : α)
-      vjp := fun _ctx _d _δ => TorchLean.TensorPack.zero (α := α) (ss := Γ ++ ss) }
+    NodeData.ofLocalCompact (fun lookup => lookup.read ix)
+      (forward := fun ctx _d => Tensor.detachSpec (ctx))
+      (jvp := fun _ctx _dctx _d => Tensor.full s (0 : α))
+      (vjp := fun _ctx _d _δ => Contributions.zero (α := α) (shapes := Γ ++ ss))
   push (α := α) (Δ := Δ) (Γ := Γ) (ss := ss) (s := s) g node
 
 end GraphM

@@ -68,7 +68,7 @@ def reverseAxis {α : Type} [TorchLean.Storage α] :
       [_h : Shape.AxisInBounds axis shape] → Tensor α shape
   | 0, .dim length _, tensor, _ =>
       Tensor.dim fun index =>
-        Tensor.unstack tensor ⟨length - 1 - index.val, by grind⟩
+        Tensor.unstack tensor index.rev
   | axis + 1, .dim _ rest, tensor, h =>
       have innerAxis : Shape.AxisInBounds axis rest :=
         ⟨by
@@ -143,16 +143,6 @@ theorem flattenSpec_dim_apply {α : Type} [TorchLean.Storage α]
 end Internal
 end ShapeChange
 
-private theorem tensor_eq_of_buffer_eq {α : Type}
-    [storage : TorchLean.Storage α] {shape : TorchLean.Tensor.Internal.Shape}
-    {left right : TorchLean.Tensor.Internal.Rep α shape}
-    (hBuffer : left.buffer = right.buffer) :
-    left = right := by
-  cases left
-  cases right
-  cases hBuffer
-  rfl
-
 private theorem cast_vector_buffer {α : Type}
     [TorchLean.Storage α] {sourceSize targetSize : Nat}
     (hSize : sourceSize = targetSize)
@@ -186,8 +176,9 @@ theorem flatten_reshapeSpec {α : Type} [TorchLean.Storage α]
     {source target : Shape} (tensor : Tensor α source)
     (hSize : source.size = target.size) :
     flattenSpec (reshapeSpec tensor hSize) = hSize ▸ flattenSpec tensor := by
-  apply tensor_eq_of_buffer_eq
-  change tensor.buffer = (hSize ▸ flattenSpec tensor).buffer
+  apply Tensor.eq_of_data_eq
+  change TorchLean.Storage.toArray tensor.buffer =
+    TorchLean.Storage.toArray (hSize ▸ flattenSpec tensor).buffer
   rw [cast_vector_buffer hSize (flattenSpec tensor)]
   rfl
 

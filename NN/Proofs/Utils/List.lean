@@ -31,16 +31,8 @@ If the initial accumulator and every `f i` are `≤ eps`, then the folded maximu
 theorem foldl_max_le_of_le {ι β : Type} [LinearOrder β] (l : List ι) (f : ι → β) {acc eps : β}
     (hacc : acc ≤ eps) (hf : ∀ i ∈ l, f i ≤ eps) :
     l.foldl (fun a i => max a (f i)) acc ≤ eps := by
-  induction l generalizing acc with
-  | nil =>
-      simpa using hacc
-  | cons a l ih =>
-      have ha : f a ≤ eps := hf a (by simp)
-      have hacc' : max acc (f a) ≤ eps := max_le hacc ha
-      have hf' : ∀ i ∈ l, f i ≤ eps := by
-        intro i hi
-        exact hf i (by simp [hi])
-      simpa [List.foldl] using ih (acc := max acc (f a)) hacc' hf'
+  exact List.foldlRecOn (motive := fun a => a ≤ eps) l _ hacc
+    fun _ h i hi => max_le h (hf i hi)
 
 /--
 Lower bound helper for `foldl max`.
@@ -49,14 +41,8 @@ The folded maximum is always at least as large as the initial accumulator.
 -/
 theorem le_foldl_max_init {ι β : Type} [LinearOrder β] (l : List ι) (f : ι → β) (acc : β) :
     acc ≤ l.foldl (fun a i => max a (f i)) acc := by
-  induction l generalizing acc with
-  | nil =>
-      simp
-  | cons a l ih =>
-      have h1 : acc ≤ max acc (f a) := le_max_left _ _
-      have h2 : max acc (f a) ≤ l.foldl (fun a i => max a (f i)) (max acc (f a)) := by
-        simpa using (ih (acc := max acc (f a)))
-      simpa [List.foldl] using le_trans h1 h2
+  exact List.foldlRecOn (motive := fun a => acc ≤ a) l _ (le_refl acc)
+    fun a h i _ => h.trans (le_max_left a (f i))
 
 /--
 Membership helper for `foldl max`.
@@ -112,28 +98,19 @@ theorem foldl_add_congr {α β : Type} [Add α] (l : List β) (f g : β → α) 
     l.foldl (fun s x => s + f x) a = l.foldl (fun s x => s + g x) a := by
   rw [funext h]
 
-/-- Folding `(+ 0)` over a list leaves the accumulator unchanged. -/
-theorem foldl_add_const_zero {α β : Type} [AddMonoid α] (l : List β) (a : α) :
-    l.foldl (fun s _ => s + (0 : α)) a = a := by
-  induction l generalizing a with
-  | nil =>
-      simp
-  | cons _ tl ih =>
-      simp [List.foldl, add_zero]
-
 /--
 Turn `foldl (fun a x => a + f x) acc` into `acc + foldl (fun a x => a + f x) 0`.
 
 This is the standard "peel off the initial accumulator" lemma for left folds over `+`.
 -/
-theorem foldl_add_init {α β : Type} [AddMonoid β] (l : List α) (f : α → β) (acc : β) :
+theorem foldl_add_init {α β : Type*} [AddMonoid β] (l : List α) (f : α → β) (acc : β) :
     l.foldl (fun a x => a + f x) acc = acc + l.foldl (fun a x => a + f x) 0 := by
   simpa only [List.foldl_map, add_zero] using
     (List.foldl_assoc (op := (· + ·)) (ha := ⟨add_assoc⟩)
       (l := l.map f) (a₁ := acc) (a₂ := 0))
 
 /-- `foldl_add_init` read right to left, which is the direction `rw` usually needs. -/
-theorem add_foldl_add0 {α β : Type} [AddMonoid β] (l : List α) (f : α → β) (acc : β) :
+theorem add_foldl_add_zero {α β : Type*} [AddMonoid β] (l : List α) (f : α → β) (acc : β) :
     acc + l.foldl (fun a x => a + f x) 0 = l.foldl (fun a x => a + f x) acc := by
   simpa using (foldl_add_init (l := l) (f := f) (acc := acc)).symm
 
@@ -163,26 +140,6 @@ theorem foldl_add_mul_right {α β : Type} [Semiring α] (l : List β) (g : β �
     l.foldl (fun acc x => acc + g x * k) (a * k) =
       (l.foldl (fun acc x => acc + g x) a) * k := by
   exact List.foldl_hom (fun x => x * k) (fun x y => (add_mul x (g y) k).symm)
-
-/--
-Length of the second component when a left fold prepends exactly one output per input.
-
-This captures the common "right-to-left scan implemented as `reverse.foldl`" proof pattern used by
-return/advantage computations: the first accumulator evolves by `step`, while the second accumulator
-records one new value with `::` at every iteration.
--/
-theorem foldl_cons_snd_length {α β : Type} (l : List β) (step : α → β → α)
-    (accScalar : α) (accList : List α) :
-    (((l.foldl
-      (fun (acc : α × List α) x =>
-        let y := step acc.1 x
-        (y, y :: acc.2))
-      (accScalar, accList)).2).length = accList.length + l.length) := by
-  induction l generalizing accScalar accList with
-  | nil =>
-      simp
-  | cons x xs ih =>
-      simp [List.foldl, ih, Nat.add_left_comm, Nat.add_comm]
 
 /--
 Rewrite the canonical `List.finRange` addition fold into a `Finset.univ` sum.

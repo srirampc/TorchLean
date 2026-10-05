@@ -18,13 +18,13 @@ import ProofWidgets.Component.HtmlDisplay
 /-!
 # Verification
 
-Verification widgets (bounds / certificates).
+CROWN bound-state diagnostics.
 
 This module provides small infoview panels for *bound propagation* artifacts, aimed at debugging
 and teaching rather than proofs:
 
-- `#crown_view g, st` shows a per-node table for a `CROWN.graph.PropState`, including optional IBP
-  boxes and optional affine forms.
+- `#crown_view g, st` shows a per-node table for a `NN.MLTheory.CROWN.Graph.PropState`,
+  including optional IBP boxes and optional affine forms.
 
 The panel makes it easy to inspect:
 - which nodes got bounds,
@@ -154,20 +154,14 @@ private def nodeStateHtml {α : Type} [TorchLean.Storage α] [Context α] [ToStr
     </div>
   </details>
 
-/-- Render a short array preview, clipping with `...` when the array is long. -/
-private def arrayPreview {α : Type} [ToString α] (maxElems : Nat) (xs : Array α) : String :=
-  let head := xs.extract 0 (min maxElems xs.size)
-  let body := head.foldl (fun acc x =>
-    if acc.isEmpty then toString x else acc ++ ", " ++ toString x) ""
-  let suffix := if xs.size > maxElems then ", ..." else ""
-  "[" ++ body ++ suffix ++ "]"
-
-/-- Produce a compact one-line preview of a flat interval box. -/
+/-- Produce a compact one-line preview without materializing the full endpoint buffers. -/
 private def flatBoxPreview {α : Type} [TorchLean.Storage α] [Context α] [ToString α]
     (b : FlatBox α) (maxElems : Nat := 4) : String :=
-  let lo := Tensor.to b.lo (Array α)
-  let hi := Tensor.to b.hi (Array α)
-  s!"lo={arrayPreview (α := α) maxElems lo}, hi={arrayPreview (α := α) maxElems hi}"
+  let preview (t : Tensor α (.dim b.dim .scalar)) : String :=
+    let entries := (TensorInternal.prefixEntries t maxElems).toList.map toString
+    let entries := if b.dim > maxElems then entries ++ ["..."] else entries
+    "[" ++ String.intercalate ", " entries ++ "]"
+  s!"lo={preview b.lo}, hi={preview b.hi}"
 
 /-- Build a DOT graph for compact visualization of state coverage across nodes. -/
 private def crownDot {α : Type} [TorchLean.Storage α] [Context α] [ToString α] (g : Graph)
@@ -207,10 +201,10 @@ private def crownDot {α : Type} [TorchLean.Storage α] [Context α] [ToString �
             | some _, some _ => "#d7fff6"
       s!"  n{nid} [label=\"{escapeDotLabel label}\", fillcolor=\"{fill}\"];")
   let edges : List String :=
-    (List.range n).foldl (fun acc nid =>
+    (List.range n).flatMap (fun nid =>
       match g.nodes[nid]? with
-      | none => acc
-      | some nd => acc ++ (nd.parents.map (fun p => s!"  n{p} -> n{nid};")).toList) []
+      | none => []
+      | some nd => (nd.parents.map (fun p => s!"  n{p} -> n{nid};")).toList)
   header ++ String.intercalate "\n" (nodes ++ edges) ++ "\n}\n"
 
 /-- Render a compact table summary of per-node state availability and previews. -/
@@ -278,7 +272,7 @@ private def compactTableHtml {α : Type} [TorchLean.Storage α] [Context α] [To
       ProofWidgets.Html.text ""}
   </div>
 
-/-- Render a `CROWN.graph.PropState` as a per-node HTML panel. -/
+/-- Render a `NN.MLTheory.CROWN.Graph.PropState` as a per-node HTML panel. -/
 def crownPropHtml {α : Type} [TorchLean.Storage α] [Context α] [ToString α] (g : Graph)
     (ps : PropState α) (maxNodes : Nat := 200) : ProofWidgets.Html :=
   let nG := g.size
@@ -346,7 +340,7 @@ def crownPropHtml {α : Type} [TorchLean.Storage α] [Context α] [ToString α] 
 /-!
 ## Bounds Tightness
 
-When IBP boxes exist, a very fast diagnostic for "where are my bounds blowing up?" is to look at
+When IBP boxes exist, a diagnostic for "where are my bounds blowing up?" is to look at
 interval widths $\mathrm{hi}-\mathrm{lo}$ node-by-node.
 
 This viewer computes width summaries per node and highlights missing IBP coverage.
@@ -363,7 +357,8 @@ private def arrayStats {α : Type} [TorchLean.Storage α] [Context α] (xs : Arr
     let mean := sum / (↑xs.size : α)
     (mn, mx, mean)
 
-/-- Per-component width `hi - lo` of a box, the quantity the diagnostic panel ranks nodes by. -/
+/-- Per-component width `hi - lo` of a box,
+the quantity the diagnostic panel summarizes per node. -/
 private def flatBoxWidthTensor {α : Type} [TorchLean.Storage α] [Context α] (b : FlatBox α) :
     Tensor α [b.dim] :=
   Tensor.subSpec (α := α) b.hi b.lo

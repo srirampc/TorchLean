@@ -173,7 +173,8 @@ structure CorrectlyRounded (ρ : ℝ → ℝ) (σ : F → F) : Prop where
   law. -/
   finite_input_implies :
     ∀ x : F, finite x →
-      finite (σ x) ∧ (toModel (σ x)).toReal = IEEE32Exec.fp32Round (ρ ((toModel x).toReal))
+      finite (σ x) ∧
+        (toModel (σ x)).toReal = Model.roundAt FloatFormat.binary32 (ρ ((toModel x).toReal))
 
  /--
 Real-valued sufficient conditions used to prove that a correctly-rounded activation satisfies the

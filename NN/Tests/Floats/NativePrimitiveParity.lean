@@ -12,7 +12,7 @@ public import FloatLib.Floats.Formats.IEEE754.Native
 /-!
 # Native binary32 parity: the test behind the CUDA float32 contract
 
-`Runtime.Autograd.Cuda.Float32Contract.NativePrimitiveAgreement` records assumptions that
+`Runtime.Autograd.LibTorch.Float32Contract.NativePrimitiveAgreement` records assumptions that
 native `add`, `mul`, `div`, `fma`, and `sqrt` agree bit-for-bit with `ExecFloat.Binary 8 23`.
 This regression harness compares selected host results with that reference; passing a finite set of
 cases does not establish the universal contract or verify a GPU implementation.
@@ -22,15 +22,15 @@ Lean's native `Float32` calls host binary32 arithmetic for four operations. Core
 `scripts/checks/cuda_float32_parity.sh`. That script compares host `fmaf` and device `__fmaf_rn`.
 
 Lean's `Float32.ofBits` canonicalizes NaNs, while `ExecFloat.Binary 8 23` preserves their sign and
-payload
-when quieting them. The native conversion therefore cannot serve as a payload-preserving oracle.
-The sweep skips NaN inputs and counts them separately; `nanOracleReport` displays the conversion
-behavior. This limitation concerns the host comparison, not a measured GPU result.
+payload when quieting them. The native conversion therefore cannot serve as a payload-preserving
+oracle. The sweep skips NaN inputs and reports only performed comparisons; `nanOracleReport`
+displays the conversion behavior. This limitation concerns the host comparison, not a measured GPU
+result.
 
 Run:
-  `lake exe native_float32_parity`
-  `lake exe native_float32_parity --sweep 1000000`
-  `lake exe native_float32_parity --emit-cases`
+  `scripts/lake.sh exe native_float32_parity`
+  `scripts/lake.sh exe native_float32_parity --sweep 1000000`
+  `scripts/lake.sh exe native_float32_parity --emit-cases`
 
 The last form prints one case per line for the CUDA parity script to consume.
 -/
@@ -40,14 +40,13 @@ The last form prints one case per line for the CUDA parity script to consume.
 open FloatLib.Floats (ExecFloat)
 open FloatLib.Floats.ExecFloat (Binary)
 open FloatLib.Floats.ExecFloat.Binary (ofBits32)
-open FloatLib.Floats.Formats.BinaryInterchange (Model FloatFormat)
 
 open TorchLean
 
 namespace NN.Tests.Floats.NativePrimitiveParity
 
 /-- Zero-padded lowercase hex, so that bit patterns line up in a column when printed. -/
-def hex8 (u : UInt32) : String :=
+def hex (u : UInt32) : String :=
   "0x" ++ u.toBitVec.toHex
 
 /--
@@ -68,10 +67,9 @@ structure Case where
 deriving Inhabited
 
 /--
-The cases are chosen so that an implementation which is merely "close" fails: every one of them
-lands on a rounding boundary, a signed zero, an underflow to subnormal, or an overflow. A kernel
-that computes in binary64 and truncates, or that flushes subnormals to zero (a real CUDA compiler
-flag, `-ftz=true`), disagrees on this list rather than on some rare input a random sweep might miss.
+The cases exercise rounding boundaries, signed zeros, subnormal results, overflow, and invalid
+operations. Subnormal cases distinguish gradual underflow from flush-to-zero behavior. The fused
+triples below separately distinguish one rounding from a multiply followed by an add.
 -/
 def curatedCases : Array Case := #[
   { what := "tie to even rounds down", x := 0x3F800000, y := 0x33800000 },
@@ -124,11 +122,12 @@ def modelDiv (x y : UInt32) : UInt32 :=
 
 @[inherit_doc modelAdd]
 def modelSqrt (x : UInt32) : UInt32 :=
-  Binary.toBits32 (Binary.sqrt (rounding := .nearestEven) (ofBits32 x))
+  Binary.toBits32 (Binary.sqrtWithRounding (rounding := .nearestEven) (ofBits32 x))
 
 @[inherit_doc modelAdd]
 def modelFma (x y z : UInt32) : UInt32 :=
-  Binary.toBits32 (Binary.fma (rounding := .nearestEven) (ofBits32 x) (ofBits32 y) (ofBits32 z))
+  Binary.toBits32
+    (Binary.fmaWithRounding (rounding := .nearestEven) (ofBits32 x) (ofBits32 y) (ofBits32 z))
 
 /-- The same expression with two roundings, used to show what a missing `fma` would return. -/
 def modelMulThenAdd (x y z : UInt32) : UInt32 :=
@@ -157,11 +156,11 @@ inside a terminal width, and so a reader can check a row by hand against a float
 -/
 def caseRows (c : Case) : String :=
   let mark (native model : UInt32) : String := if native == model then "=" else "!"
-  s!"  [{c.what}] {hex8 c.x} {hex8 c.y}\n" ++
-    s!"    add {hex8 (nativeAdd c.x c.y)}{mark (nativeAdd c.x c.y) (modelAdd c.x c.y)}" ++
-    s!" mul {hex8 (nativeMul c.x c.y)}{mark (nativeMul c.x c.y) (modelMul c.x c.y)}" ++
-    s!" div {hex8 (nativeDiv c.x c.y)}{mark (nativeDiv c.x c.y) (modelDiv c.x c.y)}" ++
-    s!" sqrt {hex8 (nativeSqrt c.x)}{mark (nativeSqrt c.x) (modelSqrt c.x)}"
+  s!"  [{c.what}] {hex c.x} {hex c.y}\n" ++
+    s!"    add {hex (nativeAdd c.x c.y)}{mark (nativeAdd c.x c.y) (modelAdd c.x c.y)}" ++
+    s!" mul {hex (nativeMul c.x c.y)}{mark (nativeMul c.x c.y) (modelMul c.x c.y)}" ++
+    s!" div {hex (nativeDiv c.x c.y)}{mark (nativeDiv c.x c.y) (modelDiv c.x c.y)}" ++
+    s!" sqrt {hex (nativeSqrt c.x)}{mark (nativeSqrt c.x) (modelSqrt c.x)}"
 
 /-- A single disagreement, kept in enough detail to reproduce it from the printed line alone. -/
 structure Mismatch where
@@ -177,13 +176,12 @@ deriving Inhabited
 
 /-- Rendering used both by the tutorial output and by test failures. -/
 def Mismatch.render (m : Mismatch) : String :=
-  s!"{m.op}({m.operands}): native {hex8 m.native} model {hex8 m.model}"
+  s!"{m.op}({m.operands}): native {hex m.native} model {hex m.model}"
 
 /--
 Running counts for one primitive.
 
-Only the first few mismatches are kept. A kernel built with `-ffast-math` disagrees on almost every
-input, and printing a million lines helps nobody find out why.
+Only the first four mismatches are kept, so a large failing sweep still produces a bounded report.
 -/
 structure Tally where
   /-- Comparisons performed. -/
@@ -222,8 +220,8 @@ deriving Inhabited
 
 /-- Compare one case, on all four natively callable primitives. -/
 def Report.check (r : Report) (c : Case) : Report :=
-  let pair := s!"{hex8 c.x}, {hex8 c.y}"
-  let one := hex8 c.x
+  let pair := s!"{hex c.x}, {hex c.y}"
+  let one := hex c.x
   { add :=
       r.add.push (nativeAdd c.x c.y == modelAdd c.x c.y) fun _ =>
         { op := "add", operands := pair, native := nativeAdd c.x c.y, model := modelAdd c.x c.y }
@@ -273,23 +271,23 @@ Marsaglia's xorshift32 generator (Marsaglia, "Xorshift RNGs", J. Stat. Soft. 8(1
 generator rather than `IO.rand` keeps a sweep reproducible, which matters when the report is the
 evidence for a claim: a reader with the same seed sees the same inputs.
 -/
-def xorshift32 (s : UInt32) : UInt32 :=
+def xorshift (s : UInt32) : UInt32 :=
   let s := s ^^^ (s <<< 13)
   let s := s ^^^ (s >>> 17)
   s ^^^ (s <<< 5)
 
 /--
 Compare `draws` pseudorandom operand pairs, skipping `NaN` operands for the reason given in the
-module docstring. Skipped draws cost a comparison, so the reported count is the number of pairs that
-actually reached the two implementations.
+module docstring. Each accepted pair contributes one comparison per primitive; skipped draws
+contribute none.
 -/
 def sweep (draws : Nat) (seed : UInt32) : Report := Id.run do
   let mut s : UInt32 := if seed == 0 then 1 else seed
   let mut r : Report := {}
   for _ in [0:draws] do
-    s := xorshift32 s
+    s := xorshift s
     let x := s
-    s := xorshift32 s
+    s := xorshift s
     let y := s
     unless isNaNBits x || isNaNBits y do
       r := r.check { what := "sweep", x := x, y := y }
@@ -302,7 +300,7 @@ docstring rather than as a parity check.
 def nanOracleReport (payload : UInt32) : String :=
   let native := (Float32.ofBits payload).toBits
   let model := (ofBits32 payload).toBits32
-  s!"NaN {hex8 payload}: Float32 keeps {hex8 native}, configured binary32 keeps {hex8 model}"
+  s!"NaN {hex payload}: Float32 keeps {hex native}, configured binary32 keeps {hex model}"
 
 /-- Command-line help for the native parity tutorial. -/
 def usage : String :=
@@ -310,44 +308,42 @@ def usage : String :=
     [ "TorchLean native binary32 parity check"
     , ""
     , "Usage:"
-    , "  lake exe native_float32_parity [--sweep N] [--seed S] [--emit-cases]"
+    , "  scripts/lake.sh exe native_float32_parity [--sweep N] [--seed S] [--emit-cases]"
     , ""
     , "Options:"
-    , "  --sweep N     also compare N pseudorandom non-NaN operand pairs (default 0)"
+    , "  --sweep N     draw N pseudorandom operand pairs, skipping NaN inputs (default 0)"
     , "  --seed S      seed for the sweep generator (default 1)"
     , "  --emit-cases  print cases and their reference bits, one per line, in the format read"
-    , "                by scripts/checks/cuda_float32_parity.sh; --sweep N adds N random cases"
+    , "                by scripts/checks/cuda_float32_parity.sh;" ++
+        " --sweep N adds up to N random cases"
     ]
 
 /-- The lines describing one case: one per primitive, each ending in the reference bits. -/
 def emitCase (c : Case) : Array String := #[
-  s!"add {hex8 c.x} {hex8 c.y} {hex8 (modelAdd c.x c.y)}",
-  s!"mul {hex8 c.x} {hex8 c.y} {hex8 (modelMul c.x c.y)}",
-  s!"div {hex8 c.x} {hex8 c.y} {hex8 (modelDiv c.x c.y)}",
-  s!"sqrt {hex8 c.x} {hex8 (modelSqrt c.x)}",
-  s!"fma {hex8 c.x} {hex8 c.y} {hex8 c.z} {hex8 (modelFma c.x c.y c.z)}"]
+  s!"add {hex c.x} {hex c.y} {hex (modelAdd c.x c.y)}",
+  s!"mul {hex c.x} {hex c.y} {hex (modelMul c.x c.y)}",
+  s!"div {hex c.x} {hex c.y} {hex (modelDiv c.x c.y)}",
+  s!"sqrt {hex c.x} {hex (modelSqrt c.x)}",
+  s!"fma {hex c.x} {hex c.y} {hex c.z} {hex (modelFma c.x c.y c.z)}"]
 
 /--
-The emitted format: the curated cases, the curated fused triples, and optionally `draws` random
-cases, each line carrying the bits the reference model returns.
-
-The random part matters more than it looks. The curated list is where a reader can follow the
-reasoning, but a GPU has its own division and square root implementations, and `fma` has no host
-counterpart in Lean at all, so the only way to gain confidence in those three fields is volume.
+Emit the curated cases, the curated fused triples, and up to `draws` random cases, each line
+carrying the reference result bits. Random cases draw three operands and skip the entire case
+if any operand is a NaN. This stream differs from `sweep`, which draws two operands per case.
 -/
 def emitLines (draws : Nat) (seed : UInt32) : Array String := Id.run do
   let mut out : Array String := #[]
   for c in curatedCases do
     out := out ++ emitCase { c with z := c.y }
   for c in curatedFmaCases do
-    out := out.push s!"fma {hex8 c.x} {hex8 c.y} {hex8 c.z} {hex8 (modelFma c.x c.y c.z)}"
+    out := out.push s!"fma {hex c.x} {hex c.y} {hex c.z} {hex (modelFma c.x c.y c.z)}"
   let mut s : UInt32 := if seed == 0 then 1 else seed
   for _ in [0:draws] do
-    s := xorshift32 s
+    s := xorshift s
     let x := s
-    s := xorshift32 s
+    s := xorshift s
     let y := s
-    s := xorshift32 s
+    s := xorshift s
     let z := s
     unless isNaNBits x || isNaNBits y || isNaNBits z do
       out := out ++ emitCase { what := "sweep", x := x, y := y, z := z }
@@ -382,10 +378,10 @@ def main (args : List String) : IO Unit := do
       throw <| IO.userError "native binary32 parity: sweep disagrees with configured binary32"
   IO.println "fused multiply-add has no Float32 primitive in Lean; reference bits only:"
   for c in curatedFmaCases do
-    IO.println s!"  [{c.what}] {hex8 c.x} {hex8 c.y} {hex8 c.z}"
+    IO.println s!"  [{c.what}] {hex c.x} {hex c.y} {hex c.z}"
     IO.println <|
-      s!"    fma {hex8 (modelFma c.x c.y c.z)}" ++
-        s!"  two roundings {hex8 (modelMulThenAdd c.x c.y c.z)}"
+      s!"    fma {hex (modelFma c.x c.y c.z)}" ++
+        s!"  two roundings {hex (modelMulThenAdd c.x c.y c.z)}"
   IO.println "NaN inputs are an oracle limitation, not a kernel disagreement:"
   for payload in [0x7FAC6DE8, 0xFFAC6DE8, 0x7F800001] do
     IO.println s!"  {nanOracleReport (UInt32.ofNat payload)}"

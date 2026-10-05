@@ -10,13 +10,13 @@ public import NN.Spec.Core.Context
 public import NN.Spec.Core.Tensor -- shake: keep
 
 /-!
-# Elementwise tensor operations (`TorchLean.Tensor.*_spec`)
+# Elementwise tensor operations (`TorchLean.Tensor.*Spec`)
 
 This file defines shape-preserving, elementwise operations on `Tensor α s`.
 
 Naming convention:
 
-- `foo_spec` means “pure spec definition” (no runtime side effects).
+- `fooSpec` means “pure spec definition” (no runtime side effects).
 - most functions use packed pointwise kernels via `mapSpec` / `map2Spec`.
 
 ## Domain / smoothness notes
@@ -156,7 +156,7 @@ omit [Context α] in
 /-- Extracting a scalar after an elementwise map applies the scalar function once. -/
 @[simp] theorem toScalar_mapSpec (f : α → α) (x : Tensor α .scalar) :
     (mapSpec f x).item = f x.item := by
-  simp [mapSpec, Tensor.item, Tensor.map]
+  exact Tensor.item_map f x
 
 omit [Context α] in
 /-- Vector indexing commutes with an elementwise operation. -/
@@ -170,19 +170,8 @@ omit [Context α] in
 theorem forall_mapSpec
     {p q : α → Prop} {f : α → α} {s : Shape} {x : Tensor α s}
     (hx : Forall p x) (hf : ∀ a, p a → q (f a)) :
-    Forall q (mapSpec f x) := by
-  induction s with
-  | scalar =>
-      have hx' : p x.item := by simpa [Forall] using hx
-      change q ((mapSpec f x).item)
-      rw [toScalar_mapSpec]
-      exact hf x.item hx'
-  | dim n inner ih =>
-      intro i
-      rw [show Tensor.unstack (mapSpec f x) i =
-          mapSpec f (Tensor.unstack x i) by
-        exact (TorchLean.Tensor.Internal.Rep.map_unstack f x i).symm]
-      exact ih (hx i)
+    Forall q (mapSpec f x) :=
+  Tensor.forall_map hx hf
 
 /--
 Map a binary function over two tensors of the same shape.
@@ -248,9 +237,7 @@ def map2Spec {α β γ : Type}
     (left : Tensor α (.dim n s)) (right : Tensor β (.dim n s)) (i : Fin n) :
     Spec.get (map2Spec f left right) i =
       map2Spec f (Spec.get left i) (Spec.get right i) := by
-  apply TorchLean.Tensor.Internal.Rep.ext
-  intro coordinate
-  simp [map2Spec, Spec.get, Tensor.unstack]
+  exact (TorchLean.Tensor.Internal.Rep.zipWith_unstack f left right i).symm
 
 /-- Vector indexing commutes with a pointwise binary tensor operation. -/
 @[simp] theorem getScalar_map2Spec {α β γ : Type}
@@ -303,9 +290,8 @@ theorem forall_map2Spec {α β γ : Type}
       exact hf x.item y.item hx' hy'
   | dim n inner ih =>
       intro i
-      rw [show Tensor.unstack (map2Spec f x y) i =
-          map2Spec f (Tensor.unstack x i) (Tensor.unstack y i) by
-        exact (TorchLean.Tensor.Internal.Rep.zipWith_unstack f x y i).symm]
+      change Forall r (Spec.get (map2Spec f x y) i)
+      rw [get_map2Spec]
       exact ih (hx i) (hy i)
 
 /-- Element‑wise addition (shape preserved). -/
@@ -393,11 +379,12 @@ theorem subSpec_eq_sub {α : Type} [TorchLean.Storage α] [Sub α]
   rfl
 
 /-- Element‑wise division (shape preserved). -/
-def divSpec {s : Shape} : Tensor α s → Tensor α s → Tensor α s :=
+def divSpec {α : Type} [TorchLean.Storage α] [Div α]
+    {s : Shape} : Tensor α s → Tensor α s → Tensor α s :=
   map2Spec (· / ·)
 
 /-- `Div` instance for shape-indexed tensors: divide pointwise, preserving the shape. -/
-instance {s : Shape} : Div (Tensor α s) :=
+instance {α : Type} [TorchLean.Storage α] [Div α] {s : Shape} : Div (Tensor α s) :=
   ⟨divSpec⟩
 
 /-- Epsilon-shifted division, $x/(y+\varepsilon)$. The denominator can still be zero. -/
@@ -410,11 +397,13 @@ def scaleSpec {α : Type} [TorchLean.Storage α] [Mul α]
   mapSpec (fun x => x * scalar) t
 
 /-- Square each element of a tensor. -/
-def squareSpec {s : Shape} (t : Tensor α s) : Tensor α s :=
+def squareSpec {α : Type} [TorchLean.Storage α] [Mul α]
+    {s : Shape} (t : Tensor α s) : Tensor α s :=
   mapSpec (fun x => x * x) t
 
 /-- Squaring is elementwise multiplication with the same tensor on both inputs. -/
-theorem squareSpec_eq_mulSpec {s : Shape} (t : Tensor α s) :
+theorem squareSpec_eq_mulSpec {α : Type} [TorchLean.Storage α] [Mul α]
+    {s : Shape} (t : Tensor α s) :
     squareSpec t = mulSpec t t := by
   apply TorchLean.Tensor.Internal.Rep.ext
   intro coordinate
@@ -437,39 +426,18 @@ def expSpec {s : Shape} (t : Tensor α s) : Tensor α s :=
   mapSpec MathFunctions.exp t
 
 /-- Element‑wise negation. -/
-def negSpec {s : Shape} (t : Tensor α s) : Tensor α s :=
+def negSpec {α : Type} [TorchLean.Storage α] [Neg α]
+    {s : Shape} (t : Tensor α s) : Tensor α s :=
   mapSpec Neg.neg t
 
 /-- `negSpec` is the tensor negation (both are `Rep.map Neg.neg`). -/
-theorem negSpec_eq_neg {s : Shape} (t : Tensor α s) : negSpec t = -t :=
+theorem negSpec_eq_neg {α : Type} [TorchLean.Storage α] [Neg α]
+    {s : Shape} (t : Tensor α s) : negSpec t = -t :=
   rfl
 
 /-- Element‑wise power. -/
 def powSpec {s : Shape} (t1 t2 : Tensor α s) : Tensor α s :=
   map2Spec HPow.hPow t1 t2
-
-/-- Element‑wise comparisons (returning Bool tensors). -/
-def greaterThanSpec {s : Shape} (x y : Tensor α s) : Tensor Bool s :=
-  map2Spec (fun a b => decide (a > b)) x y
-
-/-- Element-wise $\le$ test, implemented via $\neg(>)$ so we only depend on
-`DecidableRel (· > ·)`. This agrees with `≤` for a total order; IEEE unordered
-comparisons involving NaN return `true` here. -/
-def lessEqualSpec {s : Shape} (x y : Tensor α s) : Tensor Bool s :=
-  map2Spec (fun a b => decide (¬(a > b))) x y
-
-/-- Element‑wise `<` test (defined as `y > x`). -/
-def lessThanSpec {s : Shape} (x y : Tensor α s) : Tensor Bool s :=
-  map2Spec (fun a b => decide (b > a)) x y
-
-/-- Element-wise $\ge$ test (defined as $\neg(y>x)$). Like `lessEqualSpec`, this returns
-`true` for IEEE unordered comparisons involving NaN. -/
-def greaterEqualSpec {s : Shape} (x y : Tensor α s) : Tensor Bool s :=
-  map2Spec (fun a b => decide (¬(b > a))) x y
-
-/-- Boolean NOT, pointwise on a Bool tensor. -/
-def notSpec {s : Shape} (x : Tensor Bool s) : Tensor Bool s :=
-  mapSpec Bool.not x
 
 /-- Element‑wise reciprocal (`1/x`). -/
 def invSpec {s : Shape} (x : Tensor α s) : Tensor α s :=
@@ -524,42 +492,13 @@ def sinhSpec {s : Shape} : Tensor α s → Tensor α s :=
 def clampDerivativeSpec {s : Shape} (x : Tensor α s) (minVal maxVal : α) : Tensor α s :=
   mapSpec (fun v => if v > minVal ∧ v < maxVal then 1 else 0) x
 
-/-- Numeric mask: `1` where `a > b`, else `0`. -/
-def gtMaskSpec {s : Shape} (a b : Tensor α s) : Tensor α s :=
-  map2Spec (fun x y => if x > y then 1 else 0) a b
-
-/-- Numeric mask: `1` where `a < b`, else `0`. -/
-def ltMaskSpec {s : Shape} (a b : Tensor α s) : Tensor α s :=
-  map2Spec (fun x y => if x < y then 1 else 0) a b
-
-/-- Convert a Bool to `α` using `1`/`0`. -/
-def boolToAlphaSpec : Bool → α :=
-  fun b => if b then 1 else 0
-
-/-- Multiply a tensor by a Bool mask (casts the mask to `0/1`). -/
-def mulBoolMaskSpec {s : Shape} (t : Tensor α s) (mask : Tensor Bool s)
-  : Tensor α s :=
-  map2Spec (fun x b => x * boolToAlphaSpec b) t mask
-
-/-- Apply a Huber-style clamp on entries selected by `mask` (leaves others unchanged). -/
-def clampHuberMaskSpec {s : Shape}
-  (t : Tensor α s) (mask : Tensor Bool s) (delta : α) : Tensor α s :=
-  map2Spec (fun x m =>
-    if m then
-      if x > delta then delta
-      else if (-delta > x) then -delta
-      else x
-    else
-      x
-  ) t mask
-
 /-- Update a tensor at a runtime index path.
 
 The index path is interpreted outermost-first. Out-of-bounds indices leave the tensor unchanged.
 The implementation validates the path once, then performs one copy-on-write
 physical-buffer replacement.
 -/
-def updateTensorSpec {α : Type} [TorchLean.Storage α]
+def updateSpec {α : Type} [TorchLean.Storage α]
     [TorchLean.Storage.Update α]
     {s : Shape} (tensor : Tensor α s) (indices : List Nat)
     (newValue : α) : Tensor α s :=
@@ -567,27 +506,5 @@ def updateTensorSpec {α : Type} [TorchLean.Storage α]
   | some coordinate =>
       TorchLean.Tensor.Internal.Rep.set tensor coordinate newValue
   | none => tensor
-
-/-- Like `updateTensorSpec`, but replaces a subtree with another tensor. -/
-def updateTensorWithTensorSpec {α : Type} [TorchLean.Storage α] :
-    ∀ {s : Shape}, Tensor α s → List Nat → Tensor α s → Tensor α s
-  | .scalar, _, [], newTensor => newTensor
-  | .scalar, tensor, _ :: _, _ => tensor
-  | .dim _ _, tensor, [], _ => tensor
-  | .dim n _, tensor, i :: rest, newTensor =>
-      if h : i < n then
-        .dim (Function.update (Tensor.unstack tensor) ⟨i, h⟩
-          (updateTensorWithTensorSpec
-            (Tensor.unstack tensor ⟨i, h⟩) rest
-            (Tensor.unstack newTensor ⟨i, h⟩)))
-      else
-        tensor
-
-/-- Specialization of `updateTensorSpec` for a top-level vector dimension. -/
-def updateSpec {α : Type} [TorchLean.Storage α]
-    [TorchLean.Storage.Update α]
-    {n : ℕ} {s : Shape} (tensor : Tensor α (.dim n s))
-    (indices : List Nat) (newValue : α) : Tensor α (.dim n s) :=
-  updateTensorSpec tensor indices newValue
 
 end TorchLean.Tensor

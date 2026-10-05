@@ -7,6 +7,7 @@ Authors: TorchLean Team
 module
 
 public import NN.API.Verification
+public import NN.MLTheory.CROWN.Models.Mlp
 public import NN.Verification.Builtin.CrownOpsWorkflow
 public import NN.Verification.Builtin.TransformerIBPWorkflow
 public import NN.Verification.ODE.Verify
@@ -63,7 +64,9 @@ def checkLayerNorm {α : Type} [Storage α] [Context α]
     [NN.MLTheory.CROWN.NonlinearBoundOps α] : IO Unit := do
   let row (a b : Float) : Tensor α [2] :=
     Tensor.ofFn fun i => Runtime.ofFloat (if i.val = 0 then a else b)
-  let enclose := NN.MLTheory.CROWN.Graph.directedLayerNormLastTensor? (α := α)
+  let enclose (lo hi : Tensor α [2]) :=
+    NN.MLTheory.CROWN.Graph.directedLayerNormRow? lo hi
+      (Tensor.full [2] 1) (Tensor.full [2] 0) TorchLean.normalizationEpsilon
   for (a, b, radius) in [(-2.0, -1.0, 0.1), (1.0, 3.0, 0.2),
       (-1.0, 1.0, 0.1), (2.0, 2.0, 0.0), (1.0, 1.000001, 0.0000001)] do
     let some (lo, hi) := enclose (row (a - radius) (b - radius))
@@ -75,8 +78,11 @@ def checkLayerNorm {α : Type} [Storage α] [Context α]
           (Tensor.full [2] 1) (Tensor.full [2] 0)
         for i in List.finRange 2 do
           let value := (actual.unstack 0).getScalar i
-          unless !(decide (value < lo.getScalar i)) &&
-              !(decide (hi.getScalar i < value)) && value == value do
+          let lower := lo.getScalar i
+          let upper := hi.getScalar i
+          -- Unordered comparisons alone would also accept NaN endpoints.
+          unless lower == lower && value == value && upper == upper &&
+              !(decide (value < lower)) && !(decide (upper < value)) do
             fail "LayerNorm sampled output escaped the directed enclosure"
   unless (enclose (row 2.0 0.0) (row 1.0 3.0)).isNone do
     fail "LayerNorm accepted a reversed coordinate interval"
@@ -88,7 +94,8 @@ def checkLayerNorm {α : Type} [Storage α] [Context α]
         { dim := 1, lo := singleton, hi := singleton }).isNone do
       fail "LayerNorm singleton shortcut accepted a non-finite endpoint"
   let empty : Tensor α [0] := Tensor.ofFn Fin.elim0
-  unless (NN.MLTheory.CROWN.Graph.directedLayerNormLastTensor? empty empty).isNone do
+  unless (NN.MLTheory.CROWN.Graph.directedLayerNormRow? empty empty
+      (Tensor.full [0] 1) (Tensor.full [0] 0) TorchLean.normalizationEpsilon).isNone do
     fail "LayerNorm accepted an empty normalization row"
 
 /--
@@ -119,8 +126,10 @@ def checkAffineLayerNorm {α : Type} [Storage α] [Context α]
           let actual := Spec.layerNorm input gamma beta (epsilon := epsilon)
           for i in List.finRange 2 do
             let value := (actual.unstack 0).getScalar i
-            unless !(decide (value < lo.getScalar i)) &&
-                !(decide (hi.getScalar i < value)) && value == value do
+            let lower := lo.getScalar i
+            let upper := hi.getScalar i
+            unless lower == lower && value == value && upper == upper &&
+                !(decide (value < lower)) && !(decide (upper < value)) do
               fail "affine LayerNorm sampled output escaped its enclosure"
   for epsilon in [0.0, -0.25, 1.0 / 0.0, 0.0 / 0.0] do
     unless (enclose (row 1.0 2.0) (row 1.0 2.0) gamma beta
@@ -140,7 +149,7 @@ def checkAffineLayerNorm {α : Type} [Storage α] [Context α]
   unless (payloadBox [1, 2] 1 parameters inputBox).isSome do
     fail "LayerNorm rejected a matching last-axis payload"
   unless (payloadBox [1, 2] 0 parameters inputBox).isNone do
-    fail "LayerNorm accepted an unsupported normalization axis"
+    fail "LayerNorm accepted an axis inconsistent with the payload's normalized shape"
   let wrongShape : NN.IR.LayerNormParams α :=
     { normalizedShape := [1, 2]
       gamma := Tensor.dim fun _ => gamma
@@ -203,7 +212,70 @@ def checkODETimePartition : IO Unit := do
   unless rejected do
     fail "ODE accepted a corridor that violates the upper differential inequality"
 
+/--
+An identity model must enclose the original binary64 request, including cancellation and
+zero-radius centers between binary32 values. Check every public bound-propagation choice.
+-/
+def checkRequestEnclosure {α : Type} [Storage α] [Context α]
+    [Runtime.FromFloat α] [Runtime.TensorTransfer α]
+    [NN.MLTheory.CROWN.BoundOps α] [NN.MLTheory.CROWN.NonlinearBoundOps α] : IO Unit := do
+  let trainer := Trainer.new (nn.Sequential.identity [1])
+  let state := nn.initialState trainer.model α
+  let gap : Float := 1.0 / 33554432.0
+  for (center, radius, lower, upper) in
+      [(1.0 - gap, 1.0, -gap, 2.0 - gap),
+       (-1.0 + gap, 1.0, -2.0 + gap, gap),
+       (1.0, 1.0 + gap, -gap, 2.0 + gap),
+       (1.0 - gap, 0.0, 1.0 - gap, 1.0 - gap)] do
+    for algorithm in [Verification.Algorithm.ibp, .crown, .alphaBetaCrown] do
+      let report ← Verification.Internal.forState trainer state
+        ([center] : Tensor Float [1]) radius .inf .bounds algorithm
+      let reportedLower := report.bounds.lower.to (Array Float)
+      let reportedUpper := report.bounds.upper.to (Array Float)
+      unless reportedLower.size == 1 && reportedUpper.size == 1 &&
+          reportedLower[0]! ≤ lower && upper ≤ reportedUpper[0]! do
+        fail s!"{algorithm} narrowed the binary64 request: center={center}, radius={radius}, \
+lower={reprStr reportedLower}, upper={reprStr reportedUpper}"
+
+/-- Overflow of the displayed difference must not reverse a valid top-label decision. -/
+def checkExtremeMargins : IO Unit := do
+  let largest := Float.ofBits 0x7fefffffffffffff
+  for (winner, competitor, expected) in
+      [(largest, -largest, true), (-largest, largest, false)] do
+    let bounds : Verification.Bounds :=
+      { size := 2, lower := [winner, competitor], upper := [winner, competitor] }
+    let report ← IO.ofExcept <|
+      Verification.Report.fromBounds 0.0 bounds (property := .topLabel 0)
+    match report.result with
+    | .topLabel 0 margin certified =>
+        unless !margin.isFinite && !margin.isNaN && certified == expected do
+          fail s!"extreme finite bounds changed their top-label decision: {report}"
+    | result => fail s!"unexpected extreme-margin result: {result}"
+
+/-- Competitor bounds exclude the selected class, including when every competitor is negative. -/
+def checkMlpClassMargins : IO Unit := do
+  let bounds : NN.MLTheory.CROWN.Box Float [3] :=
+    { lo := [-9.0, -3.0, -8.0], hi := [-6.0, 4.0, -5.0] }
+  for (label, competitor, margin, certified) in
+      [((1 : Fin 3), -5.0, 2.0, true), (0, 4.0, -13.0, false),
+       (2, 4.0, -12.0, false)] do
+    unless NN.MLTheory.CROWN.Classify.maxCompetitorUpper bounds label == competitor &&
+        NN.MLTheory.CROWN.Classify.certifiedMargin bounds label == margin &&
+        NN.MLTheory.CROWN.Classify.isCertifiedClass bounds label == certified do
+      fail s!"MLP competitor fold or margin is incorrect for class {label}"
+  -- Without competitors, retain the public fallback to the selected class's upper endpoint.
+  for (lower, upper) in [(-2.0, 3.0), (5.0, 5.0)] do
+    let singleton : NN.MLTheory.CROWN.Box Float [1] := { lo := [lower], hi := [upper] }
+    unless NN.MLTheory.CROWN.Classify.maxCompetitorUpper singleton 0 == upper &&
+        NN.MLTheory.CROWN.Classify.certifiedMargin singleton 0 == lower - upper &&
+        !NN.MLTheory.CROWN.Classify.isCertifiedClass singleton 0 do
+      fail "MLP singleton fallback changed"
+
 def run : IO Unit := do
+  checkMlpClassMargins
+  checkRequestEnclosure (α := Float32)
+  checkRequestEnclosure (α := Binary 8 23)
+  checkExtremeMargins
   checkODETimePartition
   checkTextParsing
   checkBoundArithmetic
@@ -255,6 +327,15 @@ def run : IO Unit := do
       unless margin = -3.0 && !certified do
         fail s!"unexpected negative margin report: {notCertified}"
   | result => fail s!"unexpected top-label result: {result}"
+
+  let tied ← IO.ofExcept <| Verification.Report.fromBounds 0.0
+    { size := 2, lower := [2.0, 2.0], upper := [2.0, 2.0] }
+    (property := .topLabel 0)
+  match tied.result with
+  | .topLabel 0 margin certified =>
+      unless margin == 0.0 && !certified do
+        fail "zero margin must not certify a strict top label"
+  | result => fail s!"unexpected tied-label result: {result}"
 
   let enclosure ←
     match Verification.Report.fromBounds 0.1 bounds with

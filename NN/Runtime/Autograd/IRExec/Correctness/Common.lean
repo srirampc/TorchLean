@@ -19,13 +19,13 @@ reused across the per-op proofs.
 
 The lemmas are grouped as follows:
 
-* `packedTensorsOfContext*` lemmas: relate the typed context produced by `ForwardData.eval` to an
-  untyped `Array (Spec.SomeTensor α)` (this is what the IR evaluator uses).
+* `TorchLean.TensorPack.toShapeErasedArray` lemmas: relate the typed context produced by
+  `ForwardData.eval` to an untyped `Array (Spec.SomeTensor α)` (this is what the IR evaluator uses).
 * `denoteAllState*` lemmas: package the IR forward evaluator (`ForwardGraph.denoteAll`) in the form
   expected by IR-style semantic equivalence proofs.
 
-These lemmas are infrastructure: they should not encode op-specific logic. Per-op correctness files
-(Matmul/Pooling/LayerNorm/MSELoss) should depend on this module and not re-prove these bridges.
+Per-op correctness files reuse these bridges. The checked matmul-layout and axis-reduction
+evaluator equations also live here so their operation proofs can use the same typed witnesses.
 
 ## Main definitions
 
@@ -34,8 +34,8 @@ These lemmas are infrastructure: they should not encode op-specific logic. Per-o
   precondition required by raw real `log`.
 - `noRawLog_of_forall_mem`: discharge `NoRawLog` from a node-array fact, so a concrete graph can
   close it with `decide`.
-- `packedTensorsOfContext_*`: typed-context to IR-array bridge lemmas.
-- `evalAt_matmul_leading_ok`, `evalAt_axisReduction_ok`: `evalAt` in well-typed success cases.
+- `toShapeErasedArray_getElem?`, `toShapeErasedArray_getIdx?`: optional lookup bridges.
+- `evalAt_matmul_dims_ok`, `evalAt_axisReduction_ok`: `evalAt` in well-typed success cases.
 - `denoteAllState_*` helpers: semantic equivalence bridges between lowered state and IR denotation
   tables.
 
@@ -150,120 +150,47 @@ theorem throw_bind_ne_ok {β γ : Type} {msg : String} {k : β → Except String
       k y) = Except.ok v) : False := by
   simp [throw_eq_error] at h
 
-/-- If two unit guards and a tail computation return `.ok`, then the first guard succeeded. -/
-theorem exceptUnit_two_bind_first_ok
-    {β : Type} {e₁ e₂ : Except String Unit} {next : Except String β} {v : β}
-    (h : (do let _ ← e₁; let _ ← e₂; next) = Except.ok v) :
-    e₁ = Except.ok () := by
-  cases h₁ : e₁ <;> simp [h₁] at h
-  rename_i u
-  cases u
-  rfl
-
-/-- If two unit guards and a tail computation return `.ok`, then the second guard succeeded. -/
-theorem exceptUnit_two_bind_second_ok
-    {β : Type} {e₁ e₂ : Except String Unit} {next : Except String β} {v : β}
-    (h : (do let _ ← e₁; let _ ← e₂; next) = Except.ok v) :
-    e₂ = Except.ok () := by
-  cases h₁ : e₁ <;> simp [h₁] at h
-  rename_i u₁
-  cases u₁
-  cases h₂ : e₂ <;> simp [h₂] at h
-  rename_i u₂
-  cases u₂
-  rfl
-
-/-- If two unit guards and a tail computation return `.ok`, then the tail returned `.ok`. -/
-theorem exceptUnit_two_bind_tail_ok
-    {β : Type} {e₁ e₂ : Except String Unit} {next : Except String β} {v : β}
-    (h : (do let _ ← e₁; let _ ← e₂; next) = Except.ok v) :
-    next = Except.ok v := by
-  cases h₁ : e₁ <;> simp [h₁] at h
-  rename_i u₁
-  cases u₁
-  cases h₂ : e₂ <;> simp [h₂] at h
-  rename_i u₂
-  cases u₂
-  exact h
-
 /--
-Array indexing is proof-irrelevant.
-
-This is a small technical lemma: in Lean, `xs[i]'h` carries a proof `h : i < xs.size`. Different
-proofs should not change the value returned by indexing.
--/
-theorem array_getElem_proof_irrel {β : Type}
-    (xs : Array β) (i : Nat) (h₁ h₂ : i < xs.size) : xs[i]'h₁ = xs[i]'h₂ := by
-  -- `Array.getElem` is implemented via `Array.get` on a `Fin` index, and `Fin` is proof-irrelevant.
-  have hFin : (⟨i, h₁⟩ : Fin xs.size) = ⟨i, h₂⟩ := by
-    ext
-    rfl
-  -- Use `Fin` indexing (`xs[j]`) since `Array.get` is not a named constant in Lean 4.
-  exact congrArg (fun j : Fin xs.size => xs[j]) hFin
-
-/--
-`packedTensorsOfContext` ignores type-level casts of the underlying `TorchLean.TensorPack`.
-
-`ForwardData.eval` introduces a definitional cast when extending contexts; this lemma lets us erase
-it before reasoning about the corresponding `Array` of `Spec.SomeTensor`s.
--/
-@[simp]
-theorem packedTensorsOfContext_cast {α : Type} [TorchLean.Storage α] {ss₁ ss₂ : List Shape}
-    (h : ss₁ = ss₂) (ctx : TorchLean.TensorPack α ss₁) :
-    packedTensorsOfContext (α := α) (ss := ss₂) (TorchLean.TensorPack.cast (α := α) h ctx) =
-      packedTensorsOfContext (α := α) (ss := ss₁) ctx := by
-  cases h
-  simp [packedTensorsOfContext]
-
-/-- `packedTensorsOfContext` for a snoc’d context corresponds to `Array.push` of the appended
-tensor. -/
-@[simp]
-theorem packedTensorsOfContext_snoc {α : Type} [TorchLean.Storage α] {ss : List Shape} {τ : Shape}
-    (ctx : TorchLean.TensorPack α ss) (t : Tensor α τ) :
-    packedTensorsOfContext (α := α) (ss := ss ++ [τ])
-        (TorchLean.TensorPack.snoc (α := α) (ss := ss) (τ := τ) ctx t) =
-      (packedTensorsOfContext (α := α) (ss := ss) ctx).push
-        (Spec.SomeTensor.ofTensor t) := by
-  simp [packedTensorsOfContext, Spec.SomeTensor.ofTensor]
-
-/--
-Optional lookup in `packedTensorsOfContext` agrees with indexing the underlying typed context.
+Optional lookup in `TorchLean.TensorPack.toShapeErasedArray` agrees with indexing
+the underlying typed context.
 
 This is the main bridge between the typed runtime context and the untyped IR value table.
 -/
-theorem packedTensorsOfContext_getElem?
+theorem toShapeErasedArray_getElem?
     {α : Type} [TorchLean.Storage α] {ss : List Shape}
     (ctx : TorchLean.TensorPack α ss) (i : Fin ss.length) :
-    (packedTensorsOfContext (α := α) (ss := ss) ctx)[i.1]? =
+    (TorchLean.TensorPack.toShapeErasedArray (α := α) (ss := ss) ctx)[i.1]? =
       some (Spec.SomeTensor.ofTensor
         (TorchLean.TensorPack.get (α := α) (ss := ss) ctx i)) := by
   let arr := TorchLean.TensorPack.toShapeErasedArray (α := α) (ss := ss) ctx
   have hi : i.1 < arr.size := by
     exact Nat.lt_of_lt_of_eq i.2
       (TorchLean.TensorPack.size_toShapeErasedArray (α := α) (ss := ss) ctx).symm
-  rw [show (packedTensorsOfContext (α := α) (ss := ss) ctx)[i.1]? = some arr[i.1] by
-    simp [arr, packedTensorsOfContext]]
+  rw [show (TorchLean.TensorPack.toShapeErasedArray (α := α) (ss := ss) ctx)[i.1]? =
+      some arr[i.1] by
+    simp [arr]]
   congr 1
   simpa [arr] using
     (TorchLean.TensorPack.get_toShapeErasedArray (α := α) (ss := ss) ctx i)
 
 /--
-Optional lookup in `packedTensorsOfContext` by a typed `Idx` agrees with `getIdx` on the
+Optional lookup in `TorchLean.TensorPack.toShapeErasedArray` by a typed `Idx` agrees
+with `getIdx` on the
 underlying `TorchLean.TensorPack`.
 
-This packages `packedTensorsOfContext_getElem?` into the repository’s `Idx` wrapper.
+This packages `toShapeErasedArray_getElem?` into the repository’s `Idx` wrapper.
 -/
-theorem packedTensorsOfContext_getIdx?
+theorem toShapeErasedArray_getIdx?
     {α : Type} [TorchLean.Storage α] {ss : List Shape} {s : Shape}
     (ctx : TorchLean.TensorPack α ss) (idx : Idx ss s) :
-    (packedTensorsOfContext (α := α) (ss := ss) ctx)[idx.i.1]? =
+    (TorchLean.TensorPack.toShapeErasedArray (α := α) (ss := ss) ctx)[idx.i.1]? =
       some (Spec.SomeTensor.ofTensor (getIdx (α := α) (xs := ctx) idx)) := by
   cases idx with
   | mk i h =>
       -- Reduce to the `Fin`-indexed lemma and then specialize with the stored shape equality.
       cases h
       simpa [getIdx, Tensor.castShape] using
-        (packedTensorsOfContext_getElem? (α := α) (ss := ss) ctx i)
+        (toShapeErasedArray_getElem? (α := α) (ss := ss) ctx i)
 
 /-- `Graph.expectShape` succeeds on a `Spec.SomeTensor` built with the same shape. -/
 @[simp] theorem Graph.expectShape_mk {α : Type} [TorchLean.Storage α] [Context α] {s : Shape}
@@ -281,67 +208,50 @@ theorem Graph.expectShape_mk_of_eq {α : Type} [TorchLean.Storage α] [Context �
   subst t
   simp [Tensor.castShape]
 
-attribute [grind =] packedTensorsOfContext_cast packedTensorsOfContext_snoc Graph.expectShape_mk
-  throw_eq_error array_getElem_proof_irrel
-  packedTensorsOfContext_getElem? packedTensorsOfContext_getIdx?
+attribute [grind =] Graph.expectShape_mk throw_eq_error
+  toShapeErasedArray_getElem? toShapeErasedArray_getIdx?
 
 /--
-`NN.IR.Graph.evalAt` for a `.matmul` node whose parents share the leading shape
-`Shape.ofList leadingRev.reverse` and end in the matrix axes `[rows, inner]` and `[inner, cols]`.
+`normalizeNodeOutput` accepts a value whose stored shape equals the declared output shape and
+transports the tensor along that equality.
 
-The leading shape is spelled through its reversed dimension list because that is how both the IR
-evaluator and `lowerMatmul` recover it from the parent shapes. The lemma records the exact
-`NN.IR.Graph.matmulLeading` term produced by the evaluator for any leading shape (plain matrices,
-one batch axis, or several batch axes).
+Stating the cast with `Tensor.castShape` lets the per-op proofs compare it with the lowered closure
+through `Tensor.eqRec_eq_cast_shape` and proof irrelevance.
 -/
-theorem evalAt_matmul_leading_ok
+theorem normalizeNodeOutput_mk_of_eq {α : Type} [TorchLean.Storage α] [Context α]
+    {s : Shape} (i : Nat) (n : NN.IR.Node) (t : Tensor α s) (h : s = n.outShape) :
+    NN.IR.Graph.normalizeNodeOutput (α := α) i n (Spec.SomeTensor.mk (α := α) s t) =
+      .ok (Spec.SomeTensor.mk (α := α) n.outShape (Tensor.castShape t h)) := by
+  subst h
+  simp [NN.IR.Graph.normalizeNodeOutput, Pure.pure, Except.pure]
+
+/-- Reference evaluation uses the checked matmul layout, including broadcast and vector cases. -/
+theorem evalAt_matmul_dims_ok
     {α : Type} [TorchLean.Storage α] [Context α]
     (g : NN.IR.Graph) (payload : Payload α) (input : Spec.SomeTensor α)
     (vals : Array (Spec.SomeTensor α))
-    (i : Nat) (n : NN.IR.Node) (aId bId : Nat) (leadingRev : List Nat) (rows inner cols : Nat)
-    (aT : Tensor α ((Shape.ofList leadingRev.reverse).concat [rows, inner]))
-    (bT : Tensor α ((Shape.ofList leadingRev.reverse).concat [inner, cols]))
+    (i : Nat) (n : NN.IR.Node) (aId bId : Nat) (dims : OpContracts.MatmulDims)
+    (aT : Tensor α dims.leftShape) (bT : Tensor α dims.rightShape)
     (hN : g.getNode i = .ok n) (hk : n.kind = .matmul)
     (hp : binaryParents? n.parents = some (aId, bId))
-    (hGetA : vals[aId]? = some
-      (Spec.SomeTensor.mk (α := α) ((Shape.ofList leadingRev.reverse).concat [rows, inner]) aT))
-    (hGetB : vals[bId]? = some
-      (Spec.SomeTensor.mk (α := α) ((Shape.ofList leadingRev.reverse).concat [inner, cols]) bT))
-    (hOut : (Shape.ofList leadingRev.reverse).concat [rows, cols] = n.outShape) :
-    NN.IR.Graph.evalAt (α := α) (g := g) (payload := payload) (input := input)
-        (vals := vals) (i := i) =
+    (hDims : OpContracts.matmulDims dims.leftShape dims.rightShape = .ok dims)
+    (hGetA : vals[aId]? = some (Spec.SomeTensor.mk (α := α) dims.leftShape aT))
+    (hGetB : vals[bId]? = some (Spec.SomeTensor.mk (α := α) dims.rightShape bT))
+    (hOut : dims.outShape = n.outShape) :
+    NN.IR.Graph.evalAt (α := α) g payload input vals i =
       .ok (Spec.SomeTensor.mk (α := α) n.outShape
-        (hOut ▸ NN.IR.Graph.matmulLeading (α := α) (Shape.ofList leadingRev.reverse) aT bT)) := by
-  simp [NN.IR.Graph.evalAt, NN.IR.Graph.evalNode, NN.IR.Graph.normalizeNodeOutput,
-    hN, hk, binaryParentIds_eq_ok_of_binaryParents_eq_some i aId bId n hp,
-    hGetA, hGetB, hOut, throw_eq_error, Pure.pure, Except.pure, Shape.concat_eq_append]
-
-/-- The two axis reductions supported by lowered IR semantic equivalence. -/
-inductive AxisReductionKind where
-  | sum
-  | mean
-
-/-- Convert a lowered axis-reduction case to its IR operation kind. -/
-def AxisReductionKind.toOpKind (operation : AxisReductionKind) (axis : Nat) : NN.IR.OpKind :=
-  match operation with
-  | .sum => .reduceSum axis
-  | .mean => .reduceMean axis
-
-/-- Typed denotation of a lowered axis-reduction case. -/
-def AxisReductionKind.denote
-    {β : Type} [TorchLean.Storage β] [Context β] {shape : Shape}
-    (operation : AxisReductionKind) (axis : Nat) (tensor : Tensor β shape)
-    (axisValid : Shape.NonemptyAxis axis shape) : Tensor β (Tensor.shapeAfterSum shape axis) :=
-  match operation with
-  | .sum => Tensor.reduceSum (α := β) (s := shape) axis tensor
-      (axisValid)
-  | .mean => Tensor.reduceMean (α := β) (s := shape) axis tensor
-      (axisValid)
+        (hOut ▸ NN.IR.Graph.matmulWithDims dims aT bT)) := by
+  simp only [NN.IR.Graph.evalAt, hN, NN.IR.Graph.evalNode, NN.IR.Graph.evalNodeRaw,
+    hk, binaryParentIds_eq_ok_of_binaryParents_eq_some i aId bId n hp,
+    NN.IR.Graph.getParentValue, hGetA, hGetB, hDims, Graph.expectShape_mk,
+    Spec.SomeTensor.ofTensor,
+    NN.IR.Graph.normalizeNodeOutput, hOut, dite_true, Pure.pure, Except.pure,
+    Bind.bind, Except.bind]
 
 /--
 `NN.IR.Graph.evalAt` for either axis-reduction node in a well-typed success case.
 
-This helper records the exact `Tensor.reduceSum` term produced by the IR evaluator once:
+This helper records the selected reduction term produced by the IR evaluator once:
 - the parent has the expected shape `s`,
 - the axis validity check succeeds, and
 - the node's declared `outShape` matches `shapeAfterSum s axis`.
@@ -368,50 +278,6 @@ theorem evalAt_axisReduction_ok
     simp [AxisReductionKind.toOpKind, AxisReductionKind.denote, NN.IR.Graph.evalAt,
       NN.IR.Graph.evalNode, NN.IR.Graph.normalizeNodeOutput,
       hN, hk, hp, hGet, throw_eq_error, hAxis, hOut, Pure.pure, Except.pure]
-
-/-- `evalAt_axisReduction_ok` specialized to summation. -/
-theorem evalAt_reduceSum_ok
-    {α : Type} [TorchLean.Storage α] [Context α]
-    (g : NN.IR.Graph) (payload : Payload α) (input : Spec.SomeTensor α)
-    (vals : Array (Spec.SomeTensor α))
-    (i : Nat) (n : NN.IR.Node) (pId : Nat) (axis : Nat)
-    (s : Shape) (pT : Tensor α s) (hAxisPf : PLift (Shape.NonemptyAxis axis s))
-    (hN : g.getNode i = .ok n) (hk : n.kind = .reduceSum axis)
-    (hp : unaryParent? n.parents = some pId)
-    (hGet : vals[pId]? = some (Spec.SomeTensor.mk (α := α) s pT))
-    (hAxis : Spec.Shape.nonemptyAxis? (axis := axis) s = some hAxisPf)
-    (hOut : TorchLean.Tensor.shapeAfterSum s axis = n.outShape) :
-    NN.IR.Graph.evalAt (α := α) (g := g) (payload := payload) (input := input) (vals := vals) (i :=
-      i) =
-      .ok (Spec.SomeTensor.mk (α := α) n.outShape
-        (hOut ▸ Tensor.reduceSum (α := α) (s := s) axis pT
-          (hAxisPf.down))) := by
-  exact evalAt_axisReduction_ok .sum g payload input vals i n pId axis s pT hAxisPf
-    hN hk hp hGet hAxis hOut
-
-/--
-`NN.IR.Graph.evalAt` for a `.reduceMean axis` node, specialized to a well-typed success case.
-
-This is the mean analogue of `evalAt_reduceSum_ok`.
--/
-theorem evalAt_reduceMean_ok
-    {α : Type} [TorchLean.Storage α] [Context α]
-    (g : NN.IR.Graph) (payload : Payload α) (input : Spec.SomeTensor α)
-    (vals : Array (Spec.SomeTensor α))
-    (i : Nat) (n : NN.IR.Node) (pId : Nat) (axis : Nat)
-    (s : Shape) (pT : Tensor α s) (hAxisPf : PLift (Shape.NonemptyAxis axis s))
-    (hN : g.getNode i = .ok n) (hk : n.kind = .reduceMean axis)
-    (hp : unaryParent? n.parents = some pId)
-    (hGet : vals[pId]? = some (Spec.SomeTensor.mk (α := α) s pT))
-    (hAxis : Spec.Shape.nonemptyAxis? (axis := axis) s = some hAxisPf)
-    (hOut : TorchLean.Tensor.shapeAfterSum s axis = n.outShape) :
-    NN.IR.Graph.evalAt (α := α) (g := g) (payload := payload) (input := input) (vals := vals) (i :=
-      i) =
-      .ok (Spec.SomeTensor.mk (α := α) n.outShape
-        (hOut ▸ Tensor.reduceMean (α := α) (s := s) axis pT
-          (hAxisPf.down))) := by
-  exact evalAt_axisReduction_ok .mean g payload input vals i n pId axis s pT hAxisPf
-    hN hk hp hGet hAxis hOut
 
 /-- Repackage a lowered `State` as an `ForwardGraph` so we can call its evaluator helpers. -/
 def execOfState {α : Type} [TorchLean.Storage α]
@@ -441,26 +307,13 @@ theorem denoteAllState_snoc {α : Type} [TorchLean.Storage α] [Context α]
       (denoteAllState (α := α) inShape st x).push
         (Spec.SomeTensor.mk (α := α) τ
           (nodeData.eval (ForwardData.eval (ss := ss) gd (.cons x .nil)))) := by
-  -- Expand `st`/`st'`.
-  simp only
-  -- Reduce both sides to `packedTensorsOfContext` of `ForwardData.eval`.
   simp [denoteAllState, execOfState, ForwardGraph.denoteAll, ForwardGraph.eval]
-  -- Now unfold `ForwardData.eval` for the snoc graph.
-  simp [ForwardData.eval]
 
-/--
-Build a typed runtime index (`Idx`) for a numeric IR parent id.
-
-The forward executor's context is typed by a list of shapes `[inShape] ++ ss`. `mkIdx` checks that:
-- `id` is in bounds, and
-- the context shape at that position matches the expected shape `s`.
--/
-
+/-- A successfully checked typed index retains the numeric IR parent id. -/
 theorem mkIdx_ok_i_eq {inShape : Shape} {ss : List Shape} {id : Nat} {s : Shape}
     {idx : Idx ([inShape] ++ ss) s}
     (h : mkIdx (inShape := inShape) (ss := ss) id s = .ok idx) :
     idx.i.1 = id := by
-  classical
   unfold mkIdx at h
   -- After unfolding, the bound check is expressed via `id ≤ ss.length` (since the ctx is `inShape
   -- :: ss`).
@@ -496,52 +349,172 @@ theorem denoteAllState_get_mkIdx?
     (mkIdx_ok_i_eq (inShape := inShape) (ss := ss) (id := pid) (s := s) (idx := idx) hIdx).symm
   rw [hPid]
   change
-    (packedTensorsOfContext (α := α) (ss := [inShape] ++ ss)
+    (TorchLean.TensorPack.toShapeErasedArray (α := α) (ss := [inShape] ++ ss)
       (ForwardData.eval (α := α) (Γ := [inShape]) (ss := ss) gd (.cons x .nil)))[idx.i.1]? =
       some (Spec.SomeTensor.mk (α := α) s
         (getIdx (α := α)
           (xs := ForwardData.eval (α := α) (Γ := [inShape]) (ss := ss) gd
             (.cons x .nil)) idx))
-  exact packedTensorsOfContext_getIdx? (α := α)
+  exact toShapeErasedArray_getIdx? (α := α)
     (ctx := ForwardData.eval (α := α) (Γ := [inShape]) (ss := ss) gd (.cons x .nil))
       idx
 
-/--
-One-step finishing lemma for the `buildFrom`/`denoteAllFrom` semantic equivalence proof.
+/-- The lowering context used by `buildFrom` for node `n` at position `i`. -/
+abbrev loweringContext {α : Type} [TorchLean.Storage α] [Context α]
+    (g : NN.IR.Graph) (payload : Payload α) (inShape : Shape) (ss : List Shape)
+    (i : Nat) (n : NN.IR.Node) : NodeLoweringContext α ([inShape] ++ ss) :=
+  { graph := g, payload := payload, index := i, node := n,
+    parentIdx := fun pid s => mkIdx (inShape := inShape) (ss := ss) pid s }
 
-If we know:
-- the tail recursion `i+1` is correct (`hTail`),
-- the IR evaluator step at `i` matches the forward-graph node’s `forward` (`hEval`), and
-- the forward-graph table at `i` is the previous table plus the pushed node value (`hStep`),
-then `denoteAllFrom` at `i` returns the final forward-graph table.
+/--
+Semantic equivalence lemma for a lowering step after the typed `nodeData` has been built.
+
+Many operator cases differ only in how they validate parents and construct the forward closure.
+Once that closure and the matching `evalAt` fact are available, the tail-of-graph argument is the
+same for unary, binary, and shape-changing nodes.
 -/
-theorem buildFrom_denoteAllFrom_finish
+theorem buildFrom_denoteAllFrom_nodeData_exact
     {α : Type} [TorchLean.Storage α] [Context α]
     (g : NN.IR.Graph) (payload : Payload α) {inShape : Shape} {ss : List Shape}
-    (i : Nat) (x : Tensor α inShape)
+    (gd : ForwardData α [inShape] ss)
+    (i : Nat) (st' : State α inShape) (x : Tensor α inShape)
     (hi : i < g.nodes.size)
-    (τ : Shape) (nodeData : ForwardNode α ([inShape] ++ ss) τ)
-    (st1 st' : State α inShape)
-    (ctx : TorchLean.TensorPack α ([inShape] ++ ss))
-    (vals0 : Array (Spec.SomeTensor α))
-    (input : Spec.SomeTensor α)
+    (τ : Shape)
+    (nodeData : ForwardNode α ([inShape] ++ ss) τ)
     (hTail :
       NN.IR.Graph.denoteAllFrom (α := α) (g := g) (payload := payload)
-          (input := input) (i := i + 1) (vals := denoteAllState (α := α) inShape st1 x) =
+          (input := Spec.SomeTensor.mk (α := α) inShape x) (i := i + 1)
+          (vals := denoteAllState (α := α) inShape
+            (st := (⟨ss ++ [τ], .snoc (ss := ss) gd nodeData⟩ : State α inShape)) x) =
         .ok (denoteAllState (α := α) inShape st' x))
     (hEval :
       NN.IR.Graph.evalAt (α := α) (g := g) (payload := payload)
-          (input := input) (vals := vals0) (i := i) =
-        .ok (Spec.SomeTensor.mk (α := α) τ (nodeData.eval ctx)))
-    (hStep :
-      denoteAllState (α := α) inShape st1 x =
-        vals0.push (Spec.SomeTensor.mk (α := α) τ (nodeData.eval ctx))) :
+          (input := Spec.SomeTensor.mk (α := α) inShape x)
+          (vals := denoteAllState (α := α) inShape (st := (⟨ss, gd⟩ : State α inShape)) x)
+          (i := i) =
+        .ok
+          (Spec.SomeTensor.mk (α := α) τ
+            (nodeData.eval
+              (ForwardData.eval (α := α) (Γ := [inShape]) (ss := ss) gd (.cons x .nil))))) :
     NN.IR.Graph.denoteAllFrom (α := α) (g := g) (payload := payload)
-        (input := input) (i := i) (vals := vals0) =
+        (input := Spec.SomeTensor.mk (α := α) inShape x) (i := i)
+        (vals := denoteAllState (α := α) inShape (st := (⟨ss, gd⟩ : State α inShape)) x) =
       .ok (denoteAllState (α := α) inShape st' x) := by
   unfold NN.IR.Graph.denoteAllFrom
   simp [hi, hEval]
-  simpa [hStep] using hTail
+  simpa only [denoteAllState_snoc, ForwardNode.eval] using hTail
+
+/-- Share parent validation, typed lookup and tail composition for unary tensor operations. -/
+theorem buildFrom_denoteAllFrom_unary
+    {α : Type} [TorchLean.Storage α] [Context α]
+    (g : NN.IR.Graph) (payload : Payload α) {inShape : Shape} {ss : List Shape}
+    (gd : ForwardData α [inShape] ss) (i : Nat) (st' : State α inShape)
+    (x : Tensor α inShape) (n : NN.IR.Node)
+    (hN : g.getNode i = .ok n) (hi : i < g.nodes.size)
+    (label : String) (operation : Tensor α n.outShape → Tensor α n.outShape)
+    (hLower : lowerNode (loweringContext g payload inShape ss i n) =
+      lowerUnary (loweringContext g payload inShape ss i n) label operation)
+    (hEval : ∀ (pId : Nat) (value : Tensor α n.outShape),
+      unaryParent? n.parents = some pId →
+      (denoteAllState (α := α) inShape ⟨ss, gd⟩ x)[pId]? =
+        some (Spec.SomeTensor.mk (α := α) n.outShape value) →
+      NN.IR.Graph.evalAt (α := α) g payload (Spec.SomeTensor.mk inShape x)
+        (denoteAllState (α := α) inShape ⟨ss, gd⟩ x) i =
+        .ok (Spec.SomeTensor.mk n.outShape (operation value)))
+    (hBuild :
+      buildFrom (α := α) (g := g) (payload := payload) (inShape := inShape)
+        (i := i) (st := (⟨ss, gd⟩ : State α inShape)) = .ok st')
+    (ih :
+      ∀ (st1 : State α inShape),
+        buildFrom (α := α) (g := g) (payload := payload) (inShape := inShape)
+          (i := i + 1) st1 = .ok st' →
+        NN.IR.Graph.denoteAllFrom (α := α) (g := g) (payload := payload)
+          (input := Spec.SomeTensor.mk (α := α) inShape x)
+          (i := i + 1) (vals := denoteAllState (α := α) inShape st1 x) =
+          .ok (denoteAllState (α := α) inShape st' x)) :
+    NN.IR.Graph.denoteAllFrom (α := α) (g := g) (payload := payload)
+      (input := Spec.SomeTensor.mk (α := α) inShape x)
+      (i := i) (vals := denoteAllState (α := α) inShape (st := (⟨ss, gd⟩ : State α inShape)) x) =
+      .ok (denoteAllState (α := α) inShape st' x) := by
+  unfold buildFrom at hBuild
+  simp only [hi, ↓reduceDIte, hN, Except.ok_bind] at hBuild
+  rw [hLower] at hBuild
+  cases hp : unaryParent? n.parents with
+  | none => simp [hp, throw_eq_error] at hBuild
+  | some pId =>
+      cases hIdx : mkIdx (inShape := inShape) (ss := ss) pId n.outShape with
+      | error msg => simp [hp, hIdx] at hBuild
+      | ok ip =>
+          simp [hp, hIdx] at hBuild
+          let nodeData : ForwardNode α ([inShape] ++ ss) n.outShape :=
+            mkForwardNode (fun values => operation (readTensor (xs := values) ip))
+          let st1 : State α inShape := ⟨ss ++ [n.outShape], .snoc gd nodeData⟩
+          have hRec : buildFrom g payload inShape (i + 1) st1 = .ok st' := by
+            simpa [st1, nodeData] using hBuild
+          apply buildFrom_denoteAllFrom_nodeData_exact g payload gd i st' x hi
+            n.outShape nodeData (ih st1 hRec)
+          exact hEval pId _ hp (denoteAllState_get_mkIdx? gd x hIdx)
+
+/-- Share binary validation and preservation while keeping the two parent shapes distinct. -/
+theorem buildFrom_denoteAllFrom_binary
+    {α : Type} [TorchLean.Storage α] [Context α]
+    (g : NN.IR.Graph) (payload : Payload α) {inShape : Shape} {ss : List Shape}
+    (gd : ForwardData α [inShape] ss) (i : Nat) (st' : State α inShape)
+    (x : Tensor α inShape) (n : NN.IR.Node)
+    (hN : g.getNode i = .ok n) (hi : i < g.nodes.size)
+    (label : String) (rightShape : Shape)
+    (operation : Tensor α n.outShape → Tensor α rightShape → Tensor α n.outShape)
+    (hLower : lowerNode (loweringContext g payload inShape ss i n) =
+      lowerBinary (loweringContext g payload inShape ss i n) label rightShape operation)
+    (hEval : ∀ (aId bId : Nat) (left : Tensor α n.outShape) (right : Tensor α rightShape),
+      binaryParents? n.parents = some (aId, bId) →
+      (denoteAllState (α := α) inShape ⟨ss, gd⟩ x)[aId]? =
+        some (Spec.SomeTensor.mk (α := α) n.outShape left) →
+      (denoteAllState (α := α) inShape ⟨ss, gd⟩ x)[bId]? =
+        some (Spec.SomeTensor.mk (α := α) rightShape right) →
+      NN.IR.Graph.evalAt (α := α) g payload (Spec.SomeTensor.mk inShape x)
+        (denoteAllState (α := α) inShape ⟨ss, gd⟩ x) i =
+        .ok (Spec.SomeTensor.mk n.outShape (operation left right)))
+    (hBuild :
+      buildFrom (α := α) (g := g) (payload := payload) (inShape := inShape)
+        (i := i) (st := (⟨ss, gd⟩ : State α inShape)) = .ok st')
+    (ih :
+      ∀ (st1 : State α inShape),
+        buildFrom (α := α) (g := g) (payload := payload) (inShape := inShape)
+          (i := i + 1) st1 = .ok st' →
+        NN.IR.Graph.denoteAllFrom (α := α) (g := g) (payload := payload)
+          (input := Spec.SomeTensor.mk (α := α) inShape x)
+          (i := i + 1) (vals := denoteAllState (α := α) inShape st1 x) =
+          .ok (denoteAllState (α := α) inShape st' x)) :
+    NN.IR.Graph.denoteAllFrom (α := α) (g := g) (payload := payload)
+      (input := Spec.SomeTensor.mk (α := α) inShape x)
+      (i := i) (vals := denoteAllState (α := α) inShape (st := (⟨ss, gd⟩ : State α inShape)) x) =
+      .ok (denoteAllState (α := α) inShape st' x) := by
+  unfold buildFrom at hBuild
+  simp only [hi, ↓reduceDIte, hN, Except.ok_bind] at hBuild
+  rw [hLower] at hBuild
+  cases hp : binaryParents? n.parents with
+  | none => simp [hp, throw_eq_error] at hBuild
+  | some parentIds =>
+      rcases parentIds with ⟨aId, bId⟩
+      cases hIa : mkIdx (inShape := inShape) (ss := ss) aId n.outShape with
+      | error msg => simp [hp, hIa] at hBuild
+      | ok ia =>
+          cases hIb : mkIdx (inShape := inShape) (ss := ss) bId rightShape with
+          | error msg => simp [hp, hIa, hIb] at hBuild
+          | ok ib =>
+              simp [hp, hIa, hIb] at hBuild
+              let nodeData : ForwardNode α ([inShape] ++ ss) n.outShape :=
+                mkForwardNode (fun values =>
+                  operation (readTensor (xs := values) ia) (readTensor (xs := values) ib))
+              let st1 : State α inShape := ⟨ss ++ [n.outShape], .snoc gd nodeData⟩
+              have hRec : buildFrom g payload inShape (i + 1) st1 = .ok st' := by
+                simpa [st1, nodeData] using hBuild
+              apply buildFrom_denoteAllFrom_nodeData_exact g payload gd i st' x hi
+                n.outShape nodeData (ih st1 hRec)
+              exact hEval aId bId _ _ hp (denoteAllState_get_mkIdx? gd x hIa)
+                (denoteAllState_get_mkIdx? gd x hIb)
+
 end IRExec
 end Autograd
 end Runtime

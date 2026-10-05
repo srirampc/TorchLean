@@ -9,7 +9,6 @@ module
 public import NN.MLTheory.Optimization.GDLinearConvergence
 public import Mathlib.Analysis.SpecificLimits.Basic
 
-
 /-!
 # Gradient Descent Linear Convergence (Operator Form)
 
@@ -48,7 +47,6 @@ SGD, L2 regularization, and decoupled weight decay algebraically.
 namespace Optim
 namespace GD
 
-open Real
 open scoped RealInnerProductSpace
 
 variable {E : Type} [NormedAddCommGroup E] [InnerProductSpace ℝ E]

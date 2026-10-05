@@ -11,8 +11,8 @@ public import NN.Spec.Core.Context
 /-!
 # The opt-in rational algebraic backend
 
-Split out of `NN.Spec.Core.Context` so that only the handful of algebraic tests that `open scoped
-Spec.RationalAlgebraic` pay for the rational instances.
+Algebraic tests and rational verification code select these instances with
+`open scoped Spec.RationalAlgebraic`. Importing the general `Context` does not select them.
 -/
 
 @[expose] public section
@@ -68,7 +68,7 @@ scoped instance instMathFunctionsRat : MathFunctions ℚ where
   tanh := fun _ => 0
   cosh := fun _ => 0
   sqrt := fun _ => 0
-  abs := fun x => if x < 0 then -x else x
+  abs := fun x => |x|
   log := fun _ => 0
   pi := 0
   cos := fun _ => 0

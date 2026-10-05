@@ -29,7 +29,7 @@ Usage examples:
   python3 scripts/verification/pinn/export_pinn_weights.py --in-dim 2 --ckpt my_pinn.pt --out weights_2d.json
 
 Then verify in Lean (1D example):
-  lake exe verify -- pinn-cli --weights=weights_1d.json "u_xx + u" 0.25 0.05
+  scripts/lake.sh exe verify -- pinn-cli --weights=weights_1d.json "u_xx + u" 0.25 0.05
 """
 
 import argparse
@@ -39,8 +39,8 @@ from pathlib import Path
 try:
     import torch
     import torch.nn as nn
-except Exception as e:
-    raise SystemExit("PyTorch is required: pip install torch")
+except Exception as exc:
+    raise SystemExit("PyTorch is required: pip install torch") from exc
 
 
 def build_model(in_dim: int):
@@ -92,7 +92,7 @@ def main():
     js = to_json_dict(model)
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(js))
+    out.write_text(json.dumps(js, allow_nan=False))
     print(f"Wrote weights JSON to {out}")
 
 

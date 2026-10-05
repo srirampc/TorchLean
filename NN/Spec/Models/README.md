@@ -66,7 +66,8 @@ Practical checklist:
 
 5. If you want the model to be trainable, add an explicit backward/VJP
    - Name it `<Model>Spec.backward` or `<Model>Spec.<loss>_grad_*`.
-   - Reuse existing backward specs (`linear_backward_spec`, `convBackwardSpec`, attention/encoder backprops, etc.).
+   - Reuse existing backward specs (`linearInputDerivSpec`, `linearWeightsDerivSpec`,
+     `convBackwardSpec`, attention/encoder backprops, etc.).
    - If you recompute intermediates, say so once (and keep the recomputation structurally aligned with the forward).
 
 6. Hook it into the public spec entrypoint
@@ -83,8 +84,9 @@ Practical checklist:
    - If the code is only a usage demonstration, put it under `NN/Examples`.
 
 8. Build the files you touched
-   - `lake build NN.Spec.Models.<your_model>`
-   - If you updated the spec entrypoint: `lake build NN.Spec`
+   - `scripts/lake.sh build NN.Spec.Models.<your_model>`
+   - If you updated the spec entrypoint: `scripts/lake.sh build NN.Spec`
+   - This wrapper holds the checkout lock described in `docs/CONTRIBUTING.md`.
 
 ## Common Pitfalls
 

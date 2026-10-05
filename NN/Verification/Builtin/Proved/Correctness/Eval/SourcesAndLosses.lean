@@ -57,8 +57,8 @@ theorem evalAt_detach_eq
         (vals := #[Spec.SomeTensor.mk (α := α) s x]) (i := 1)
       =
       Except.ok (Spec.SomeTensor.mk (α := α) s (Tensor.detachSpec x)) := by
-  simp [Graph.evalAt, Graph.evalNode, Graph.normalizeNodeOutput, unaryGraph, unaryNode,
-    Graph.getNode, Graph.getNode?, Graph.expectShape,
+  simp [Graph.evalAt, Graph.evalNode, Graph.normalizeNodeOutput, unaryGraph,
+    unaryGraphOut, unaryNodeOut, Graph.getNode, Graph.getNode?, Graph.expectShape,
     Graph.unaryParentId, unaryParent?, Bind.bind, Except.bind, Pure.pure, Except.pure]
 
 /-- A graph containing a zero-parent `rand_uniform` node. -/
@@ -116,7 +116,8 @@ theorem evalAt_mseLoss_eq
               (↑(TorchLean.Tensor.meanDenominator s) : α)))) := by
   simp [Graph.evalAt, Graph.evalNode, Graph.normalizeNodeOutput, binaryGraphOut, binaryNodeOut,
     Graph.getNode, Graph.getNode?,
-    Graph.binaryParentIds, binaryParents?, Graph.mseLossSomeTensor, Bind.bind, Except.bind,
+    Graph.binaryParentIds, binaryParents?, Graph.mseLossSomeTensor, Spec.mseSpec, Spec.meanOver,
+    Bind.bind, Except.bind,
     Pure.pure, Except.pure]
 
 end IRStep

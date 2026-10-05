@@ -68,24 +68,6 @@ theorem MultiIndex.get_vector_eq_getScalar {α : Type} [TorchLean.Storage α] {n
     MultiIndex.get (dims := [n]) values (i, PUnit.unit) = TorchLean.Tensor.getScalar values i := by
   rfl
 
-/-- An index that runs out too early reads zero. -/
-@[simp]
-theorem getAtOrZero_dim_nil {α : Type} [TorchLean.Storage α] [Zero α]
-    (n : Nat) (dims : List Nat)
-    (values : Fin n → Tensor α (Shape.ofList dims)) :
-    getAtOrZero (Tensor.dim values) [] = 0 := by
-  simp
-
-/-- Otherwise the leading coordinate is bounds-checked and the lookup recurses, reading zero when it
-falls outside. This total lookup is what lets padding be expressed without a separate case split at
-every use site: an out-of-range index simply contributes nothing. -/
-theorem getAtOrZero_dim_cons {α : Type} [TorchLean.Storage α] [Zero α]
-    (n : Nat) (dims : List Nat)
-    (values : Fin n → Tensor α (Shape.ofList dims)) (j : Nat) (js : List Nat) :
-    getAtOrZero (Tensor.dim values) (j :: js) =
-      if h : j < n then getAtOrZero (values ⟨j, h⟩) js else 0 := by
-  simp
-
 /-- Split a finite sum over a nonempty multi-index into its leading coordinate and tail. -/
 theorem MultiIndex.sum_cons {α : Type} [AddCommMonoid α] (n : Nat) (dims : List Nat)
     (f : MultiIndex (n :: dims) → α) :

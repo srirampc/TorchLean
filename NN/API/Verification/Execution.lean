@@ -41,6 +41,21 @@ def readBounds {α : Type} [TorchLean.Storage α] [Context α]
     { size := box.dim, lower, upper }
 
 /--
+Enclose the requested binary64 ball before converting its endpoints to the runtime scalar.
+
+Rounding the center and radius separately can shrink the region, especially when subtraction
+cancels most of the center. The directed conversion requires a faithful `roundForValidation`
+hook, supplied by both arithmetic backends used by ordinary trained results.
+-/
+def inputBoxFromFloat {α : Type} [TorchLean.Storage α] [Context α]
+    [Runtime.FromFloat α] {σ : Shape}
+    (center : Tensor Float σ) (radius : Float) : NN.MLTheory.CROWN.FlatBox α :=
+  let box := NN.Verification.Builtin.lInfBall center radius
+  { dim := box.dim
+    lo := Tensor.map (Runtime.ofFloatDirected (α := α) false) box.lo
+    hi := Tensor.map (Runtime.ofFloatDirected (α := α) true) box.hi }
+
+/--
 Build the verification closure retained by an ordinary trained result.
 
 The closure captures the completed parameter snapshot, so subsequent updates to the training
@@ -60,9 +75,7 @@ def forState {σ τ : Shape} {α : Type}
     (algorithm : Algorithm) →
     IO Report :=
   fun centerFloat radius norm property algorithm => do
-    match validateRadius radius with
-    | .ok () => pure ()
-    | .error message => throw <| IO.userError message
+    IO.ofExcept (validateRadius radius)
 
     match norm with
     | .inf => pure ()
@@ -73,16 +86,12 @@ def forState {σ τ : Shape} {α : Type}
         throw <| IO.userError
           "L2 verification is not implemented by the current box-based verifier; use norm := .inf"
 
-    let lowered ←
-      match NN.Verification.Builtin.lowerForwardToIR
-          (TorchLean.nn.forward trainer.model (α := α))
-          (nn.State.Internal.toTensorPack modelState) with
-      | .ok result => pure result
-      | .error message => throw <| IO.userError message
+    let lowered ← IO.ofExcept <|
+      NN.Verification.Builtin.lowerForwardToIR
+        (TorchLean.nn.forward trainer.model (α := α))
+        (nn.State.Internal.toTensorPack modelState)
 
-    let center := Tensor.map (Runtime.ofFloat (α := α)) centerFloat
-    let regionRadius := Runtime.ofFloat (α := α) radius
-    let inputBox := NN.Verification.Builtin.lInfBall center regionRadius
+    let inputBox := inputBoxFromFloat (α := α) centerFloat radius
     let parameters := lowered.seedInputBox inputBox
     let outputBox ←
     match algorithm with
@@ -91,23 +100,16 @@ def forState {σ τ : Shape} {α : Type}
       | .crown =>
           lowered.outputBoxCROWNOrThrow parameters inputBox
       | .alphaBetaCrown =>
-          let inputDim ←
-            match lowered.inputDim? with
-            | .ok dim => pure dim
-            | .error message => throw <| IO.userError message
-          match NN.MLTheory.CROWN.Cert.outputBoxAlphaBetaCROWN?
-              (α := α) lowered.graph parameters inputBox
-              lowered.inputId lowered.outputId inputDim with
-          | .ok box => pure box
-          | .error message => throw <| IO.userError message
+          let inputDim ← IO.ofExcept lowered.inputDim?
+          IO.ofExcept <| NN.MLTheory.CROWN.Cert.outputBoxAlphaBetaCROWN?
+            (α := α) lowered.graph parameters inputBox
+            lowered.inputId lowered.outputId inputDim
 
     let bounds ← readBounds outputBox
-    match Report.fromBounds radius bounds
-        (norm := norm)
-        (property := property)
-        (algorithm := algorithm) with
-    | .ok report => pure report
-    | .error message => throw <| IO.userError message
+    IO.ofExcept <| Report.fromBounds radius bounds
+      (norm := norm)
+      (property := property)
+      (algorithm := algorithm)
 
 end Internal
 

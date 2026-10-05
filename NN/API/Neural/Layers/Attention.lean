@@ -30,7 +30,7 @@ attention width `headCount * headWidth`. Query, key, and value projections map f
 into that internal width; the output projection maps back to `modelWidth`. The two widths therefore
 do not need to be equal.
 -/
-structure MultiHeadAttention.Config where
+structure Attention.Options where
   /-- Number of attention heads. Must be positive. -/
   headCount : Nat
   /-- Per-head embedding dimension. Must be positive. -/
@@ -61,24 +61,24 @@ structure MultiHeadAttention.Config where
   -/
   dropout? : Option Float := none
 
-namespace MultiHeadAttention.Config
+namespace Attention.Options
 
-/-- Validate attention dimensions and projection initializers. -/
-def validate (config : MultiHeadAttention.Config)
+/-- Validate attention dimensions, dropout probability, and projection initializers. -/
+def validate (config : Attention.Options)
     (sequenceLength modelWidth : Nat) : Except String Unit := do
   if sequenceLength = 0 then
-    throw "MultiHeadAttention: sequence length must be positive"
+    throw "Attention: sequence length must be positive"
   if modelWidth = 0 then
-    throw "MultiHeadAttention: model width must be positive"
+    throw "Attention: model width must be positive"
   if config.headCount = 0 then
-    throw "MultiHeadAttention: head count must be positive"
+    throw "Attention: head count must be positive"
   if config.headWidth = 0 then
-    throw "MultiHeadAttention: head width must be positive"
+    throw "Attention: head width must be positive"
   match config.dropout? with
   | none => pure ()
   | some probability =>
       unless probability.isFinite && 0.0 <= probability && probability <= 1.0 do
-        throw <| "MultiHeadAttention: dropout probability must be finite and in [0, 1], " ++
+        throw <| "Attention: dropout probability must be finite and in [0, 1], " ++
           s!"got {probability}"
   match config.weightInitialization? with
   | none => pure ()
@@ -87,7 +87,7 @@ def validate (config : MultiHeadAttention.Config)
   | none => pure ()
   | some initialization => initialization.validate
 
-end MultiHeadAttention.Config
+end Attention.Options
 
 end nn
 end TorchLean

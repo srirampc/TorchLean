@@ -27,8 +27,10 @@ def probe(case: str, magnitude: float, dtype: torch.dtype, device: str) -> dict:
     elif case == "instance_norm":
         output = functional.instance_norm(x, weight=weight, bias=bias,
                                           use_input_stats=True, eps=1e-5)
-    else:
+    elif case == "batch_norm":
         output = functional.batch_norm(x, None, None, weight, bias, training=True, eps=1e-5)
+    else:
+        raise ValueError(f"unknown normalization case: {case}")
     output.sum().backward()
     residuals = {
         "output_minus_bias_max_abs": (output.detach() - 3).abs().max().item(),

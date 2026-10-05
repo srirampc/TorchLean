@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import subprocess
 import sys
@@ -39,6 +40,7 @@ HF_SPACE_REPO = "allenai/WildDet3D"
 HF_CKPT_NAME = "wilddet3d_alldata_all_prompt_v1.0.pt"
 DEFAULT_IMAGE_URL = "https://images.cocodataset.org/val2017/000000039769.jpg"
 DEFAULT_OUT = Path("_external/geometry3d/wilddet3d/wilddet3d_box3d_cert.json")
+REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 def load_image(path: Path | None, url: str | None) -> Image.Image:
@@ -120,12 +122,13 @@ def choose_prediction(
     """Select the highest-scoring predicted 3D detection above threshold."""
     if len(boxes) == 0:
         raise ValueError("WildDet3D returned no detections")
+    if not math.isfinite(min_score) or not torch.isfinite(scores).all():
+        raise ValueError("detection threshold and scores must be finite")
     mask = scores >= min_score
     if not bool(mask.any()):
-        best = int(scores.argmax().item())
-    else:
-        masked_indices = torch.nonzero(mask, as_tuple=False).flatten()
-        best = int(masked_indices[scores[masked_indices].argmax()].item())
+        raise ValueError("no detection survived --min-score")
+    masked_indices = torch.nonzero(mask, as_tuple=False).flatten()
+    best = int(masked_indices[scores[masked_indices].argmax()].item())
     return (
         boxes[best].detach().cpu(),
         boxes3d[best].detach().cpu(),
@@ -151,15 +154,15 @@ def corners_from_wilddet3d_box(box3d: torch.Tensor) -> list[float]:
     the projection contract, but keeping a stable order makes the overlay edges understandable.
     """
     b = box3d.detach().cpu().double().numpy()
-    if b.shape[0] < 10:
+    if b.shape != (10,) or not np.isfinite(b).all():
         raise ValueError(f"expected a WildDet3D 10D box, got shape {b.shape}")
 
     center = b[:3]
     width, length, height = b[3:6]
     qw, qx, qy, qz = b[6:10]
     norm2 = qw * qw + qx * qx + qy * qy + qz * qz
-    if norm2 <= 0.0:
-        raise ValueError("WildDet3D returned a zero-norm orientation quaternion")
+    if not math.isfinite(norm2) or norm2 <= 0.0:
+        raise ValueError("WildDet3D returned an invalid orientation quaternion norm")
     s = 2.0 / norm2
     rot = np.array(
         [
@@ -229,6 +232,10 @@ def bbox_encloses(projected: list[tuple[float, float, float]], bbox: list[float]
 
 def export_cert(args: argparse.Namespace) -> dict[str, Any]:
     """Run WildDet3D and return one TorchLean certificate dictionary."""
+    if not all(math.isfinite(x) and x >= 0 for x in (args.tol, args.envelope_pad)):
+        raise ValueError("tolerance and envelope padding must be finite and nonnegative")
+    if not math.isfinite(args.min_score):
+        raise ValueError("minimum score must be finite")
     prepare_wilddet3d_source()
     from wilddet3d.inference import build_model
     from wilddet3d.preprocessing import preprocess
@@ -315,6 +322,7 @@ def export_cert(args: argparse.Namespace) -> dict[str, Any]:
         "bbox2d": bbox2d,
         "metadata": {
             "producer": "scripts/verification/geometry3d/export_wilddet3d_box3d_cert.py",
+            "corner_order": "perimeter",
             "model": HF_MODEL_REPO,
             "space_source": HF_SPACE_REPO,
             "text_prompt": args.text_prompt,
@@ -369,19 +377,20 @@ def main() -> None:
     cert = export_cert(args)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     with args.out.open("w", encoding="utf-8") as fh:
-        json.dump(cert, fh, indent=2)
+        json.dump(cert, fh, indent=2, allow_nan=False)
         fh.write("\n")
     print(f"wrote {args.out}", flush=True)
 
     if args.verify:
-        subprocess.run(["lake", "exe", "verify", "--", "camera-box3d-cert", str(args.out)], check=True)
+        subprocess.run([str(REPO_ROOT / "scripts/lake.sh"), "exe", "verify", "--",
+                        "camera-box3d-cert", str(args.out.resolve())], cwd=REPO_ROOT, check=True)
 
     if args.overlay:
         overlay = args.out.with_suffix(".png")
         subprocess.run(
             [
-                "python3",
-                "scripts/verification/geometry3d/render_box3d_cert_overlay.py",
+                sys.executable,
+                str(REPO_ROOT / "scripts/verification/geometry3d/render_box3d_cert_overlay.py"),
                 "--cert",
                 str(args.out),
                 "--out-dir",

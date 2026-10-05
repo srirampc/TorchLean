@@ -103,13 +103,9 @@ def withSelectedRuntime
         (cast : Float → α) → (runtime : Runtime.Config) →
         (remainingArguments : List String) → IO Unit) :
     IO Unit := do
-  let (selection, remainingArguments) ← match RuntimeSelection.parse arguments with
-    | .ok result => pure result
-    | .error message => throw <| IO.userError message
+  let (selection, remainingArguments) ← IO.ofExcept (RuntimeSelection.parse arguments)
   RuntimeSelection.log selection
-  let runtime ← match RuntimeSelection.toConfig selection with
-    | .ok result => pure result
-    | .error message => throw <| IO.userError message
+  let runtime ← IO.ofExcept (RuntimeSelection.toConfig selection)
   runtime.validateForExecution
   TorchLean.Runtime.Arithmetic.withRuntime selection.arithmetic (fun {α} _ _ _ =>
     continuation (α := α) (TorchLean.Runtime.ofFloat (α := α))
@@ -216,11 +212,11 @@ def usage (exeName : String) : String :=
     , ""
     , "Runtime flags:"
     , "  -h, --help"
-    , "  --device auto|cpu|cuda|rocm|metal|wasm|tpu|trainium|custom|external"
+    , "  --device auto|cpu|gpu|cuda|rocm|metal|wasm|tpu|trainium|custom|external"
     , "      cpu and cuda are implemented by the current eager runtime;"
     , "      other names are planning targets and fail until a runtime is registered."
     , "  --arithmetic native|ieee|complex"
-    , "      native is the default; ieee runs TorchLean's bit-level binary32 reference."
+    , "      native is the default; ieee uses FloatLib's executable binary32 format."
     , "  --execution eager|typed-graph"
     , "      eager executes immediately; typed-graph records and reuses a shape-indexed SSA graph."
     , "  --seed N"
@@ -228,12 +224,12 @@ def usage (exeName : String) : String :=
     , "      print the backend capsules selected by the current device profile."
     , ""
     , "Verification commands:"
-    , "  lake exe verify -- list"
-    , "  lake exe verify -- margin-report"
-    , "  lake exe verify -- abcrown-leaf"
-    , "  lake exe verify -- torchlean-mlp-workflow"
+    , "  scripts/lake.sh exe verify -- list"
+    , "  scripts/lake.sh exe verify -- margin-report"
+    , "  scripts/lake.sh exe verify -- abcrown-leaf"
+    , "  scripts/lake.sh exe verify -- torchlean-mlp-workflow"
     , ""
-    , "Use `lake exe torchlean --help` for the full example list."
+    , "Use `scripts/lake.sh exe torchlean --help` for the full example list."
     ]
 
 /--
@@ -254,9 +250,7 @@ def run
     IO.println (config.usage?.getD (usage exeName))
     return 0
   let (seed, arguments) ←
-    match TorchLean.CLI.takeSeed arguments (default := 0) with
-    | .ok result => pure result
-    | .error message => throw <| IO.userError s!"{exeName}: {message}"
+    TorchLean.CLI.orThrow exeName (TorchLean.CLI.takeSeed arguments (default := 0))
   let arguments := config.runtime.applyDefaults arguments
 
   TorchLean.rand.manualSeed seed
@@ -270,28 +264,19 @@ def run
       withSelectedRuntime arguments
         (fun {α} _ _ _ _ cast runtime remainingArguments => do
         let runtime : Runtime.Config := { runtime with seed := seed }
-        match config.runtime.validate runtime with
-        | .ok () => pure ()
-        | .error message => throw <| IO.userError s!"{exeName}: {message}"
+        TorchLean.CLI.orThrow exeName (config.runtime.validate runtime)
         config.printBanner runtime
         continuation (α := α) cast runtime remainingArguments
         printSuccess)
       pure 0
   | .native continuation =>
-      let (selection, remainingArguments) ←
-        match RuntimeSelection.parse arguments with
-        | .ok result => pure result
-        | .error message => throw <| IO.userError message
+      let (selection, remainingArguments) ← IO.ofExcept (RuntimeSelection.parse arguments)
       if selection.arithmetic != .native then
         throw <| IO.userError s!"{exeName}: this program only supports `--arithmetic native`"
       RuntimeSelection.log selection
-      let runtime ← match RuntimeSelection.toConfig selection seed with
-        | .ok runtime => pure runtime
-        | .error message => throw <| IO.userError message
+      let runtime ← IO.ofExcept (RuntimeSelection.toConfig selection seed)
       runtime.validateForExecution
-      match config.runtime.validate runtime with
-      | .ok () => pure ()
-      | .error message => throw <| IO.userError s!"{exeName}: {message}"
+      TorchLean.CLI.orThrow exeName (config.runtime.validate runtime)
       config.printBanner runtime
       continuation runtime remainingArguments
       printSuccess

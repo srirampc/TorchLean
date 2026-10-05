@@ -64,12 +64,9 @@ define `Adj` in terms of replacing one coordinate.
 
 @[expose] public section
 
-
 noncomputable section
 
 namespace NN.MLTheory.LearningTheory
-
-open scoped BigOperators
 
 open MeasureTheory
 
@@ -81,8 +78,8 @@ variable {α β γ : Type}
 A randomized mechanism from inputs `α` to outputs `β`.
 
 We use `ProbabilityMeasure β` so probability mass is total ($\mu(\mathrm{univ})=1$) and so that
-post-processing can be phrased using `ProbabilityMeasure.map` (pushforward along a measurable
-function).
+post-processing can be phrased using `ProbabilityMeasure.map` (pushforward along a function of the
+output).
 -/
 abbrev Mechanism (α β : Type) [MeasurableSpace β] : Type :=
   α → ProbabilityMeasure β
@@ -110,7 +107,7 @@ def DifferentialPrivacy (Adj : α → α → Prop) [MeasurableSpace β]
     ∀ S : Set β, MeasurableSet S →
       (M a : Measure β) S ≤ (ENNReal.ofReal (Real.exp ε)) * (M a' : Measure β) S + δ
 
-/-! A common special case: $\delta=0$ (“pure DP”). -/
+/-- A common special case: $\delta=0$ (“pure DP”). -/
 abbrev PureDP (Adj : α → α → Prop) [MeasurableSpace β]
     (M : Mechanism α β) (ε : ℝ) : Prop :=
   DifferentialPrivacy (α := α) (β := β) Adj M ε 0
@@ -130,11 +127,9 @@ theorem differentialPrivacy_mono_delta {Adj : α → α → Prop} [MeasurableSpa
     DifferentialPrivacy (α := α) (β := β) Adj M ε δ₁ →
       DifferentialPrivacy (α := α) (β := β) Adj M ε δ₂ := by
   intro hdp a a' hadj S hS
-  have h := hdp a a' hadj S hS
-  exact le_trans h (by
-    -- `add_le_add_left` produces the inequality with `δ` on the left; rewrite by commutativity.
-    simpa [add_comm, add_left_comm, add_assoc] using
-      add_le_add_left hδ ((ENNReal.ofReal (Real.exp ε)) * (M a' : Measure β) S))
+  refine le_trans (hdp a a' hadj S hS) ?_
+  -- Only the additive slack `δ` changes.
+  gcongr
 
 /--
 $\varepsilon$-monotonicity: privacy at a smaller $\varepsilon$ implies privacy at a larger one.
@@ -159,18 +154,19 @@ theorem differentialPrivacy_mono_eps {Adj : α → α → Prop} [MeasurableSpace
 /-! ## Post-processing -/
 
 /--
-Post-process a mechanism by applying a measurable function to its output.
+Post-process a mechanism by applying a function to its output.
 
-In DP folklore: if `M` is DP, then so is `f ∘ M` for any (measurable) `f` that does *not* look at
+In DP folklore: if `M` is DP, then so is `f ∘ M` for any measurable `f` that does *not* look at
 the private input. This is called **post-processing** and is one of the core reasons DP composes
 well with downstream pipelines.
 
-Formally, `postprocess M f` is the pushforward measure `(M a).map f` for each input `a`.
+Formally, `postprocess M f` is the pushforward `(M a).map f` for each input `a`. Mathlib's
+`ProbabilityMeasure.map` is total (a non-measurable `f` yields a junk Dirac mass), so the
+measurability hypothesis lives on `differentialPrivacy_postprocess`, where it is actually used.
 -/
-def postprocess [MeasurableSpace β] [MeasurableSpace γ]
-    (M : Mechanism α β) (f : β → γ) (hf : Measurable f) : Mechanism α γ :=
-  fun a => ⟨(M a : Measure β).map f,
-    (Measure.isProbabilityMeasure_map_iff hf.aemeasurable).mpr inferInstance⟩
+def postprocess [MeasurableSpace β] [MeasurableSpace γ] (M : Mechanism α β) (f : β → γ) :
+    Mechanism α γ :=
+  fun a => (M a).map f
 
 /--
 Post-processing theorem: measurable mappings of outputs preserve DP.
@@ -181,11 +177,11 @@ Proof idea (the standard one):
   `f ⁻¹' S` under the original output;
 - apply DP for `M` to the measurable set `f ⁻¹' S`.
 -/
-theorem differentialPrivacy_postprocess {Adj : α → α → Prop} [MeasurableSpace β] [MeasurableSpace γ]
-    {M : Mechanism α β} {ε : ℝ} {δ : ENNReal} {f : β → γ} (hf : Measurable f) :
+theorem differentialPrivacy_postprocess {Adj : α → α → Prop} [MeasurableSpace β]
+    [MeasurableSpace γ] {M : Mechanism α β} {ε : ℝ} {δ : ENNReal} {f : β → γ}
+    (hf : Measurable f) :
     DifferentialPrivacy (α := α) (β := β) Adj M ε δ →
-      DifferentialPrivacy (α := α) (β := γ) Adj (postprocess (α := α) (β := β) (γ := γ) M f hf) ε δ
-        := by
+      DifferentialPrivacy (α := α) (β := γ) Adj (postprocess M f) ε δ := by
   intro hdp a a' hadj S hS
   -- Reduce the event on the post-processed output to a preimage event on the original output.
   change ((M a).map f : Measure γ) S ≤

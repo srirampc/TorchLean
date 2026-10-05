@@ -6,7 +6,7 @@ Authors: TorchLean Team
 
 module
 
-public import NN.Tests.Runtime.Floats.Utils
+public import NN.Tests.Utils
 public import NN.Verification.Cert.CROWNNodeCert
 public import NN.Verification.ODE.Parse
 public import NN.Verification.PINN.Core
@@ -78,12 +78,6 @@ def parseInputRegion! (source : String) : IO NN.Verification.Json.BoxRegion := d
   | .ok region => pure region
   | .error e => throw <| IO.userError s!"input-region parser rejected a valid fixture: {e}"
 
-/-- Whether a JSON value passes the complete PINN certificate schema checks. -/
-def pinnCertificateAccepted (json : Json) : Bool :=
-  match NN.Verification.PINN.parseCertificate json with
-  | .ok _ => true
-  | .error _ => false
-
 /-- Compare a computed scalar interval pair with its exact expected endpoints. -/
 def expectFloatPair (msg : String) (actual : Option (Float × Float))
     (expected : Float × Float) : IO Unit := do
@@ -106,19 +100,12 @@ def evalPDEAtTwo (source : String) : Option (Float × Float) := do
     { u := some (2.0, 2.0), duX := none, duY := none, d2uX := none, d2uY := none }
     expr
 
-def flatBox (lo hi : Fin 2 → Float) : FlatBox (Binary 8 23) :=
-  { dim := 2
+def flatBox {n : Nat} (lo hi : Fin n → Float) : FlatBox (Binary 8 23) :=
+  { dim := n
     lo := TorchLean.Tensor.map (fun x => (ofModel (Model.cast .binary64 .binary32 (toModel
       (Binary.ofFloat x))) : Binary 8 23)) (TorchLean.Tensor.ofFn lo)
     hi := TorchLean.Tensor.map (fun x => (ofModel (Model.cast .binary64 .binary32 (toModel
       (Binary.ofFloat x))) : Binary 8 23)) (TorchLean.Tensor.ofFn hi) }
-
-def flatBox3 : FlatBox (Binary 8 23) :=
-  { dim := 3
-    lo := TorchLean.Tensor.map (fun x => (ofModel (Model.cast .binary64 .binary32 (toModel
-      (Binary.ofFloat x))) : Binary 8 23)) (TorchLean.Tensor.ofFn (fun _ : Fin 3 => 0.0))
-    hi := TorchLean.Tensor.map (fun x => (ofModel (Model.cast .binary64 .binary32 (toModel
-      (Binary.ofFloat x))) : Binary 8 23)) (TorchLean.Tensor.ofFn (fun _ : Fin 3 => 1.0)) }
 
 def inputNode (id dim : Nat) : NN.IR.Node :=
   { id := id, parents := #[], kind := .input, outShape := [dim] }
@@ -145,7 +132,7 @@ def run : IO Unit := do
   let boxRegion ← parseInputRegion!
     "{\"region\":{\"lo\":[-1.0,0.0],\"hi\":[1.0,2.0]}}"
   expect "endpoint input region did not infer its dimension"
-    (boxRegion.dim == 2 && boxRegion.lo.size == 2 && boxRegion.hi.size == 2)
+    (boxRegion.dim == 2 && boxRegion.lo == #[-1.0, 0.0] && boxRegion.hi == #[1.0, 2.0])
   expectRejected "malformed input dimension was treated as absent" <|
     parseInputRegion! "{\"input\":{\"dim\":\"two\",\"lo\":[0.0,0.0],\"hi\":[1.0,1.0]}}"
   expectRejected "declared input dimension did not constrain endpoint lengths" <|
@@ -202,7 +189,7 @@ def run : IO Unit := do
   expectRejected "margin report accepted reversed logit bounds" <|
     NN.Verification.Robustness.MarginCert.checkOneExample 2 reversedMarginEntry
 
-  let validPinnCert ← parseJson! <|
+  let validPinnSource :=
     "{\"pinn\":{\"pde\":\"u\",\"h\":0.1,\"eps\":0.0,\"points\":[0.0]}," ++
     "\"residual_bounds\":{\"lo\":[0.0],\"hi\":[0.0]}," ++
     "\"residual_bounds_deriv\":{\"lo\":[0.0],\"hi\":[0.0]}," ++
@@ -210,31 +197,30 @@ def run : IO Unit := do
     "\"u_minus\":{\"lo\":0.0,\"hi\":0.0}," ++
     "\"u\":{\"lo\":0.0,\"hi\":0.0}," ++
     "\"u_plus\":{\"lo\":0.0,\"hi\":0.0}}]}"
-  expect "a well-formed PINN certificate was rejected" (pinnCertificateAccepted validPinnCert)
-  let negativeSpacing ← parseJson! <|
-    "{\"pinn\":{\"pde\":\"u\",\"h\":-0.1,\"eps\":0.0,\"points\":[0.0]}," ++
-    "\"residual_bounds\":{\"lo\":[0.0],\"hi\":[0.0]}," ++
-    "\"residual_bounds_deriv\":{\"lo\":[0.0],\"hi\":[0.0]},\"u_bounds\":[]}"
-  expect "a PINN certificate with nonpositive spacing was accepted"
-    (!pinnCertificateAccepted negativeSpacing)
+  let validPinnCert ← parseJson! validPinnSource
+  expect "a well-formed PINN certificate was rejected"
+    (NN.Verification.PINN.parseCertificate validPinnCert).isOk
+  -- Each invalid fixture changes one condition of the accepted certificate.
+  for spacing in ["-0.1", "0.0"] do
+    let invalidSpacing ← parseJson! <|
+      validPinnSource.replace "\"h\":0.1" s!"\"h\":{spacing}"
+    expect s!"a PINN certificate with spacing {spacing} was accepted"
+      (!(NN.Verification.PINN.parseCertificate invalidSpacing).isOk)
   let negativeRadius ← parseJson! <|
-    "{\"pinn\":{\"pde\":\"u\",\"h\":0.1,\"eps\":-0.1,\"points\":[0.0]}," ++
-    "\"residual_bounds\":{\"lo\":[0.0],\"hi\":[0.0]}," ++
-    "\"residual_bounds_deriv\":{\"lo\":[0.0],\"hi\":[0.0]},\"u_bounds\":[]}"
+    validPinnSource.replace "\"eps\":0.0" "\"eps\":-0.1"
   expect "a PINN certificate with a negative perturbation radius was accepted"
-    (!pinnCertificateAccepted negativeRadius)
+    (!(NN.Verification.PINN.parseCertificate negativeRadius).isOk)
   let missingUBounds ← parseJson! <|
     "{\"pinn\":{\"pde\":\"u\",\"h\":0.1,\"eps\":0.0,\"points\":[0.0]}," ++
     "\"residual_bounds\":{\"lo\":[0.0],\"hi\":[0.0]}," ++
     "\"residual_bounds_deriv\":{\"lo\":[0.0],\"hi\":[0.0]},\"u_bounds\":[]}"
   expect "a PINN certificate with incomplete u_bounds was accepted"
-    (!pinnCertificateAccepted missingUBounds)
+    (!(NN.Verification.PINN.parseCertificate missingUBounds).isOk)
   let reversedPinnInterval ← parseJson! <|
-    "{\"pinn\":{\"pde\":\"u\",\"h\":0.1,\"eps\":0.0,\"points\":[0.0]}," ++
-    "\"residual_bounds\":{\"lo\":[1.0],\"hi\":[0.0]}," ++
-    "\"residual_bounds_deriv\":{\"lo\":[0.0],\"hi\":[0.0]},\"u_bounds\":[]}"
+    validPinnSource.replace "\"residual_bounds\":{\"lo\":[0.0],\"hi\":[0.0]}"
+      "\"residual_bounds\":{\"lo\":[1.0],\"hi\":[0.0]}"
   expect "a PINN certificate with a reversed residual interval was accepted"
-    (!pinnCertificateAccepted reversedPinnInterval)
+    (!(NN.Verification.PINN.parseCertificate reversedPinnInterval).isOk)
 
   IO.println "certificate_preconditions: begin"
 
@@ -326,13 +312,14 @@ def run : IO Unit := do
     (!(Binary.isFinite <| NN.Verification.ODE.Ival.max2 (Binary.zero false : Binary 8 23)
       (Binary.infinity false : Binary 8 23)))
 
-  let b2 := flatBox (fun _ => 0.0) (fun _ => 1.0)
-  let mismatchCert : Array (Option (FlatBox (Binary 8 23))) := #[some b2, some flatBox3, some b2]
+  let b2 := flatBox (n := 2) (fun _ => 0.0) (fun _ => 1.0)
+  let b3 := flatBox (n := 3) (fun _ => 0.0) (fun _ => 1.0)
+  let mismatchCert : Array (Option (FlatBox (Binary 8 23))) := #[some b2, some b3, some b2]
   expect "binary elementwise dimension mismatch was accepted"
     (!(ibpNodePreconditionsOk addGraph mismatchCert 2))
 
-  let nonPositive := flatBox (fun _ => 0.0) (fun _ => 1.0)
-  let positive := flatBox (fun _ => 0.1) (fun _ => 2.0)
+  let nonPositive := b2
+  let positive := flatBox (n := 2) (fun _ => 0.1) (fun _ => 2.0)
   expect "non-positive log input was accepted"
     (!(ibpNodePreconditionsOk logGraph #[some nonPositive, some nonPositive] 1))
   expect "positive log input was rejected"
@@ -341,20 +328,29 @@ def run : IO Unit := do
   let emptyStore : ParamStore (Binary 8 23) := {}
   let nonPositiveRun := runIBP logGraph (emptyStore.seedInputBox 0 nonPositive)
   let positiveRun := runIBP logGraph (emptyStore.seedInputBox 0 positive)
-  expect "IBP evaluated raw log across its nonpositive domain boundary"
-    (nonPositiveRun[1]!.isNone)
-  expect "configured binary32 log was accepted without a directed transcendental implementation"
-    (positiveRun[1]!.isNone)
+  Tests.Utils.assertNoBoundAt "IBP raw log across its nonpositive domain boundary"
+    nonPositiveRun 1
+  match positiveRun[1]! with
+  | none =>
+      throw <| IO.userError "IBP rejected certified binary32 log on a positive interval"
+  | some box =>
+      expect "certified log changed the output dimension" (box.dim == 2)
+      for endpoint in box.lo.to (Array (Binary 8 23)) do
+        expect "certified log lower endpoint is not a finite bound near log(0.1)"
+          ((Binary.toRat? endpoint).any fun q => decide (-3 < q ∧ q < -2))
+      for endpoint in box.hi.to (Array (Binary 8 23)) do
+        expect "certified log upper endpoint is not a finite bound near log(2)"
+          ((Binary.toRat? endpoint).any fun q => decide (1 / 2 < q ∧ q < 1))
 
   let inputGraph : NN.IR.Graph := { nodes := #[inputNode 0 2] }
-  let authoritative := flatBox (fun _ => 0.0) (fun _ => 1.0)
-  let inward := flatBox (fun _ => 0.0) (fun _ => 0.999999)
-  let outward := flatBox (fun _ => -0.000001) (fun _ => 1.000001)
+  let authoritative := b2
+  let inward := flatBox (n := 2) (fun _ => 0.0) (fun _ => 0.999999)
+  let outward := flatBox (n := 2) (fun _ => -0.000001) (fun _ => 1.000001)
   let inwardAccepted ←
-    NN.Verification.IBPNodeCert.checkIBPNode inputGraph #[some authoritative] #[some inward] 0
+    NN.Verification.Cert.IBPNodeCert.checkIBPNode inputGraph #[some authoritative] #[some inward] 0
   expect "an inward-shrunk certificate interval was accepted" (!inwardAccepted)
   let outwardAccepted ←
-    NN.Verification.IBPNodeCert.checkIBPNode inputGraph #[some authoritative] #[some outward] 0
+    NN.Verification.Cert.IBPNodeCert.checkIBPNode inputGraph #[some authoritative] #[some outward] 0
   expect "an outward-widened certificate interval was rejected" outwardAccepted
 
   let ctx : AffineCtx := { inputId := 0, inputDim := 2 }
@@ -364,11 +360,11 @@ def run : IO Unit := do
       crown := #[some (boundsIdentity (α := (Binary 8 23)) 2)]
       alpha := #[none] }
   expect "a complete exact alpha-CROWN replay was rejected"
-    (NN.Verification.CROWNNodeCert.certificateAccepts crownCert inputGraph emptyStore
+    (NN.Verification.Cert.CROWNNodeCert.certificateAccepts crownCert inputGraph emptyStore
       #[some authoritative] true)
   let missingCrown := { crownCert with crown := #[none] }
   expect "an alpha-CROWN certificate with a missing affine entry was accepted"
-    (!(NN.Verification.CROWNNodeCert.certificateAccepts missingCrown inputGraph emptyStore
+    (!(NN.Verification.Cert.CROWNNodeCert.certificateAccepts missingCrown inputGraph emptyStore
       #[some authoritative] true))
 
   IO.println "certificate_preconditions: ok"

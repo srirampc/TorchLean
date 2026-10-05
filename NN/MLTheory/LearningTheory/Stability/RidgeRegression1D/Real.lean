@@ -97,6 +97,8 @@ variable {n : Nat}
 An example $(x,y)$ together with bounds $|x|\le X$ and $|y|\le Y$.
 
 This lets us state stability bounds as theorems with explicit constants in terms of `X` and `Y`.
+The bounds are carried in the subtype, so every lemma below can use them without repeating
+hypotheses.
 -/
 def BoundedExample (X Y : ℝ) : Type :=
   {p : ℝ × ℝ // |p.1| ≤ X ∧ |p.2| ≤ Y}
@@ -104,11 +106,6 @@ def BoundedExample (X Y : ℝ) : Type :=
 namespace BoundedExample
 
 variable {X Y : ℝ}
-
-/-!
-We keep `BoundedExample` as a subtype so bounds are carried as hypotheses in the type and can be
-reused uniformly throughout the proof (instead of repeating assumptions).
--/
 
 /-- The `x` coordinate of a bounded example. -/
 @[simp] def x (z : BoundedExample X Y) : ℝ := z.1.1
@@ -127,6 +124,16 @@ theorem X_nonneg (z : BoundedExample X Y) : 0 ≤ X :=
 /-- The declared bound `Y` is nonnegative because $|y|\le Y$. -/
 theorem Y_nonneg (z : BoundedExample X Y) : 0 ≤ Y :=
   le_trans (abs_nonneg z.y) z.abs_y_le
+
+/-- The cross term of a bounded example satisfies $|xy|\le XY$. -/
+theorem abs_x_mul_y_le (z : BoundedExample X Y) : |z.x * z.y| ≤ X * Y := by
+  rw [abs_mul]
+  exact mul_le_mul z.abs_x_le z.abs_y_le (abs_nonneg _) z.X_nonneg
+
+/-- The squared input of a bounded example satisfies $x^2\le X^2$. -/
+theorem sq_x_le (z : BoundedExample X Y) : z.x ^ 2 ≤ X ^ 2 := by
+  rw [← sq_abs z.x]
+  exact pow_le_pow_left₀ (abs_nonneg _) z.abs_x_le 2
 
 end BoundedExample
 
@@ -164,57 +171,23 @@ end
 
 section
 
-variable {X Y : ℝ}
-
 /--
-If you replace a single element of a dataset, then the change in a sum over the dataset can be
-written as a single-term difference.
+Replacing a single element of a dataset changes a sum over the dataset by a single-term
+difference.
 
-This is a standard “finite sum perturbation” identity and is the main combinatorial input needed
-to control `sumXX` and `sumXY` under replace-one.
+This finite-sum perturbation identity is the combinatorial input needed to control `sumXX` and
+`sumXY` under replace-one.
 -/
 private theorem sum_replaceAt_sub {Z : Type} (φ : Z → ℝ)
     (S : Dataset (n + 1) Z) (i : Fin (n + 1)) (z' : Z) :
     (∑ j ∈ (Finset.univ : Finset (Fin (n + 1))), φ (Dataset.get S j)) -
         (∑ j ∈ (Finset.univ : Finset (Fin (n + 1))), φ (Dataset.get (replaceAt S i z') j)) =
       φ (Dataset.get S i) - φ z' := by
-  classical
-  set s : Finset (Fin (n + 1)) := (Finset.univ : Finset (Fin (n + 1)))
-  have hi : i ∈ s := by simp [s]
-  let f : Fin (n + 1) → ℝ := fun j => φ (Dataset.get S j)
-  have hS' : (fun j => φ (Dataset.get (replaceAt S i z') j)) = Function.update f i (φ z') := by
-    funext j
-    by_cases h : j = i
-    · subst h
-      simp
-    · simp [f, h]
-  have hS : (fun j => φ (Dataset.get S j)) = Function.update f i (f i) := by
-    funext j
-    by_cases h : j = i
-    · subst h; simp [f, Function.update]
-    · simp [f, Function.update, h]
-  have hsumS :
-      (∑ j ∈ s, φ (Dataset.get S j)) = (∑ j ∈ s, Function.update f i (f i) j) := by
-    simp [hS]
-  have hsumS' :
-      (∑ j ∈ s, φ (Dataset.get (replaceAt S i z') j)) = (∑ j ∈ s, Function.update f i (φ z') j) :=
-        by
-    rw [hS']
-  -- Now apply `Finset.sum_update_of_mem` to both sums and cancel the common remainder.
-  have hUpd1 : (∑ j ∈ s, Function.update f i (f i) j) = f i + ∑ j ∈ s \ {i}, f j := by
-    simpa using (Finset.sum_update_of_mem (s := s) (i := i) hi f (f i))
-  have hUpd2 : (∑ j ∈ s, Function.update f i (φ z') j) = φ z' + ∑ j ∈ s \ {i}, f j := by
-    simpa using (Finset.sum_update_of_mem (s := s) (i := i) hi f (φ z'))
-  have hsub :
-      (∑ j ∈ s, φ (Dataset.get S j)) - (∑ j ∈ s, φ (Dataset.get (replaceAt S i z') j)) =
-        (f i + ∑ j ∈ s \ {i}, f j) - (φ z' + ∑ j ∈ s \ {i}, f j) := by
-    -- rewrite both sums via the update lemmas
-    rw [hsumS, hsumS', hUpd1, hUpd2]
-  calc
-    (∑ j ∈ s, φ (Dataset.get S j)) - (∑ j ∈ s, φ (Dataset.get (replaceAt S i z') j))
-        = (f i + ∑ j ∈ s \ {i}, f j) - (φ z' + ∑ j ∈ s \ {i}, f j) := hsub
-    _ = f i - φ z' := by ring
-    _ = φ (Dataset.get S i) - φ z' := by rfl
+  -- Only the summand at `i` survives the difference, since `get_replaceAt` is the identity
+  -- elsewhere.
+  rw [← Finset.sum_sub_distrib, Finset.sum_eq_single i
+    (fun j _ hj => by rw [get_replaceAt, ite_eq_right hj, sub_self]) (by simp)]
+  rw [get_replaceAt, ite_eq_left rfl]
 
 end
 
@@ -233,20 +206,17 @@ local to the proof.
 /-- The sample size `n + 1` as a real number, so the averaging denominators stay readable. -/
 def N : ℝ := ((n + 1 : Nat) : ℝ)
 
-/-! $N=n+1$ is positive as a real number. -/
+/-- $N=n+1$ is positive as a real number. -/
 theorem N_pos : 0 < N (n := n) := by
   simpa [N] using (Nat.cast_pos.mpr (Nat.succ_pos n))
 
-/-! `sumXX` is nonnegative (it is a sum of squares). -/
+/-- `sumXX` is nonnegative (it is a sum of squares). -/
 private theorem sumXX_nonneg (S : Dataset (n + 1) (BoundedExample X Y)) :
     0 ≤ sumXX (n := n) S := by
-  classical
-  refine Finset.sum_nonneg ?_
-  intro i hi
-  have : 0 ≤ (Dataset.get S i).x ^ 2 := by nlinarith
-  simpa using this
+  unfold sumXX
+  exact Finset.sum_nonneg fun _ _ => sq_nonneg _
 
-/-!
+/--
 The ridge denominator $\operatorname{sumXX}(S)+\lambda N$ is positive when $\lambda>0$.
 
 This ensures the closed-form ratio is well-defined and lets us use order properties of division.
@@ -257,9 +227,8 @@ private theorem denom_pos (hlam : 0 < lam) (S : Dataset (n + 1) (BoundedExample 
   have h2 : 0 < lam * N (n := n) := mul_pos hlam (N_pos (n := n))
   linarith
 
-/-!
-Lower bound on the ridge denominator:
-$\lambda N\le\operatorname{sumXX}(S)+\lambda N$.
+/--
+Lower bound on the ridge denominator: $\lambda N\le\operatorname{sumXX}(S)+\lambda N$.
 
 We use this to replace the (dataset-dependent) denominator with a uniform lower bound.
 -/
@@ -268,26 +237,10 @@ private theorem denom_lower (S : Dataset (n + 1) (BoundedExample X Y)) :
   have h1 : 0 ≤ sumXX (n := n) S := sumXX_nonneg (n := n) (X := X) (Y := Y) S
   linarith
 
-/-!
-Absolute bound on the cross-term sum `sumXY`.
-
-This is a simple consequence of the bounds $|x|\le X$ and $|y|\le Y$.
--/
+/-- Absolute bound on the cross-term sum `sumXY`, from the bounds $|x|\le X$ and $|y|\le Y$. -/
 private theorem abs_sumXY_le (S : Dataset (n + 1) (BoundedExample X Y)) :
     |sumXY (n := n) S| ≤ N (n := n) * X * Y := by
   classical
-  have hterm :
-      ∀ i : Fin (n + 1), |(Dataset.get S i).x * (Dataset.get S i).y| ≤ X * Y := by
-    intro i
-    have hx : |(Dataset.get S i).x| ≤ X := (Dataset.get S i).abs_x_le
-    have hy : |(Dataset.get S i).y| ≤ Y := (Dataset.get S i).abs_y_le
-    have hX0 : 0 ≤ X := (Dataset.get S i).X_nonneg
-    have hY0 : 0 ≤ Y := (Dataset.get S i).Y_nonneg
-    calc
-      |(Dataset.get S i).x * (Dataset.get S i).y| =
-          |(Dataset.get S i).x| * |(Dataset.get S i).y| := by simp [abs_mul]
-      _ ≤ X * Y := by
-            exact mul_le_mul hx hy (abs_nonneg _) hX0
   calc
     |sumXY (n := n) S|
         ≤ ∑ i ∈ (Finset.univ : Finset (Fin (n + 1))), |(Dataset.get S i).x * (Dataset.get S i).y| :=
@@ -295,101 +248,56 @@ private theorem abs_sumXY_le (S : Dataset (n + 1) (BoundedExample X Y)) :
             simpa [sumXY] using
               (Finset.abs_sum_le_sum_abs (s := (Finset.univ : Finset (Fin (n + 1))))
                 (f := fun i => (Dataset.get S i).x * (Dataset.get S i).y))
-    _ ≤ ∑ _i ∈ (Finset.univ : Finset (Fin (n + 1))), (X * Y) := by
-          refine Finset.sum_le_sum ?_
-          intro i hi
-          simpa using hterm i
+    _ ≤ ∑ _i ∈ (Finset.univ : Finset (Fin (n + 1))), (X * Y) :=
+          Finset.sum_le_sum fun i _ => (Dataset.get S i).abs_x_mul_y_le
     _ = ((n + 1 : Nat) : ℝ) * (X * Y) := by
           simp [Finset.sum_const, Finset.card_univ, nsmul_eq_mul]
     _ = N (n := n) * X * Y := by
           simp [N]
           ring_nf
 
-/-!
-Replacing one example changes `sumXY` by at most $2XY$.
-
-This is the “numerator perturbation” bound for the ridge closed form.
+/--
+Replacing one example changes `sumXY` by at most $2XY$: the numerator perturbation bound for the
+ridge closed form.
 -/
-private theorem abs_sumXY_sub_replaceAt_le (S : Dataset (n + 1) (BoundedExample X Y)) (i : Fin (n +
-  1))
-    (z' : BoundedExample X Y) :
+private theorem abs_sumXY_sub_replaceAt_le (S : Dataset (n + 1) (BoundedExample X Y))
+    (i : Fin (n + 1)) (z' : BoundedExample X Y) :
     |sumXY (n := n) S - sumXY (n := n) (replaceAt S i z')| ≤ 2 * X * Y := by
   classical
   have hdiff :
       sumXY (n := n) S - sumXY (n := n) (replaceAt S i z') =
         (Dataset.get S i).x * (Dataset.get S i).y - z'.x * z'.y := by
-    -- Use the generic sum-change lemma with `φ(z) = x*z`.
-    have := (sum_replaceAt_sub (φ := fun z : BoundedExample X Y => z.x * z.y) S i z')
+    have := sum_replaceAt_sub (φ := fun z : BoundedExample X Y => z.x * z.y) S i z'
     simpa [sumXY] using this
-  have hAi : |(Dataset.get S i).x * (Dataset.get S i).y| ≤ X * Y := by
-    have hx : |(Dataset.get S i).x| ≤ X := (Dataset.get S i).abs_x_le
-    have hy : |(Dataset.get S i).y| ≤ Y := (Dataset.get S i).abs_y_le
-    have hX0 : 0 ≤ X := (Dataset.get S i).X_nonneg
-    calc
-      |(Dataset.get S i).x * (Dataset.get S i).y| =
-          |(Dataset.get S i).x| * |(Dataset.get S i).y| := by simp [abs_mul]
-      _ ≤ X * Y := by exact mul_le_mul hx hy (abs_nonneg _) hX0
-  have hA' : |z'.x * z'.y| ≤ X * Y := by
-    have hx : |z'.x| ≤ X := z'.abs_x_le
-    have hy : |z'.y| ≤ Y := z'.abs_y_le
-    have hX0 : 0 ≤ X := z'.X_nonneg
-    calc
-      |z'.x * z'.y| = |z'.x| * |z'.y| := by simp [abs_mul]
-      _ ≤ X * Y := by exact mul_le_mul hx hy (abs_nonneg _) hX0
   calc
     |sumXY (n := n) S - sumXY (n := n) (replaceAt S i z')|
-        = |(Dataset.get S i).x * (Dataset.get S i).y - z'.x * z'.y| := by simp [hdiff]
-    _ ≤ |(Dataset.get S i).x * (Dataset.get S i).y| + |z'.x * z'.y| := by
-          simpa [sub_eq_add_neg] using abs_add_le ((Dataset.get S i).x * (Dataset.get S i).y)
-            (-(z'.x * z'.y))
-    _ ≤ X * Y + X * Y := by nlinarith [hAi, hA']
+        = |(Dataset.get S i).x * (Dataset.get S i).y - z'.x * z'.y| := by rw [hdiff]
+    _ ≤ |(Dataset.get S i).x * (Dataset.get S i).y| + |z'.x * z'.y| := abs_sub _ _
+    _ ≤ X * Y + X * Y := add_le_add (Dataset.get S i).abs_x_mul_y_le z'.abs_x_mul_y_le
     _ = 2 * X * Y := by ring
 
-/-!
-Replacing one example changes `sumXX` by at most $2X^2$.
-
-This is the “denominator perturbation” bound for the ridge closed form.
+/--
+Replacing one example changes `sumXX` by at most $2X^2$: the denominator perturbation bound for
+the ridge closed form.
 -/
-private theorem abs_sumXX_sub_replaceAt_le (S : Dataset (n + 1) (BoundedExample X Y)) (i : Fin (n +
-  1))
-    (z' : BoundedExample X Y) :
+private theorem abs_sumXX_sub_replaceAt_le (S : Dataset (n + 1) (BoundedExample X Y))
+    (i : Fin (n + 1)) (z' : BoundedExample X Y) :
     |sumXX (n := n) S - sumXX (n := n) (replaceAt S i z')| ≤ 2 * X ^ 2 := by
   classical
   have hdiff :
       sumXX (n := n) S - sumXX (n := n) (replaceAt S i z') =
         (Dataset.get S i).x ^ 2 - z'.x ^ 2 := by
-    have := (sum_replaceAt_sub (φ := fun z : BoundedExample X Y => z.x ^ 2) S i z')
+    have := sum_replaceAt_sub (φ := fun z : BoundedExample X Y => z.x ^ 2) S i z'
     simpa [sumXX] using this
-  have hsq_i : (Dataset.get S i).x ^ 2 ≤ X ^ 2 := by
-    have hx : |(Dataset.get S i).x| ≤ X := (Dataset.get S i).abs_x_le
-    have hX0 : 0 ≤ X := (Dataset.get S i).X_nonneg
-    have habs_sq : |(Dataset.get S i).x| ^ 2 ≤ X ^ 2 := by
-      have : |(Dataset.get S i).x| * |(Dataset.get S i).x| ≤ X * X :=
-        mul_le_mul hx hx (abs_nonneg _) hX0
-      simpa [pow_two] using this
-    -- convert `|x|^2` to `x^2`
-    simpa [sq_abs] using habs_sq
-  have hsq' : z'.x ^ 2 ≤ X ^ 2 := by
-    have hx : |z'.x| ≤ X := z'.abs_x_le
-    have hX0 : 0 ≤ X := z'.X_nonneg
-    have habs_sq : |z'.x| ^ 2 ≤ X ^ 2 := by
-      have : |z'.x| * |z'.x| ≤ X * X :=
-        mul_le_mul hx hx (abs_nonneg _) hX0
-      simpa [pow_two] using this
-    simpa [sq_abs] using habs_sq
   calc
     |sumXX (n := n) S - sumXX (n := n) (replaceAt S i z')|
-        = |(Dataset.get S i).x ^ 2 - z'.x ^ 2| := by simp [hdiff]
-    _ ≤ (Dataset.get S i).x ^ 2 + z'.x ^ 2 := by
-          have h := abs_add_le ((Dataset.get S i).x ^ 2) (-(z'.x ^ 2))
-          calc
-            |(Dataset.get S i).x ^ 2 - z'.x ^ 2|
-                = |(Dataset.get S i).x ^ 2 + -(z'.x ^ 2)| := by simp [sub_eq_add_neg]
-            _ ≤ |(Dataset.get S i).x ^ 2| + |-(z'.x ^ 2)| := h
-            _ = (Dataset.get S i).x ^ 2 + z'.x ^ 2 := by simp
-    _ ≤ 2 * X ^ 2 := by nlinarith [hsq_i, hsq']
+        = |(Dataset.get S i).x ^ 2 - z'.x ^ 2| := by rw [hdiff]
+    _ ≤ |(Dataset.get S i).x ^ 2| + |z'.x ^ 2| := abs_sub _ _
+    _ = (Dataset.get S i).x ^ 2 + z'.x ^ 2 := by simp
+    _ ≤ X ^ 2 + X ^ 2 := add_le_add (Dataset.get S i).sq_x_le z'.sq_x_le
+    _ = 2 * X ^ 2 := by ring
 
-/-!
+/--
 Bound the magnitude of the fitted ridge weight.
 
 This is a coarse bound of the form $|\widehat w(S)|\le XY/\lambda$.
@@ -406,14 +314,14 @@ private theorem abs_w_le (hlam : 0 < lam) (S : Dataset (n + 1) (BoundedExample X
   have hB : |sumXY (n := n) (X := X) (Y := Y) S| ≤ N (n := n) * X * Y :=
     abs_sumXY_le (n := n) (X := X) (Y := Y) S
   have habsD : |D| = D := abs_of_pos hDpos
-  have hfit : ridgeFit1D (n := n) (X := X) (Y := Y) lam S = (sumXY (n := n) (X := X) (Y := Y) S) / D
-    := by
+  have hfit :
+      ridgeFit1D (n := n) (X := X) (Y := Y) lam S = sumXY (n := n) (X := X) (Y := Y) S / D := by
     simp [ridgeFit1D, D, N]
   have hpos_num : 0 ≤ |sumXY (n := n) (X := X) (Y := Y) S| := abs_nonneg _
   calc
       |ridgeFit1D (n := n) (X := X) (Y := Y) lam S|
           = |sumXY (n := n) (X := X) (Y := Y) S| / D := by
-              -- use `D>0` to remove `|D|` in `abs_div`
+              -- `D > 0` removes `|D|` after `abs_div`.
               simp [hfit, abs_div, habsD]
     _ ≤ |sumXY (n := n) (X := X) (Y := Y) S| / (lam * N (n := n)) := by
           exact div_le_div_of_nonneg_left hpos_num hlamNpos hDge
@@ -423,36 +331,26 @@ private theorem abs_w_le (hlam : 0 < lam) (S : Dataset (n + 1) (BoundedExample X
           have hNne : (N (n := n)) ≠ 0 := ne_of_gt (N_pos (n := n))
           field_simp [N, hNne, (ne_of_gt hlam)]
 
-/-!
+/--
 Bound the residual $|\widehat w(S)x-y|$ at a test point.
 
 This is another coarse bound used at the very end when bounding the loss change via
 $(e-e')(e+e')$ for $e=wx-y$.
 -/
-private theorem abs_residual_le (hlam : 0 < lam) (S : Dataset (n + 1) (BoundedExample X Y)) (z :
-  BoundedExample X Y) :
-    |ridgeFit1D (n := n) (X := X) (Y := Y) lam S * z.x - z.y| ≤
-      Y * (lam + X ^ 2) / lam := by
+private theorem abs_residual_le (hlam : 0 < lam) (S : Dataset (n + 1) (BoundedExample X Y))
+    (z : BoundedExample X Y) :
+    |ridgeFit1D (n := n) (X := X) (Y := Y) lam S * z.x - z.y| ≤ Y * (lam + X ^ 2) / lam := by
   have hw : |ridgeFit1D (n := n) (X := X) (Y := Y) lam S| ≤ (X * Y) / lam :=
     abs_w_le (n := n) (X := X) (Y := Y) (lam := lam) hlam S
-  have hx : |z.x| ≤ X := z.abs_x_le
-  have hy : |z.y| ≤ Y := z.abs_y_le
+  have hXYlam_nonneg : 0 ≤ (X * Y) / lam :=
+    div_nonneg (mul_nonneg z.X_nonneg z.Y_nonneg) (le_of_lt hlam)
   calc
     |ridgeFit1D (n := n) (X := X) (Y := Y) lam S * z.x - z.y|
-        ≤ |ridgeFit1D (n := n) (X := X) (Y := Y) lam S * z.x| + |z.y| := by
-            simpa [sub_eq_add_neg] using abs_add_le (ridgeFit1D (n := n) (X := X) (Y := Y) lam S *
-              z.x) (-z.y)
+        ≤ |ridgeFit1D (n := n) (X := X) (Y := Y) lam S * z.x| + |z.y| := abs_sub _ _
     _ = |ridgeFit1D (n := n) (X := X) (Y := Y) lam S| * |z.x| + |z.y| := by
-          simp [abs_mul]
-    _ ≤ ((X * Y) / lam) * X + Y := by
-          have hXYlam_nonneg : 0 ≤ (X * Y) / lam := by
-            have hX0 : 0 ≤ X := z.X_nonneg
-            have hY0 : 0 ≤ Y := z.Y_nonneg
-            exact div_nonneg (mul_nonneg hX0 hY0) (le_of_lt hlam)
-          have hmul : |ridgeFit1D (n := n) (X := X) (Y := Y) lam S| * |z.x| ≤ ((X * Y) / lam) * X :=
-            by
-            exact mul_le_mul hw hx (abs_nonneg _) hXYlam_nonneg
-          exact add_le_add hmul hy
+          rw [abs_mul]
+    _ ≤ ((X * Y) / lam) * X + Y :=
+          add_le_add (mul_le_mul hw z.abs_x_le (abs_nonneg _) hXYlam_nonneg) z.abs_y_le
     _ = Y * (lam + X ^ 2) / lam := by
           field_simp [(ne_of_gt hlam)]
           ring
@@ -495,8 +393,8 @@ theorem ridgeFit1D_sqLoss_uniformStableReplace (hlam : 0 < lam) :
   have hD'ge : lam * N (n := n) ≤ D' := by
     simpa [D'] using (denom_lower (n := n) (X := X) (Y := Y) (lam := lam) S')
   have hlamNpos : 0 < lam * N (n := n) := mul_pos hlam (N_pos (n := n))
-  have hBdiff : |sumXY (n := n) (X := X) (Y := Y) S - sumXY (n := n) (X := X) (Y := Y) S'| ≤ 2 * X *
-    Y := by
+  have hBdiff :
+      |sumXY (n := n) (X := X) (Y := Y) S - sumXY (n := n) (X := X) (Y := Y) S'| ≤ 2 * X * Y := by
     simpa [S'] using abs_sumXY_sub_replaceAt_le (n := n) (X := X) (Y := Y) S i z'
   have hB' : |sumXY (n := n) (X := X) (Y := Y) S'| ≤ N (n := n) * X * Y :=
     abs_sumXY_le (n := n) (X := X) (Y := Y) S'
@@ -507,8 +405,8 @@ theorem ridgeFit1D_sqLoss_uniformStableReplace (hlam : 0 < lam) :
     simp [w', ridgeFit1D, D', N, S']
 
   -- Bound |1/D - 1/D'|
-  have hA_diff : |sumXX (n := n) (X := X) (Y := Y) S - sumXX (n := n) (X := X) (Y := Y) S'| ≤ 2 * X
-    ^ 2 := by
+  have hA_diff :
+      |sumXX (n := n) (X := X) (Y := Y) S - sumXX (n := n) (X := X) (Y := Y) S'| ≤ 2 * X ^ 2 := by
     simpa [S'] using abs_sumXX_sub_replaceAt_le (n := n) (X := X) (Y := Y) S i z'
   have hInv :
       |(1 / D) - (1 / D')| ≤ (2 * X ^ 2) / (lam ^ 2 * (N (n := n)) ^ 2) := by
@@ -520,13 +418,12 @@ theorem ridgeFit1D_sqLoss_uniformStableReplace (hlam : 0 < lam) :
     have hDD'ge : (lam * N (n := n)) ^ 2 ≤ D * D' := by
       nlinarith [hDge, hD'ge, le_of_lt hDpos, le_of_lt hD'pos]
     have hDdiff : |D' - D| ≤ 2 * X ^ 2 := by
-      have : D' - D = sumXX (n := n) (X := X) (Y := Y) S' - sumXX (n := n) (X := X) (Y := Y) S := by
+      have hsub :
+          D' - D = sumXX (n := n) (X := X) (Y := Y) S' - sumXX (n := n) (X := X) (Y := Y) S := by
         simp [D, D']
-      have : |D' - D| = |sumXX (n := n) (X := X) (Y := Y) S - sumXX (n := n) (X := X) (Y := Y) S'|
-        := by
-        simp [this, abs_sub_comm]
-      simpa [this] using hA_diff
-    have hn : 0 ≤ 2 * X ^ 2 := by nlinarith
+      rw [hsub, abs_sub_comm]
+      exact hA_diff
+    have hn : 0 ≤ 2 * X ^ 2 := by positivity
     calc
       |(1 / D) - (1 / D')|
           = |(D' - D) / (D * D')| := by
@@ -561,19 +458,13 @@ theorem ridgeFit1D_sqLoss_uniformStableReplace (hlam : 0 < lam) :
     have hterm2 :
         |sumXY (n := n) (X := X) (Y := Y) S'| * |(1 / D) - (1 / D')|
           ≤ (2 * X ^ 3 * Y) / (lam ^ 2 * N (n := n)) := by
-      have hX0 : 0 ≤ X := (Dataset.get S' 0).X_nonneg
-      have hY0 : 0 ≤ Y := (Dataset.get S' 0).Y_nonneg
       have hN0 : 0 ≤ N (n := n) := le_of_lt (N_pos (n := n))
-      have hB'' : |sumXY (n := n) (X := X) (Y := Y) S'| ≤ (N (n := n) * X * Y) := hB'
-      have hB0 : 0 ≤ N (n := n) * X * Y := by
-        have : 0 ≤ N (n := n) * X := mul_nonneg hN0 hX0
-        simpa [mul_assoc] using (mul_nonneg this hY0)
+      have hB0 : 0 ≤ N (n := n) * X * Y := mul_nonneg (mul_nonneg hN0 z.X_nonneg) z.Y_nonneg
       have hMul :
           |sumXY (n := n) (X := X) (Y := Y) S'| * |(1 / D) - (1 / D')|
             ≤ (N (n := n) * X * Y) * ((2 * X ^ 2) / (lam ^ 2 * (N (n := n)) ^ 2)) := by
-        exact mul_le_mul hB'' hInv (abs_nonneg _) hB0
+        exact mul_le_mul hB' hInv (abs_nonneg _) hB0
       have hNne : (N (n := n)) ≠ 0 := ne_of_gt (N_pos (n := n))
-      -- simplify the right-hand side
       have hSimp :
           (N (n := n) * X * Y) * ((2 * X ^ 2) / (lam ^ 2 * (N (n := n)) ^ 2))
             = (2 * X ^ 3 * Y) / (lam ^ 2 * N (n := n)) := by
@@ -610,8 +501,9 @@ theorem ridgeFit1D_sqLoss_uniformStableReplace (hlam : 0 < lam) :
               simpa [h1, h2] using htri
       nlinarith [htri', hterm1, hterm2]
     have hw_eq :
-        |w - w'| = |(sumXY (n := n) (X := X) (Y := Y) S) / D - (sumXY (n := n) (X := X) (Y := Y) S')
-          / D'| := by
+        |w - w'| =
+          |(sumXY (n := n) (X := X) (Y := Y) S) / D -
+            (sumXY (n := n) (X := X) (Y := Y) S') / D'| := by
       simp [w, w', hw_def, hw'_def]
     have hsimp :
         (2 * X * Y) / (lam * N (n := n)) + (2 * X ^ 3 * Y) / (lam ^ 2 * N (n := n))
@@ -661,22 +553,16 @@ theorem ridgeFit1D_sqLoss_uniformStableReplace (hlam : 0 < lam) :
     |sqLoss (X := X) (Y := Y) w z - sqLoss (X := X) (Y := Y) w' z|
         = |e - e'| * |e + e'| := hloss
     _ ≤ (X * |w - w'|) * (2 * (Y * (lam + X ^ 2) / lam)) := by
-          have hX0 : 0 ≤ X := z.X_nonneg
-          have hBw0 : 0 ≤ X * |w - w'| := mul_nonneg hX0 (abs_nonneg _)
-          have hProd :
-              |e - e'| * |e + e'| ≤ (X * |w - w'|) * (2 * (Y * (lam + X ^ 2) / lam)) := by
-            exact mul_le_mul he_diff he_sum (abs_nonneg _) hBw0
-          exact hProd
+          have hBw0 : 0 ≤ X * |w - w'| := mul_nonneg z.X_nonneg (abs_nonneg _)
+          exact mul_le_mul he_diff he_sum (abs_nonneg _) hBw0
     _ ≤ (X * ((2 * X * Y * (lam + X ^ 2)) / (lam ^ 2 * N (n := n))))
           * (2 * (Y * (lam + X ^ 2) / lam)) := by
-            have hX0 : 0 ≤ X := z.X_nonneg
             have hC0 : 0 ≤ 2 * (Y * (lam + X ^ 2) / lam) := by
-              have : 0 ≤ Y * (lam + X ^ 2) / lam := by
-                have hY0 : 0 ≤ Y := z.Y_nonneg
-                have : 0 ≤ lam + X ^ 2 := by nlinarith
-                exact div_nonneg (mul_nonneg hY0 this) (le_of_lt hlam)
+              have : 0 ≤ Y * (lam + X ^ 2) / lam :=
+                div_nonneg (mul_nonneg z.Y_nonneg (add_nonneg hlam.le (sq_nonneg X)))
+                  (le_of_lt hlam)
               nlinarith
-            exact mul_le_mul_of_nonneg_right (mul_le_mul_of_nonneg_left hw_diff hX0) hC0
+            exact mul_le_mul_of_nonneg_right (mul_le_mul_of_nonneg_left hw_diff z.X_nonneg) hC0
     _ = 4 * X ^ 2 * Y ^ 2 * (lam + X ^ 2) ^ 2 / (lam ^ 3 * N (n := n)) := by
           have hNne : (N (n := n)) ≠ 0 := ne_of_gt (N_pos (n := n))
           field_simp [hNne, (ne_of_gt hlam)]

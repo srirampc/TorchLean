@@ -97,11 +97,9 @@ theorem exactCertifiedStep_of_buffer {m n : Nat}
     (parameters gradients : MatrixTensor α m n)
     (horth : ExactOrthogonalizesBuffer state.orthogonalizer
       (update state parameters gradients).optimizerState.momentumBuffer) :
-    ∃ direction : MatrixTensor α m n, ExactCertifiedStep state parameters gradients direction := by
-  let direction :=
-    state.orthogonalizer.apply (update state parameters gradients).optimizerState.momentumBuffer
-  refine ⟨direction, ⟨⟨rfl, horth⟩, rfl, ?_⟩⟩
-  rfl
+    ∃ direction : MatrixTensor α m n, ExactCertifiedStep state parameters gradients direction :=
+  ⟨state.orthogonalizer.apply (update state parameters gradients).optimizerState.momentumBuffer,
+    ⟨rfl, horth⟩, rfl, rfl⟩
 
 /-- A local residual bound for the fresh buffer produces a certified Muon step. -/
 theorem approxCertifiedStep_of_buffer {m n : Nat} {eps : α}
@@ -111,11 +109,9 @@ theorem approxCertifiedStep_of_buffer {m n : Nat} {eps : α}
       ApproxOrthogonalizesBuffer eps state.orthogonalizer
         (update state parameters gradients).optimizerState.momentumBuffer) :
     ∃ direction : MatrixTensor α m n,
-      ApproxCertifiedStep eps state parameters gradients direction := by
-  let direction :=
-    state.orthogonalizer.apply (update state parameters gradients).optimizerState.momentumBuffer
-  refine ⟨direction, ⟨⟨rfl, horth⟩, rfl, ?_⟩⟩
-  rfl
+      ApproxCertifiedStep eps state parameters gradients direction :=
+  ⟨state.orthogonalizer.apply (update state parameters gradients).optimizerState.momentumBuffer,
+    ⟨rfl, horth⟩, rfl, rfl⟩
 
 /--
 A checked exact backend certifies the concrete direction and equations of one Muon update whenever
@@ -186,8 +182,8 @@ theorem checkedBackend_updateDirection_hasExactColumnGram {m n : Nat}
           ({ learningRate := learningRate, momentum := momentum, momentumBuffer := momentumBuffer,
              orthogonalizer := backend.orthogonalizer } :
             State α (.dim m (.dim n .scalar)))
-          parameters gradients).optimizerState.momentumBuffer) := by
-  exact backend.certified _ hsuccess
+          parameters gradients).optimizerState.momentumBuffer) :=
+  backend.certified _ hsuccess
 
 /-- A checked approximate backend gives its residual bound for the direction used by an update. -/
 theorem checkedBackend_updateDirection_hasApproxColumnGram {m n : Nat} {eps : α}
@@ -206,8 +202,8 @@ theorem checkedBackend_updateDirection_hasApproxColumnGram {m n : Nat} {eps : α
           ({ learningRate := learningRate, momentum := momentum, momentumBuffer := momentumBuffer,
              orthogonalizer := backend.orthogonalizer } :
             State α (.dim m (.dim n .scalar)))
-          parameters gradients).optimizerState.momentumBuffer) := by
-  exact backend.certified _ hsuccess
+          parameters gradients).optimizerState.momentumBuffer) :=
+  backend.certified _ hsuccess
 
 /-- Extract exact column orthogonality from a certified step. -/
 theorem ExactCertifiedStep.hasExactColumnGram {m n : Nat}

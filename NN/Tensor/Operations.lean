@@ -106,16 +106,14 @@ def clamp {α : Type} [TorchLean.Storage α] [Context α]
     (minimum maximum : α) : Tensor α shape :=
   TorchLean.Tensor.clampSpec tensor minimum maximum
 
-/-- Square every tensor entry.
-
-This is `squareSpec` under the weaker `[Mul α]` requirement; see `square_eq_squareSpec`. -/
+/-- Square every tensor entry. Public spelling of `squareSpec`. -/
 def square {α : Type} [TorchLean.Storage α] [Mul α]
     {shape : Spec.Shape} (tensor : Tensor α shape) :
     Tensor α shape :=
-  tensor.map (fun value => value * value)
+  TorchLean.Tensor.squareSpec tensor
 
-/-- Under a full scalar `Context`, the public square is the specification square. -/
-theorem square_eq_squareSpec {α : Type} [TorchLean.Storage α] [Context α]
+/-- The public square is the specification square under the same scalar assumptions. -/
+theorem square_eq_squareSpec {α : Type} [TorchLean.Storage α] [Mul α]
     {shape : Spec.Shape} (tensor : Tensor α shape) :
     square tensor = TorchLean.Tensor.squareSpec tensor :=
   rfl
@@ -494,7 +492,7 @@ def vectors (images : Tensor Float [8, 3, 4, 4]) : Tensor Float [8, 48] :=
   Tensor.flattenAfter [8] images
 ```
 -/
-def flattenAfter {α : Type} [TorchLean.Storage α] [Inhabited α]
+def flattenAfter {α : Type} [TorchLean.Storage α]
     (leading : Spec.Shape) {source : Spec.Shape}
     (tensor : Tensor α (leading.concat source)) :
     Tensor α (leading.appendDim source.size) :=
@@ -502,7 +500,7 @@ def flattenAfter {α : Type} [TorchLean.Storage α] [Inhabited α]
     rw [Spec.Shape.size_concat, Spec.Shape.size_appendDim])
 
 /-- Flatten after `leading`, then keep a checked prefix of each resulting vector. -/
-def flattenThenTake {α : Type} [TorchLean.Storage α] [Inhabited α]
+def flattenThenTake {α : Type} [TorchLean.Storage α]
     (leading : Spec.Shape) (count : Nat) {source : Spec.Shape}
     (hCount : count ≤ source.size)
     (tensor : Tensor α (leading.concat source)) :

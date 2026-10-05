@@ -6,13 +6,14 @@ Authors: TorchLean Team
 
 module
 
+public import NN.Runtime.Autograd.Torch.Core.Ops.Layers
+
 public import NN.Runtime.Autograd.Torch.Core.Functional.Ops
 public import NN.Runtime.Autograd.Torch.Core.Ops.Convolution
 public import NN.Runtime.Autograd.Torch.Core.Ops.Elementwise
 public import NN.Runtime.Autograd.Torch.Core.Ops.Indexing
 public import NN.Runtime.Autograd.Torch.Core.Ops.Pooling
 public import NN.Runtime.Autograd.Torch.Core.Ops.Spectral
-public import NN.Runtime.Autograd.Torch.Core.Trainer.Attention
 
 /-!
 # Eager Operations
@@ -83,9 +84,6 @@ instance {α : Type} [TorchLean.Storage α] [Context α] [TensorTransfer α] :
   selectiveScanDiagVarNative? := some fun {seqLen state} a b x initial sess =>
     Internal.EagerSession.selectiveScanDiagVarNative? sess (seqLen := seqLen) (state := state)
       a b x initial
-  spectralConv1dRfftNative? := some fun {grid width modes} x realWeight imagWeight sess =>
-    Internal.EagerSession.spectralConv1dRfftNative? sess (grid := grid) (width := width)
-      (modes := modes) x realWeight imagWeight
   const := fun {s} t => fun sess => Internal.EagerSession.const (α := α) sess (sh := s) t
   add := fun {s} a b => fun sess => Internal.EagerSession.add (α := α) sess (sh := s) a b
   sub := fun {s} a b => fun sess => Internal.EagerSession.sub (α := α) sess (sh := s) a b
@@ -118,10 +116,10 @@ instance {α : Type} [TorchLean.Storage α] [Context α] [TensorTransfer α] :
     Internal.EagerSession.matmul (α := α) sess (batchA := batchA) (batchB := batchB)
       (batch := batch) (m := mDim) (n := nDim) (p := pDim)
       (broadcastA := broadcastA) (broadcastB := broadcastB) a b
-  concatLeadingAxis := fun {nDim mDim} {s} a b => fun sess =>
-    Internal.EagerSession.concatLeadingAxis (α := α) sess (n := nDim) (m := mDim) (sh := s) a b
-  sliceLeadingAxisRange := fun {nDim} {s} start len h x => fun sess =>
-    Internal.EagerSession.sliceLeadingAxisRange (α := α) sess (n := nDim) (sh := s) x start len h
+  concat := fun {nDim mDim} {s} a b => fun sess =>
+    Internal.EagerSession.concat (α := α) sess (n := nDim) (m := mDim) (sh := s) a b
+  slice := fun {nDim} {s} start len h x => fun sess =>
+    Internal.EagerSession.slice (α := α) sess (n := nDim) (sh := s) x start len h
   maxPool := fun {d C} {inSpatial kernel stride padding} x => fun sess =>
     Internal.EagerSession.maxPool (α := α) sess
       (d := d) (C := C)
@@ -167,14 +165,10 @@ instance {α : Type} [TorchLean.Storage α] [Context α] [TensorTransfer α] :
   batchNorm := fun {channels sSpatial} hWellFormed x gamma beta epsilon => fun sess =>
     Internal.EagerSession.batchNorm (α := α) sess
       (channels := channels) (sSpatial := sSpatial) hWellFormed x gamma beta (epsilon := epsilon)
-  multiHeadAttention := fun {n numHeads dModel headDim} h1 wq wk wv wo x mask => fun sess =>
-    Internal.EagerSession.multiHeadAttention (α := α) sess (n := n) (numHeads := numHeads)
-      (dModel := dModel) (headDim := headDim) h1 wq wk wv wo x (mask := mask)
-  batchedMultiHeadAttention :=
-    fun {batch n numHeads dModel headDim} hBatch h1 wq wk wv wo x mask => fun sess =>
-      Internal.EagerSession.batchedMultiHeadAttention (α := α) sess
-        (batch := batch) (n := n) (numHeads := numHeads) (dModel := dModel) (headDim := headDim)
-        hBatch h1 wq wk wv wo x (mask := mask)
+  attention := fun {n numHeads dModel headDim batch} hBatch h1 wq wk wv wo x mask sess =>
+    Internal.EagerSession.attention (α := α) sess
+      (batch := batch) (n := n) (numHeads := numHeads) (dModel := dModel) (headDim := headDim)
+      h1 wq wk wv wo x (mask := mask) (hBatch := hBatch)
   conv := fun {d inC outC} {kernel stride padding} {inSpatial} w b x => fun sess =>
     Internal.EagerSession.conv (α := α) sess
       (d := d) (inC := inC) (outC := outC)

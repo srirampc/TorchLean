@@ -25,7 +25,10 @@ def round_up(x: float) -> float:
     return math.nextafter(x, math.inf)
 
 
-def seed_weights() -> Tuple[List[List[float]], List[float], List[List[float]], List[float]]:
+def seed_weights() -> Tuple[
+    List[List[float]], List[float], List[List[float]], List[float],
+    List[List[float]], List[float],
+]:
     """Return deterministic tanh-MLP weights used by the bundled PINN fixture."""
     first_weight = [[(i + 1) * 0.1] for i in range(HIDDEN_WIDTH)]
     first_bias = [0.05 * (i - 8) for i in range(HIDDEN_WIDTH)]
@@ -66,7 +69,11 @@ def fd_residual_bounds(
     u_plus: Tuple[float, float],
     h: float,
 ) -> Tuple[float, float]:
-    """Bound the centered finite-difference second derivative residual."""
+    """Produce finite-difference endpoints using ordinary binary64 arithmetic.
+
+    These are producer assertions for the Lean checker, not directed-rounding
+    evidence. Keep this schedule distinct from the derivative interval helpers.
+    """
     # u_minus, u_center, u_plus are (lo, hi)
     l_minus, h_minus = u_minus
     center_lo, center_hi = u_center
@@ -138,7 +145,6 @@ def deriv_and_second_for_mlp(
         first_activation_hi,
     )
     middle_activation_lo, middle_activation_hi = ibp_tanh(middle_linear_lo, middle_linear_hi)
-    _out_lo, _out_hi = ibp_linear(output_weight, output_bias, middle_activation_lo, middle_activation_hi)
     # First derivative intervals
     first_deriv_lo, first_deriv_hi = [1.0], [1.0]
     second_deriv_lo, second_deriv_hi = [0.0], [0.0]
@@ -289,7 +295,7 @@ def main():
     cert = run_ibp()
     out_path = "NN/Examples/Verification/PINN/pinn_cert.json"
     with open(out_path, "w") as f:
-        json.dump(cert, f, indent=2)
+        json.dump(cert, f, indent=2, allow_nan=False)
     print(f"Wrote certificate to {out_path}")
 
 

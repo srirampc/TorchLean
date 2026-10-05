@@ -18,5 +18,3 @@ Real-model example producers live under `scripts/verification/geometry3d` and wr
 artifacts under `_external/geometry3d`. This namespace contains the Lean checker, theorem
 statements, and a small CLI wrapper around the checker.
 -/
-
-@[expose] public section

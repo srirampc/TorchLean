@@ -277,11 +277,7 @@ def ofFn {α : Type u} [Storage α] {s : Shape}
     (values : Fin (Shape.size s) → α) (i : Fin (Shape.size s)) :
     getFlat (ofFlatFn values) i = values i := by
   change storage.get (Storage.ofFn values) i.val _ = values i
-  have hData := Storage.toArray_ofFn values
-  have hGet := storage.toArray_get (Storage.ofFn values) i.val
-    (by simpa only [Storage.size_ofFn] using i.isLt)
-    (by simpa only [hData, Array.size_ofFn] using i.isLt)
-  simpa only [hData, Array.getElem_ofFn] using hGet.symm
+  exact Storage.get_ofFn values i _
 
 /-- Reading a flat-generated tensor linearizes the requested coordinate. -/
 @[simp, grind =] theorem get_ofFlatFn {α : Type u}
@@ -299,10 +295,23 @@ def ofFn {α : Type u} [Storage α] {s : Shape}
     ofFn values i = values i := by
   simp [ofFn, get, Coord.unlinearize_linearize]
 
-/-- The native buffer has exactly the statically known tensor size. -/
+/-- Observe the native buffer as an ordinary array. -/
 def data {α : Type u} [storage : Storage α] {s : Shape}
     (x : Rep α s) : Array α :=
   storage.toArray x.buffer
+
+/-- The ordinary-array observation uniquely determines a shaped tensor. -/
+theorem data_injective {α : Type u} [storage : Storage α] {s : Shape} :
+    Function.Injective (data (α := α) (s := s)) := by
+  intro x y hData
+  cases x with
+  | mk xBuffer _xSize =>
+    cases y with
+    | mk yBuffer _ySize =>
+      have hBuffer : xBuffer = yBuffer :=
+        storage.toArray_injective hData
+      cases hBuffer
+      rfl
 
 /--
 Executable tensors have decidable elementwise equality whenever their scalar type does.
@@ -312,20 +321,8 @@ observations determines equality of the native buffers, while the size certifica
 proof-irrelevant.
 -/
 instance {α : Type u} [storage : Storage α] [DecidableEq α] {s : Shape} :
-    DecidableEq (Rep α s) := fun left right =>
-  if hData : left.data = right.data then
-    isTrue (by
-      cases left with
-      | mk leftBuffer leftSize =>
-          cases right with
-          | mk rightBuffer rightSize =>
-              simp only [data] at hData
-              have hBuffer : leftBuffer = rightBuffer :=
-                storage.toArray_injective hData
-              cases hBuffer
-              rfl)
-  else
-    isFalse (fun hTensor => hData (congrArg data hTensor))
+    DecidableEq (Rep α s) :=
+  data_injective.decidableEq
 
 /--
 Traverse tensor entries in physical row-major order without materializing the
@@ -432,26 +429,15 @@ size. Evaluating `data` may convert specialized storage, so native kernels use
 @[ext, grind ext] theorem ext {α : Type u} [storage : Storage α]
     {s : Shape} {x y : Rep α s}
     (h : ∀ i, x i = y i) : x = y := by
-  cases x with
-  | mk xData xSize =>
-    cases y with
-    | mk yData ySize =>
-      congr 1
-      apply storage.toArray_injective
-      apply Array.ext
-      · simpa only [storage.toArray_size] using xSize.trans ySize.symm
-      · intro index xBound yBound
-        let flatIndex : Fin (Shape.size s) :=
-          ⟨index, by
-            rw [storage.toArray_size] at xBound
-            simpa only [xSize] using xBound⟩
-        have hObserved := h (Coord.unlinearize flatIndex)
-        have hLeft := storage.toArray_get xData index
-          (by simpa only [xSize] using flatIndex.isLt) xBound
-        have hRight := storage.toArray_get yData index
-          (by simpa only [ySize] using flatIndex.isLt) yBound
-        rw [hLeft, hRight]
-        simpa [get, getFlat, flatIndex] using hObserved
+  apply data_injective
+  apply Array.ext
+  · rw [data_size, data_size]
+  · intro index xBound _yBound
+    let flatIndex : Fin (Shape.size s) :=
+      ⟨index, by simpa only [x.data_size] using xBound⟩
+    rw [data_getFlat x flatIndex, data_getFlat y flatIndex]
+    have hObserved := h (Coord.unlinearize flatIndex)
+    simpa only [get, Coord.linearize_unlinearize] using hObserved
 
 end Rep
 

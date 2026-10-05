@@ -45,13 +45,6 @@ def tokenSample {β : Type} [TorchLean.Storage β]
         (fun row : Tensor β [sequenceLength + 1] => Tensor.ofFn fun position : Fin sequenceLength =>
           row[position.succ]) window }
 
-/-- One-hot encode every bounded token id along a new final vocabulary dimension. -/
-def oneHotInputs
-    {α : Type} [TorchLean.Storage α] [Zero α] [One α]
-    {shape : Shape} (vocabularySize : Nat) (tokens : Tensor (Fin vocabularySize) shape) :
-    Tensor α (shape.appendDim vocabularySize) :=
-  TorchLean.Tensor.oneHotIndices (α := α) vocabularySize tokens
-
 /--
 Build a one-hot causal-language-model sample over an arbitrary batch shape.
 
@@ -65,32 +58,8 @@ def oneHotSample
       ((batchShape.appendDim sequenceLength).appendDim vocabularySize)
       ((batchShape.appendDim sequenceLength).appendDim vocabularySize) :=
   let sample := tokenSample batchShape sequenceLength tokens
-  { input := oneHotInputs vocabularySize sample.input
-    target := oneHotInputs vocabularySize sample.target }
-
-/--
-Build a batched one-hot causal-language-model sample from a token tensor by choosing one
-deterministic `(sequenceLength + 1)` window per batch row.
-
-Use this for GPT-style trainers that keep a tokenized corpus in memory and derive each batch from
-the same `(tokens, seed, step)` rule.
--/
-def oneHotBatch {tokenCount : Nat}
-    {α : Type} [TorchLean.Storage α] [Zero α] [One α]
-    (batchSize sequenceLength vocabularySize : Nat)
-    (tokens : Tensor Nat [tokenCount])
-    (seed step : Nat)
-    (paddingTokenId : Nat := 0) :
-    Except String
-      (Sample.Supervised α
-        [batchSize, sequenceLength, vocabularySize]
-        [batchSize, sequenceLength, vocabularySize]) := do
-  let tokenWindows :=
-    TorchLean.text.Corpus.randomTokenBatch
-      tokens batchSize sequenceLength seed step (paddingTokenId := paddingTokenId)
-  let boundedTokens ← TorchLean.Tensor.checkIndices vocabularySize tokenWindows
-  pure <| oneHotSample
-    (α := α) [batchSize] sequenceLength vocabularySize boundedTokens
+  { input := Tensor.oneHotIndices vocabularySize sample.input
+    target := Tensor.oneHotIndices vocabularySize sample.target }
 
 /--
 Build an indexed-token causal-language-model batch from a tensor corpus.
@@ -117,9 +86,8 @@ def tokenBatch {tokenCount : Nat}
 /--
 Build one unbatched one-hot causal-language-model sample from a text corpus string.
 
-This takes one `(sequenceLength + 1)` byte window from the UTF-8 bytes of `text`, converts it to
-one-hot input/target matrices, and casts the result into the runtime-selected arithmetic
-representation.
+This takes one `(sequenceLength + 1)` byte window from the UTF-8 bytes of `text` and constructs
+one-hot input/target matrices directly in the selected scalar type `α`.
 -/
 def byteSample
     {α : Type} [TorchLean.Storage α] [Zero α] [One α]
@@ -133,10 +101,13 @@ def byteSample
   oneHotSample (α := α) [] sequenceLength vocabularySize tokens
 
 /--
-Build a finite causal-language-model dataset from approximately evenly spaced byte windows.
+Build an indexed stream of causal-language-model samples from approximately evenly spaced byte
+windows.
 
 Offsets are measured in UTF-8 bytes, matching `byteSample`. Short corpora remain total because
-`byteTokenWindow` pads beyond the end, while `windowCount = 0` returns an empty dataset.
+`byteTokenWindow` pads beyond the end, while `windowCount = 0` returns an empty stream. Samples
+are constructed on access. For supervised training, select `α := Float` and wrap the result with
+`Data.fromStream`.
 -/
 def byteSamples
     {α : Type} [TorchLean.Storage α] [Zero α] [One α]

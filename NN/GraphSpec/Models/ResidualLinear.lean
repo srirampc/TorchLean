@@ -13,13 +13,14 @@ public import NN.GraphSpec.DAG.Primitives.Core
 # Residual Linear Block
 
 A small DAG model for `x ↦ ReLU(Wx + b + x)`. The weight and bias have shapes
-`[d, d]` and `[d]`; both start at zero, so the initial model computes `ReLU(x)`.
+`[d, d]` and `[d]`; both start at zero. In real arithmetic, the initial model computes `ReLU(x)`.
 
 The input variable appears in both the linear branch and the skip branch. A `let1`
 binds the linear result before the addition. Reusing an environment variable does
 not recompute a preceding input expression.
 
-Read this alongside `NN.GraphSpec.DAG.Core` for typed variables and `let1` semantics.
+Read this alongside `NN.GraphSpec.DAG.Syntax` and `NN.GraphSpec.DAG.Semantics` for typed variables
+and `let1` semantics.
 -/
 
 @[expose] public section
@@ -43,7 +44,7 @@ The layout is exactly:
 
 The parameter-free skip path reuses the input `x`.
 -/
-abbrev ResidualLinearParams (d : Nat) : List Shape :=
+abbrev residualLinearParams (d : Nat) : List Shape :=
   [[d, d], [d]]
 
 /--
@@ -58,7 +59,7 @@ $$
 The same input variable is used by the linear operation and the residual addition.
 -/
 def residualLinear (d : Nat) :
-    DAG.Model (ps := ResidualLinearParams d) (ins := [[d]]) (τ := [d]) :=
+    DAG.Model (ps := residualLinearParams d) (ins := [[d]]) (τ := [d]) :=
   let Γ : List Shape :=
     [[d, d], [d], [d]]
   let w : DAG.Term Γ [d, d] :=
@@ -70,11 +71,7 @@ def residualLinear (d : Nat) :
   let y : DAG.Term Γ [d] :=
     DAG.Term.op (Γ := Γ) (DAG.PrimOp.linear (inDim := d) (outDim := d))
       (DAG.Args.cons w (DAG.Args.cons b (DAG.Args.cons x (DAG.Args.nil))))
-  { initParams :=
-      -- Deterministic, simple init: all zeros.
-      let W0 : TorchLean.Tensor Float [d, d] := Tensor.zeros (α := Float) [d, d]
-      let b0 : TorchLean.Tensor Float [d] := Tensor.zeros (α := Float) [d]
-      .cons W0 (.cons b0 .nil)
+  { initParams := TorchLean.TensorPack.zero
     body :=
       DAG.Term.let1 y <|
         let Γ' : List Shape :=

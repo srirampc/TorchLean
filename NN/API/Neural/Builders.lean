@@ -81,11 +81,18 @@ runtime layer code without learning a second vocabulary.
 export Runtime.Autograd.Model.Layers.Seq
   (stateShapes requiresGrad validate runtimeInit? hasBufferUpdates updateBuffers)
 
-/-- Semantic initial values for every parameter and persistent buffer in a sequential model. -/
-def initialState {σ τ : Spec.Shape} (model : Sequential σ τ) :
-    State Float (stateShapes model) :=
-  State.Internal.fromTensorPack
-    (Runtime.Autograd.Model.Layers.Seq.initState model)
+/--
+Initial parameters and buffers in the requested scalar type, defaulting to `Float`.
+
+Model builders store their seeded initial values in `Float`; this conversion preserves that source
+and does not generate additional random precision. For exact wider initial values, construct
+`State α` directly and pass it as `initialState?` when instantiating the model or opening a trainer.
+-/
+def initialState {σ τ : Spec.Shape} (model : Sequential σ τ) (α : Type := Float)
+    [TorchLean.Storage α] [Runtime.FromFloat α] : State α (stateShapes model) :=
+  (State.Internal.fromTensorPack
+    (Runtime.Autograd.Model.Layers.Seq.initState model)).map
+      (fun tensor => TorchLean.Tensor.map (Runtime.ofFloat (α := α)) tensor)
 
 /-! Constructors that pair an immutable model with a scalar training loss. -/
 namespace Objective
@@ -104,11 +111,11 @@ def fromLoss {σ τ : Spec.Shape} (model : Sequential σ τ)
   Runtime.Autograd.Model.Layers.Seq.Objective.fromLoss model loss mode
 
 /-- Pair an immutable sequential model with mean-squared error. -/
-def meanSquaredError {σ τ : Spec.Shape} (model : Sequential σ τ)
+def mse {σ τ : Spec.Shape} (model : Sequential σ τ)
     (reduction : TorchLean.Loss.Reduction := .mean)
     (mode : Mode := .train) :
     TorchLean.Module.ObjectiveDefinition Unit (stateShapes model) [σ, τ] :=
-  Runtime.Autograd.Model.Layers.Seq.Objective.meanSquaredError model reduction mode
+  Runtime.Autograd.Model.Layers.Seq.Objective.mse model reduction mode
 
 /-- Pair an immutable sequential model with one-hot cross entropy. -/
 def oneHotCrossEntropy {σ τ : Spec.Shape} (model : Sequential σ τ)
@@ -152,11 +159,9 @@ Layer constructors use this when a value-level configuration check is needed to 
 shape-indexed model. Normal model validation rejects the placeholder before state allocation or
 execution, so callers receive the same error path as every other invalid layer.
 
-Why a placeholder instead of an `Except`? A `Sequential σ τ` is indexed by its shapes, so a
-constructor that has already committed to `σ` and `τ` cannot back out and return an error value
-without changing every caller's type. PyTorch has the same problem and solves it by raising at
-construction time; we cannot raise inside a pure definition, so we return a model that is
-guaranteed to fail `validate` with `message` before it ever touches storage.
+Keeping this failure in `validate` lets pure constructors retain their `Sequential σ τ` interface
+and compose with valid layers. The placeholder's forward body only supplies the required result
+type; it does not give a meaning to the invalid configuration.
 -/
 def invalidConfiguration (input output : Spec.Shape) (kind message : String) :
     Sequential input output :=

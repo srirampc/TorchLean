@@ -39,13 +39,13 @@ host. This is primarily useful for implementing GPU-native optimizer steps.
 def backwardDenseAllCuda {α : Type} [TorchLean.Storage α] [TensorTransfer α]
     (s : EagerSession α) [Add α] [Zero α]
   {sh : Shape} (out : TensorRef α sh) (seed : Tensor α sh) :
-  IO (Array Runtime.Autograd.Cuda.AnyBuffer) := do
+  IO (Array Runtime.Autograd.LibTorch.AnyBuffer) := do
   if Config.device s.options != .cuda then
     throw <| IO.userError "torch: backwardDenseAllCuda called on non-CUDA eager session"
   let t ← s.cudaTape.get
   let seedAny ← CudaBridge.toAnyBuffer (α := α) (s := sh) seed
   okOrThrow <|
-    Runtime.Autograd.Cuda.Tape.backwardDenseAll (t := t) (outId := out.id) (seed := seedAny)
+    Runtime.Autograd.LibTorch.Tape.backwardDenseAll (t := t) (outId := out.id) (seed := seedAny)
 
 /--
 Run scalar-loss CUDA backprop and return gradients only for trainable parameter leaves.
@@ -53,7 +53,7 @@ Run scalar-loss CUDA backprop and return gradients only for trainable parameter 
 `seed` scales the loss cotangent. Batch training uses `1 / batch.size` so it can accumulate the
 mean directly, without first forming a larger unnormalized sum.
 
-The traversal is the engine's sparse CUDA sweep `Cuda.Tape.backwardSparse`, which walks node
+The traversal is the engine's sparse CUDA sweep `LibTorch.Tape.backwardSparse`, which walks node
 ids in reverse, runs a node's VJP only when that node has received a cotangent, retires every
 activation cotangent as soon as it has been propagated, and keeps owned device buffers only for
 the ids selected by `retain`. Here `retain` selects exactly the trainable parameter leaves, so the
@@ -78,10 +78,10 @@ def backwardScalarParamGradsCuda {α : Type} [TorchLean.Storage α] [TensorTrans
     match params.get? id with
     | some p => p.requiresGrad
     | none => false
-  let grads ← Runtime.Autograd.Cuda.Tape.backwardSparse (t := t) loss.id seedAny retain
+  let grads ← Runtime.Autograd.LibTorch.Tape.backwardSparse (t := t) loss.id seedAny retain
   for (id, _p) in params.toList.filter (fun entry => entry.2.requiresGrad) do
     unless grads.contains id do
-      Runtime.Autograd.Cuda.Tape.releaseSparseGrads grads
+      Runtime.Autograd.LibTorch.Tape.releaseSparseGrads grads
       throw <| IO.userError s!"torch: missing CUDA gradient for parameter leaf {id}"
   pure grads
 
@@ -97,9 +97,9 @@ def accumulateCudaGradMap (accumulator : IO.Ref CudaGradMap)
     let current ← accumulator.get
     let summed ← match current.get? id with
       | none =>
-          pure { gradient with buf := Runtime.Autograd.Cuda.Buffer.copy gradient.buf }
+          pure { gradient with buf := Runtime.Autograd.LibTorch.Buffer.copy gradient.buf }
       | some old =>
-          okOrThrow (Runtime.Autograd.Cuda.AnyBuffer.add old gradient)
+          okOrThrow (Runtime.Autograd.LibTorch.AnyBuffer.add old gradient)
     accumulator.set (current.insert id summed)
     if let some old := current.get? id then
       releaseCudaAnyBuffer old
@@ -164,7 +164,7 @@ def sgdStepAll {α : Type} [TorchLean.Storage α] [TensorTransfer α] (s : Eager
     for group in groups do
       for id in group.leaves do
         let value ← okOrThrow <|
-          Runtime.Autograd.Cuda.Tape.requireValue (t := t0) (id := id) (s := group.parameter.s)
+          Runtime.Autograd.LibTorch.Tape.requireValue (t := t0) (id := id) (s := group.parameter.s)
         checkCudaAnyBufferSize "SGD parameter value" { s := group.parameter.s, buf := value }
     let currentValues ← groups.mapM ParameterGroup.currentCudaValue
     for ((group, gAny), currentValue) in prepared.zip currentValues do
@@ -173,8 +173,9 @@ def sgdStepAll {α : Type} [TorchLean.Storage α] [TensorTransfer α] (s : Eager
         let gT : Tensor α p.s := gAny.cast hs
         let gDev ← CudaBridge.toAnyBuffer (α := α) (s := p.s) gT
         try
-          let updatedDev : Runtime.Autograd.Cuda.AnyBuffer :=
-            { s := p.s, buf := Runtime.Autograd.Cuda.Buffer.axpy currentValue.buf gDev.buf (-lrF) }
+          let updatedDev : Runtime.Autograd.LibTorch.AnyBuffer :=
+            { s := p.s
+              buf := Runtime.Autograd.LibTorch.Buffer.axpy currentValue.buf gDev.buf (-lrF) }
           p.setCuda updatedDev
         finally
           releaseCudaAnyBuffer gDev
@@ -202,7 +203,7 @@ changes a parameter. This prevents a malformed gradient map or checkpoint state 
 partially applied update.
 -/
 def checkCudaOptimizerInputs {α : Type} [TorchLean.Storage α] (operation : String)
-    (tape : Runtime.Autograd.Cuda.Tape) (params : Std.HashMap Nat (AnyParam α))
+    (tape : Runtime.Autograd.LibTorch.Tape) (params : Std.HashMap Nat (AnyParam α))
     (grads : CudaGradMap) (state : Option CudaAdamState := none) : IO Unit := do
   for (id, param) in params.toList.filter (fun entry => entry.2.requiresGrad) do
     let grad ← match grads.get? id with
@@ -212,7 +213,7 @@ def checkCudaOptimizerInputs {α : Type} [TorchLean.Storage α] (operation : Str
       throw <| IO.userError s!"torch: gradient shape mismatch during {operation}"
     checkCudaAnyBufferSize s!"{operation} gradient for parameter leaf {id}" grad
     let value ← okOrThrow <|
-      Runtime.Autograd.Cuda.Tape.requireValue (t := tape) (id := id) (s := param.s)
+      Runtime.Autograd.LibTorch.Tape.requireValue (t := tape) (id := id) (s := param.s)
     checkCudaAnyBufferSize s!"{operation} value for parameter leaf {id}"
       { s := param.s, buf := value }
     match state with
@@ -221,9 +222,9 @@ def checkCudaOptimizerInputs {α : Type} [TorchLean.Storage α] (operation : Str
         match states.get? id with
         | none => pure ()
         | some adamState =>
-            let expected := Runtime.Autograd.Cuda.Buffer.size value
-            if Runtime.Autograd.Cuda.Buffer.size adamState.m != expected ||
-                Runtime.Autograd.Cuda.Buffer.size adamState.v != expected then
+            let expected := Runtime.Autograd.LibTorch.Buffer.size value
+            if Runtime.Autograd.LibTorch.Buffer.size adamState.m != expected ||
+                Runtime.Autograd.LibTorch.Buffer.size adamState.v != expected then
               throw <| IO.userError
                 s!"torch: CUDA Adam state size mismatch for parameter leaf {id}"
 
@@ -269,11 +270,74 @@ def sgdStepAllCudaMap {α : Type} [TorchLean.Storage α] [TensorTransfer α]
     let p := group.parameter
     withCudaGroupGradient group grads fun gAny => do
       if _hs : gAny.s = p.s then
-        let updatedDev : Runtime.Autograd.Cuda.AnyBuffer :=
-          { s := p.s, buf := Runtime.Autograd.Cuda.Buffer.axpy currentValue.buf gAny.buf (-lrF) }
+        let updatedDev : Runtime.Autograd.LibTorch.AnyBuffer :=
+          { s := p.s
+            buf := Runtime.Autograd.LibTorch.Buffer.axpy currentValue.buf gAny.buf (-lrF) }
         p.setCuda updatedDev
       else
         throw <| IO.userError "torch: internal grad shape mismatch during CUDA SGD"
+
+/-- Run the shared Adam update after each entry point has converted and validated its options.
+
+The decay coefficient stays delayed until the kernel call: AdamW evaluates `-(lr * weightDecay)`
+for each parameter after the moment corrections, while Adam passes the literal zero coefficient.
+-/
+def applyCudaAdamUpdate {α : Type} [TorchLean.Storage α]
+    (s : EagerSession α) (operation : String)
+    (configRef : IO.Ref (Option CudaAdamConfig)) (stateRef : IO.Ref CudaAdamState)
+    (config : CudaAdamConfig) (lrF : Float) (decayStep : Unit → Float)
+    (grads : CudaGradMap) : IO Unit := do
+  let beta1F := config.beta1
+  let beta2F := config.beta2
+  let epsF := config.epsilon
+  let oneMinusBeta1 := 1.0 - beta1F
+  let oneMinusBeta2 := 1.0 - beta2F
+  let t0 ← s.cudaTape.get
+  let params ← s.paramsByLeaf.get
+  let mut state ← stateRef.get
+  checkCudaOptimizerInputs operation t0 params grads (some state)
+  let groups ← parameterGroups s
+  checkSharedCudaAdamState groups state
+  let currentValues ← groups.mapM ParameterGroup.currentCudaValue
+  ensureCudaAdamConfig configRef config
+  for (group, currentValue) in groups.zip currentValues do
+    let id := group.id
+    let p := group.parameter
+    let nextState ← withCudaGroupGradient group grads fun gAny => do
+      if _hs : gAny.s = p.s then
+        let pBuf := currentValue.buf
+        let n := Runtime.Autograd.LibTorch.Buffer.size pBuf
+        let st :=
+          match state.get? id with
+          | some st => st
+          | none =>
+              { m := Runtime.Autograd.LibTorch.Buffer.zeros n
+                v := Runtime.Autograd.LibTorch.Buffer.zeros n
+                t := 0 }
+        let t' := st.t + 1
+        let mHatScale := 1.0 / (1.0 - Float.pow beta1F (Float.ofNat t'))
+        let vHatScale := 1.0 / (1.0 - Float.pow beta2F (Float.ofNat t'))
+        let (updated, m', v') := Runtime.Autograd.LibTorch.Buffer.adamStep
+          pBuf gAny.buf st.m st.v
+          beta1F oneMinusBeta1 beta2F oneMinusBeta2
+          mHatScale vHatScale epsF (decayStep ()) (-lrF)
+        let updatedDev : Runtime.Autograd.LibTorch.AnyBuffer :=
+          { s := p.s, buf := updated }
+        p.setCuda updatedDev
+        releaseCudaBuffer st.m
+        releaseCudaBuffer st.v
+        pure ({ m := m', v := v', t := t' } : CudaAdamParamState)
+      else
+        throw <| IO.userError s!"torch: internal grad shape mismatch during {operation}"
+    state := state.insert id nextState
+  for (id, st) in state.toList do
+    if params.contains id then
+      pure ()
+    else
+      releaseCudaBuffer st.m
+      releaseCudaBuffer st.v
+      state := state.erase id
+  stateRef.set state
 
 /-- Apply Adam using an already-computed sparse CUDA gradient map. -/
 def adamStepAllCudaMap {α : Type} [TorchLean.Storage α] [TensorTransfer α]
@@ -290,57 +354,8 @@ def adamStepAllCudaMap {α : Type} [TorchLean.Storage α] [TensorTransfer α]
   checkCudaLearningRate "CUDA Adam" lrF
   let config : CudaAdamConfig :=
     { kind := .adam, beta1 := beta1F, beta2 := beta2F, epsilon := epsF, weightDecay := 0.0 }
-  match config.validate with
-  | .ok () => pure ()
-  | .error message => throw <| IO.userError message
-  let oneMinusBeta1 := 1.0 - beta1F
-  let oneMinusBeta2 := 1.0 - beta2F
-  let t0 ← s.cudaTape.get
-  let params ← s.paramsByLeaf.get
-  let mut state ← stateRef.get
-  checkCudaOptimizerInputs "CUDA Adam" t0 params grads (some state)
-  let groups ← parameterGroups s
-  checkSharedCudaAdamState groups state
-  let currentValues ← groups.mapM ParameterGroup.currentCudaValue
-  ensureCudaAdamConfig configRef config
-  for (group, currentValue) in groups.zip currentValues do
-    let id := group.id
-    let p := group.parameter
-    let nextState ← withCudaGroupGradient group grads fun gAny => do
-      if _hs : gAny.s = p.s then
-        let pBuf := currentValue.buf
-        let n := Runtime.Autograd.Cuda.Buffer.size pBuf
-        let st :=
-          match state.get? id with
-          | some st => st
-          | none =>
-              { m := Runtime.Autograd.Cuda.Buffer.zeros n
-                v := Runtime.Autograd.Cuda.Buffer.zeros n
-                t := 0 }
-        let t' := st.t + 1
-        let mHatScale := 1.0 / (1.0 - Float.pow beta1F (Float.ofNat t'))
-        let vHatScale := 1.0 / (1.0 - Float.pow beta2F (Float.ofNat t'))
-        let (updated, m', v') := Runtime.Autograd.Cuda.Buffer.adamStep
-          pBuf gAny.buf st.m st.v
-          beta1F oneMinusBeta1 beta2F oneMinusBeta2
-          mHatScale vHatScale epsF 0.0 (-lrF)
-        let updatedDev : Runtime.Autograd.Cuda.AnyBuffer :=
-          { s := p.s, buf := updated }
-        p.setCuda updatedDev
-        releaseCudaBuffer st.m
-        releaseCudaBuffer st.v
-        pure ({ m := m', v := v', t := t' } : CudaAdamParamState)
-      else
-        throw <| IO.userError "torch: internal grad shape mismatch during CUDA Adam"
-    state := state.insert id nextState
-  for (id, st) in state.toList do
-    if params.contains id then
-      pure ()
-    else
-      releaseCudaBuffer st.m
-      releaseCudaBuffer st.v
-      state := state.erase id
-  stateRef.set state
+  okOrThrow config.validate
+  applyCudaAdamUpdate s "CUDA Adam" configRef stateRef config lrF (fun _ => 0.0) grads
 
 /--
 Apply AdamW from a sparse CUDA gradient map.
@@ -363,57 +378,9 @@ def adamWStepAllCudaMap {α : Type} [TorchLean.Storage α] [TensorTransfer α]
   checkCudaLearningRate "CUDA AdamW" lrF
   let config : CudaAdamConfig :=
     { kind := .adamW, beta1 := beta1F, beta2 := beta2F, epsilon := epsF, weightDecay := wdF }
-  match config.validate with
-  | .ok () => pure ()
-  | .error message => throw <| IO.userError message
-  let oneMinusBeta1 := 1.0 - beta1F
-  let oneMinusBeta2 := 1.0 - beta2F
-  let t0 ← s.cudaTape.get
-  let params ← s.paramsByLeaf.get
-  let mut state ← stateRef.get
-  checkCudaOptimizerInputs "CUDA AdamW" t0 params grads (some state)
-  let groups ← parameterGroups s
-  checkSharedCudaAdamState groups state
-  let currentValues ← groups.mapM ParameterGroup.currentCudaValue
-  ensureCudaAdamConfig configRef config
-  for (group, currentValue) in groups.zip currentValues do
-    let id := group.id
-    let p := group.parameter
-    let nextState ← withCudaGroupGradient group grads fun gAny => do
-      if _hs : gAny.s = p.s then
-        let pBuf := currentValue.buf
-        let n := Runtime.Autograd.Cuda.Buffer.size pBuf
-        let st :=
-          match state.get? id with
-          | some st => st
-          | none =>
-              { m := Runtime.Autograd.Cuda.Buffer.zeros n
-                v := Runtime.Autograd.Cuda.Buffer.zeros n
-                t := 0 }
-        let t' := st.t + 1
-        let mHatScale := 1.0 / (1.0 - Float.pow beta1F (Float.ofNat t'))
-        let vHatScale := 1.0 / (1.0 - Float.pow beta2F (Float.ofNat t'))
-        let (updated, m', v') := Runtime.Autograd.Cuda.Buffer.adamStep
-          pBuf gAny.buf st.m st.v
-          beta1F oneMinusBeta1 beta2F oneMinusBeta2
-          mHatScale vHatScale epsF (-(lrF * wdF)) (-lrF)
-        let updatedDev : Runtime.Autograd.Cuda.AnyBuffer :=
-          { s := p.s, buf := updated }
-        p.setCuda updatedDev
-        releaseCudaBuffer st.m
-        releaseCudaBuffer st.v
-        pure ({ m := m', v := v', t := t' } : CudaAdamParamState)
-      else
-        throw <| IO.userError "torch: internal grad shape mismatch during CUDA AdamW"
-    state := state.insert id nextState
-  for (id, st) in state.toList do
-    if params.contains id then
-      pure ()
-    else
-      releaseCudaBuffer st.m
-      releaseCudaBuffer st.v
-      state := state.erase id
-  stateRef.set state
+  okOrThrow config.validate
+  applyCudaAdamUpdate s "CUDA AdamW" configRef stateRef config lrF
+    (fun _ => -(lrF * wdF)) grads
 
 end EagerSession
 

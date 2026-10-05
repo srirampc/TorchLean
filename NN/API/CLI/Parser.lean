@@ -223,9 +223,8 @@ opaque takePositional? (arguments : List String) :
 
 /-- Take one optional positional argument and fall back to `default` when it is absent. -/
 opaque takePositional (arguments : List String) (default : String) :
-    Except String (String × List String) := do
-  let (value?, rest) ← takePositional? arguments
-  pure (value?.getD default, rest)
+    Except String (String × List String) :=
+  parsedWithDefault (takePositional? arguments) default
 
 /--
 Normalize commands that accept either a positional path or a named path flag.

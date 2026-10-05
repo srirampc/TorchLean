@@ -104,6 +104,37 @@ def unrowsCLM {m n : Nat} : (Fin m → Vec n) →L[ℝ] Vec (MNSize m n) := by
   refine { toLinearMap := fLin, cont := ?_ }
   exact LinearMap.continuous_of_finiteDimensional (f := fLin)
 
+/-- The bundled row splitting computes `rows`. -/
+@[simp] theorem rowsCLM_apply {m n : Nat} (x : Vec (MNSize m n)) :
+    rowsCLM (m := m) (n := n) x = rows (m := m) (n := n) x := rfl
+
+/-- The bundled row reassembly computes `unrows`. -/
+@[simp] theorem unrowsCLM_apply {m n : Nat} (r : Fin m → Vec n) :
+    unrowsCLM (m := m) (n := n) r = unrows (m := m) (n := n) r := rfl
+
+/-- Splitting a flattened matrix into rows and reassembling is the identity. -/
+@[simp] theorem unrows_rows {m n : Nat} (x : Vec (MNSize m n)) :
+    unrows (m := m) (n := n) (rows (m := m) (n := n) x) = x := by
+  ext ip
+  obtain ⟨⟨i, j⟩, rfl⟩ := finProdFinEquiv.surjective ip
+  simp [unrows, rows]
+
+/-- The inner product of two row stacks is the sum of the rowwise inner products. -/
+theorem inner_unrows_unrows {m n : Nat} (r s : Fin m → Vec n) :
+    inner ℝ (unrows (m := m) (n := n) r) (unrows (m := m) (n := n) s) =
+      ∑ i : Fin m, inner ℝ (r i) (s i) := by
+  classical
+  -- Reindex the flat sum by `finProdFinEquiv`, then split it into a double sum over `(i, j)`.
+  have hsum :
+      (∑ ip : Fin (m * n), unrows (m := m) (n := n) r ip * unrows (m := m) (n := n) s ip) =
+        ∑ p : Fin m × Fin n,
+          unrows (m := m) (n := n) r (finProdFinEquiv p) *
+            unrows (m := m) (n := n) s (finProdFinEquiv p) :=
+    (Equiv.sum_comp (e := (finProdFinEquiv : Fin m × Fin n ≃ Fin (m * n)))
+      (g := fun ip => unrows (m := m) (n := n) r ip * unrows (m := m) (n := n) s ip)).symm
+  rw [inner_eq_sum_mul, hsum, Fintype.sum_prod_type]
+  simp [unrows, inner_eq_sum_mul]
+
 /-- Apply `softmaxVec` independently to each row of an `m×n` matrix (flattened representation). -/
 def forwardMN {m n : Nat} (x : Vec (MNSize m n)) : Vec (MNSize m n) :=
   unrows (m := m) (n := n) (fun i => softmaxVec (n := n) (rows (m := m) (n := n) x i))
@@ -166,156 +197,32 @@ theorem hasFDerivAt_forwardMN {m n : Nat} (x : Vec (MNSize m n)) :
     simpa [derivMN, G, r0, DG, Function.comp_def] using hcomp
   refine hcomp'.congr_of_eventuallyEq ?_
   exact Filter.Eventually.of_forall fun z => by
-    simp [forwardMN, G, rowsCLM, unrowsCLM]
+    simp [forwardMN, G]
 
 /-- JVP computed by `jvpMN` agrees with applying the derivative `derivMN`. -/
 theorem jvpMN_eq_derivMN {m n : Nat} (x dx : Vec (MNSize m n)) :
     jvpMN (m := m) (n := n) x dx = (derivMN (m := m) (n := n) x) dx := by
   classical
   ext ip
-  -- decode `ip` into `(i,j)`
-  let p : Fin m × Fin n := (finProdFinEquiv : Fin m × Fin n ≃ Fin (m * n)).symm ip
   -- unfold everything to rowwise application
-  simp [jvpMN, derivMN, rowsCLM, rows, unrows, unrowsCLM, MNSize,
-    ContinuousLinearMap.comp_apply, ContinuousLinearMap.proj_apply,
-    softmaxJvp_eq_deriv]
+  simp [jvpMN, derivMN, rows, unrows, MNSize, ContinuousLinearMap.comp_apply,
+    ContinuousLinearMap.proj_apply, softmaxJvp_eq_deriv]
 
 /-- Symmetry property of the JVP under the inner product (rowwise `softmaxJvp` commutation). -/
 theorem inner_jvpMN_comm {m n : Nat} (x dx δ : Vec (MNSize m n)) :
     inner ℝ (jvpMN (m := m) (n := n) x dx) δ =
       inner ℝ dx (jvpMN (m := m) (n := n) x δ) := by
-  classical
-  -- Expand to sums over `(i,j)` and apply the vector lemma rowwise.
-  have hL :
-      inner ℝ (jvpMN (m := m) (n := n) x dx) δ
-        =
-      ∑ i : Fin m,
-        inner ℝ (softmaxJvp (n := n) (rows (m := m) (n := n) x i) (rows (m := m) (n := n) dx i))
-          (rows (m := m) (n := n) δ i) := by
-    -- `inner` on `Vec (m*n)` is a sum over `(i,j)`.
-    have :
-        inner ℝ (jvpMN (m := m) (n := n) x dx) δ
-          =
-        ∑ p : Fin m × Fin n,
-          (softmaxJvp (n := n) (rows (m := m) (n := n) x p.1) (rows (m := m) (n := n) dx p.1) p.2) *
-            δ (finProdFinEquiv p) := by
-      -- Reindex the `Fin (m*n)` sum by `finProdFinEquiv`, then unfold `unrows` at `finProdFinEquiv
-      -- p`.
-      let g : Fin (m * n) → ℝ := fun ip =>
-        (jvpMN (m := m) (n := n) x dx ip) * δ ip
-      have hsum :
-          (∑ ip : Fin (m * n), g ip) = ∑ p : Fin m × Fin n, g (finProdFinEquiv p) := by
-        simpa [g] using
-          (Equiv.sum_comp (e := (finProdFinEquiv : Fin m × Fin n ≃ Fin (m * n))) (g := g)).symm
-      -- rewrite the inner product to `∑ ip, g ip`, apply the reindexing lemma, then unfold `g`.
-      calc
-        inner ℝ (jvpMN (m := m) (n := n) x dx) δ
-            = ∑ ip : Fin (m * n), g ip := by
-                simp [inner_eq_sum_mul, g]
-        _ = ∑ p : Fin m × Fin n, g (finProdFinEquiv p) := hsum
-        _ = ∑ p : Fin m × Fin n,
-              (softmaxJvp (n := n)
-                    (rows (m := m) (n := n) x p.1)
-                    (rows (m := m) (n := n) dx p.1) p.2) * δ (finProdFinEquiv p) := by
-                classical
-                refine Fintype.sum_congr _ _ ?_
-                intro p
-                simp [g, jvpMN, unrows, rows, MNSize, vecOfFun, mul_comm]
-    -- split the product sum into a double sum
-    -- and recognize each inner product on `Vec n`
-    calc
-      inner ℝ (jvpMN (m := m) (n := n) x dx) δ
-          = ∑ p : Fin m × Fin n,
-              (softmaxJvp (n := n) (rows (m := m) (n := n) x p.1) (rows (m := m) (n := n) dx p.1)
-                p.2) *
-                δ (finProdFinEquiv p) := this
-      _ = ∑ i : Fin m, ∑ j : Fin n,
-              (softmaxJvp (n := n) (rows (m := m) (n := n) x i) (rows (m := m) (n := n) dx i) j) *
-                δ (finProdFinEquiv (i, j)) := by
-            simp [Fintype.sum_prod_type]
-      _ = ∑ i : Fin m,
-            inner ℝ (softmaxJvp (n := n) (rows (m := m) (n := n) x i) (rows (m := m) (n := n) dx i))
-              (rows (m := m) (n := n) δ i) := by
-            refine Finset.sum_congr rfl ?_
-            intro i _hi
-            -- `inner` expands to `∑ j, ...`
-            simp [inner_eq_sum_mul, rows]
-  have hR :
-      inner ℝ dx (jvpMN (m := m) (n := n) x δ)
-        =
-      ∑ i : Fin m,
-        inner ℝ (rows (m := m) (n := n) dx i)
-          (softmaxJvp (n := n) (rows (m := m) (n := n) x i) (rows (m := m) (n := n) δ i)) := by
-    have :
-        inner ℝ dx (jvpMN (m := m) (n := n) x δ)
-          =
-        ∑ p : Fin m × Fin n,
-          dx (finProdFinEquiv p) *
-            (softmaxJvp (n := n) (rows (m := m) (n := n) x p.1) (rows (m := m) (n := n) δ p.1) p.2)
-              := by
-      let g : Fin (m * n) → ℝ := fun ip =>
-        dx ip * (jvpMN (m := m) (n := n) x δ ip)
-      have hsum :
-          (∑ ip : Fin (m * n), g ip) = ∑ p : Fin m × Fin n, g (finProdFinEquiv p) := by
-        simpa [g] using
-          (Equiv.sum_comp (e := (finProdFinEquiv : Fin m × Fin n ≃ Fin (m * n))) (g := g)).symm
-      calc
-        inner ℝ dx (jvpMN (m := m) (n := n) x δ)
-            = ∑ ip : Fin (m * n), g ip := by
-                simp [inner_eq_sum_mul, g]
-        _ = ∑ p : Fin m × Fin n, g (finProdFinEquiv p) := hsum
-        _ = ∑ p : Fin m × Fin n,
-              dx (finProdFinEquiv p) *
-                (softmaxJvp (n := n)
-                    (rows (m := m) (n := n) x p.1)
-                    (rows (m := m) (n := n) δ p.1) p.2) := by
-                classical
-                refine Fintype.sum_congr _ _ ?_
-                intro p
-                simp [g, jvpMN, unrows, rows, MNSize, vecOfFun, mul_comm]
-    calc
-      inner ℝ dx (jvpMN (m := m) (n := n) x δ)
-          = ∑ p : Fin m × Fin n,
-              dx (finProdFinEquiv p) *
-                (softmaxJvp (n := n) (rows (m := m) (n := n) x p.1) (rows (m := m) (n := n) δ p.1)
-                  p.2) := this
-      _ = ∑ i : Fin m, ∑ j : Fin n,
-              dx (finProdFinEquiv (i, j)) *
-                (softmaxJvp (n := n) (rows (m := m) (n := n) x i) (rows (m := m) (n := n) δ i) j) :=
-                  by
-            simp [Fintype.sum_prod_type]
-      _ = ∑ i : Fin m,
-            inner ℝ (rows (m := m) (n := n) dx i)
-              (softmaxJvp (n := n) (rows (m := m) (n := n) x i) (rows (m := m) (n := n) δ i)) := by
-            refine Finset.sum_congr rfl ?_
-            intro i _hi
-            simp [inner_eq_sum_mul, rows, mul_comm]
-  -- finish by applying the vector lemma per row
-  have hrow :
-      ∀ i : Fin m,
-        inner ℝ (softmaxJvp (n := n) (rows (m := m) (n := n) x i) (rows (m := m) (n := n) dx i))
-            (rows (m := m) (n := n) δ i)
-          =
-        inner ℝ (rows (m := m) (n := n) dx i)
-            (softmaxJvp (n := n) (rows (m := m) (n := n) x i) (rows (m := m) (n := n) δ i)) := by
-    intro i
-    simpa using
-      inner_softmaxJvp_comm (n := n)
-        (x := rows (m := m) (n := n) x i)
-        (dx := rows (m := m) (n := n) dx i)
-        (δ := rows (m := m) (n := n) δ i)
-  calc
-    inner ℝ (jvpMN (m := m) (n := n) x dx) δ
-        = ∑ i : Fin m,
-            inner ℝ (softmaxJvp (n := n) (rows (m := m) (n := n) x i) (rows (m := m) (n := n) dx i))
-              (rows (m := m) (n := n) δ i) := hL
-    _ = ∑ i : Fin m,
-            inner ℝ (rows (m := m) (n := n) dx i)
-              (softmaxJvp (n := n) (rows (m := m) (n := n) x i) (rows (m := m) (n := n) δ i)) := by
-          refine Finset.sum_congr rfl ?_
-          intro i _hi
-          exact hrow i
-    _ = inner ℝ dx (jvpMN (m := m) (n := n) x δ) := hR.symm
+  -- Both sides are sums of rowwise inner products; commute `softmaxJvp` on each row.
+  have hL := inner_unrows_unrows (m := m) (n := n)
+    (fun i => softmaxJvp (n := n) (rows (m := m) (n := n) x i) (rows (m := m) (n := n) dx i))
+    (rows (m := m) (n := n) δ)
+  have hR := inner_unrows_unrows (m := m) (n := n) (rows (m := m) (n := n) dx)
+    (fun i => softmaxJvp (n := n) (rows (m := m) (n := n) x i) (rows (m := m) (n := n) δ i))
+  rw [unrows_rows] at hL hR
+  refine hL.trans (Eq.trans ?_ hR.symm)
+  exact Finset.sum_congr rfl fun i _ =>
+    inner_softmaxJvp_comm (n := n) (rows (m := m) (n := n) x i) (rows (m := m) (n := n) dx i)
+      (rows (m := m) (n := n) δ i)
 
 end SoftmaxLastAxis
 
@@ -351,8 +258,8 @@ def derivMN {m n : Nat} (x : Vec (MNSize m n)) : Vec (MNSize m n) →L[ℝ] Vec 
   let DG : (Fin m → Vec n) →L[ℝ] (Fin m → Vec n) :=
     ContinuousLinearMap.pi (R := ℝ) fun i : Fin m =>
       (logSoftmaxDerivCLM (n := n) (r i)).comp (ContinuousLinearMap.proj (R := ℝ) i)
-  (SoftmaxLastAxis.unrowsCLM (m := m) (n := n)).comp (DG.comp (SoftmaxLastAxis.rowsCLM (m := m) (n
-    := n)))
+  (SoftmaxLastAxis.unrowsCLM (m := m) (n := n)).comp
+    (DG.comp (SoftmaxLastAxis.rowsCLM (m := m) (n := n)))
 
 /-- `HasFDerivAt` statement for `logSoftmaxVec` applied rowwise. -/
 theorem hasFDerivAt_forwardMN {m n : Nat} (x : Vec (MNSize m n)) :
@@ -381,12 +288,12 @@ theorem hasFDerivAt_forwardMN {m n : Nat} (x : Vec (MNSize m n)) :
     simpa [Function.comp_def, ContinuousLinearMap.proj_apply] using hlog.comp r0 hproj
 
   have hrows :
-      HasFDerivAt (SoftmaxLastAxis.rowsCLM (m := m) (n := n)) (SoftmaxLastAxis.rowsCLM (m := m) (n
-        := n)) x := by
+      HasFDerivAt (SoftmaxLastAxis.rowsCLM (m := m) (n := n))
+        (SoftmaxLastAxis.rowsCLM (m := m) (n := n)) x := by
     simpa using ((SoftmaxLastAxis.rowsCLM (m := m) (n := n)).hasFDerivAt (x := x))
   have hunrows :
-      HasFDerivAt (SoftmaxLastAxis.unrowsCLM (m := m) (n := n)) (SoftmaxLastAxis.unrowsCLM (m := m)
-        (n := n)) (G r0) := by
+      HasFDerivAt (SoftmaxLastAxis.unrowsCLM (m := m) (n := n))
+        (SoftmaxLastAxis.unrowsCLM (m := m) (n := n)) (G r0) := by
     simpa using ((SoftmaxLastAxis.unrowsCLM (m := m) (n := n)).hasFDerivAt (x := G r0))
   have hmid :
       HasFDerivAt (fun z : Vec (MNSize m n) => G ((SoftmaxLastAxis.rowsCLM (m := m) (n := n)) z))
@@ -402,169 +309,35 @@ theorem hasFDerivAt_forwardMN {m n : Nat} (x : Vec (MNSize m n)) :
     simpa [derivMN, G, r0, DG, Function.comp_def] using hcomp
   refine hcomp'.congr_of_eventuallyEq ?_
   exact Filter.Eventually.of_forall fun z => by
-    simp [forwardMN, G, SoftmaxLastAxis.rowsCLM, SoftmaxLastAxis.unrowsCLM]
+    simp [forwardMN, G]
 
 /-- JVP computed by `jvpMN` agrees with applying the derivative `derivMN`. -/
 theorem jvpMN_eq_derivMN {m n : Nat} (x dx : Vec (MNSize m n)) :
     jvpMN (m := m) (n := n) x dx = (derivMN (m := m) (n := n) x) dx := by
   classical
   ext ip
-  let p : Fin m × Fin n := (finProdFinEquiv : Fin m × Fin n ≃ Fin (m * n)).symm ip
-  simp [jvpMN, derivMN, SoftmaxLastAxis.rowsCLM, SoftmaxLastAxis.rows, SoftmaxLastAxis.unrows,
-    SoftmaxLastAxis.unrowsCLM,
-    MNSize, ContinuousLinearMap.comp_apply, ContinuousLinearMap.proj_apply,
-    logSoftmaxJvp_eq_deriv, logSoftmaxDerivCLM]
+  simp [jvpMN, derivMN, SoftmaxLastAxis.rows, SoftmaxLastAxis.unrows, MNSize,
+    ContinuousLinearMap.comp_apply, ContinuousLinearMap.proj_apply, logSoftmaxJvp_eq_deriv,
+    logSoftmaxDerivCLM]
 
 /-- `logSoftmaxJvp` / `logSoftmaxVjp` adjointness under the inner product, lifted rowwise. -/
 theorem inner_jvpMN_vjp {m n : Nat} (x dx δ : Vec (MNSize m n)) :
     inner ℝ (jvpMN (m := m) (n := n) x dx) δ =
       inner ℝ dx (vjpMN (m := m) (n := n) x δ) := by
-  classical
-  -- Expand to sums over `(i,j)` and apply the vector lemma rowwise.
-  have hL :
-      inner ℝ (jvpMN (m := m) (n := n) x dx) δ
-        =
-      ∑ i : Fin m,
-        inner ℝ
-          (logSoftmaxJvp (n := n) (SoftmaxLastAxis.rows (m := m) (n := n) x i)
-            (SoftmaxLastAxis.rows (m := m) (n := n) dx i))
-          (SoftmaxLastAxis.rows (m := m) (n := n) δ i) := by
-    have :
-        inner ℝ (jvpMN (m := m) (n := n) x dx) δ
-          =
-        ∑ p : Fin m × Fin n,
-          (logSoftmaxJvp (n := n)
-                (SoftmaxLastAxis.rows (m := m) (n := n) x p.1)
-                (SoftmaxLastAxis.rows (m := m) (n := n) dx p.1) p.2) *
-            δ (finProdFinEquiv p) := by
-      let g : Fin (m * n) → ℝ := fun ip =>
-        (jvpMN (m := m) (n := n) x dx ip) * δ ip
-      have hsum :
-          (∑ ip : Fin (m * n), g ip) = ∑ p : Fin m × Fin n, g (finProdFinEquiv p) := by
-        simpa [g] using
-          (Equiv.sum_comp (e := (finProdFinEquiv : Fin m × Fin n ≃ Fin (m * n))) (g := g)).symm
-      calc
-        inner ℝ (jvpMN (m := m) (n := n) x dx) δ
-            = ∑ ip : Fin (m * n), g ip := by
-                simp [inner_eq_sum_mul, g]
-        _ = ∑ p : Fin m × Fin n, g (finProdFinEquiv p) := hsum
-        _ = ∑ p : Fin m × Fin n,
-              (logSoftmaxJvp (n := n)
-                    (SoftmaxLastAxis.rows (m := m) (n := n) x p.1)
-                    (SoftmaxLastAxis.rows (m := m) (n := n) dx p.1) p.2) * δ (finProdFinEquiv p) :=
-                      by
-                classical
-                refine Fintype.sum_congr _ _ ?_
-                intro p
-                simp [g, jvpMN, SoftmaxLastAxis.unrows, SoftmaxLastAxis.rows, MNSize, vecOfFun,
-                  mul_comm]
-    calc
-      inner ℝ (jvpMN (m := m) (n := n) x dx) δ = ∑ p : Fin m × Fin n,
-          (logSoftmaxJvp (n := n)
-                (SoftmaxLastAxis.rows (m := m) (n := n) x p.1)
-                (SoftmaxLastAxis.rows (m := m) (n := n) dx p.1) p.2) *
-            δ (finProdFinEquiv p) := this
-      _ = ∑ i : Fin m, ∑ j : Fin n,
-          (logSoftmaxJvp (n := n)
-                (SoftmaxLastAxis.rows (m := m) (n := n) x i)
-                (SoftmaxLastAxis.rows (m := m) (n := n) dx i) j) *
-            δ (finProdFinEquiv (i, j)) := by
-          simp [Fintype.sum_prod_type]
-      _ = ∑ i : Fin m,
-          inner ℝ
-            (logSoftmaxJvp (n := n) (SoftmaxLastAxis.rows (m := m) (n := n) x i)
-              (SoftmaxLastAxis.rows (m := m) (n := n) dx i))
-            (SoftmaxLastAxis.rows (m := m) (n := n) δ i) := by
-          refine Finset.sum_congr rfl ?_
-          intro i _hi
-          simp [inner_eq_sum_mul, SoftmaxLastAxis.rows]
-  have hR :
-      inner ℝ dx (vjpMN (m := m) (n := n) x δ)
-        =
-      ∑ i : Fin m,
-        inner ℝ (SoftmaxLastAxis.rows (m := m) (n := n) dx i)
-          (logSoftmaxVjp (n := n) (SoftmaxLastAxis.rows (m := m) (n := n) x i)
-            (SoftmaxLastAxis.rows (m := m) (n := n) δ i)) := by
-    have :
-        inner ℝ dx (vjpMN (m := m) (n := n) x δ)
-          =
-        ∑ p : Fin m × Fin n,
-          dx (finProdFinEquiv p) *
-            (logSoftmaxVjp (n := n)
-                (SoftmaxLastAxis.rows (m := m) (n := n) x p.1)
-                (SoftmaxLastAxis.rows (m := m) (n := n) δ p.1) p.2) := by
-      let g : Fin (m * n) → ℝ := fun ip =>
-        dx ip * (vjpMN (m := m) (n := n) x δ ip)
-      have hsum :
-          (∑ ip : Fin (m * n), g ip) = ∑ p : Fin m × Fin n, g (finProdFinEquiv p) := by
-        simpa [g] using
-          (Equiv.sum_comp (e := (finProdFinEquiv : Fin m × Fin n ≃ Fin (m * n))) (g := g)).symm
-      calc
-        inner ℝ dx (vjpMN (m := m) (n := n) x δ)
-            = ∑ ip : Fin (m * n), g ip := by
-                simp [inner_eq_sum_mul, g]
-        _ = ∑ p : Fin m × Fin n, g (finProdFinEquiv p) := hsum
-        _ = ∑ p : Fin m × Fin n,
-              dx (finProdFinEquiv p) *
-                (logSoftmaxVjp (n := n)
-                    (SoftmaxLastAxis.rows (m := m) (n := n) x p.1)
-                    (SoftmaxLastAxis.rows (m := m) (n := n) δ p.1) p.2) := by
-                classical
-                refine Fintype.sum_congr _ _ ?_
-                intro p
-                simp [g, vjpMN, SoftmaxLastAxis.unrows, SoftmaxLastAxis.rows, MNSize, vecOfFun,
-                  mul_comm]
-    calc
-      inner ℝ dx (vjpMN (m := m) (n := n) x δ)
-          = ∑ p : Fin m × Fin n,
-              dx (finProdFinEquiv p) *
-                (logSoftmaxVjp (n := n)
-                    (SoftmaxLastAxis.rows (m := m) (n := n) x p.1)
-                    (SoftmaxLastAxis.rows (m := m) (n := n) δ p.1) p.2) := this
-      _ = ∑ i : Fin m, ∑ j : Fin n,
-              dx (finProdFinEquiv (i, j)) *
-                (logSoftmaxVjp (n := n)
-                    (SoftmaxLastAxis.rows (m := m) (n := n) x i)
-                    (SoftmaxLastAxis.rows (m := m) (n := n) δ i) j) := by
-            simp [Fintype.sum_prod_type]
-      _ = ∑ i : Fin m,
-            inner ℝ (SoftmaxLastAxis.rows (m := m) (n := n) dx i)
-              (logSoftmaxVjp (n := n) (SoftmaxLastAxis.rows (m := m) (n := n) x i)
-                (SoftmaxLastAxis.rows (m := m) (n := n) δ i)) := by
-            refine Finset.sum_congr rfl ?_
-            intro i _hi
-            simp [inner_eq_sum_mul, SoftmaxLastAxis.rows, mul_comm]
-  have hrow :
-      ∀ i : Fin m,
-        inner ℝ
-            (logSoftmaxJvp (n := n) (SoftmaxLastAxis.rows (m := m) (n := n) x i)
-              (SoftmaxLastAxis.rows (m := m) (n := n) dx i))
-            (SoftmaxLastAxis.rows (m := m) (n := n) δ i)
-          =
-        inner ℝ (SoftmaxLastAxis.rows (m := m) (n := n) dx i)
-            (logSoftmaxVjp (n := n) (SoftmaxLastAxis.rows (m := m) (n := n) x i)
-              (SoftmaxLastAxis.rows (m := m) (n := n) δ i)) := by
-    intro i
-    simpa using
-      inner_logSoftmaxJvp_vjp (n := n)
-        (x := SoftmaxLastAxis.rows (m := m) (n := n) x i)
-        (dx := SoftmaxLastAxis.rows (m := m) (n := n) dx i)
-        (δ := SoftmaxLastAxis.rows (m := m) (n := n) δ i)
-  calc
-    inner ℝ (jvpMN (m := m) (n := n) x dx) δ
-        = ∑ i : Fin m,
-            inner ℝ
-              (logSoftmaxJvp (n := n) (SoftmaxLastAxis.rows (m := m) (n := n) x i)
-                (SoftmaxLastAxis.rows (m := m) (n := n) dx i))
-              (SoftmaxLastAxis.rows (m := m) (n := n) δ i) := hL
-    _ = ∑ i : Fin m,
-            inner ℝ (SoftmaxLastAxis.rows (m := m) (n := n) dx i)
-              (logSoftmaxVjp (n := n) (SoftmaxLastAxis.rows (m := m) (n := n) x i)
-                (SoftmaxLastAxis.rows (m := m) (n := n) δ i)) := by
-          refine Finset.sum_congr rfl ?_
-          intro i _hi
-          exact hrow i
-    _ = inner ℝ dx (vjpMN (m := m) (n := n) x δ) := hR.symm
+  -- Both sides are sums of rowwise inner products; apply the vector adjointness on each row.
+  have hL := SoftmaxLastAxis.inner_unrows_unrows (m := m) (n := n)
+    (fun i => logSoftmaxJvp (n := n) (SoftmaxLastAxis.rows (m := m) (n := n) x i)
+      (SoftmaxLastAxis.rows (m := m) (n := n) dx i))
+    (SoftmaxLastAxis.rows (m := m) (n := n) δ)
+  have hR := SoftmaxLastAxis.inner_unrows_unrows (m := m) (n := n)
+    (SoftmaxLastAxis.rows (m := m) (n := n) dx)
+    (fun i => logSoftmaxVjp (n := n) (SoftmaxLastAxis.rows (m := m) (n := n) x i)
+      (SoftmaxLastAxis.rows (m := m) (n := n) δ i))
+  rw [SoftmaxLastAxis.unrows_rows] at hL hR
+  refine hL.trans (Eq.trans ?_ hR.symm)
+  exact Finset.sum_congr rfl fun i _ =>
+    inner_logSoftmaxJvp_vjp (n := n) (SoftmaxLastAxis.rows (m := m) (n := n) x i)
+      (SoftmaxLastAxis.rows (m := m) (n := n) dx i) (SoftmaxLastAxis.rows (m := m) (n := n) δ i)
 
 end LogSoftmaxLastAxis
 
@@ -815,8 +588,8 @@ def softmaxLastFderiv {Γ : List Shape} {m n : Nat}
     have hsoft : HasFDerivAt (SoftmaxLastAxis.forwardMN (m := m) (n := n))
         (SoftmaxLastAxis.derivMN (m := m) (n := n) (getMN xV)) (getMN xV) :=
       SoftmaxLastAxis.hasFDerivAt_forwardMN (m := m) (n := n) (getMN xV)
-    have hout : HasFDerivAt (fun z : Vec (m * n) => outCast z) outCast (SoftmaxLastAxis.forwardMN (m
-      := m) (n := n) (getMN xV)) :=
+    have hout : HasFDerivAt (fun z : Vec (m * n) => outCast z) outCast
+        (SoftmaxLastAxis.forwardMN (m := m) (n := n) (getMN xV)) :=
       outCast.hasFDerivAt (x := SoftmaxLastAxis.forwardMN (m := m) (n := n) (getMN xV))
     have hcomp := hout.comp xV (hsoft.comp xV hget)
     -- rewrite the forwardVec of the node to this composition
@@ -911,7 +684,7 @@ def logSoftmaxLastFderiv {Γ : List Shape} {m n : Nat}
           outCast (LogSoftmaxLastAxis.forwardMN (m := m) (n := n) (getMN xV)) := by
       funext xV
       ext i
-      -- Same proof structure as `softmax_last_fderiv`: keep `castVec` opaque to `simp`.
+      -- Same proof structure as `softmaxLastFderiv`: keep `castVec` opaque to `simp`.
       simp [logSoftmaxLast, Node.forwardVec_ofFn, getMN, outCast, Graph.castCLM]
     exact hcomp.congr_of_eventuallyEq hEq.eventuallyEq
   · intro xV dxV

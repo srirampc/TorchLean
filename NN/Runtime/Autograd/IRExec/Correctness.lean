@@ -54,18 +54,3 @@ correctness, ir, runtime, lowering, semantic equivalence
 -/
 
 @[expose] public section
-
-
-namespace Runtime
-namespace Autograd
-namespace IRExec
-
-open Spec TorchLean
-open TorchLean TorchLean.Tensor
-open Proofs.Autograd.Algebra
-open NN.IR
-open Internal
-
-end IRExec
-end Autograd
-end Runtime

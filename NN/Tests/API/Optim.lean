@@ -92,8 +92,9 @@ def checkOptimizerDescription : IO Unit := do
       (config.beta2, rebuilt.beta2), (config.epsilon, rebuilt.epsilon)] do
     unless original.toBits == decoded.toBits do
       fail "rebuilding the described Adam configuration changed a field's bits"
-  unless optimizer.validate.isOk && optimizer.validateFloat32.isOk &&
-      (optim.adam rebuilt).validate.isOk && (optim.adam rebuilt).validateFloat32.isOk do
+  unless optimizer.validate.isOk && (optimizer.validateFor (α := Float32)).isOk &&
+      (optim.adam rebuilt).validate.isOk &&
+      ((optim.adam rebuilt).validateFor (α := Float32)).isOk do
     fail "copying the Adam description must preserve binary64 and binary32 validity"
 
 /-- A user-defined scalar can retain the original conversion-only instance contract. -/
@@ -142,7 +143,7 @@ def run : IO Unit := do
       optim.adam { learningRate := 0.1, beta2 := 0.999999999 },
       optim.adamW { learningRate := 0.1, weightDecay := 1e300 },
       optim.adaDelta { rho := 0.999999999 }] do
-    unless optimizer.validate.isOk && !optimizer.validateFloat32.isOk do
+    unless optimizer.validate.isOk && !(optimizer.validateFor (α := Float32)).isOk do
       fail "configuration must be valid in binary64 but invalid after binary32 conversion"
     checkManualOptimizer (α := Float32) "Float32" optimizer false
     checkManualOptimizer (α := (Binary 8 23)) "IEEE32" optimizer false
@@ -155,14 +156,14 @@ def run : IO Unit := do
           (α := TorchLean.Complex (Binary 8 23))).isOk then
       fail "dual and complex scalars must inherit the component's validation rounding"
   let ordinary := optim.adam { learningRate := 0.001 }
-  unless ordinary.validateFloat32.isOk do
+  unless (ordinary.validateFor (α := Float32)).isOk do
     fail "default Adam settings should remain valid in binary32"
   checkManualOptimizer (α := Float32) "Float32" ordinary true
   checkManualOptimizer (α := (Binary 8 23)) "IEEE32" ordinary true
   checkManualOptimizer (α := Float) "Float" ordinary true
   checkManualOptimizer (α := Float) "Float/CUDA" ordinary true { device := .cuda }
   let negative := optim.sgd { learningRate := -1e-300 }
-  unless !negative.validateFloat32.isOk do
+  unless !(negative.validateFor (α := Float32)).isOk do
     fail "binary32 underflow must not hide a negative input learning rate"
   checkManualOptimizer (α := Float32) "Float32" negative false
   checkManualOptimizer (α := (Binary 8 23)) "IEEE32" negative false
@@ -174,14 +175,14 @@ def run : IO Unit := do
       Trainer.Scheduler.step 1e300 2,
       Trainer.Scheduler.exponential 1e300 0.9,
       Trainer.Scheduler.warmupCosine 1e300 0.0 2 4] do
-    unless (Trainer.Scheduler.validate schedule).isOk &&
-        !(Trainer.Scheduler.validateFloat32 schedule).isOk do
+    unless schedule.validate.isOk &&
+        !(schedule.validate (round := fun value => value.toFloat32.toFloat)).isOk do
       fail "schedule must reject a rate that overflows binary32"
-  unless (Trainer.Scheduler.validateFloat32
-      (Trainer.Scheduler.warmupCosine 0.01 0.001 2 4)).isOk do
+  unless ((Trainer.Scheduler.warmupCosine 0.01 0.001 2 4).validate
+      (round := fun value => value.toFloat32.toFloat)).isOk do
     fail "ordinary warmup schedule should be valid in binary32"
   let peak := 1e308
-  unless Trainer.Scheduler.learningRateAt
+  unless Trainer.Scheduler.Config.rate
       (Trainer.Scheduler.warmupCosine peak 0.0 2 4) 1 == peak do
     fail "the final warmup update must reach a finite peak without intermediate overflow"
 

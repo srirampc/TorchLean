@@ -159,39 +159,17 @@ def renderApplication (expression : Expr) : MetaM String := do
         "one output fill through the certified output-to-input coordinate map"
         "Lowering.repeatTensor_correct" "Semantics.denoteRepeat"
   else if expression.isAppOfArity ``Lowering.reduceFoldTensor 11 then
-    let step := arguments[5]!
-    let finish := arguments[7]!
-    let directFoldExecution :=
+    let operation := "reduce (ordered fold)"
+    let nativeExecution :=
       "allocate one output buffer, fold each removed-axis fiber directly \
         from left to right in row-major order, and finalize it once."
-    let (operation, nativeExecution, nonemptyReduction) :=
-      if containsConstant finish ``HDiv.hDiv then
-        ("reduce (nonempty aggregate)",
-          "allocate one output buffer, fold each certified nonempty \
-            removed-axis fiber from left to right in row-major order, and \
-            divide once by its certified cardinality.", true)
-      else if containsConstant step ``Bool.or then
-        ("reduce", directFoldExecution, false)
-      else if containsConstant step ``Bool.and then
-        ("reduce", directFoldExecution, false)
-      else if containsConstant step ``HMul.hMul then
-        ("reduce", directFoldExecution, false)
-      else if containsConstant step ``HAdd.hAdd then
-        ("reduce", directFoldExecution, false)
-      else
-        ("reduce (ordered fold)", directFoldExecution, false)
     let correctnessTheorem :=
       "Lowering.reduceFoldTensor_ordered_correct"
     let denotation :=
       "Semantics.denoteOrderedReduce with the same row-major left-fold order"
     let logicalStages :=
-      if nonemptyReduction then
-        ["reshape into elementary axes", "move retained axes first",
-         "aggregate provably nonempty fibers",
-         "reshape into physical output"]
-      else
-        ["reshape into elementary axes", "move retained axes first",
-         "aggregate removed-axis fibers", "reshape into physical output"]
+      ["reshape into elementary axes", "move retained axes first",
+       "aggregate removed-axis fibers", "reshape into physical output"]
     let inputScalarType ← formatType arguments[0]!
     let accumulatorType ← formatType arguments[1]!
     let outputScalarType ← formatType arguments[2]!
@@ -214,11 +192,7 @@ def renderApplication (expression : Expr) : MetaM String := do
           equations are certified by the checked plan.",
        "Axis relation: every retained output axis comes from the input.",
        "The reduction-fiber shape and cardinality are derived from exactly \
-          the removed elementary axes."] ++
-        if nonemptyReduction then
-          ["The symbolic reduction-fiber cardinality is certified positive."]
-        else
-          []
+          the removed elementary axes."]
     let symbolicWork :=
       ["Output entries: Shape.size outputShape.",
        "Input visits and fold-step calls: Shape.size outputShape × \
@@ -230,20 +204,14 @@ def renderApplication (expression : Expr) : MetaM String := do
     return (← concreteTransformReport operation arguments[8]!
         arguments[0]! arguments[2]! supplementaryTypeEntries
         nativeExecution correctnessTheorem denotation
-        nonemptyReduction true).getD <|
+        false true).getD <|
       symbolicReport operation symbolicTypeEntries symbolicObligations
         logicalStages symbolicWork nativeExecution correctnessTheorem
         denotation
   else if expression.isAppOfArity
       ``Lowering.reduceNonemptyFoldTensor 7 then
     let step := arguments[2]!
-    let operation :=
-      if containsConstant step ``min then
-        "reduce (minimum)"
-      else if containsConstant step ``max then
-        "reduce (maximum)"
-      else
-        "reduce (ordered nonempty fold)"
+    let operation := "reduce (ordered nonempty fold)"
     let inputScalarType ← formatType arguments[0]!
     let stepType ← inferredType step
     let supplementaryTypeEntries := [
@@ -454,22 +422,40 @@ def renderApplication (expression : Expr) : MetaM String := do
         "one direct output fill per component through the certified packed \
           coordinate map"
         "Lowering.unpackTensor_correct" "Semantics.denoteUnpack"
-  else
+  else if expression.isAppOfArity ``Check.checkParseShape 2 then
+    if let some report ← concreteParseShapeReport arguments[0]! arguments[1]! then
+      return report
+    let result ← reportWhnf expression
+    let succeeded := result.isAppOfArity ``Except.ok 3
+    let rejected := result.isAppOfArity ``Except.error 3
+    let operation :=
+      if succeeded then "parse_shape (symbolic metadata check)"
+      else if rejected then "parse_shape (rejected metadata check)"
+      else "parse_shape (unverified metadata check)"
     let shapeType ← inferredType arguments[1]!
     let checkerResultType ← inferredType expression
-    return (← concreteParseShapeReport arguments[0]! arguments[1]!).getD <|
-      String.intercalate "\n" <|
-        ["parse_shape (symbolic metadata check)"] ++
+    let obligations ←
+      if succeeded then
+        pure <| reportSection "Discharged obligations"
+          ["The checker reduces to success; its correctness theorems \
+              certify grammar, rank, ellipsis, literal, unit-axis, and \
+              unique-name requirements.",
+           "Returned dimension expressions remain symbolic in the local context."]
+      else if rejected then
+        pure <| reportSection "Check status"
+          [s!"The checker rejects this input: {← ppExpr result.getAppArgs[2]!}"]
+      else
+        pure <| reportSection "Check status"
+          ["The checker result remains symbolic. Success has not been established.",
+           "Correctness theorems require a proof that checking returns `Except.ok`."]
+    return String.intercalate "\n" <|
+        [operation] ++
           typeCheckSection [
             ("Structural shape metadata", shapeType),
             ("Checker result", checkerResultType),
             ("Rep scalar type",
               "arbitrary and erased before this metadata check")] ++
-          reportSection "Discharged obligations"
-            ["A generated kernel proof certifies grammar, rank, ellipsis, \
-                literal, unit-axis, and unique-name requirements.",
-             "Actual dimension expressions remain symbolic in the local \
-                context."] ++
+          obligations ++
           reportSection "Shape-derived work estimate"
             ["Rep scalar reads: 0.",
              "Rep output buffers: 0.",
@@ -477,6 +463,8 @@ def renderApplication (expression : Expr) : MetaM String := do
           reportSection "Correctness"
             ["Successful checking yields ordered, duplicate-free bindings \
                 whose lengths agree with their physical dimensions."]
+  else
+    return "Unsupported einops application"
 
 
 end Report

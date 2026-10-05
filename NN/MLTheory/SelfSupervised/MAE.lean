@@ -88,8 +88,8 @@ theorem maeLoss_eq_zero_of_patch_losses_zero {n : Nat} {Patch Pred : Type}
     (idxs : Array (Fin n)) (target : PatchBatch n Patch) (pred : Fin n → Pred)
     (patchLoss : Patch → Pred → Nat)
     (h : ∀ i ∈ idxs, patchLoss (target i) (pred i) = 0) :
-    maeLoss idxs target pred patchLoss = 0 := by
-  exact maskedLoss_eq_zero_of_all_zero idxs (fun i => patchLoss (target i) (pred i)) h
+    maeLoss idxs target pred patchLoss = 0 :=
+  maskedLoss_eq_zero_of_all_zero idxs (fun i => patchLoss (target i) (pred i)) h
 
 /-- Reconstructing with the identity decoder/prediction is exact. -/
 theorem exactReconstruction_identity {n : Nat} {Patch : Type} (x : PatchBatch n Patch) :

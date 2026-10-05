@@ -9,6 +9,7 @@ module
 public import NN.API.Json
 public import NN.Runtime.PyTorch.Import.CNN
 public import NN.Runtime.PyTorch.Import.MLP
+public import NN.Runtime.PyTorch.Export.MLP
 public import NN.Examples.Interop.PyTorch.Roundtrip
 public import NN.Runtime.PyTorch.Import.Transformer
 public import NN.Tests.Runtime.Floats.Utils
@@ -124,16 +125,16 @@ def parityScript : String :=
 
 def leanMlp : IO (Array Float) := do
   let y ← NN.Examples.Interop.PyTorch.Roundtrip.mlpOutput
-  pure #[vecVal y ⟨0, by decide⟩]
+  pure #[Tensor.getScalar y ⟨0, by decide⟩]
 
 def leanCnn : IO (Array Float) := do
   let y ← NN.Examples.Interop.PyTorch.Roundtrip.cnnOutput
-  pure #[vecVal y ⟨0, by decide⟩, vecVal y ⟨1, by decide⟩]
+  pure #[Tensor.getScalar y ⟨0, by decide⟩, Tensor.getScalar y ⟨1, by decide⟩]
 
 def leanTransformer : IO (Array Float) := do
   let y ← NN.Examples.Interop.PyTorch.Roundtrip.transformerOutput
-  pure #[matVal y ⟨0, by decide⟩ ⟨0, by decide⟩,
-    matVal y ⟨0, by decide⟩ ⟨1, by decide⟩]
+  pure #[Tensor.get2 y ⟨0, by decide⟩ ⟨0, by decide⟩,
+    Tensor.get2 y ⟨0, by decide⟩ ⟨1, by decide⟩]
 
 def parseJson! (source : String) : IO Json :=
   match Json.parse source with
@@ -148,7 +149,7 @@ def checkImporterBoundaries : IO Unit := do
     | throw <| IO.userError "pytorch_roundtrip_parity: rejected valid wrapped weights"
   let some weight := Import.PyTorch.getTensor? weights "weight" [1]
     | throw <| IO.userError "pytorch_roundtrip_parity: failed to parse wrapped weight"
-  unless vecVal weight ⟨0, by decide⟩ == 1.0 do
+  unless Tensor.getScalar weight ⟨0, by decide⟩ == 1.0 do
     throw <| IO.userError "pytorch_roundtrip_parity: wrapper field shadowed a parameter"
 
   let float32 ← parseJson!
@@ -161,6 +162,45 @@ def checkImporterBoundaries : IO Unit := do
   if (Import.PyTorch.loadWeights? float64).isSome then
     throw <| IO.userError "pytorch_roundtrip_parity: accepted unsupported float64 metadata"
 
+/-- Execute the emitted class skeleton and both MLP variants, including their summary API. -/
+def checkGeneratedPythonContract : IO Unit := do
+  let source := Export.PyTorch.MLP.completeSource
+      (inputWidth := 2) (hiddenWidth := 3) (outputWidth := 2) "Fixture" ++ "\n" ++
+    Export.PyTorch.generateBasePyTorchModule "Base" "Regression fixture" ++ "\n" ++
+    String.intercalate "\n"
+      [ "assert '_initialize_layers' in Base.__dict__"
+      , "try:"
+      , "    Base()"
+      , "except NotImplementedError:"
+      , "    pass"
+      , "else:"
+      , "    raise AssertionError('base initialization must require an override')"
+      , "class Concrete(Base):"
+      , "    def _initialize_layers(self):"
+      , "        self.layer = nn.Linear(2, 2)"
+      , "    def forward(self, x):"
+      , "        return self.layer(x)"
+      , "assert Concrete()(torch.zeros(1, 2)).shape == (1, 2)"
+      , "for cls, count in [(Fixture, 3), (FixtureWithSoftmax, 4)]:"
+      , "    model = cls()"
+      , "    info = model.get_model_info()"
+      , "    assert info['model_name'] == cls.__name__"
+      , "    assert info['layer_count'] == count"
+      , "    assert info['input_dim'] == 2 and info['hidden_dim'] == 3"
+      , "    assert info['output_dim'] == 2"
+      , "    assert info['input_shape'] == (2,) and info['output_shape'] == (2,)"
+      , "    assert len(info['operation_types']) == count"
+      , "    assert model(torch.zeros(1, 2)).shape == (1, 2)"
+      , "    print_model_summary(model)"
+      , "assert torch.allclose(FixtureWithSoftmax()(torch.zeros(1, 2)).sum(1), torch.ones(1))"
+      ]
+  let path := workDir / "generated_contract.py"
+  IO.FS.writeFile path source
+  let _ ← TorchLean.External.Process.run
+    (ctx := "pytorch_generated_contract") (cmd := "python3") (args := #[path.toString])
+    (cwd := some ".")
+  pure ()
+
 def run : IO Unit := do
   IO.println "pytorch_roundtrip_parity: begin"
   checkImporterBoundaries
@@ -168,8 +208,9 @@ def run : IO Unit := do
     IO.println "pytorch_roundtrip_parity: skipped (python package `torch` not installed)"
     return ()
   IO.FS.createDirAll workDir
+  checkGeneratedPythonContract
   IO.FS.writeFile parityScriptPath parityScript
-  let out ← TorchLean.External.Process.runStdoutChecked
+  let out ← TorchLean.External.Process.run
     (ctx := "pytorch_roundtrip_parity")
     (cmd := "python3")
     (args := #[parityScriptPath.toString])

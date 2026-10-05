@@ -144,8 +144,7 @@ def LinearSVM.backward
   (y : Tensor α [n]) :
   (Tensor α [p] × α × Tensor α [n, p]) :=
 
-  let nα : α := (n : α)
-  let invN : α := 1 / (Max.max nα Context.defaultEpsilon)
+  let invN : α := 1 / (meanDenominator [n] : α)
 
   -- Regularization contribution: λ w
   let regDw : Tensor α [p] := scaleSpec m.w lambda
@@ -314,7 +313,8 @@ def linear {p : ℕ} (x y : Tensor α [p]) : α :=
 /-- Polynomial kernel: `k(x, y) = (x·y + c)^degree` (naive power for generic `α`). -/
 def polynomial {p : ℕ} (degree : Nat) (c : α) (x y : Tensor α [p]) : α :=
   let dot := Tensor.dotSpec x y
-  -- Generic `α` does not provide a `Float.pow`-style operation, so use recursive multiplication.
+  -- Fix the multiplication order for a natural degree. The scalar `Pow α α` operation
+  -- does not specify this schedule, including the multiplication-free degree-one case.
   let rec powRec (base : α) (exp : Nat) : α :=
     match exp with
     | 0 => (1 : α)

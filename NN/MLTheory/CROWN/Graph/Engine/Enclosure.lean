@@ -55,14 +55,8 @@ theorem boxUnaryEnclosure?_enclosesReal [LawfulBoundOps α] [NonlinearBoundOps �
     EnclosesRealValue out (Tensor.mapSpec f x) := by
   simp only [boxUnaryEnclosure?] at hout
   obtain ⟨bounds, hbounds, hout⟩ := Option.bind_eq_some_iff.mp hout
-  have hpoint := Internal.traverseFin_eq_some_iff.mp hbounds
-  have houtEq :
-      out =
-        { dim := B.dim
-          lo := Tensor.ofFn fun i => (bounds i).1
-          hi := Tensor.ofFn fun i => (bounds i).2 } := by
-    exact (Option.some.inj hout).symm
-  subst out
+  have hpoint := Tensor.Internal.sequenceFinM_get_of_eq_some hbounds
+  obtain rfl := Option.some.inj hout
   refine ⟨rfl, ?_⟩
   intro i
   have hscalar := henclose (hpoint i) (hx i).1 (hx i).2

@@ -94,7 +94,7 @@ def parseIdent (st : Cursor) : Except String (String × Cursor) := do
 
 /-! ## Built-in constants and unary functions -/
 
-/-- Internal: interpret built-in constants like `pi` / `π`. -/
+/-- Interpret built-in constants like `pi` / `π`. -/
 def constOfIdent? (id : String) : Option Float :=
   if id = "pi" ∨ id = "π" then some 3.14159265358979323846 else none
 
@@ -258,7 +258,7 @@ def parseExpr (s : String) : Except String Expr :=
   match Internal.parseExprFuel fuel st0 with
   | .ok (e, st) =>
     let st' := Internal.skipWs st
-    if st'.position = st'.source.rawEndPos then .ok e else .error "trailing input"
+    if TextCursor.atEnd st' then .ok e else .error "trailing input"
   | .error msg => .error msg
 
 end NN.Verification.ODE.Parse

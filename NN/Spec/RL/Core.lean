@@ -55,8 +55,12 @@ stop). -/
 def continueMask [Zero α] [One α] (done : Bool) : α :=
   if done then 0 else 1
 
-/-- Bellman-style one-step backup:
-$r+\gamma(1-\mathtt{done})\mathtt{bootstrap}$. -/
+/--
+Bellman-style one-step backup: $r+\gamma(1-\mathtt{done})\mathtt{bootstrap}$.
+
+Termination masks by multiplication, without short-circuiting the bootstrap. In floating-point
+arithmetic, a terminal transition can therefore still produce NaN from a NaN or infinite bootstrap.
+-/
 def discountedBackup [Zero α] [One α] [Add α] [Mul α]
     (reward gamma bootstrap : α) (done : Bool) : α :=
   reward + gamma * continueMask (α := α) done * bootstrap

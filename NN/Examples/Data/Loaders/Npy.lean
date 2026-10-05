@@ -26,10 +26,11 @@ Generate small deterministic `.npy` files with
 
 Build:
 
-- `lake build NN.Examples.Data.Loaders.Npy`
+- `scripts/lake.sh build NN.Examples.Data.Loaders.Npy`
 
 The tutorial code is compiled with the rest of TorchLean and is directly runnable as
-`lake exe torchlean data_npy`. It checks the array metadata before constructing the typed dataset,
+`scripts/lake.sh exe torchlean data_npy`. It checks the array metadata before
+constructing the typed dataset,
 then trains through the same public trainer used by the model examples.
 
 Optional flags (tutorial-specific):
@@ -72,21 +73,12 @@ def model {batchSize : Nat} :
     nn.Builder (nn.Sequential [batchSize, inputWidth] [batchSize, outputWidth]) :=
   nn.mlp inputWidth outputWidth { hiddenWidths := [hiddenWidth] } [batchSize]
 
-/-- Read exactly two matrix dimensions from untrusted NPY metadata. -/
-def Internal.matrixDimensions? (shape : Array Nat) : Option (Nat × Nat) := do
-  let rows ← shape[0]?
-  let columns ← shape[1]?
-  if shape.size = 2 then
-    pure (rows, columns)
-  else
-    none
-
 /-- Validate the two NPY shapes and return their shared leading-axis size. -/
-def rowCountFromMetadata
+def rowCount
     (xShape yShape : Array Nat) :
     Except String Nat :=
-  match Internal.matrixDimensions? xShape, Internal.matrixDimensions? yShape with
-  | some (xRows, xWidth), some (yRows, yWidth) =>
+  match xShape, yShape with
+  | #[xRows, xWidth], #[yRows, yWidth] =>
     if xWidth != inputWidth then
       .error s!"X.npy: expected shape (N,{inputWidth}), got {xShape}"
     else if yWidth != outputWidth then
@@ -106,7 +98,7 @@ def usage : String :=
     [ "TorchLean NPY loader tutorial"
     , ""
     , "Usage:"
-    , "  lake exe torchlean data_npy [options]"
+    , "  scripts/lake.sh exe torchlean data_npy [options]"
     , ""
     , "Options:"
     , "  --data-dir PATH"
@@ -117,7 +109,7 @@ def usage : String :=
     , "  --steps N"
     , "  --arithmetic native|ieee"
     , "  --execution eager|typed-graph"
-    , "  --device auto|cpu|cuda|rocm|metal|wasm|tpu|trainium|custom|external"
+    , "  --device auto|cpu|gpu|cuda|rocm|metal|wasm|tpu|trainium|custom|external"
     , "  --show-backend                    print backend capsules as they execute"
     ]
 
@@ -143,7 +135,7 @@ def main (args : List String) : IO Unit := do
   let run ← TorchLean.CLI.Trainer.parseCommandLine exeName args
     { optimizer := optim.adam { learningRate := 0.05 } }
   let trainer := Trainer.new network <|
-    Trainer.RunConfig.forObjective run .meanSquaredError (seed := seed)
+    Trainer.RunConfig.forObjective run .mse (seed := seed)
 
   IO.println "== NPY loader training tutorial =="
   trainer.printSummary
@@ -159,7 +151,7 @@ def main (args : List String) : IO Unit := do
   IO.println s!"X.npy dtype={xMeta.dtype} shape={xMeta.shape}"
   IO.println s!"y.npy dtype={yMeta.dtype} shape={yMeta.shape}"
   let rowCount ← CLI.orThrow exeName <|
-    rowCountFromMetadata xMeta.shape yMeta.shape
+    rowCount xMeta.shape yMeta.shape
 
   let src : Data.SupervisedSource :=
     Data.SupervisedSource.fromFiles xPath yPath rowCount [inputWidth] [outputWidth]

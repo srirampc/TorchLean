@@ -37,8 +37,6 @@ open Spec TorchLean
 open TorchLean TorchLean.Tensor
 open Spec.RL
 
-open TorchLean.Floats
-open TorchLean.Floats.IEEE754
 
 /-!
 ## Checked value-learning and advantage-estimation building blocks (configured binary32)
@@ -54,8 +52,8 @@ Checked TD residual / Bellman error:
 `r + γ * (1-done) * nextValue - value`.
 -/
 def tdResidualChecked
-    (value reward gamma nextValue : Float32Exec) (done : Bool) :
-    Except String Float32Exec :=
+    (value reward gamma nextValue : Binary 8 23) (done : Bool) :
+    Except String (Binary 8 23) :=
   match discountedBackupChecked (reward := reward) (gamma := gamma)
       (bootstrap := nextValue) (done := done) with
   | .error e => .error e
@@ -75,38 +73,35 @@ If `tdResidualChecked` returns `.ok out`, then:
 This is the runtime-checker analogue of `discountedBackup_eq_ok`.
 -/
 theorem tdResidual_eq_ok
-    (value reward gamma nextValue : Float32Exec) (done : Bool) (out : Float32Exec)
+    (value reward gamma nextValue : Binary 8 23) (done : Bool) (out : Binary 8 23)
     (h : tdResidualChecked value reward gamma nextValue done = .ok out) :
     Binary.isFinite
-        (ExecFloat.mul gamma (continueMask (α := Float32Exec) done)) =
+        (ExecFloat.mul gamma (continueMask (α := Binary 8 23) done)) =
       true ∧
       Binary.isFinite
           (ExecFloat.mul
-            (ExecFloat.mul gamma (continueMask (α := Float32Exec) done))
+            (ExecFloat.mul gamma (continueMask (α := Binary 8 23) done))
             nextValue) =
         true ∧
         Binary.isFinite
             (ExecFloat.add reward
               (ExecFloat.mul
                 (ExecFloat.mul gamma
-                  (continueMask (α := Float32Exec) done))
+                  (continueMask (α := Binary 8 23) done))
                 nextValue)) =
           true ∧
           Binary.isFinite value = true ∧
           Binary.isFinite
               (ExecFloat.sub
-                (discountedBackup (α := Float32Exec) reward gamma nextValue done) value) =
+                (discountedBackup (α := Binary 8 23) reward gamma nextValue done) value) =
             true ∧
-            out = tdResidual (α := Float32Exec) value reward gamma nextValue done := by
+            out = tdResidual (α := Binary 8 23) value reward gamma nextValue done := by
   -- First, extract the checked discounted-backup call.
   cases htarget : discountedBackupChecked (reward := reward) (gamma := gamma)
       (bootstrap := nextValue) (done := done) with
   | error e =>
       -- Contradiction: the TD residual is an `.error` in this branch.
-      have : False := by
-        have h' := h
-        simp [tdResidualChecked, htarget] at h'
-      exact this.elim
+      simp [tdResidualChecked, htarget] at h
   | ok target =>
       -- The `.ok` TD residual means the value finiteness check and the subsequent checked
       -- subtraction both succeeded.
@@ -115,10 +110,7 @@ theorem tdResidual_eq_ok
         | true =>
             rfl
         | false =>
-            have : False := by
-              have h' := h
-              simp [tdResidualChecked, htarget, requireFinite, hf] at h'
-            exact this.elim
+            simp [tdResidualChecked, htarget, requireFinite, hf] at h
 
       have hsub :
           checkedSub "tdResidual/sub(target,value)" target value = .ok out := by
@@ -131,25 +123,18 @@ theorem tdResidual_eq_ok
           (out := target) htarget
 
       -- Now handle the checked subtraction.
-      set out0 : Float32Exec := ExecFloat.sub target value
+      set out0 : Binary 8 23 := ExecFloat.sub target value
       have hout0 : Binary.isFinite out0 = true := by
         cases hf : Binary.isFinite out0 with
         | true =>
             rfl
         | false =>
-            have : False := by
-              have h' := hsub
-              simp [checkedSub, requireFinite, out0, hf] at h'
-            exact this.elim
+            simp [checkedSub, requireFinite, out0, hf] at hsub
 
       have hout : out = out0 := by
         have : checkedSub "tdResidual/sub(target,value)" target value = .ok out0 := by
           simp [checkedSub, requireFinite, out0, hout0]
-        have hok : (Except.ok out : Except String Float32Exec) = Except.ok out0 := by
-          exact hsub.symm.trans this
-        have : out = out0 := by
-          injection hok
-        exact this
+        exact Except.ok.inj (hsub.symm.trans this)
 
       -- Assemble the final statement.
       refine ⟨h₁, h₂, h₃, hval, ?_, ?_⟩
@@ -164,38 +149,58 @@ theorem tdResidual_eq_ok
 
 /--
 Checked fixed-horizon Generalized Advantage Estimation ($\operatorname{GAE}(\lambda)$), specialized
-to `ExecFloat.Binary 8 23`.
+to `Binary 8 23`, with separate episode masks.
 
-This is the checked/finite counterpart to `Runtime.RL.Core.generalizedAdvantageEstimation`.
+`terminated[t]` drops the bootstrap value `nextValues[t]`; `boundaries[t]` stops the advantage
+recursion from reading step `t + 1`. A time-limit truncation sets only `boundaries[t]`, so the step
+still bootstraps from the pre-reset next value without mixing in the next episode's advantages.
+This matches `PPO.Rollout.Internal.generalizedAdvantageEstimationWithBoundaries`.
 
 Reference:
 - Schulman et al., "High-Dimensional Continuous Control Using Generalized Advantage Estimation"
   (2015): https://arxiv.org/abs/1506.02438
 -/
-def generalizedAdvantageEstimationChecked {n : Nat}
-    (gamma lam : Float32Exec)
-    (rewards values nextValues : Tensor Float32Exec [n])
-    (dones : Tensor Bool [n]) :
-    Except String (Tensor Float32Exec [n]) := do
+def generalizedAdvantageEstimationWithBoundariesChecked {n : Nat}
+    (gamma lam : Binary 8 23)
+    (rewards values nextValues : Tensor (Binary 8 23) [n])
+    (terminated boundaries : Tensor Bool [n]) :
+    Except String (Tensor (Binary 8 23) [n]) := do
   let indices : Tensor (Fin n) [n] := Tensor.ofFn id
   Tensor.scanrM (fun idx advNext => do
-    let done := dones[idx]
-    let mask : Float32Exec := continueMask (α := Float32Exec) done
-    -- delta = r + γ * mask * nextValue - value
-    let t1 ← checkedMul "gae/mul(gamma,mask)" gamma mask
+    let bootstrapMask : Binary 8 23 := continueMask (α := Binary 8 23) terminated[idx]
+    let continuationMask : Binary 8 23 := continueMask (α := Binary 8 23) boundaries[idx]
+    -- delta = r + γ * bootstrapMask * nextValue - value
+    let t1 ← checkedMul "gae/mul(gamma,mask)" gamma bootstrapMask
     let t2 ← checkedMul "gae/mul(t1,nextValue)" t1 nextValues[idx]
     let t3 ← checkedAdd "gae/add(reward,t2)" rewards[idx] t2
     let delta ← checkedSub "gae/sub(t3,value)" t3 values[idx]
-    -- adv = delta + γ * λ * mask * advNext
+    -- adv = delta + γ * λ * continuationMask * advNext
     let u1 ← checkedMul "gae/mul(gamma,lam)" gamma lam
-    let u2 ← checkedMul "gae/mul(u1,mask)" u1 mask
+    let u2 ← checkedMul "gae/mul(u1,mask)" u1 continuationMask
     let u3 ← checkedMul "gae/mul(u2,advNext)" u2 advNext
     let adv ← checkedAdd "gae/add(delta,u3)" delta u3
     pure adv) 0 indices
 
 /--
+Checked fixed-horizon GAE with a single `dones` mask, the checked counterpart to
+`Runtime.RL.Core.generalizedAdvantageEstimation`.
+
+Each `dones[t]` both drops the bootstrap value and stops the recursion, so it should mark true
+termination. For rollouts with time-limit truncation use
+`generalizedAdvantageEstimationWithBoundariesChecked`, passing the terminal flags and the
+terminal-or-truncated flags separately.
+-/
+def generalizedAdvantageEstimationChecked {n : Nat}
+    (gamma lam : Binary 8 23)
+    (rewards values nextValues : Tensor (Binary 8 23) [n])
+    (dones : Tensor Bool [n]) :
+    Except String (Tensor (Binary 8 23) [n]) :=
+  generalizedAdvantageEstimationWithBoundariesChecked gamma lam rewards values nextValues
+    dones dones
+
+/--
 Checked z-score normalization (mean-center then divide by standard deviation), specialized to
-`ExecFloat.Binary 8 23`.
+`Binary 8 23`.
 
 This is used by PPO to normalize advantages.
 
@@ -205,11 +210,11 @@ finite. If the computed standard deviation is zero, `normalizeZscoreSpec` return
 vector, which is still validated for finiteness here.
 -/
 def normalizeZScoreChecked {n : Nat}
-    (x : Tensor Float32Exec [n]) :
-    Except String (Tensor Float32Exec [n]) := do
-  let y : Tensor Float32Exec [n] :=
-    Spec.normalizeZscoreSpec (α := Float32Exec) (n := n) x
-  if Boundary.tensorAll (α := Float32Exec) (s := .dim n .scalar)
+    (x : Tensor (Binary 8 23) [n]) :
+    Except String (Tensor (Binary 8 23) [n]) := do
+  let y : Tensor (Binary 8 23) [n] :=
+    Spec.normalizeZscoreSpec (α := Binary 8 23) (n := n) x
+  if Boundary.tensorAll (α := Binary 8 23) (s := .dim n .scalar)
       (fun z => Binary.isFinite z) y then
     .ok y
   else

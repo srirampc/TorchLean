@@ -53,7 +53,7 @@ Build the shared simplifier for compact row-major index programs.
 Callers may provide operation-specific definitions such as the compact
 reduction index. Coordinate semantics and proof fields remain opaque.
 -/
-def rowMajorIndexSimpContext
+private def rowMajorIndexSimpContext
     (extraDeclarations : Array Name := #[]) : MetaM Simp.Context := do
   let mut simpTheorems ← getSimpTheorems
   let declarations := #[

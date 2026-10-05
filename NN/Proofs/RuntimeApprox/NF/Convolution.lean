@@ -7,7 +7,6 @@ Authors: TorchLean Team
 module
 
 public import NN.Proofs.Autograd.Tape.Ops.Conv.Index
-public import NN.Proofs.RuntimeApprox.NF.FoldLemmas
 public import NN.Tensor.Conversion
 public import NN.Proofs.RuntimeApprox.NF.Ops.Scalar
 
@@ -31,54 +30,54 @@ open Flocq
 
 noncomputable section
 
-variable {beta : Radix} {fexp : ℤ → ℤ} [ValidExp fexp]
+variable {β : Radix} {fexp : ℤ → ℤ} [ValidExp fexp]
 variable {rnd : ℝ → ℤ} [ValidRndToNearest rnd]
 
-local notation "R" => NF beta fexp rnd
+local notation "R" => NF β fexp rnd
 
 /-! ## Ordered rounded sums -/
 
 /-- Error budget after one rounded addition. -/
 def accumulationError (acc term : R) (accError termError : ℝ) : ℝ :=
   accError + termError +
-    ulp beta fexp
-      (toSpec (β := beta) (fexp := fexp) (rnd := rnd) acc +
-        toSpec (β := beta) (fexp := fexp) (rnd := rnd) term) / 2
+    ulp β fexp
+      (toSpec (β := β) (fexp := fexp) (rnd := rnd) acc +
+        toSpec (β := β) (fexp := fexp) (rnd := rnd) term) / 2
 
 /-- Error budget after one rounded multiplication. -/
 def productError (x y : R) (xError yError : ℝ) : ℝ :=
-  let xValue := toSpec (β := beta) (fexp := fexp) (rnd := rnd) x
-  let yValue := toSpec (β := beta) (fexp := fexp) (rnd := rnd) y
+  let xValue := toSpec (β := β) (fexp := fexp) (rnd := rnd) x
+  let yValue := toSpec (β := β) (fexp := fexp) (rnd := rnd) y
   (abs xValue + xError) * yError + (abs yValue + yError) * xError +
-    ulp beta fexp (xValue * yValue) / 2
+    ulp β fexp (xValue * yValue) / 2
 
 /-- Replay a rounded sum while carrying its absolute-error budget. -/
-def foldErrorState {iota : Type} (indices : List iota)
-    (term : iota → R) (termError : iota → ℝ) (initial : R × ℝ) : R × ℝ :=
+def foldErrorState {ι : Type} (indices : List ι)
+    (term : ι → R) (termError : ι → ℝ) (initial : R × ℝ) : R × ℝ :=
   indices.foldl (fun state index =>
     let value := term index
     (state.1 + value,
-      accumulationError (beta := beta) (fexp := fexp) (rnd := rnd)
+      accumulationError (β := β) (fexp := fexp) (rnd := rnd)
         state.1 value state.2 (termError index))) initial
 
 /-- Error budget for a rounded sum beginning at zero. -/
-def foldError {iota : Type} (indices : List iota)
-    (term : iota → R) (termError : iota → ℝ) : ℝ :=
-  (foldErrorState (beta := beta) (fexp := fexp) (rnd := rnd)
+def foldError {ι : Type} (indices : List ι)
+    (term : ι → R) (termError : ι → ℝ) : ℝ :=
+  (foldErrorState (β := β) (fexp := fexp) (rnd := rnd)
     indices term termError (0, 0)).2
 
-private theorem approx_fold_state {iota : Type} (indices : List iota)
-    (ideal : iota → ℝ) (rounded : iota → R) (termError : iota → ℝ) :
+private theorem approx_fold_state {ι : Type} (indices : List ι)
+    (ideal : ι → ℝ) (rounded : ι → R) (termError : ι → ℝ) :
     ∀ (idealAcc : ℝ) (state : R × ℝ),
-      abs (toSpec (β := beta) (fexp := fexp) (rnd := rnd) state.1 - idealAcc) ≤ state.2 →
+      abs (toSpec (β := β) (fexp := fexp) (rnd := rnd) state.1 - idealAcc) ≤ state.2 →
       (∀ index ∈ indices,
-        abs (toSpec (β := beta) (fexp := fexp) (rnd := rnd) (rounded index) -
+        abs (toSpec (β := β) (fexp := fexp) (rnd := rnd) (rounded index) -
           ideal index) ≤ termError index) →
       abs
-          (toSpec (β := beta) (fexp := fexp) (rnd := rnd)
+          (toSpec (β := β) (fexp := fexp) (rnd := rnd)
               (indices.foldl (fun acc index => acc + rounded index) state.1) -
             indices.foldl (fun acc index => acc + ideal index) idealAcc) ≤
-        (foldErrorState (beta := beta) (fexp := fexp) (rnd := rnd)
+        (foldErrorState (β := β) (fexp := fexp) (rnd := rnd)
           indices rounded termError state).2 := by
   intro idealAcc state hAcc hTerm
   induction indices generalizing idealAcc state with
@@ -87,73 +86,73 @@ private theorem approx_fold_state {iota : Type} (indices : List iota)
       have hHead := hTerm head (by simp)
       have hNext :
           abs
-              (toSpec (β := beta) (fexp := fexp) (rnd := rnd)
+              (toSpec (β := β) (fexp := fexp) (rnd := rnd)
                   (state.1 + rounded head) -
                 (idealAcc + ideal head)) ≤
-            accumulationError (beta := beta) (fexp := fexp) (rnd := rnd)
+            accumulationError (β := β) (fexp := fexp) (rnd := rnd)
               state.1 (rounded head) state.2 (termError head) := by
         simpa [accumulationError, add_assoc, add_comm, add_left_comm] using
-          (approx_add_nf (β := beta) (fexp := fexp) (rnd := rnd)
+          (approx_add_nf (β := β) (fexp := fexp) (rnd := rnd)
             (x := idealAcc) (y := ideal head) (xR := state.1) (yR := rounded head)
             (epsx := state.2) (epsy := termError head) hAcc hHead)
       simpa [foldErrorState] using
         ih (idealAcc + ideal head)
           (state.1 + rounded head,
-            accumulationError (beta := beta) (fexp := fexp) (rnd := rnd)
+            accumulationError (β := β) (fexp := fexp) (rnd := rnd)
               state.1 (rounded head) state.2 (termError head))
           hNext (by
             intro index hIndex
             exact hTerm index (by simp [hIndex]))
 
 /-- A fold of individually bounded rounded terms is bounded by `foldError`. -/
-theorem approx_fold {iota : Type} (indices : List iota)
-    (ideal : iota → ℝ) (rounded : iota → R) (termError : iota → ℝ)
+theorem approx_fold {ι : Type} (indices : List ι)
+    (ideal : ι → ℝ) (rounded : ι → R) (termError : ι → ℝ)
     (hTerm : ∀ index ∈ indices,
-      abs (toSpec (β := beta) (fexp := fexp) (rnd := rnd) (rounded index) -
+      abs (toSpec (β := β) (fexp := fexp) (rnd := rnd) (rounded index) -
         ideal index) ≤ termError index) :
     abs
-        (toSpec (β := beta) (fexp := fexp) (rnd := rnd)
+        (toSpec (β := β) (fexp := fexp) (rnd := rnd)
             (indices.foldl (fun acc index => acc + rounded index) 0) -
           indices.foldl (fun acc index => acc + ideal index) 0) ≤
-      foldError (beta := beta) (fexp := fexp) (rnd := rnd)
+      foldError (β := β) (fexp := fexp) (rnd := rnd)
         indices rounded termError := by
   have hZero :
-      abs (toSpec (β := beta) (fexp := fexp) (rnd := rnd) (0 : R) - 0) ≤ (0 : ℝ) := by
-    simp [toSpec_zero (β := beta) (fexp := fexp) (rnd := rnd)]
+      abs (toSpec (β := β) (fexp := fexp) (rnd := rnd) (0 : R) - 0) ≤ (0 : ℝ) := by
+    simp [toSpec_zero (β := β) (fexp := fexp) (rnd := rnd)]
   simpa [foldError, foldErrorState] using
-    approx_fold_state (beta := beta) (fexp := fexp) (rnd := rnd)
+    approx_fold_state (β := β) (fexp := fexp) (rnd := rnd)
       indices ideal rounded termError 0 (0, 0) hZero hTerm
 
 /-- Replay bound for a dot product whose two arguments are already approximated pointwise. -/
-def productFoldError {iota : Type} (indices : List iota)
-    (left right : iota → R) (leftError rightError : iota → ℝ) : ℝ :=
-  foldError (beta := beta) (fexp := fexp) (rnd := rnd) indices
+def productFoldError {ι : Type} (indices : List ι)
+    (left right : ι → R) (leftError rightError : ι → ℝ) : ℝ :=
+  foldError (β := β) (fexp := fexp) (rnd := rnd) indices
     (fun index => left index * right index)
-    (fun index => productError (beta := beta) (fexp := fexp) (rnd := rnd)
+    (fun index => productError (β := β) (fexp := fexp) (rnd := rnd)
       (left index) (right index) (leftError index) (rightError index))
 
 /-- An ordered rounded dot product is enclosed by `productFoldError`. -/
-theorem approx_product_fold {iota : Type} (indices : List iota)
-    (leftIdeal rightIdeal : iota → ℝ) (leftRounded rightRounded : iota → R)
-    (leftError rightError : iota → ℝ)
+theorem approx_product_fold {ι : Type} (indices : List ι)
+    (leftIdeal rightIdeal : ι → ℝ) (leftRounded rightRounded : ι → R)
+    (leftError rightError : ι → ℝ)
     (hLeft : ∀ index ∈ indices,
-      abs (toSpec (β := beta) (fexp := fexp) (rnd := rnd) (leftRounded index) -
+      abs (toSpec (β := β) (fexp := fexp) (rnd := rnd) (leftRounded index) -
         leftIdeal index) ≤ leftError index)
     (hRight : ∀ index ∈ indices,
-      abs (toSpec (β := beta) (fexp := fexp) (rnd := rnd) (rightRounded index) -
+      abs (toSpec (β := β) (fexp := fexp) (rnd := rnd) (rightRounded index) -
         rightIdeal index) ≤ rightError index) :
     abs
-        (toSpec (β := beta) (fexp := fexp) (rnd := rnd)
+        (toSpec (β := β) (fexp := fexp) (rnd := rnd)
             (indices.foldl
               (fun acc index => acc + leftRounded index * rightRounded index) 0) -
           indices.foldl
             (fun acc index => acc + leftIdeal index * rightIdeal index) 0) ≤
-      productFoldError (beta := beta) (fexp := fexp) (rnd := rnd)
+      productFoldError (β := β) (fexp := fexp) (rnd := rnd)
         indices leftRounded rightRounded leftError rightError := by
-  apply approx_fold (beta := beta) (fexp := fexp) (rnd := rnd)
+  apply approx_fold (β := β) (fexp := fexp) (rnd := rnd)
   intro index hIndex
   simpa [productError] using
-    (approx_mul_nf (β := beta) (fexp := fexp) (rnd := rnd)
+    (approx_mul_nf (β := β) (fexp := fexp) (rnd := rnd)
       (x := leftIdeal index) (y := rightIdeal index)
       (xR := leftRounded index) (yR := rightRounded index)
       (epsx := leftError index) (epsy := rightError index)
@@ -172,18 +171,17 @@ def enumerateIndices : List Nat → List (List Nat)
 
 This is the workhorse of the file. The implementation loops over dimensions recursively, whereas an
 error bound is much easier to state as one sum over coordinates; turning one into the other once,
-here,
-keeps every later bound free of nested inductions. -/
-theorem foldlIndices_eq_enumerateIndices {a : Type} (dims : List Nat)
-    (initial : a) (step : a → List Nat → a) :
+here, keeps every later bound free of nested inductions. -/
+theorem foldlIndices_eq_enumerateIndices {α : Type} (dims : List Nat)
+    (initial : α) (step : α → List Nat → α) :
     foldlIndices dims initial step =
       (enumerateIndices dims).foldl step initial := by
   induction dims generalizing initial step with
   | nil => rfl
   | cons n dims ih =>
-      simp only [foldlIndices, enumerateIndices, foldl_flatMap]
-      apply foldl_congr
-      intro state index
+      simp only [foldlIndices, enumerateIndices, List.foldl_flatMap]
+      apply List.foldl_ext
+      intro state index _
       rw [ih]
       simp [List.foldl_map]
 
@@ -194,25 +192,25 @@ def enumerateChannelIndices (channels : Nat) (dims : List Nat) :
     (enumerateIndices dims).map fun index => (channel, index)
 
 /-- Same flattening one level up, for the channel loop wrapped around the spatial loop. -/
-theorem foldChannelsIndices_eq_foldl {a : Type} (channels : Nat) (dims : List Nat)
-    (initial : a) (step : a → Fin channels → List Nat → a) :
+theorem foldChannelsIndices_eq_foldl {α : Type} (channels : Nat) (dims : List Nat)
+    (initial : α) (step : α → Fin channels → List Nat → α) :
     (List.finRange channels).foldl
         (fun state channel => foldlIndices dims state (step · channel ·)) initial =
       (enumerateChannelIndices channels dims).foldl
         (fun state index => step state index.1 index.2) initial := by
-  simp only [enumerateChannelIndices, foldl_flatMap]
-  apply foldl_congr
-  intro state channel
+  simp only [enumerateChannelIndices, List.foldl_flatMap]
+  apply List.foldl_ext
+  intro state channel _
   rw [foldlIndices_eq_enumerateIndices]
   simp [List.foldl_map]
 
 /-! ## Tensor coordinates -/
 
 private theorem get_convCoreSpec
-    {alpha : Type} [Context alpha]
+    {α : Type} [Context α]
     {d inC outC : Nat} {kernel stride padding inSpatial : TorchLean.Tensor Nat [d]}
-    (weights : Tensor alpha (Shape.ofList (outC :: inC :: (Tensor.to kernel (List Nat)))))
-    (input : Tensor alpha (Shape.ofList (inC :: (Tensor.to inSpatial (List Nat)))))
+    (weights : Tensor α (Shape.ofList (outC :: inC :: (Tensor.to kernel (List Nat)))))
+    (input : Tensor α (Shape.ofList (inC :: (Tensor.to inSpatial (List Nat)))))
     (outChannel : Fin outC)
     (outIndex :
       MultiIndex (Tensor.to (convOutSpatial inSpatial kernel stride padding) (List Nat))) :
@@ -231,9 +229,9 @@ private theorem get_convCoreSpec
   rfl
 
 private theorem get_convBiasBroadcastSpec
-    {alpha : Type} [Context alpha]
+    {α : Type} [Context α]
     {d outC : Nat} {kernel stride padding inSpatial : TorchLean.Tensor Nat [d]}
-    (bias : Tensor alpha [outC]) (outChannel : Fin outC)
+    (bias : Tensor α [outC]) (outChannel : Fin outC)
     (outIndex :
       MultiIndex (Tensor.to (convOutSpatial inSpatial kernel stride padding) (List Nat))) :
     MultiIndex.get
@@ -247,9 +245,9 @@ private theorem get_convBiasBroadcastSpec
 theorem approx_getAtOrZero {shape : Shape} {ideal : Tensor ℝ shape}
     {rounded : Tensor R shape} {error : ℝ}
     (h : approxTensor
-      (toSpec := toSpec (β := beta) (fexp := fexp) (rnd := rnd)) ideal rounded error)
+      (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd)) ideal rounded error)
     (index : List Nat) :
-    abs (toSpec (β := beta) (fexp := fexp) (rnd := rnd)
+    abs (toSpec (β := β) (fexp := fexp) (rnd := rnd)
         (getAtOrZero rounded index) - getAtOrZero ideal index) ≤ error := by
   induction shape generalizing index with
   | scalar =>
@@ -259,20 +257,20 @@ theorem approx_getAtOrZero {shape : Shape} {ideal : Tensor ℝ shape}
           simpa [getAtOrZero] using (approxTensor_scalar_iff.mp h)
       | cons _ _ =>
           simpa [getAtOrZero,
-            toSpec_zero (β := beta) (fexp := fexp) (rnd := rnd)] using
+            toSpec_zero (β := β) (fexp := fexp) (rnd := rnd)] using
               approxTensor_eps_nonneg h
   | dim n shape ih =>
       cases index with
       | nil =>
           simpa [getAtOrZero,
-            toSpec_zero (β := beta) (fexp := fexp) (rnd := rnd)] using
+            toSpec_zero (β := β) (fexp := fexp) (rnd := rnd)] using
               approxTensor_eps_nonneg h
       | cons i tail =>
           by_cases hi : i < n
           · simpa [getAtOrZero, hi] using
-              ih (approxTensor_dim_get h ⟨i, hi⟩) tail
+              ih (approxTensor_unstack h ⟨i, hi⟩) tail
           · simpa [getAtOrZero, hi,
-              toSpec_zero (β := beta) (fexp := fexp) (rnd := rnd)] using
+              toSpec_zero (β := β) (fexp := fexp) (rnd := rnd)] using
                 approxTensor_eps_nonneg h
 
 /-! ## Forward convolution -/
@@ -283,11 +281,11 @@ or zero when the strided, padded index falls outside the input.
 Naming the read explicitly is what lets the approximation proof treat padding as an exact zero
 rather than as another rounded value. -/
 def convolutionInputValue
-    {alpha : Type} [Context alpha]
+    {α : Type} [Context α]
     {d inC : Nat} {kernel stride padding inSpatial : TorchLean.Tensor Nat [d]}
-    (input : Tensor alpha (Shape.ofList (inC :: (Tensor.to inSpatial (List Nat)))))
+    (input : Tensor α (Shape.ofList (inC :: (Tensor.to inSpatial (List Nat)))))
     (outIndex : MultiIndex (Tensor.to (convOutSpatial inSpatial kernel stride padding) (List Nat)))
-    (index : Fin inC × List Nat) : alpha :=
+    (index : Fin inC × List Nat) : α :=
   match mkInputIdx? outIndex.toList index.2 (Tensor.to stride (List Nat))
       (Tensor.to padding (List Nat)) with
   | none => 0
@@ -298,10 +296,10 @@ def convolutionInputValue
 Named so the error bound can talk about the summands of the accumulation in the same order the code
 produces them, which is what makes the bound tight rather than merely valid. -/
 def convolutionWeightValue
-    {alpha : Type} [Context alpha]
+    {α : Type} [Context α]
     {d inC outC : Nat} {kernel : TorchLean.Tensor Nat [d]}
-    (weights : Tensor alpha (Shape.ofList (outC :: inC :: (Tensor.to kernel (List Nat)))))
-    (outChannel : Fin outC) (index : Fin inC × List Nat) : alpha :=
+    (weights : Tensor α (Shape.ofList (outC :: inC :: (Tensor.to kernel (List Nat)))))
+    (outChannel : Fin outC) (index : Fin inC × List Nat) : α :=
   getAtOrZero weights (outChannel.val :: index.1.val :: index.2)
 
 /--
@@ -323,9 +321,9 @@ def convolutionPointError
   let weightValue := convolutionWeightValue layer.kernel outChannel
   let sumValue := indices.foldl
     (fun acc index => acc + inputValue index * weightValue index) 0
-  let sumError := productFoldError (beta := beta) (fexp := fexp) (rnd := rnd)
+  let sumError := productFoldError (β := β) (fexp := fexp) (rnd := rnd)
     indices inputValue weightValue (fun _ => inputError) (fun _ => weightError)
-  accumulationError (beta := beta) (fexp := fexp) (rnd := rnd)
+  accumulationError (β := β) (fexp := fexp) (rnd := rnd)
     sumValue (getAtOrZero layer.bias [outChannel.val]) sumError biasError
 
 /-- One coordinate of rounded convolution is enclosed by `convolutionPointError`. -/
@@ -337,22 +335,22 @@ theorem approx_convSpec_coordinate
     {roundedInput : Tensor R (Shape.ofList (inC :: (Tensor.to inSpatial (List Nat))))}
     {weightError biasError inputError : ℝ}
     (hWeight : approxTensor
-      (toSpec := toSpec (β := beta) (fexp := fexp) (rnd := rnd))
+      (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd))
       idealLayer.kernel roundedLayer.kernel weightError)
     (hBias : approxTensor
-      (toSpec := toSpec (β := beta) (fexp := fexp) (rnd := rnd))
+      (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd))
       idealLayer.bias roundedLayer.bias biasError)
     (hInput : approxTensor
-      (toSpec := toSpec (β := beta) (fexp := fexp) (rnd := rnd))
+      (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd))
       idealInput roundedInput inputError)
     (outChannel : Fin outC)
     (outIndex :
       MultiIndex (Tensor.to (convOutSpatial inSpatial kernel stride padding) (List Nat))) :
     abs
-        (toSpec (β := beta) (fexp := fexp) (rnd := rnd)
+        (toSpec (β := β) (fexp := fexp) (rnd := rnd)
             (MultiIndex.get (convSpec roundedLayer roundedInput) (outChannel, outIndex)) -
           MultiIndex.get (convSpec idealLayer idealInput) (outChannel, outIndex)) ≤
-      convolutionPointError (beta := beta) (fexp := fexp) (rnd := rnd)
+      convolutionPointError (β := β) (fexp := fexp) (rnd := rnd)
         roundedLayer roundedInput weightError biasError inputError outChannel outIndex := by
   let indices := enumerateChannelIndices inC (Tensor.to kernel (List Nat))
   let inputIdeal := convolutionInputValue idealInput outIndex
@@ -360,31 +358,31 @@ theorem approx_convSpec_coordinate
   let weightIdeal := convolutionWeightValue idealLayer.kernel outChannel
   let weightRounded := convolutionWeightValue roundedLayer.kernel outChannel
   have hInputValue : ∀ index ∈ indices,
-      abs (toSpec (β := beta) (fexp := fexp) (rnd := rnd) (inputRounded index) -
+      abs (toSpec (β := β) (fexp := fexp) (rnd := rnd) (inputRounded index) -
         inputIdeal index) ≤ inputError := by
     intro index _
     simp only [inputRounded, inputIdeal, convolutionInputValue]
     split
-    · simpa [toSpec_zero (β := beta) (fexp := fexp) (rnd := rnd)] using
+    · simpa [toSpec_zero (β := β) (fexp := fexp) (rnd := rnd)] using
         approxTensor_eps_nonneg hInput
-    · exact approx_getAtOrZero (beta := beta) (fexp := fexp) (rnd := rnd) hInput _
+    · exact approx_getAtOrZero (β := β) (fexp := fexp) (rnd := rnd) hInput _
   have hWeightValue : ∀ index ∈ indices,
-      abs (toSpec (β := beta) (fexp := fexp) (rnd := rnd) (weightRounded index) -
+      abs (toSpec (β := β) (fexp := fexp) (rnd := rnd) (weightRounded index) -
         weightIdeal index) ≤ weightError := by
     intro index _
-    exact approx_getAtOrZero (beta := beta) (fexp := fexp) (rnd := rnd) hWeight _
-  have hSum := approx_product_fold (beta := beta) (fexp := fexp) (rnd := rnd)
+    exact approx_getAtOrZero (β := β) (fexp := fexp) (rnd := rnd) hWeight _
+  have hSum := approx_product_fold (β := β) (fexp := fexp) (rnd := rnd)
     indices inputIdeal weightIdeal inputRounded weightRounded
     (fun _ => inputError) (fun _ => weightError) hInputValue hWeightValue
   have hBiasValue := approx_getAtOrZero
-    (beta := beta) (fexp := fexp) (rnd := rnd) hBias [outChannel.val]
-  have hFinal := approx_add_nf (β := beta) (fexp := fexp) (rnd := rnd)
+    (β := β) (fexp := fexp) (rnd := rnd) hBias [outChannel.val]
+  have hFinal := approx_add_nf (β := β) (fexp := fexp) (rnd := rnd)
     (x := indices.foldl (fun acc index => acc + inputIdeal index * weightIdeal index) 0)
     (y := getAtOrZero idealLayer.bias [outChannel.val])
     (xR := indices.foldl
       (fun acc index => acc + inputRounded index * weightRounded index) 0)
     (yR := getAtOrZero roundedLayer.bias [outChannel.val])
-    (epsx := productFoldError (beta := beta) (fexp := fexp) (rnd := rnd)
+    (epsx := productFoldError (β := β) (fexp := fexp) (rnd := rnd)
       indices inputRounded weightRounded (fun _ => inputError) (fun _ => weightError))
     (epsy := biasError) hSum hBiasValue
   have hRounded :
@@ -412,11 +410,11 @@ theorem approx_convSpec_coordinate
 /-! ## Backward convolution -/
 
 private theorem get_convKernelDerivSpec
-    {alpha : Type} [Context alpha]
+    {α : Type} [Context α]
     {d inC outC : Nat} {kernel stride padding inSpatial : TorchLean.Tensor Nat [d]}
-    (layer : ConvSpec d inC outC kernel stride padding alpha)
-    (input : Tensor alpha (Shape.ofList (inC :: (Tensor.to inSpatial (List Nat)))))
-    (gradOutput : Tensor alpha
+    (layer : ConvSpec d inC outC kernel stride padding α)
+    (input : Tensor α (Shape.ofList (inC :: (Tensor.to inSpatial (List Nat)))))
+    (gradOutput : Tensor α
       (Shape.ofList
         (outC :: (Tensor.to (convOutSpatial inSpatial kernel stride padding) (List Nat)))))
     (outChannel : Fin outC) (inChannel : Fin inC)
@@ -439,12 +437,12 @@ private theorem get_convKernelDerivSpec
 The input value entering one term of the kernel-gradient accumulation, zero outside the padding.
 -/
 def kernelGradientInputValue
-    {alpha : Type} [Context alpha]
+    {α : Type} [Context α]
     {d inC : Nat} {kernel inSpatial : TorchLean.Tensor Nat [d]}
     (stride padding : TorchLean.Tensor Nat [d])
-    (input : Tensor alpha (Shape.ofList (inC :: (Tensor.to inSpatial (List Nat)))))
+    (input : Tensor α (Shape.ofList (inC :: (Tensor.to inSpatial (List Nat)))))
     (inChannel : Fin inC) (kernelIndex : MultiIndex (Tensor.to kernel (List Nat)))
-    (outIndex : List Nat) : alpha :=
+    (outIndex : List Nat) : α :=
   match mkInputIdx? outIndex kernelIndex.toList (Tensor.to stride (List Nat))
       (Tensor.to padding (List Nat)) with
   | none => 0
@@ -452,12 +450,12 @@ def kernelGradientInputValue
 
 /-- The output-gradient value entering that same term. -/
 def kernelGradientOutputValue
-    {alpha : Type} [Context alpha]
+    {α : Type} [Context α]
     {d outC : Nat} {kernel stride padding inSpatial : TorchLean.Tensor Nat [d]}
-    (gradOutput : Tensor alpha
+    (gradOutput : Tensor α
       (Shape.ofList
         (outC :: (Tensor.to (convOutSpatial inSpatial kernel stride padding) (List Nat)))))
-    (outChannel : Fin outC) (outIndex : List Nat) : alpha :=
+    (outChannel : Fin outC) (outIndex : List Nat) : α :=
   getAtOrZero gradOutput (outChannel.val :: outIndex)
 
 /-- Error budget for one coordinate of the rounded convolution kernel gradient. -/
@@ -472,7 +470,7 @@ def convolutionKernelGradientPointError
     (kernelIndex : MultiIndex (Tensor.to kernel (List Nat))) : ℝ :=
   let indices :=
     enumerateIndices (Tensor.to (convOutSpatial inSpatial kernel stride padding) (List Nat))
-  productFoldError (beta := beta) (fexp := fexp) (rnd := rnd) indices
+  productFoldError (β := β) (fexp := fexp) (rnd := rnd) indices
     (kernelGradientInputValue stride padding input inChannel kernelIndex)
     (kernelGradientOutputValue gradOutput outChannel)
     (fun _ => inputError) (fun _ => gradOutputError)
@@ -492,15 +490,15 @@ theorem approx_convKernelDerivSpec_coordinate
         (outC :: (Tensor.to (convOutSpatial inSpatial kernel stride padding) (List Nat))))}
     {inputError gradOutputError : ℝ}
     (hInput : approxTensor
-      (toSpec := toSpec (β := beta) (fexp := fexp) (rnd := rnd))
+      (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd))
       idealInput roundedInput inputError)
     (hGradOutput : approxTensor
-      (toSpec := toSpec (β := beta) (fexp := fexp) (rnd := rnd))
+      (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd))
       idealGradOutput roundedGradOutput gradOutputError)
     (outChannel : Fin outC) (inChannel : Fin inC)
     (kernelIndex : MultiIndex (Tensor.to kernel (List Nat))) :
     abs
-        (toSpec (β := beta) (fexp := fexp) (rnd := rnd)
+        (toSpec (β := β) (fexp := fexp) (rnd := rnd)
             (MultiIndex.get
               (convKernelDerivSpec roundedLayer roundedInput roundedGradOutput)
               (outChannel, (inChannel, kernelIndex))) -
@@ -508,7 +506,7 @@ theorem approx_convKernelDerivSpec_coordinate
             (convKernelDerivSpec idealLayer idealInput idealGradOutput)
             (outChannel, (inChannel, kernelIndex))) ≤
       convolutionKernelGradientPointError
-        (beta := beta) (fexp := fexp) (rnd := rnd)
+        (β := β) (fexp := fexp) (rnd := rnd)
         roundedInput roundedGradOutput inputError gradOutputError
         outChannel inChannel kernelIndex := by
   let indices :=
@@ -518,20 +516,20 @@ theorem approx_convKernelDerivSpec_coordinate
   let gradIdeal := kernelGradientOutputValue idealGradOutput outChannel
   let gradRounded := kernelGradientOutputValue roundedGradOutput outChannel
   have hInputValue : ∀ index ∈ indices,
-      abs (toSpec (β := beta) (fexp := fexp) (rnd := rnd) (inputRounded index) -
+      abs (toSpec (β := β) (fexp := fexp) (rnd := rnd) (inputRounded index) -
         inputIdeal index) ≤ inputError := by
     intro index _
     simp only [inputRounded, inputIdeal, kernelGradientInputValue]
     split
-    · simpa [toSpec_zero (β := beta) (fexp := fexp) (rnd := rnd)] using
+    · simpa [toSpec_zero (β := β) (fexp := fexp) (rnd := rnd)] using
         approxTensor_eps_nonneg hInput
-    · exact approx_getAtOrZero (beta := beta) (fexp := fexp) (rnd := rnd) hInput _
+    · exact approx_getAtOrZero (β := β) (fexp := fexp) (rnd := rnd) hInput _
   have hGradValue : ∀ index ∈ indices,
-      abs (toSpec (β := beta) (fexp := fexp) (rnd := rnd) (gradRounded index) -
+      abs (toSpec (β := β) (fexp := fexp) (rnd := rnd) (gradRounded index) -
         gradIdeal index) ≤ gradOutputError := by
     intro index _
-    exact approx_getAtOrZero (beta := beta) (fexp := fexp) (rnd := rnd) hGradOutput _
-  have hBound := approx_product_fold (beta := beta) (fexp := fexp) (rnd := rnd)
+    exact approx_getAtOrZero (β := β) (fexp := fexp) (rnd := rnd) hGradOutput _
+  have hBound := approx_product_fold (β := β) (fexp := fexp) (rnd := rnd)
     indices inputIdeal gradIdeal inputRounded gradRounded
     (fun _ => inputError) (fun _ => gradOutputError) hInputValue hGradValue
   have hRounded :
@@ -554,11 +552,11 @@ theorem approx_convKernelDerivSpec_coordinate
   simpa only [convolutionKernelGradientPointError, indices] using hBound
 
 private theorem get_convBiasDerivSpec
-    {alpha : Type} [Context alpha]
+    {α : Type} [Context α]
     {d inC outC : Nat} {kernel stride padding inSpatial : TorchLean.Tensor Nat [d]}
-    (layer : ConvSpec d inC outC kernel stride padding alpha)
-    (input : Tensor alpha (Shape.ofList (inC :: (Tensor.to inSpatial (List Nat)))))
-    (gradOutput : Tensor alpha
+    (layer : ConvSpec d inC outC kernel stride padding α)
+    (input : Tensor α (Shape.ofList (inC :: (Tensor.to inSpatial (List Nat)))))
+    (gradOutput : Tensor α
       (Shape.ofList
         (outC :: (Tensor.to (convOutSpatial inSpatial kernel stride padding) (List Nat)))))
     (outChannel : Fin outC) :
@@ -578,7 +576,7 @@ def convolutionBiasGradientPointError
     (gradOutputError : ℝ) (outChannel : Fin outC) : ℝ :=
   let indices :=
     enumerateIndices (Tensor.to (convOutSpatial inSpatial kernel stride padding) (List Nat))
-  foldError (beta := beta) (fexp := fexp) (rnd := rnd) indices
+  foldError (β := β) (fexp := fexp) (rnd := rnd) indices
     (fun index => getAtOrZero gradOutput (outChannel.val :: index))
     (fun _ => gradOutputError)
 
@@ -597,30 +595,30 @@ theorem approx_convBiasDerivSpec_coordinate
         (outC :: (Tensor.to (convOutSpatial inSpatial kernel stride padding) (List Nat))))}
     {gradOutputError : ℝ}
     (hGradOutput : approxTensor
-      (toSpec := toSpec (β := beta) (fexp := fexp) (rnd := rnd))
+      (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd))
       idealGradOutput roundedGradOutput gradOutputError)
     (outChannel : Fin outC) :
     abs
-        (toSpec (β := beta) (fexp := fexp) (rnd := rnd)
+        (toSpec (β := β) (fexp := fexp) (rnd := rnd)
             (MultiIndex.get (dims := [outC])
               (convBiasDerivSpec roundedLayer roundedInput roundedGradOutput)
               (outChannel, PUnit.unit)) -
           MultiIndex.get (dims := [outC])
             (convBiasDerivSpec idealLayer idealInput idealGradOutput)
-            (outChannel, PUnit.unit)) <=
+            (outChannel, PUnit.unit)) ≤
       convolutionBiasGradientPointError
-        (beta := beta) (fexp := fexp) (rnd := rnd)
+        (β := β) (fexp := fexp) (rnd := rnd)
         roundedGradOutput gradOutputError outChannel := by
   let indices :=
     enumerateIndices (Tensor.to (convOutSpatial inSpatial kernel stride padding) (List Nat))
   let idealValue := fun index => getAtOrZero idealGradOutput (outChannel.val :: index)
   let roundedValue := fun index => getAtOrZero roundedGradOutput (outChannel.val :: index)
-  have hValue : forall index, index ∈ indices ->
-      abs (toSpec (β := beta) (fexp := fexp) (rnd := rnd) (roundedValue index) -
-        idealValue index) <= gradOutputError := by
+  have hValue : ∀ index ∈ indices,
+      abs (toSpec (β := β) (fexp := fexp) (rnd := rnd) (roundedValue index) -
+        idealValue index) ≤ gradOutputError := by
     intro index _
-    exact approx_getAtOrZero (beta := beta) (fexp := fexp) (rnd := rnd) hGradOutput _
-  have hBound := approx_fold (beta := beta) (fexp := fexp) (rnd := rnd)
+    exact approx_getAtOrZero (β := β) (fexp := fexp) (rnd := rnd) hGradOutput _
+  have hBound := approx_fold (β := β) (fexp := fexp) (rnd := rnd)
     indices idealValue roundedValue (fun _ => gradOutputError) hValue
   have hRounded :
       MultiIndex.get (dims := [outC])
@@ -638,11 +636,11 @@ theorem approx_convBiasDerivSpec_coordinate
   simpa only [convolutionBiasGradientPointError, indices] using hBound
 
 private theorem get_convInputDerivSpec
-    {alpha : Type} [Context alpha]
+    {α : Type} [Context α]
     {d inC outC : Nat} {kernel stride padding inSpatial : TorchLean.Tensor Nat [d]}
-    (layer : ConvSpec d inC outC kernel stride padding alpha)
-    (input : Tensor alpha (Shape.ofList (inC :: (Tensor.to inSpatial (List Nat)))))
-    (gradOutput : Tensor alpha
+    (layer : ConvSpec d inC outC kernel stride padding α)
+    (input : Tensor α (Shape.ofList (inC :: (Tensor.to inSpatial (List Nat)))))
+    (gradOutput : Tensor α
       (Shape.ofList
         (outC :: (Tensor.to (convOutSpatial inSpatial kernel stride padding) (List Nat)))))
     (inChannel : Fin inC) (inputIndex : MultiIndex (Tensor.to inSpatial (List Nat))) :
@@ -665,14 +663,14 @@ private theorem get_convInputDerivSpec
 /-- One summand of the input-gradient accumulation: an output gradient times the kernel weight that
 connected them, or zero when the transposed index falls outside the input. -/
 def inputGradientTermValue
-    {alpha : Type} [Context alpha]
+    {α : Type} [Context α]
     {d inC outC : Nat} {kernel stride padding inSpatial : TorchLean.Tensor Nat [d]}
-    (layer : ConvSpec d inC outC kernel stride padding alpha)
-    (gradOutput : Tensor alpha
+    (layer : ConvSpec d inC outC kernel stride padding α)
+    (gradOutput : Tensor α
       (Shape.ofList
         (outC :: (Tensor.to (convOutSpatial inSpatial kernel stride padding) (List Nat)))))
     (inChannel : Fin inC) (inputIndex : MultiIndex (Tensor.to inSpatial (List Nat)))
-    (index : Fin outC × List Nat) : alpha :=
+    (index : Fin outC × List Nat) : α :=
   match mkTransposeInputIdx? inputIndex.toList index.2 (Tensor.to stride (List Nat))
       (Tensor.to padding (List Nat)) with
   | none => 0
@@ -690,14 +688,14 @@ def convolutionInputGradientPointError
     (weightError gradOutputError : ℝ)
     (inChannel : Fin inC) (inputIndex : MultiIndex (Tensor.to inSpatial (List Nat))) : ℝ :=
   let indices := enumerateChannelIndices outC (Tensor.to kernel (List Nat))
-  foldError (beta := beta) (fexp := fexp) (rnd := rnd) indices
+  foldError (β := β) (fexp := fexp) (rnd := rnd) indices
     (inputGradientTermValue layer gradOutput inChannel inputIndex)
     (fun index =>
       match mkTransposeInputIdx? inputIndex.toList index.2
           (Tensor.to stride (List Nat)) (Tensor.to padding (List Nat)) with
       | none => 0
       | some outIndex =>
-          productError (beta := beta) (fexp := fexp) (rnd := rnd)
+          productError (β := β) (fexp := fexp) (rnd := rnd)
             (getAtOrZero gradOutput (index.1.val :: outIndex))
             (getAtOrZero layer.kernel (index.1.val :: inChannel.val :: index.2))
             gradOutputError weightError)
@@ -717,14 +715,14 @@ theorem approx_convInputDerivSpec_coordinate
         (outC :: (Tensor.to (convOutSpatial inSpatial kernel stride padding) (List Nat))))}
     {weightError gradOutputError : ℝ}
     (hWeight : approxTensor
-      (toSpec := toSpec (β := beta) (fexp := fexp) (rnd := rnd))
+      (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd))
       idealLayer.kernel roundedLayer.kernel weightError)
     (hGradOutput : approxTensor
-      (toSpec := toSpec (β := beta) (fexp := fexp) (rnd := rnd))
+      (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd))
       idealGradOutput roundedGradOutput gradOutputError)
     (inChannel : Fin inC) (inputIndex : MultiIndex (Tensor.to inSpatial (List Nat))) :
     abs
-        (toSpec (β := beta) (fexp := fexp) (rnd := rnd)
+        (toSpec (β := β) (fexp := fexp) (rnd := rnd)
             (MultiIndex.get
               (convInputDerivSpec roundedLayer roundedInput roundedGradOutput)
               (inChannel, inputIndex)) -
@@ -732,7 +730,7 @@ theorem approx_convInputDerivSpec_coordinate
             (convInputDerivSpec idealLayer idealInput idealGradOutput)
             (inChannel, inputIndex)) ≤
       convolutionInputGradientPointError
-        (beta := beta) (fexp := fexp) (rnd := rnd)
+        (β := β) (fexp := fexp) (rnd := rnd)
         roundedLayer roundedGradOutput weightError gradOutputError
         inChannel inputIndex := by
   let indices := enumerateChannelIndices outC (Tensor.to kernel (List Nat))
@@ -743,13 +741,13 @@ theorem approx_convInputDerivSpec_coordinate
         (Tensor.to padding (List Nat)) with
     | none => 0
     | some outIndex =>
-        productError (beta := beta) (fexp := fexp) (rnd := rnd)
+        productError (β := β) (fexp := fexp) (rnd := rnd)
           (getAtOrZero roundedGradOutput (index.1.val :: outIndex))
           (getAtOrZero roundedLayer.kernel
             (index.1.val :: inChannel.val :: index.2))
           gradOutputError weightError
   have hTerm : ∀ index ∈ indices,
-      abs (toSpec (β := beta) (fexp := fexp) (rnd := rnd) (roundedTerm index) -
+      abs (toSpec (β := β) (fexp := fexp) (rnd := rnd) (roundedTerm index) -
         idealTerm index) ≤ termError index := by
     intro index _
     cases hIndex : mkTransposeInputIdx? inputIndex.toList index.2
@@ -760,22 +758,22 @@ theorem approx_convInputDerivSpec_coordinate
                 padding.data.toList = none := by
           simpa only [Tensor.to_list_eq_data] using hIndex
         simp [roundedTerm, idealTerm, termError, inputGradientTermValue, hIndexData,
-          toSpec_zero (β := beta) (fexp := fexp) (rnd := rnd)]
+          toSpec_zero (β := β) (fexp := fexp) (rnd := rnd)]
     | some outIndex =>
         have hIndexData :
             mkTransposeInputIdx? inputIndex.toList index.2 stride.data.toList
                 padding.data.toList = some outIndex := by
           simpa only [Tensor.to_list_eq_data] using hIndex
         have hGrad := approx_getAtOrZero
-          (beta := beta) (fexp := fexp) (rnd := rnd) hGradOutput
+          (β := β) (fexp := fexp) (rnd := rnd) hGradOutput
           (index.1.val :: outIndex)
         have hKernel := approx_getAtOrZero
-          (beta := beta) (fexp := fexp) (rnd := rnd) hWeight
+          (β := β) (fexp := fexp) (rnd := rnd) hWeight
           (index.1.val :: inChannel.val :: index.2)
         simpa [roundedTerm, idealTerm, termError, inputGradientTermValue,
           hIndex, hIndexData, productError] using
-          (approx_mul_nf (β := beta) (fexp := fexp) (rnd := rnd) hGrad hKernel)
-  have hBound := approx_fold (beta := beta) (fexp := fexp) (rnd := rnd)
+          (approx_mul_nf (β := β) (fexp := fexp) (rnd := rnd) hGrad hKernel)
+  have hBound := approx_fold (β := β) (fexp := fexp) (rnd := rnd)
     indices idealTerm roundedTerm termError hTerm
   have hRounded :
       MultiIndex.get
@@ -796,10 +794,10 @@ theorem approx_convInputDerivSpec_coordinate
   rw [hRounded, hIdeal]
   change
     abs
-        (toSpec (β := beta) (fexp := fexp) (rnd := rnd)
+        (toSpec (β := β) (fexp := fexp) (rnd := rnd)
             (indices.foldl (fun acc index => acc + roundedTerm index) 0) -
           indices.foldl (fun acc index => acc + idealTerm index) 0) ≤
-      foldError (beta := beta) (fexp := fexp) (rnd := rnd)
+      foldError (β := β) (fexp := fexp) (rnd := rnd)
         indices roundedTerm termError
   exact hBound
 

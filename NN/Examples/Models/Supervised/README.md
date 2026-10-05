@@ -21,17 +21,17 @@ GPT-style language modeling, Mamba-style state updates, and synthetic sequence c
 
 ```bash
 python3 scripts/datasets/download_example_data.py --auto-mpg
-lake exe torchlean mlp --device cpu --steps 10
-lake exe torchlean kan --device cpu --steps 10
+scripts/lake.sh exe torchlean mlp --device cpu --steps 10
+scripts/lake.sh exe torchlean kan --device cpu --steps 10
 
 python3 scripts/datasets/download_example_data.py --household-power --household-power-windows 512
-lake -R -K cuda=true exe torchlean lstm_regression --device cuda --steps 200 --windows 96
+scripts/lake.sh -Kcuda=true exe torchlean lstm_regression --device cuda --steps 200 --windows 96
 ```
 
 Pass `--log PATH` to preserve the training curve:
 
 ```bash
-lake exe torchlean mlp --device cpu --steps 50 --log data/examples/mlp_trainlog.json
+scripts/lake.sh exe torchlean mlp --device cpu --steps 50 --log data/examples/mlp_trainlog.json
 ```
 
 The log is the stable artifact for comparing runs. Printed predictions are useful for a quick read,
@@ -41,7 +41,7 @@ but the log records the run metadata, metric names, steps, and values.
 
 | Example | Data boundary | Main runtime path | Artifact to inspect |
 | --- | --- | --- | --- |
-| `Mlp.lean` | Auto MPG CSV or generated tabular tensors | public `Trainer` regression path | `TrainLog`, before/after predictions |
+| `Mlp.lean` | Auto MPG CSV or a custom CSV with the same columns | public `Trainer` regression path | `TrainLog` and loss summary |
 | `Kan.lean` | same tabular loader conventions | public trainer with KAN-style model structure | loss curve and parameter shapes |
 | `LstmRegression.lean` | household-power windows exported to `.npy` | CUDA-capable sequence layer used for supervised forecasting | forecast rows and `TrainLog` |
 

@@ -24,8 +24,8 @@ open scoped BigOperators
 universe u v
 namespace Rep
 
-/-- The standard bilinear pairing of two finite coordinate tensors. -/
-def dot {R : Type u} [Storage R] [Semiring R] {s : Shape}
+/-- The finite sum of corresponding entry products. -/
+def dot {R : Type u} [Storage R] [AddCommMonoid R] [Mul R] {s : Shape}
     (x y : Rep R s) : R :=
   ∑ i, x i * y i
 
@@ -35,7 +35,7 @@ Stacking and leading-axis slicing are adjoint for the finite tensor pairing.
 The pairing of a stacked family with a tensor is the sum of the pairings with
 each corresponding leading-axis slice.
 -/
-@[grind =] theorem dot_stack {R : Type u} [Storage R] [Semiring R]
+@[grind =] theorem dot_stack {R : Type u} [Storage R] [AddCommMonoid R] [Mul R]
     {n : Nat} {s : Shape}
     (components : Fin n → Rep R s) (tensor : Rep R (n :: s)) :
     dot (stack components) tensor =
@@ -43,18 +43,7 @@ each corresponding leading-axis slice.
   classical
   unfold dot
   simp only [stack_apply, unstack_apply]
-  rw [show
-    (Finset.univ : Finset (Coord (n :: s))) =
-      (Finset.univ : Finset (Fin n)) ×ˢ
-        (Finset.univ : Finset (Coord s)) by
-    ext coordinate
-    constructor
-    · intro _
-      exact Finset.mem_product.mpr
-        ⟨Finset.mem_univ coordinate.1, Finset.mem_univ coordinate.2⟩
-    · intro _
-      exact Finset.mem_univ coordinate]
-  exact Finset.sum_product _ _ _
+  exact Fintype.sum_prod_type _
 
 /--
 Reindexing and inverse reindexing are adjoint for the finite tensor pairing.
@@ -64,7 +53,7 @@ equivalence; it does not require an ordering or positivity assumption on
 shape dimensions.
 -/
 @[grind =] theorem dot_reindex_eq_dot_reindex_symm {R : Type u}
-    [Storage R] [Semiring R]
+    [Storage R] [AddCommMonoid R] [Mul R]
     {s t : Shape} (e : Coord t ≃ Coord s)
     (x : Rep R s) (y : Rep R t) :
     dot (reindex e x) y = dot x (reindex e.symm y) := by
@@ -73,7 +62,7 @@ shape dimensions.
 
 /-- Applying the same coordinate reindexing to both tensors preserves their pairing. -/
 @[grind =] theorem dot_reindex_reindex {R : Type u} [Storage R]
-    [Semiring R] {s t : Shape}
+    [AddCommMonoid R] [Mul R] {s t : Shape}
     (e : Coord t ≃ Coord s) (x y : Rep R s) :
     dot (reindex e x) (reindex e y) = dot x y := by
   rw [dot_reindex_eq_dot_reindex_symm, reindex_symm_reindex]
@@ -83,7 +72,7 @@ Fiber aggregation is adjoint to pullback for the standard finite dot
 product.
 -/
 @[grind =] theorem dot_push_eq_dot_pull {R : Type u} [Storage R]
-    [Semiring R] {s t : Shape}
+    [NonUnitalNonAssocSemiring R] {s t : Shape}
     (f : Coord s → Coord t) (x : Rep R s) (y : Rep R t) :
     dot (push f x) y = dot x (pull f y) := by
   classical
@@ -116,7 +105,7 @@ uses this theorem to obtain the global VJP law. No permutation order is chosen:
 both local functions act directly on the finite fiber.
 -/
 theorem dot_fiberwiseDifferential_eq_dot_fiberwiseVjp
-    {R : Type u} [Storage R] [Semiring R] {s t : Shape}
+    {R : Type u} [Storage R] [AddCommMonoid R] [Mul R] {s t : Shape}
     (f : Coord s → Coord t)
     (fiberDifferential :
       ∀ outputCoordinate,

@@ -46,7 +46,7 @@ def lossGradient (state : nn.State Float (nn.stateShapes model)) :
   for x in collocation do
     let input : Tensor Float [1] := [x]
     let second ← autograd.model.derivative model state input [direction, direction]
-    let residual := second.getScalar ⟨0, by decide⟩ + 2
+    let residual := second[0] + 2
     loss := loss + residual * residual / (2 * collocation.size.toFloat)
     let (contribution, _) ← autograd.model.derivativeVjp model state input
       [direction, direction] (Tensor.full [1] (residual / collocation.size.toFloat))
@@ -54,7 +54,7 @@ def lossGradient (state : nn.State Float (nn.stateShapes model)) :
   for x in #[-1.0, 1.0] do
     let input : Tensor Float [1] := [x]
     let output ← autograd.model.derivative model state input []
-    let residual := output.getScalar ⟨0, by decide⟩
+    let residual := output[0]
     loss := loss + residual * residual / 4
     let (contribution, _) ← autograd.model.vjp model state input
       (Tensor.full [1] (residual / 2))
@@ -76,7 +76,7 @@ def run (steps : Nat := 1500) : IO Unit := do
   IO.println s!"final residual objective: {after}"
   for x in #[-1.0, -0.75, -0.25, 0.0, 0.25, 0.75, 1.0] do
     let output ← autograd.model.derivative model state ([x] : Tensor Float [1]) []
-    IO.println s!"x={x}: prediction={output.getScalar ⟨0, by decide⟩}, exact={1 - x*x}"
+    IO.println s!"x={x}: prediction={output[0]}, exact={1 - x*x}"
 
 /-- Run with the default step count or one explicit natural-number argument. -/
 def main (args : List String) : IO Unit := do

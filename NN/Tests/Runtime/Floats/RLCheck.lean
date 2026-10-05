@@ -8,7 +8,7 @@ module
 
 public import NN.Runtime.RL
 public import NN.Tests.Runtime.Floats.DQN
-public import NN.Tests.Runtime.Floats.Utils
+public import NN.Tests.Utils
 
 /-!
 # RL Runtime Checks
@@ -19,6 +19,7 @@ Small compile-and-run runtime checks for TorchLean's RL helper surface.
 @[expose] public section
 
 open FloatLib.Floats (ExecFloat)
+open FloatLib.Numerics (Interval)
 open FloatLib.Floats.ExecFloat (Binary)
 open FloatLib.Floats.ExecFloat.Binary (ofModel toModel)
 open FloatLib.Floats.Formats.BinaryInterchange (Model FloatFormat)
@@ -26,7 +27,6 @@ open FloatLib.Floats.Formats.BinaryInterchange (Model FloatFormat)
 open Spec TorchLean
 open TorchLean TorchLean.Tensor
 open Tests.Utils
-open Tests.Floats.Utils
 
 namespace Tests
 namespace Floats
@@ -36,6 +36,10 @@ namespace RLCheck
 def assertBool (msg : String) (b : Bool) : IO Unit := do
   if !b then
     throw <| IO.userError msg
+
+/-- Widen a configured binary32 value through its binary64 model for host assertions. -/
+def toHostFloat (value : Binary 8 23) : Float :=
+  Binary.toFloat (ofModel (Model.cast .binary32 .binary64 (toModel value)))
 
 /-- Check discounted returns in host, executable float32, and interval semantics. -/
 def checkReturns : IO Unit := do
@@ -49,34 +53,31 @@ def checkReturns : IO Unit := do
       (Tensor.getScalar tensorReturns ⟨2, by decide⟩) 3.0 1e-6
   checkTensorReturns <| Runtime.RL.Core.discountedReturns (α := Float) 0.5 rewards
 
-  -- Run the same return recursion in executable float32 semantics (`ExecFloat.Binary 8 23`), with:
+  -- Run the same return recursion in executable float32 semantics (`Binary 8 23`), with:
   -- 1) a checked Float→float32 cast (catches binary64→binary32 overflow), and
-  -- 2) a simple interval enclosure (`Interval32`) as a diagnostic.
-  let gamma32 : Runtime.RL.Numerics.Float32.Float32Exec ←
+  -- 2) a FloatLib interval enclosure as a diagnostic.
+  let gamma32 : Binary 8 23 ←
     match Runtime.RL.Numerics.Float32.ofFloatChecked 0.5 with
     | .ok g => pure g
     | .error e => throw <| IO.userError e
-  let rewards32 : Tensor Runtime.RL.Numerics.Float32.Float32Exec [3] ←
+  let rewards32 : Tensor (Binary 8 23) [3] ←
     match Runtime.RL.Numerics.Float32.castTensorChecked (s := [3]) rewards with
     | .ok t => pure t
     | .error e => throw <| IO.userError e
-  let returns32 : Tensor Runtime.RL.Numerics.Float32.Float32Exec [3] ←
+  let returns32 : Tensor (Binary 8 23) [3] ←
     match Runtime.RL.Numerics.Float32.discountedReturnsChecked (n := 3) gamma32 rewards32 with
     | .ok t => pure t
     | .error e => throw <| IO.userError e
   assertApprox "discountedReturns configured binary32[0]"
-    (Binary.toFloat (ofModel (Model.cast .binary32 .binary64 (toModel (Tensor.getScalar returns32
-      ⟨0, by decide⟩)))))
+    (toHostFloat (Tensor.getScalar returns32 ⟨0, by decide⟩))
     2.75 1e-5
   assertApprox "discountedReturns configured binary32[1]"
-    (Binary.toFloat (ofModel (Model.cast .binary32 .binary64 (toModel (Tensor.getScalar returns32
-      ⟨1, by decide⟩)))))
+    (toHostFloat (Tensor.getScalar returns32 ⟨1, by decide⟩))
     3.5 1e-5
   assertApprox "discountedReturns configured binary32[2]"
-    (Binary.toFloat (ofModel (Model.cast .binary32 .binary64 (toModel (Tensor.getScalar returns32
-      ⟨2, by decide⟩)))))
+    (toHostFloat (Tensor.getScalar returns32 ⟨2, by decide⟩))
     3.0 1e-5
-  let intervals32 : Tensor Runtime.RL.Numerics.Float32.Interval32 [3] :=
+  let intervals32 : Tensor (Interval (Binary 8 23)) [3] :=
     Runtime.RL.Numerics.Float32.discountedReturnsIntervals (n := 3) gamma32 rewards32
   assertBool "interval enclosure should contain configured binary32 returns"
     (Runtime.RL.Numerics.Float32.returnsWithinIntervals (n := 3) returns32 intervals32)
@@ -90,23 +91,37 @@ def checkReturns : IO Unit := do
 open Runtime.RL.Numerics.Float32 in
 /-- Checked scans preserve empty horizons, termination resets, and failure order. -/
 def checkCheckedScans : IO Unit := do
-  let emptyRewards : Tensor Float32Exec [0] := []
+  let emptyRewards : Tensor (Binary 8 23) [0] := []
   match discountedReturnsChecked (1 / 2) emptyRewards with
   | .ok _ => pure ()
   | .error error => throw (IO.userError s!"empty checked returns: {error}")
-  let rewards : Tensor Float32Exec [3] := [1, 2, 3]
-  let baseline : Tensor Float32Exec [3] := [0, 0, 0]
+  let rewards : Tensor (Binary 8 23) [3] := [1, 2, 3]
+  let baseline : Tensor (Binary 8 23) [3] := [0, 0, 0]
   let dones : Tensor Bool [3] := [false, true, false]
   let advantages ← match generalizedAdvantageEstimationChecked
       (1 / 2) 1 rewards baseline baseline dones with
     | .ok values => pure values
     | .error error => throw (IO.userError error)
-  let expected : Tensor Float32Exec [3] := [2, 2, 3]
+  let expected : Tensor (Binary 8 23) [3] := [2, 2, 3]
   assertBool "terminal GAE step resets the future advantage" (advantages == expected)
+  -- A truncated step bootstraps from its next value but does not continue into the next episode.
+  let nextValues : Tensor (Binary 8 23) [3] := [5, 5, 5]
+  let noTermination : Tensor Bool [3] := [false, false, false]
+  let truncated ← IO.ofExcept <| generalizedAdvantageEstimationWithBoundariesChecked
+    (1 / 2) 1 rewards baseline nextValues noTermination dones
+  let expectedTruncated : Tensor (Binary 8 23) [3] := [5.75, 4.5, 5.5]
+  assertBool "truncated GAE step bootstraps from its next value" (truncated == expectedTruncated)
+  let terminal ← IO.ofExcept <| generalizedAdvantageEstimationWithBoundariesChecked
+    (1 / 2) 1 rewards baseline nextValues dones dones
+  let singleMask ← IO.ofExcept <| generalizedAdvantageEstimationChecked
+    (1 / 2) 1 rewards baseline nextValues dones
+  let expectedTerminal : Tensor (Binary 8 23) [3] := [4.5, 2, 5.5]
+  assertBool "terminal GAE step drops its next value" (terminal == expectedTerminal)
+  assertBool "single-mask GAE matches equal masks" (singleMask == terminal)
   let intervals := generalizedAdvantageEstimationIntervals
     (1 / 2) 1 rewards baseline baseline dones
   assertBool "terminal GAE interval enclosure" (returnsWithinIntervals advantages intervals)
-  let invalid : Tensor Float32Exec [2] :=
+  let invalid : Tensor (Binary 8 23) [2] :=
     [(Binary.infinity false : Binary 8 23),
      (Binary.maxFinite false : Binary 8 23)]
   match discountedReturnsChecked 2 invalid
@@ -115,6 +130,22 @@ def checkCheckedScans : IO Unit := do
   | .error error =>
       assertBool "rightmost overflow is reported before the earlier nonfinite reward"
         (error.contains "mul")
+
+open Runtime.RL.Numerics.Float32 in
+/-- The PPO objective interval encloses the exact clipped product when `1 ± clipEps` rounds. -/
+def checkPPOClipThresholdEnclosure : IO Unit := do
+  -- `0.1` is not a binary32 value, and `1 ± eps` is exact in binary64 but not in binary32.
+  let eps ← IO.ofExcept <| ofFloatChecked 0.1
+  let two ← IO.ofExcept <| ofFloatChecked 2.0
+  let zero ← IO.ofExcept <| ofFloatChecked 0.0
+  let one ← IO.ofExcept <| ofFloatChecked 1.0
+  let contains (label : String) (I : Interval (Binary 8 23)) (exact : Float) : IO Unit :=
+    assertBool s!"{label}: [{toHostFloat I.lo}, {toHostFloat I.hi}] misses {exact}"
+      (toHostFloat I.lo ≤ exact && exact ≤ toHostFloat I.hi)
+  contains "upper clip threshold"
+    (ppoClippedObjectiveFromRatioInterval two one eps) (1.0 + toHostFloat eps)
+  contains "lower clip threshold"
+    (ppoClippedObjectiveFromRatioInterval zero one eps) (1.0 - toHostFloat eps)
 
 /-- Check the numerical transforms used by PPO advantage estimation. -/
 def checkAdvantages : IO Unit := do
@@ -125,88 +156,58 @@ def checkAdvantages : IO Unit := do
   let gaeDones : Tensor Bool [3] :=
     [false, false, false]
 
-  let gamma32 : Runtime.RL.Numerics.Float32.Float32Exec ←
-    match Runtime.RL.Numerics.Float32.ofFloatChecked 0.5 with
-    | .ok g => pure g
-    | .error e => throw <| IO.userError e
+  let gamma32 ←
+    IO.ofExcept <| Runtime.RL.Numerics.Float32.ofFloatChecked 0.5
 
   -- Run PPO-relevant transforms (TD residual, GAE, z-score normalization, PPO clip objective).
-  let one32 : Runtime.RL.Numerics.Float32.Float32Exec ←
-    match Runtime.RL.Numerics.Float32.ofFloatChecked 1.0 with
-    | .ok x => pure x
-    | .error e => throw <| IO.userError e
-  let lam32 : Runtime.RL.Numerics.Float32.Float32Exec ←
-    match Runtime.RL.Numerics.Float32.ofFloatChecked 1.0 with
-    | .ok x => pure x
-    | .error e => throw <| IO.userError e
-  let tdRes32 : Runtime.RL.Numerics.Float32.Float32Exec ←
-    match Runtime.RL.Numerics.Float32.tdResidualChecked (value := 0) (reward := one32)
-        (gamma := gamma32) (nextValue := 0) (done := false) with
-    | .ok x => pure x
-    | .error e => throw <| IO.userError e
+  let one32 ←
+    IO.ofExcept <| Runtime.RL.Numerics.Float32.ofFloatChecked 1.0
+  let lam32 ←
+    IO.ofExcept <| Runtime.RL.Numerics.Float32.ofFloatChecked 1.0
+  let tdRes32 ←
+    IO.ofExcept <| Runtime.RL.Numerics.Float32.tdResidualChecked
+      (value := 0) (reward := one32) (gamma := gamma32) (nextValue := 0) (done := false)
   assertApprox "tdResidual configured binary32"
-    (Binary.toFloat (ofModel (Model.cast .binary32 .binary64 (toModel tdRes32)))) 1.0 1e-5
+    (toHostFloat tdRes32) 1.0 1e-5
 
-  let gaeRewards32 : Tensor Runtime.RL.Numerics.Float32.Float32Exec [3] ←
-    match Runtime.RL.Numerics.Float32.castTensorChecked (s := [3]) gaeRewards with
-    | .ok t => pure t
-    | .error e => throw <| IO.userError e
-  let gaeValues32 : Tensor Runtime.RL.Numerics.Float32.Float32Exec [3] ←
-    match Runtime.RL.Numerics.Float32.castTensorChecked (s := [3]) gaeValues with
-    | .ok t => pure t
-    | .error e => throw <| IO.userError e
-  let gaeNext32 : Tensor Runtime.RL.Numerics.Float32.Float32Exec [3] ←
-    match Runtime.RL.Numerics.Float32.castTensorChecked (s := [3]) gaeNext with
-    | .ok t => pure t
-    | .error e => throw <| IO.userError e
+  let gaeRewards32 ←
+    IO.ofExcept <| Runtime.RL.Numerics.Float32.castTensorChecked (s := [3]) gaeRewards
+  let gaeValues32 ←
+    IO.ofExcept <| Runtime.RL.Numerics.Float32.castTensorChecked (s := [3]) gaeValues
+  let gaeNext32 ←
+    IO.ofExcept <| Runtime.RL.Numerics.Float32.castTensorChecked (s := [3]) gaeNext
 
-  let advantages32 : Tensor Runtime.RL.Numerics.Float32.Float32Exec [3] ←
-    match Runtime.RL.Numerics.Float32.generalizedAdvantageEstimationChecked (n := 3)
-        (gamma := gamma32) (lam := lam32) gaeRewards32 gaeValues32 gaeNext32 gaeDones with
-    | .ok t => pure t
-    | .error e => throw <| IO.userError e
+  let advantages32 ←
+    IO.ofExcept <| Runtime.RL.Numerics.Float32.generalizedAdvantageEstimationChecked (n := 3)
+      (gamma := gamma32) (lam := lam32) gaeRewards32 gaeValues32 gaeNext32 gaeDones
   assertApprox "gaeTensor configured binary32[0]"
-    (Binary.toFloat (ofModel (Model.cast .binary32 .binary64 (toModel (Tensor.getScalar advantages32
-      ⟨0, by decide⟩)))))
+    (toHostFloat (Tensor.getScalar advantages32 ⟨0, by decide⟩))
     1.75 1e-4
   assertApprox "gaeTensor configured binary32[1]"
-    (Binary.toFloat (ofModel (Model.cast .binary32 .binary64 (toModel (Tensor.getScalar advantages32
-      ⟨1, by decide⟩)))))
+    (toHostFloat (Tensor.getScalar advantages32 ⟨1, by decide⟩))
     1.5 1e-4
   assertApprox "gaeTensor configured binary32[2]"
-    (Binary.toFloat (ofModel (Model.cast .binary32 .binary64 (toModel (Tensor.getScalar advantages32
-      ⟨2, by decide⟩)))))
+    (toHostFloat (Tensor.getScalar advantages32 ⟨2, by decide⟩))
     1.0 1e-4
 
-  let normIn32 : Tensor Runtime.RL.Numerics.Float32.Float32Exec [3] ←
-    match Runtime.RL.Numerics.Float32.castTensorChecked (s := [3]) rewards with
-    | .ok t => pure t
-    | .error e => throw <| IO.userError e
-  let normed32 : Tensor Runtime.RL.Numerics.Float32.Float32Exec [3] ←
-    match Runtime.RL.Numerics.Float32.normalizeZScoreChecked (n := 3) normIn32 with
-    | .ok t => pure t
-    | .error e => throw <| IO.userError e
+  let normIn32 ←
+    IO.ofExcept <| Runtime.RL.Numerics.Float32.castTensorChecked (s := [3]) rewards
+  let normed32 ←
+    IO.ofExcept <| Runtime.RL.Numerics.Float32.normalizeZScoreChecked (n := 3) normIn32
   -- Mean-centered input has a 0 entry; after z-score it should remain 0 (finite).
   assertApprox "zscore configured binary32[1]"
-    (Binary.toFloat (ofModel (Model.cast .binary32 .binary64 (toModel (Tensor.getScalar normed32 ⟨1,
-      by decide⟩)))))
+    (toHostFloat (Tensor.getScalar normed32 ⟨1, by decide⟩))
     0.0 1e-6
 
-  let ratio32 : Runtime.RL.Numerics.Float32.Float32Exec ←
-    match Runtime.RL.Numerics.Float32.ofFloatChecked 1.5 with
-    | .ok x => pure x
-    | .error e => throw <| IO.userError e
-  let clipEps32 : Runtime.RL.Numerics.Float32.Float32Exec ←
-    match Runtime.RL.Numerics.Float32.ofFloatChecked 0.2 with
-    | .ok x => pure x
-    | .error e => throw <| IO.userError e
-  let ppoObj32 : Runtime.RL.Numerics.Float32.Float32Exec ←
-    match Runtime.RL.Numerics.Float32.ppoClippedObjectiveFromRatioChecked
-        ratio32 one32 clipEps32 with
-    | .ok x => pure x
-    | .error e => throw <| IO.userError e
+  let ratio32 ←
+    IO.ofExcept <| Runtime.RL.Numerics.Float32.ofFloatChecked 1.5
+  let clipEps32 ←
+    IO.ofExcept <| Runtime.RL.Numerics.Float32.ofFloatChecked 0.2
+  let ppoObj32 ←
+    IO.ofExcept <| Runtime.RL.Numerics.Float32.ppoClippedObjectiveFromRatioChecked
+      ratio32 one32 clipEps32
   assertApprox "ppoClipFromRatio configured binary32"
-    (Binary.toFloat (ofModel (Model.cast .binary32 .binary64 (toModel ppoObj32)))) 1.2 1e-5
+    (toHostFloat ppoObj32) 1.2 1e-5
 
   let advantages :=
     Runtime.RL.Core.generalizedAdvantageEstimation (α := Float)
@@ -261,26 +262,48 @@ def checkValueLearning : IO Unit := do
   let onlineQ (_ : Tensor Float [2]) : Tensor Float [3] := qPred
   let targetQ (_ : Tensor Float [2]) : Tensor Float [3] := qNext
   let replayLoss :=
-    Runtime.RL.DQN.minibatchMSELoss (α := Float) onlineQ targetQ 0.9 replayBatch
+    Runtime.RL.DQN.loss (α := Float) onlineQ targetQ 0.9 replayBatch (batch := true)
   assertApprox "replay dqn minibatch loss" replayLoss dqnLoss 1e-6
   let soft := Runtime.RL.DQN.softUpdateScalar (α := Float) 0.1 10.0 0.0
   assertApprox "soft target update" soft 1.0 1e-6
 
+  -- A time-limit truncation keeps the bootstrap term; only termination drops it.
+  let observed (terminated truncated : Bool) :
+      Spec.RL.ObservedTransition (Tensor Float [2]) (Fin 3) Float :=
+    { observation := obs2, action := ⟨1, by decide⟩, reward := 1.0
+      nextObservation := nextObs2, terminated := terminated, truncated := truncated }
+  let truncatedTr := Runtime.RL.Replay.ofObservedTransition (observed false true)
+  let terminatedTr := Runtime.RL.Replay.ofObservedTransition (observed true false)
+  assertBool "truncated replay transition should bootstrap" (!truncatedTr.done)
+  assertBool "terminated replay transition should not bootstrap" terminatedTr.done
+  assertApprox "truncated replay dqn loss"
+    (Runtime.RL.DQN.loss (α := Float) onlineQ targetQ 0.9 #[truncatedTr] (batch := true))
+    dqnLoss 1e-6
+  assertApprox "terminated replay dqn loss"
+    (Runtime.RL.DQN.loss (α := Float) onlineQ targetQ 0.9 #[terminatedTr] (batch := true))
+    ((2.0 - 1.0) * (2.0 - 1.0)) 1e-6
+
   let logits : Tensor Float [2] := [0.0, 1.0]
+  let p0 := 1.0 / (1.0 + Float.exp 1.0)
+  let p1 := 1.0 - p0
+  let expectedLogp := Float.log p1
+  let entropy := -(p0 * Float.log p0 + p1 * expectedLogp)
   let logp := Runtime.RL.PolicyGradient.actionLogProbability (α := Float) logits ⟨1, by decide⟩
-  assertFinite "action log-probability" logp
+  assertApprox "action log-probability" logp expectedLogp 1e-12
   let ppoObj := Runtime.RL.PolicyGradient.ppoClippedObjective (α := Float) logits ⟨1, by decide⟩
     (-0.2) 1.5 0.2
-  assertFinite "ppo objective" ppoObj
+  -- This fixture's ratio lies in [0.8, 1.2], so the clip leaves it unchanged.
+  assertApprox "ppo objective" ppoObj (Float.exp (expectedLogp + 0.2) * 1.5) 1e-12
   let klSame := Runtime.RL.PolicyGradient.categoricalKLFromLogits (α := Float) logits logits
   assertApprox "categorical KL same policy" klSame 0.0 1e-6
-  let a2cLoss := Runtime.RL.PolicyGradient.a2cLoss (α := Float) logits ⟨1, by decide⟩
+  let a2cLoss := Runtime.RL.PolicyGradient.actorCriticLoss (α := Float) logits ⟨1, by decide⟩
     1.0 0.2 0.5 1.0 0.01
-  assertFinite "a2c loss" a2cLoss
+  assertApprox "a2c loss" a2cLoss (-expectedLogp + 0.09 - 0.01 * entropy) 1e-12
   let qForPolicy : Tensor Float [2] := [0.1, 0.8]
   let sacActor := Runtime.RL.PolicyGradient.sacCategoricalActorLoss (α := Float)
     logits qForPolicy 0.2
-  assertFinite "sac categorical actor loss" sacActor
+  assertApprox "sac categorical actor loss" sacActor
+    (-0.2 * entropy - (p0 * 0.1 + p1 * 0.8)) 1e-12
 
 /-- Check validation at an external RL environment boundary. -/
 def checkBoundary : IO Unit := do
@@ -312,6 +335,145 @@ def checkBoundary : IO Unit := do
   | .ok _ => throw <| IO.userError "boundary check should reject terminated && truncated"
   | .error _ => pure ()
 
+/-- Mean PPO clipped objective for a two-sample batch of three-action logits. -/
+def ppoMeanObjective :
+    ∀ {β : Type}, [TorchLean.Storage β] → [Context β] →
+      Runtime.Autograd.Model.Program β
+        [Shape.ofList [2, 3], Shape.ofList [2, 3], Shape.ofList [2], Shape.ofList [2]] [] :=
+  fun {β} _ _ => fun {m} _ _ => fun logits actions oldLogProb advantage =>
+    (do
+      let objective ← Runtime.RL.PolicyGradient.Autograd.ppoClippedObjective (m := m) (α := β)
+        (batch := 2) (nActions := 3) logits actions oldLogProb advantage
+      Runtime.Autograd.Model.F.mean (m := m) (α := β) (s := .dim 2 .scalar) objective :
+      m (Runtime.Autograd.Model.RefTy (m := m) (α := β) Shape.scalar))
+
+/-- Within the one-hot log-probability clamp interval, collection and autograd reductions agree
+and the PPO ratio is exactly 1 at identical parameters. The second sample picks an action whose
+probability is far below the separate probability clamp used by `actionLogProbability`. -/
+def checkPPORatioAtIdenticalParams : IO Unit := do
+  let rows : Array (Array Float) := #[#[0.0, 1.0, -0.5], #[0.0, 30.0, -30.0]]
+  let chosen : Array (Fin 3) := #[⟨1, by decide⟩, ⟨2, by decide⟩]
+  let logits : Tensor Float [2, 3] :=
+    (Tensor.ofFn fun i : Fin 6 => (rows[i.val / 3]!)[i.val % 3]!).reshape [2, 3] (by decide)
+  let actions : Tensor Float [2, 3] :=
+    (Tensor.ofFn fun i : Fin 6 =>
+      if chosen[i.val / 3]!.val == i.val % 3 then (1 : Float) else 0).reshape [2, 3] (by decide)
+  let oldLogProb : Tensor Float [2] := Tensor.ofFn fun i =>
+    Runtime.RL.PolicyGradient.actionLogSoftmax (α := Float)
+      (Tensor.ofFn fun j : Fin 3 => (rows[i.val]!)[j.val]!) chosen[i.val]!
+  let advantage : Tensor Float [2] := Tensor.ofFn fun _ => 1
+  let graph ← Runtime.Autograd.Model.Autodiff.lowerScalarToTypedGraph (α := Float)
+    (paramShapes := [Shape.ofList [2, 3]])
+    (inputShapes := [Shape.ofList [2, 3], Shape.ofList [2], Shape.ofList [2]]) ppoMeanObjective
+  let (_, objective) ← Runtime.Autograd.Model.Autodiff.Impl.vjpWithValue graph
+    (.cons logits (.cons actions (.cons oldLogProb (.cons advantage .nil))))
+    (Tensor.scalar (1 : Float))
+  -- With ratio 1 and unit advantages every per-sample objective is exactly 1.
+  let value := objective.getFlat ⟨0, by decide⟩
+  assertBool s!"PPO objective at identical parameters should be 1, got {value}" (value == 1)
+
+/-- Outside the one-hot clamp interval, a raw cached tail log-probability need not give
+unit importance ratio at identical parameters. Unit advantage clips the objective to 1.2. -/
+def checkPPOTailOutsideClamp : IO Unit := do
+  let logits : Tensor Float [2, 3] :=
+    (Tensor.ofFn fun i : Fin 6 => if i.val % 3 == 1 then -1.0e40 else 0.0).reshape
+      [2, 3] (by decide)
+  let actions : Tensor Float [2, 3] :=
+    (Tensor.ofFn fun i : Fin 6 => if i.val % 3 == 1 then (1 : Float) else 0).reshape
+      [2, 3] (by decide)
+  let rawLogProb := Runtime.RL.PolicyGradient.actionLogSoftmax (α := Float)
+    (Tensor.ofFn fun i : Fin 3 => if i.val == 1 then -1.0e40 else 0.0) ⟨1, by decide⟩
+  assertBool "PPO cached tail lies outside the one-hot clamp" (rawLogProb < -1.0e30)
+  let oldLogProb : Tensor Float [2] := Tensor.full [2] rawLogProb
+  let advantage : Tensor Float [2] := Tensor.full [2] 1
+  let graph ← Runtime.Autograd.Model.Autodiff.lowerScalarToTypedGraph (α := Float)
+    (paramShapes := [Shape.ofList [2, 3]])
+    (inputShapes := [Shape.ofList [2, 3], Shape.ofList [2], Shape.ofList [2]]) ppoMeanObjective
+  let (_, objective) ← Runtime.Autograd.Model.Autodiff.Impl.vjpWithValue graph
+    (.cons logits (.cons actions (.cons oldLogProb (.cons advantage .nil))))
+    (Tensor.scalar (1 : Float))
+  assertApprox "PPO raw cached tail gives clipped nonunit objective" objective.item 1.2 1e-12
+
+/-- A logit of `-inf` on an unselected action must not turn the one-hot log-probability into NaN.
+The objective stays exactly 1 at identical parameters and the logit gradient stays finite. -/
+def checkPPONegativeInfinityLogit : IO Unit := do
+  let negInf : Float := -1.0 / 0.0
+  let rows : Array (Array Float) := #[#[0.0, 1.0, negInf], #[negInf, 0.0, 2.0]]
+  let chosen : Array (Fin 3) := #[⟨1, by decide⟩, ⟨2, by decide⟩]
+  let logits : Tensor Float [2, 3] :=
+    (Tensor.ofFn fun i : Fin 6 => (rows[i.val / 3]!)[i.val % 3]!).reshape [2, 3] (by decide)
+  let actions : Tensor Float [2, 3] :=
+    (Tensor.ofFn fun i : Fin 6 =>
+      if chosen[i.val / 3]!.val == i.val % 3 then (1 : Float) else 0).reshape [2, 3] (by decide)
+  let oldLogProb : Tensor Float [2] := Tensor.ofFn fun i =>
+    Runtime.RL.PolicyGradient.actionLogSoftmax (α := Float)
+      (Tensor.ofFn fun j : Fin 3 => (rows[i.val]!)[j.val]!) chosen[i.val]!
+  let advantage : Tensor Float [2] := Tensor.ofFn fun _ => 1
+  let graph ← Runtime.Autograd.Model.Autodiff.lowerScalarToTypedGraph (α := Float)
+    (paramShapes := [Shape.ofList [2, 3]])
+    (inputShapes := [Shape.ofList [2, 3], Shape.ofList [2], Shape.ofList [2]]) ppoMeanObjective
+  let (gradients, objective) ← Runtime.Autograd.Model.Autodiff.Impl.vjpWithValue graph
+    (.cons logits (.cons actions (.cons oldLogProb (.cons advantage .nil))))
+    (Tensor.scalar (1 : Float))
+  let value := objective.getFlat ⟨0, by decide⟩
+  assertBool s!"PPO objective with a -inf logit should be 1, got {value}" (value == 1)
+  let .cons logitGradient _ := gradients
+  assertBool "PPO logit gradient with a -inf logit should be finite"
+    (Tensor.allSpec (fun g : Float => g.isFinite) logitGradient)
+
+/-- Strict parsing compares the original decimal, including fractional tails lost by Float. -/
+def checkStrictNaturalJson : IO Unit := do
+  for (source, expected) in [("0", 0), ("1.00", 1), ("1e3", 1000),
+      ("9007199254740992", 9007199254740992),
+      ("18446744073709549568", 18446744073709549568),
+      ("18446744073709551615", 18446744073709551615)] do
+    let json ← IO.ofExcept (Lean.Json.parse source)
+    let parsed ← IO.ofExcept (Runtime.RL.Boundary.parseNatStrict json)
+    assertBool s!"strict natural JSON {source}" (parsed == expected)
+  for source in ["1.5", "1.00000000000000001", "9007199254740993",
+      "18446744073709551616", "-1", "-1e-400", "1e-400"] do
+    let json ← IO.ofExcept (Lean.Json.parse source)
+    match Runtime.RL.Boundary.parseNatStrict json with
+    | .ok value => throw <| IO.userError s!"strict natural JSON accepted {source} as {value}"
+    | .error _ => pure ()
+
+/-- Entropy objective for the zero-probability and finite-tail regressions. -/
+def entropyObjective :
+    ∀ {β : Type}, [TorchLean.Storage β] → [Context β] →
+      Runtime.Autograd.Model.Program β [Shape.ofList [1, 2]] [] :=
+  fun {β} _ _ => fun {m} _ _ => fun logits =>
+    Runtime.RL.PolicyGradient.Autograd.entropyMean (m := m) (α := β) logits
+
+/-- A zero-probability action contributes zero to entropy and its logit gradient. -/
+def checkEntropyZeroProbability : IO Unit := do
+  let graph ← Runtime.Autograd.Model.Autodiff.lowerScalarToTypedGraph (α := Float)
+    (paramShapes := [Shape.ofList [1, 2]]) (inputShapes := []) entropyObjective
+  for tail in [-(1.0 / 0.0), -1000.0, -1.0e40, 0.0] do
+    let logits : Tensor Float [1, 2] :=
+      (Tensor.ofFn fun i : Fin 2 => if i.val == 0 then 0.0 else tail).reshape [1, 2] (by decide)
+    let (gradients, entropy) ← Runtime.Autograd.Model.Autodiff.Impl.vjpWithValue graph
+      (.cons logits .nil) (Tensor.scalar (1 : Float))
+    let expected := if tail == 0 then Float.log 2.0 else 0.0
+    assertBool "entropy must be finite" entropy.item.isFinite
+    assertApprox "entropy with zero or equal probabilities" entropy.item expected 1e-12
+    let .cons gradient .nil := gradients
+    assertBool "entropy gradient must be finite and zero"
+      (Tensor.allSpec (fun g : Float => g.isFinite && Float.abs g < 1e-12) gradient)
+
+/-- A carrier's negative infinity yields zero entropy and a zero logit gradient. -/
+def checkEntropyAtNegativeInfinity {α : Type} [TorchLean.Storage α] [Context α]
+    (label : String) (negativeInfinity : α) (isZero : α → Bool) : IO Unit := do
+  let graph ← Runtime.Autograd.Model.Autodiff.lowerScalarToTypedGraph (α := α)
+    (paramShapes := [Shape.ofList [1, 2]]) (inputShapes := []) entropyObjective
+  let logits : Tensor α [1, 2] :=
+    (Tensor.ofFn fun i : Fin 2 => if i.val == 0 then 0 else negativeInfinity).reshape
+      [1, 2] (by decide)
+  let (gradients, entropy) ← Runtime.Autograd.Model.Autodiff.Impl.vjpWithValue graph
+    (.cons logits .nil) (Tensor.scalar (1 : α))
+  assertBool s!"{label} zero-probability entropy" (isZero entropy.item)
+  let .cons gradient .nil := gradients
+  assertBool s!"{label} zero-probability entropy VJP" (Tensor.allSpec isZero gradient)
+
 /-- Run the complete RL runtime check suite. -/
 def run : IO Unit := do
   IO.println "rl_check: begin"
@@ -320,6 +482,15 @@ def run : IO Unit := do
   checkAdvantages
   checkValueLearning
   checkBoundary
+  checkStrictNaturalJson
+  checkEntropyZeroProbability
+  checkEntropyAtNegativeInfinity "native binary32" (Float32.ofBits 0xff800000) (· == 0)
+  checkEntropyAtNegativeInfinity "executable binary32"
+    (Binary.infinity true : Binary 8 23) Binary.isZero
+  checkPPORatioAtIdenticalParams
+  checkPPOTailOutsideClamp
+  checkPPONegativeInfinityLogit
+  checkPPOClipThresholdEnclosure
   DQN.run
   IO.println "rl_check: ok"
 

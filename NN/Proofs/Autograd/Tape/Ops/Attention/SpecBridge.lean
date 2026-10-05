@@ -9,6 +9,7 @@ module
 public import NN.Proofs.Autograd.FDeriv.SoftmaxSpec
 public import NN.Proofs.Autograd.Tape.Ops.Attention.ScaledDotProduct
 public import NN.Proofs.Autograd.Tape.Ops.Norm.CtxVecEval
+public import NN.Proofs.Autograd.Tape.Ops.Norm.MatrixEntries
 public import NN.Proofs.Models.Attention.HardMask
 
 /-!
@@ -28,7 +29,9 @@ tape graph built from proven nodes. `NN.Spec.Layers.Attention` defines
   the masked code path with the all-true Boolean mask.
 
 Blocks of the evaluated graph are read with the `Graph.evalVec` lemmas of
-`NN.Proofs.Autograd.Tape.Ops.Norm.CtxVecEval`. The first half of this file relates the flattened
+`NN.Proofs.Autograd.Tape.Ops.Norm.CtxVecEval`, and matrix coordinates are read through
+`TapeNodes.Matmul.tensorToVec_idxMN`: attention is proved in the flat `Vec` world where
+Mathlib's calculus lives, and stated about `Tensor ℝ [m, n]`. The first half relates the flattened
 node functions (`matmulVec`, `transposeVec`, `forwardMN`) to `Spec.matMulSpec`,
 `swapAdjacentAxes`, `scaleSpec`, and `Activation.softmaxSpec 1`; the second half walks the
 attention graph node by node.
@@ -39,8 +42,7 @@ attention graph node by node.
 namespace Proofs
 namespace Autograd
 
-open Spec TorchLean
-open TorchLean TorchLean.Tensor
+open Spec TorchLean TorchLean.Tensor
 open TapeNodes DGraph
 open TapeNodes.Matmul
 
@@ -48,59 +50,14 @@ noncomputable section
 
 /-! ## Flattened matrices -/
 
-theorem val_finProdFinEquiv {m k : Nat} (i : Fin m) (j : Fin k) :
-    (finProdFinEquiv (i, j)).val = j.val + k * i.val := rfl
-
-/-- The flattened index of entry `(i, j)` is `j + n * i`: row-major layout, as in PyTorch. -/
-theorem val_idxMN {m n : Nat} (i : Fin m) (j : Fin n) :
-    (idxMN (m := m) (n := n) i j).val = j.val + n * i.val := by
-  change j.val + Spec.Shape.size (Shape.dim n Shape.scalar) * i.val = _
-  simp [Spec.Shape.size]
-
-/-- Every flattened matrix index is the image of a row/column pair. -/
-theorem exists_idxMN {m n : Nat} (ip : Fin (matSize m n)) :
-    ∃ i : Fin m, ∃ j : Fin n, idxMN (m := m) (n := n) i j = ip := by
-  have hsz : matSize m n = m * n := by simp [matSize, Spec.Shape.size]
-  refine ⟨(Fin.cast hsz ip).divNat, (Fin.cast hsz ip).modNat, ?_⟩
-  apply Fin.ext
-  rw [val_idxMN]
-  simp only [Fin.coe_divNat, Fin.coe_modNat, Fin.val_cast]
-  exact Nat.mod_add_div ip.val n
-
-/-- Coordinate `idxMN i j` of a vectorized matrix is the matrix entry `A i j`.
-
-This is the bridge the whole file is named for. Attention is proved in the flat `Vec` world, where
-Mathlib's calculus lives, and stated about `Tensor ℝ [m, n]`; this lemma is what connects the two
-without ever unfolding the flattening. -/
-theorem tensorToVec_idxMN {m n : Nat} (A : Tensor ℝ [m, n]) (i : Fin m) (j : Fin n) :
-    tensorToVec (t := A) (idxMN (m := m) (n := n) i j) = Spec.get2 A i j := by
-  have hn : 0 < Spec.Shape.size (Shape.dim n Shape.scalar) := by
-    simp only [Spec.Shape.size, Nat.mul_one]
-    exact j.pos
-  have h1 : 0 < Spec.Shape.size Shape.scalar := by simp [Spec.Shape.size]
-  have hrow := tensorToVec_dim_apply hn (Tensor.unstack A)
-    (i, finProdFinEquiv (j, (⟨0, h1⟩ : Fin (Spec.Shape.size Shape.scalar))))
-  have hcol := tensorToVec_dim_apply h1 (Tensor.unstack (Tensor.unstack A i))
-    (j, (⟨0, h1⟩ : Fin (Spec.Shape.size Shape.scalar)))
-  rw [Tensor.dim_unstack] at hrow hcol
-  have hidx : (finProdFinEquiv (i, finProdFinEquiv (j, (⟨0, h1⟩ : Fin (Spec.Shape.size
-      Shape.scalar)))) : Fin (matSize m n)) = idxMN (m := m) (n := n) i j := by
-    apply Fin.ext
-    rw [val_idxMN]
-    change (0 + Spec.Shape.size Shape.scalar * j.val) +
-      Spec.Shape.size (Shape.dim n Shape.scalar) * i.val = j.val + n * i.val
-    simp [Spec.Shape.size]
-  rw [hidx] at hrow
-  rw [hrow, hcol, ← Tensor.scalar_item (Tensor.unstack (Tensor.unstack A i) j), tensorToVec_scalar]
-  rfl
-
 /-- Vectorization is homogeneous: scaling a matrix scales its vector. This is what lets the `1/√d`
 factor in scaled dot-product attention be handled as ordinary scalar multiplication. -/
 theorem tensorToVec_scaleSpec {m n : Nat} (A : Tensor ℝ [m, n]) (c : ℝ) :
     tensorToVec (t := scaleSpec A c) = c • tensorToVec (t := A) := by
-  ext ip
-  obtain ⟨i, j, rfl⟩ := exists_idxMN ip
-  rw [PiLp.smul_apply, tensorToVec_idxMN, tensorToVec_idxMN, smul_eq_mul]
+  apply Norm.vec_ext_idxMN (m := m) (n := n)
+  intro i j
+  rw [PiLp.smul_apply, TapeNodes.Matmul.tensorToVec_idxMN,
+    TapeNodes.Matmul.tensorToVec_idxMN, smul_eq_mul]
   simp [scaleSpec, mul_comm]
 
 /-- Transposition on flat vectors swaps the row and column index, as expected. -/
@@ -116,7 +73,7 @@ theorem transposeVec_idxMN {m n : Nat} (a : Vec (matSize m n)) (i : Fin n) (j : 
       (idxMN (m := m) (n := n) j i).val
     rw [val_idxMN, val_idxMN, Nat.add_mul_div_left _ _ j.pos, Nat.add_mul_mod_self_left,
       Nat.div_eq_of_lt j.isLt, Nat.mod_eq_of_lt j.isLt, Nat.zero_add]
-  simp only [MatTranspose.transposeVec, castVec_apply, vecOfFun_apply]
+  simp only [MatTranspose.transposeVec, ShapeOps.reindexVec, castVec_apply, vecOfFun_apply]
   rw [hidx]
 
 /-- Swapping the two axes of a matrix tensor corresponds to the flat transpose.
@@ -126,13 +83,14 @@ about at the tensor level and at the vector level separately. -/
 theorem tensorToVec_swapAdjacentAxes {m n : Nat} (A : Tensor ℝ [m, n]) :
     tensorToVec (t := swapAdjacentAxes A 0) =
       MatTranspose.transposeVec (m := m) (n := n) (tensorToVec (t := A)) := by
-  ext ip
-  obtain ⟨i, j, rfl⟩ := exists_idxMN ip
-  rw [tensorToVec_idxMN, Spec.get2_matrix_transpose_spec, transposeVec_idxMN, tensorToVec_idxMN]
+  apply Norm.vec_ext_idxMN (m := n) (n := m)
+  intro i j
+  rw [TapeNodes.Matmul.tensorToVec_idxMN, Spec.get2_matrix_transpose_spec, transposeVec_idxMN,
+    TapeNodes.Matmul.tensorToVec_idxMN]
 
 /-- Reading a vectorized matrix through the `Fin m × Fin n` product equivalence, after the size
-cast,
-gives the matrix entry. This is `tensorToVec_idxMN` in the indexing the softmax development uses. -/
+cast, gives the matrix entry. This is `TapeNodes.Matmul.tensorToVec_idxMN` in the indexing
+the softmax development uses. -/
 theorem castVec_tensorToVec_finProdFinEquiv {m n : Nat} (A : Tensor ℝ [m, n])
     (hsz : Spec.Shape.size (Shape.dim m (Shape.dim n Shape.scalar)) = m * n)
     (i : Fin m) (j : Fin n) :
@@ -141,7 +99,7 @@ theorem castVec_tensorToVec_finProdFinEquiv {m n : Nat} (A : Tensor ℝ [m, n])
     apply Fin.ext
     rw [val_idxMN]
     rfl
-  rw [castVec_apply, hidx, tensorToVec_idxMN]
+  rw [castVec_apply, hidx, TapeNodes.Matmul.tensorToVec_idxMN]
 
 /-- Row `i` of a vectorized matrix is the vectorization of row `i` of the tensor. -/
 theorem rows_castVec_tensorToVec {m n : Nat} (A : Tensor ℝ [m, n])
@@ -155,8 +113,7 @@ theorem rows_castVec_tensorToVec {m n : Nat} (A : Tensor ℝ [m, n])
 /-- Row-wise softmax on tensors agrees with the flat `forwardMN` softmax on vectors.
 
 The temperature is fixed to `1` because that is the only case attention needs; the scaling is
-already
-folded into the scores by `tensorToVec_scaleSpec`. -/
+already folded into the scores by `tensorToVec_scaleSpec`. -/
 theorem castVec_tensorToVec_softmaxSpec_one {m n : Nat} (S : Tensor ℝ [m, n])
     (hsz : Spec.Shape.size (Shape.dim m (Shape.dim n Shape.scalar)) = m * n) :
     castVec hsz (tensorToVec (t := Activation.softmaxSpec (α := ℝ) (s := [m, n]) 1 S)) =
@@ -167,6 +124,7 @@ theorem castVec_tensorToVec_softmaxSpec_one {m n : Nat} (S : Tensor ℝ [m, n])
     ← getScalarE_ofLp, getScalarE_softmaxVecSpec]
   simp only [SoftmaxLastAxis.forwardMN, SoftmaxLastAxis.unrows, vecOfFun_apply,
     Equiv.symm_apply_apply, rows_castVec_tensorToVec]
+
 
 /-! ## Attention graph evaluation -/
 
@@ -277,20 +235,13 @@ theorem hasFDerivAt_sdpaSpecForwardVec {m d : Nat} (c : ℝ) (xV : CtxVec (ΓQKV
   rw [sdpaSpecForwardVec_eq_getCLM_evalVec, hD.fderiv]
   exact (CtxVec.getCLM (sdpaOutIdx m d)).hasFDerivAt.comp xV hD
 
-/-- The adjoint of block projection is block injection. -/
-theorem adjoint_getCLM {Γ : List Shape} {s : Shape} (idx : Idx Γ s) (v : Vec (Spec.Shape.size s)) :
-    (CtxVec.getCLM idx).adjoint v = CtxVec.single idx v := by
-  apply ext_inner_left ℝ
-  intro x
-  rw [ContinuousLinearMap.adjoint_inner_right, CtxVec.getCLM_apply, CtxVec.inner_get_single]
-
 /-- Tape backprop seeded on the output block is the VJP of the specification forward pass. -/
 theorem backpropVec_eq_adjoint_fderiv_sdpaSpec {m d : Nat} (c : ℝ) (xV : CtxVec (ΓQKV m d))
     (δ : Vec (Spec.Shape.size (Shape.dim m (Shape.dim d Shape.scalar)))) :
     Graph.backpropVec (scaledDotProductGraph c) xV (CtxVec.single (sdpaOutIdx m d) δ) =
       (fderiv ℝ (sdpaSpecForwardVec (m := m) (d := d) c) xV).adjoint δ := by
   rw [(hasFDerivAt_sdpaSpecForwardVec c xV).fderiv, ContinuousLinearMap.adjoint_comp,
-    ContinuousLinearMap.comp_apply, adjoint_getCLM]
+    ContinuousLinearMap.comp_apply, CtxVec.adjoint_getCLM]
   exact Graph.backpropVec_eq_adjoint_fderiv _ (scaledDotProductDGraph c).hg xV _
 
 /-- The output block of the attention graph at scale `1 / √d` is the vectorized

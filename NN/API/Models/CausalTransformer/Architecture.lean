@@ -80,11 +80,12 @@ def Config.modelWidth (config : Config) : Nat :=
 
 namespace Config
 
-/-- Validate the hidden Transformer independently of its token-vocabulary boundary. -/
-def validateBody (config : Config) : Except String Unit := do
-  if config.sequenceLength = 0 then
-    throw "CausalTransformer: sequence length must be positive"
-  let block : nn.TransformerEncoder.Block.Config :=
+/-- Shared token and positional embedding initialization, including the layer default. -/
+def embeddingInitialization (config : Config) : Init.Scheme :=
+  config.parameterInitialization?.getD (.uniform (-0.02) 0.02)
+
+/-- Block settings shared by validation and construction of the hidden stack. -/
+def block (config : Config) : nn.TransformerEncoder.Block.Config :=
     { headCount := config.headCount
       headWidth := config.headWidth
       feedForwardWidth := config.feedForwardWidth
@@ -98,7 +99,12 @@ def validateBody (config : Config) : Except String Unit := do
       weightInitialization? := config.parameterInitialization?
       residualOutputInitialization? :=
         config.residualProjectionInitialization? }
-  block.validate (kind := "CausalTransformer")
+
+/-- Validate the hidden Transformer independently of its token-vocabulary boundary. -/
+def validateBody (config : Config) : Except String Unit := do
+  if config.sequenceLength = 0 then
+    throw "CausalTransformer: sequence length must be positive"
+  config.block.validate (kind := "CausalTransformer")
 
 /-- Validate the complete language-model configuration before allocating any parameters. -/
 def validate (config : Config) : Except String Unit := do
@@ -149,26 +155,11 @@ def hidden (config : Config) (batchShape : Shape := [])
         let modelWidth := config.modelWidth
         let encoderConfig : nn.TransformerEncoder.Stack.Config :=
           { layerCount := config.layerCount
-            block :=
-              { headCount := config.headCount
-                headWidth := config.headWidth
-                feedForwardWidth := config.feedForwardWidth
-                activation := config.activation
-                dropout? := config.dropout?
-                attentionDropout? := config.attentionDropout?
-                feedForwardDropout? := config.feedForwardDropout?
-                attentionInputBias := config.attentionInputBias
-                normalizeFirst := config.normalizeFirst
-                attentionOutputBias := config.attentionOutputBias
-                weightInitialization? := config.parameterInitialization?
-                residualOutputInitialization? :=
-                  config.residualProjectionInitialization? } }
-        let positionInitialization :=
-          config.parameterInitialization?.getD (.uniform (-0.02) 0.02)
+            block := config.block }
         do
           let builtPositionalEmbedding ← nn.learnedPositionalEmbedding batchShape
             (sequenceLength := config.sequenceLength) (embeddingWidth := modelWidth)
-            { initialization := positionInitialization }
+            { initialization := config.embeddingInitialization }
           let positionalEmbedding :
               nn.Sequential
                 (config.embeddingShape batchShape)
@@ -243,11 +234,9 @@ def oneHot (config : Config) (batchShape : Shape := [])
         "CausalTransformer" message
   | .ok () =>
       let modelWidth := config.modelWidth
-      let embeddingInitialization :=
-        config.parameterInitialization?.getD (.uniform (-0.02) 0.02)
       do
         let builtTokenEmbedding ← nn.oneHotEmbedding config.vocabularySize modelWidth
-          { weightInitialization := embeddingInitialization }
+          { weightInitialization := config.embeddingInitialization }
           (batchShape := batchShape.appendDim config.sequenceLength)
         let tokenEmbedding :
             nn.Sequential

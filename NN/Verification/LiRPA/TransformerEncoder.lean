@@ -152,6 +152,6 @@ def verifyCert (path : String) : IO Unit := do
   -- Every input coordinate gets the box $[x_i - \varepsilon, x_i + \varepsilon]$; the
   -- graph has 4 inputs, ids `0 .. 3`.
   let ps := ExampleInputs.seedNaturalInputBox 0 4 0.5 seedParamsFloat
-  NN.Verification.IBPCert.checkOrThrow g ps (outId := 10) path
+  NN.Verification.Cert.IBPCert.checkOrThrow g ps (outId := 10) path
 
 end NN.Verification.LiRPA.TransformerEncoder

@@ -5,97 +5,87 @@
 
 TorchLean brings neural-network programming and formal reasoning into one Lean project. Tensor
 shapes are part of the types, models are executable Lean programs, and the same definitions can be
-used by training code, graph transformations, certificate checkers, and proofs. CPU and CUDA
-backends handle numerical work; the Lean library records the mathematical meaning and assumptions
-attached to each path.
+used by training code, graph transformations, certificate checkers, and proofs. TorchLean owns
+automatic differentiation; its CUDA backend uses LibTorch's ATen operations to compute tensor
+values and local gradients. The Lean library records the mathematical meaning and assumptions
+attached to each execution path.
 
 ## Installation
 
 ```bash
 git clone https://github.com/lean-dojo/TorchLean.git
 cd TorchLean
-lake exe cache get
-lake build
+scripts/lake.sh exe cache get
+scripts/lake.sh build
 ```
 
-For Linux, macOS, Windows/WSL, CUDA, optional LibTorch support, and an explanation of
+For Linux, macOS, Windows/WSL, CUDA with LibTorch, and an explanation of
 TorchLean's backend architecture, see the [Installation guide](https://lean-dojo.github.io/TorchLean/installation/).
-
-TorchLean is pinned by `lean-toolchain` and currently builds with
-`leanprover/lean4:v4.34.0`.
 
 ### Native Windows (MSYS2/UCRT64)
 
-TorchLean builds on native Windows — CPU, and optionally CUDA and LibTorch — through an
-[MSYS2](https://www.msys2.org/) MinGW64 shell.
+TorchLean builds on native Windows — CPU and optionally CUDA — through an
+[MSYS2](https://www.msys2.org/) **UCRT64** shell.
 Lake invokes `cc` directly, and the standard Lean for Windows toolchain does not put a `cc` on
 `PATH`, so the build must run inside MSYS2 (which provides `gcc`/`cc`). Install MSYS2 and Elan
-on Windows via Command Prompt or Powershell, then from a **MinGW64/UCRT64** shell:
+on Windows via Command Prompt or PowerShell, then from a **UCRT64** shell:
 
 ```bash
-pacman -S --needed mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-clang mingw-w64-x86_64-toolchain
+pacman -S --needed mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-clang mingw-w64-x86_64-toolchain mingw-w64-ucrt-x86_64-cmake mingw-w64-ucrt-x86_64-ninja
 git clone https://github.com/lean-dojo/TorchLean.git
 cd TorchLean
 lake exe cache get
 lake build
 ```
 
-Building both CUDA backed and (optional) libtorch bridge in native Windows
-requires MSYS64 shell with the MSVC environment already initialized, i.e.,
-an MSYS2 shell from an environment where `vcvars64.bat` has already run 
-(e.g. an *x64 Native Tools Command Prompt*, launching
-`msys2_shell.cmd -mingw64` from it), leaving `INCLUDE` and `LIB` set.
-For the native CUDA backend you also need the NVIDIA CUDA toolkit and the MSVC x64 libraries, and
-you pass three directories so the linker can resolve the CUDA, MSVC, and MinGW libraries:
+The CUDA configuration builds the LibTorch backend natively (`cuda=true` implies LibTorch).
+It requires an MSYS2 shell with the MSVC environment already initialized, i.e. an
+MSYS2 shell from an environment where `vcvars64.bat` has already run (e.g. an
+*x64 Native Tools Command Prompt*, launching `msys2_shell.cmd -ucrt64` from it), leaving
+`INCLUDE` and `LIB` set and `cl.exe` on `PATH`. You also need the NVIDIA CUDA toolkit and a
+CUDA-enabled LibTorch SDK. `-K cuda_home` and `-K msys2_lib_dir` are mandatory; `-K msvc_lib_dir`
+is optional (derived from `cl.exe`'s location on `PATH`). `-K cuda_arch` is not used — the SDK's
+CMake configuration supplies the supported GPU architectures:
 
 ```bash
 lake -R -K cuda=true \
   -K cuda_home="C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.3" \
-  -K msvc_lib_dir="C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.51.36231\lib\x64" \
-  -K msys2_lib_dir="C:/msys64/mingw64/lib" \
-  -K cuda_arch=sm_89 \
-  build torchlean
-```
-
-On Windows, `-K cuda_home=...`, `-K msvc_lib_dir=...`, and `-K msys2_lib_dir=...` are mandatory for
-CUDA builds; the build fails early with a clear message when any is missing or points at a
-directory that does not exist. At runtime the CUDA DLLs (`cudart64_*`, `cublas64_*`, `cufft64_*`)
-must be on `PATH`. WSL2 remains the best-tested Windows route; see the Installation guide.
-
-The optional LibTorch SDPA bridge also builds on native Windows. It needs the Windows (MSVC)
-LibTorch distribution and, because the bridge C++ source is compiled with `clang-cl`, an MSYS2
-shell with the MSVC environment initialized (`vcvars64.bat`, so `clang-cl` finds the MSVC and
-Windows SDK headers):
-
-```bash
+  -K msys2_lib_dir="C:/msys64/ucrt64/lib" \
+  -K libtorch_home="C:/path/to/libtorch" \
+  build
 lake -R -K cuda=true \
   -K cuda_home="C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.3" \
-  -K msvc_lib_dir="C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.51.36231\lib\x64" \
-  -K msys2_lib_dir="C:/msys64/mingw64/lib" \
-  -K cuda_arch=sm_89 \
-  -K libtorch=true -K libtorch_home="C:/path/to/libtorch" \
-  build torchlean
+  -K msys2_lib_dir="C:/msys64/ucrt64/lib" \
+  -K libtorch_home="C:/path/to/libtorch" \
+  exe torchlean quickstart_mlp --device cuda --steps 10
 ```
 
-At runtime the LibTorch DLLs (`torch.dll`, `torch_cpu.dll`, `torch_cuda.dll`, `c10.dll`,
-`c10_cuda.dll`) must be on `PATH` as well (e.g. `C:\path\to\libtorch\lib`).
+At run time the CUDA toolkit `bin` directory (for `cudart64_*`, `cublas64_*`, `cufft64_*`) and the
+LibTorch `lib` directory (for `torch.dll`, `torch_cpu.dll`, `torch_cuda.dll`, `c10.dll`,
+`c10_cuda.dll`) must be on `PATH` (e.g. `C:\path\to\libtorch\lib`). WSL2 remains the
+best-tested Windows route; see the Installation guide.
 
 ## Quickstart
 
 ```bash
-lake exe torchlean quickstart_mlp --device cpu --steps 10 --arithmetic ieee --execution eager
-lake exe torchlean quickstart_mlp --device cpu --steps 10 --execution eager
+scripts/lake.sh exe torchlean quickstart_mlp --device cpu --steps 10 --arithmetic ieee --execution eager
+scripts/lake.sh exe torchlean quickstart_mlp --device cpu --steps 10 --execution eager
 
-# Optional CUDA run, if the CUDA toolkit and an NVIDIA GPU are available:
-lake -R -K cuda=true build
-lake -R -K cuda=true exe torchlean quickstart_mlp --device cuda --steps 10 --execution eager
+# Optional GPU run with a CUDA-enabled LibTorch SDK, matching toolkit, and NVIDIA GPU:
+export TORCHLEAN_LIBTORCH_HOME=/absolute/path/to/libtorch
+scripts/lake.sh -Kcuda=true build
+scripts/lake.sh -Kcuda=true exe torchlean quickstart_mlp --device cuda --steps 10 --execution eager
 ```
 
 The first quickstart uses [FloatLib](https://github.com/lean-dojo/FloatLib)'s binary32 arithmetic.
 The second uses Lean's native `Float32`.
 For more precision, choose a FloatLib binary format directly in typed tensors and models, as shown
 below.
-The CUDA command selects the native GPU runtime and reports an error when CUDA is unavailable.
+The CUDA command selects LibTorch's GPU runtime and reports an error when CUDA is unavailable.
+TorchLean retains its own tape and backward traversal; the bridge disables LibTorch autograd.
+Attention's matrix products, masking, softmax, and local VJP are composed in Lean, with saved
+buffers owned by the tape. Spectral layers likewise compose FFT, frequency mixing, and inverse FFT
+in Lean. LibTorch supplies the numerical primitives for these computations.
 
 Application code writes concrete tensor types as `Tensor α [dims...]`, with the element type first.
 For example, `Tensor Float [4, 2]` is a four-by-two tensor of `Float` values:
@@ -127,13 +117,13 @@ def trainOnce : IO Unit := do
   -- Select the loss and train through a typed graph with FloatLib binary32 arithmetic.
   let trainer :=
     Trainer.new model
-      { objective := .meanSquaredError
+      { objective := .mse
         optimizer := optim.sgd { learningRate := 0.05 }
         execution := .typedGraph
         device := .cpu
         arithmetic := .ieee }
   -- Inspect the initialized model before any parameter updates.
-  let initialPrediction ← trainer.predict ([0.5, -0.25])
+  let initialPrediction ← trainer.predict ([0.5, -0.25] : Tensor Float [2])
   IO.println s!"initial={reprStr initialPrediction}"
   -- Each step averages 16 sample gradients at one parameter point, then updates once.
   -- Training returns a result that retains the updated parameters and run report.
@@ -144,15 +134,15 @@ def trainOnce : IO Unit := do
 ## Commands
 
 ```bash
-lake exe torchlean --help
-lake exe verify --help
-lake exe verify -- torchlean-ibp
+scripts/lake.sh exe torchlean --help
+scripts/lake.sh exe verify --help
+scripts/lake.sh exe verify -- torchlean-ibp
 ```
 
 For the maintained examples:
 
 ```bash
-lake build NNExamples
+scripts/lake.sh build NNExamples
 ```
 
 ## Use TorchLean From Another Lean Project
@@ -163,7 +153,7 @@ TorchLean is a normal Lake package. You can depend on the Git repository directl
 require TorchLean from git "https://github.com/lean-dojo/TorchLean.git" @ "main"
 ```
 
-Then run:
+Then run from the downstream project's root, using its own Lake configuration:
 
 ```bash
 lake update
@@ -228,8 +218,9 @@ including exceptional values. Real error bounds add the relevant finiteness and 
 FloatLib also supplies other binary widths, decimal formats, posits, fixed-point arithmetic, and
 intervals. Its scalar import does not depend on TorchLean's tensors, models, or CUDA runtime.
 Configured binary formats support CPU tensor and typed-model execution at the selected precision.
-The native CUDA providers support binary32 and binary64; selecting another FloatLib binary format
-does not create a GPU provider for it. TorchLean's tensor quantization and runtime-approximation
+The eager CUDA runtime uses binary32 buffers; a separate matrix-multiplication interface supports
+binary64. Selecting another FloatLib binary format does not create a GPU provider for it.
+TorchLean's tensor quantization and runtime-approximation
 connections remain separate from the scalar library.
 
 For tensors and models at a chosen precision, `NN.API` includes `NN.API.Precision`. A
@@ -275,8 +266,14 @@ The final prediction is $9a/8$. Returning an exact rational observation preserve
 that would disappear in a conversion to binary64. The same typed interfaces accept other valid
 configured binary formats; their rounding can change the arithmetic result.
 
-The supervised trainer's dataset, reporting, and checkpoint boundaries use `Float`; changing its
-arithmetic option does not turn that interface into a general-precision data path. The
+For a supervised loop at the selected precision, open
+`trainer.openTyped (α := Scalar) (initialState? := some state)` and supply typed samples.
+Inputs, losses, predictions, state, and model-state checkpoints retain `Scalar`; `finish` keeps
+an independent snapshot. This path supports eager and graph execution on CPU. Seeded initialization
+and optimizer settings still start from `Float` unless explicitly supplied through typed interfaces.
+Typed sessions reject custom backend profiles. Their finished results have no attached verifier,
+so `Result.verify` returns an error.
+The
 [tensor guide](https://lean-dojo.github.io/TorchLean/blueprint/Building-Models/Tensors-That-Remember-Their-Shapes/)
 works through a typed binary128 model and checks its output and derivatives against exact rationals.
 
@@ -306,7 +303,7 @@ Generic rounded-real definitions live in `FloatLib.Floats.Formats.Flocq`; execut
 
 Native conversions now use `ExecFloat.Binary.ofFloat32` and `toFloat32` directly. FloatLib proves
 their exact native round trip, addition/subtraction agreement for finite operands, and square-root
-agreement through native export for every configured input. The finite-input addition theorem
+agreement through native export for every configured binary32 input. The finite-input addition theorem
 allows overflow in the result. These are logical-model theorems; they do not certify compiled
 CPU or CUDA instructions.
 
@@ -319,7 +316,7 @@ accumulation followed by one rounding; this differs from rounding at every node.
 
 For quantization, `FloatLib.Numerics.Quantization.Affine` supplies executable rational
 nearest-even quantization. `FloatLib.Numerics.Quantization.Affine.Real` supplies real scales and
-caller-chosen rounding. TorchLean re-exports these through `NN.Floats.Quantization`, with tensor
+caller-chosen rounding. TorchLean imports these from FloatLib and adds tensor
 lifts in `NN.Spec.Quantization` and `NN.Spec.Quantization.Rational`.
 
 ## Repository Map

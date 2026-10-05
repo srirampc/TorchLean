@@ -34,57 +34,43 @@ deriving Repr
 
 namespace Internal
 
-/-- Tensor buffers and the active basis width of the Gram-Schmidt sweep. -/
-structure WideQRState (α : Type) [TorchLean.Storage α] (rows columns : Nat) where
-  /-- Number of populated basis columns; remaining columns stay zero. -/
-  count : Fin (min rows columns + 1)
-  /-- Reduced basis matrix. -/
-  basis : Tensor α [rows, min rows columns]
-  /-- Coefficients for the source columns processed so far. -/
-  coefficients : Tensor α [min rows columns, columns]
-
 /-- Reduced QR by classical Gram-Schmidt, sweeping source columns left to right.
 
-The basis and coefficient buffers keep their final tensor shapes; `count` selects the populated
-basis columns. A dependent column does not consume a basis slot, so later independent columns can
-still enter. Each dot product and projection sums only active entries in their original order,
-starting from zero. Unused basis columns therefore never introduce spurious `0 * NaN` terms.
+The sweep keeps the populated basis columns and the finished coefficient columns in arrays and
+builds the two factor matrices once at the end. A dependent column does not consume a basis slot,
+so later independent columns can still enter. Each dot product and projection sums only active
+entries in their original order, starting from zero. Unused basis columns are zero and never
+introduce spurious `0 * NaN` terms.
 -/
 def wideQR {α : Type} [TorchLean.Storage α] [Context α] {m n : Nat}
     (matrix : Tensor α [m, n]) : QRFactors α m n := Id.run do
   let width := min m n
-  let mut state : WideQRState α m n :=
-    { count := ⟨0, by omega⟩, basis := Tensor.zeros [m, width]
-      coefficients := Tensor.zeros [width, n] }
+  let mut basisColumns : Array (Tensor α [m]) := Array.emptyWithCapacity width
+  let mut coefficientColumns : Array (Tensor α [width]) := Array.emptyWithCapacity n
   for column in List.finRange n do
-    let basisIndex : Fin state.count.val → Fin width :=
-      fun index => ⟨index.val, Nat.lt_of_lt_of_le index.isLt (Nat.le_of_lt_succ state.count.isLt)⟩
+    let count := basisColumns.size
+    let basisEntry (index : Fin count) (row : Fin m) : α := basisColumns[index][row]
     let source : Tensor α [m] := Tensor.ofFn fun row => matrix[(row, column)]
-    let coefficients : Tensor α [state.count.val] := Tensor.ofFn fun index =>
-      Tensor.sum <| Tensor.ofFn fun (row : Fin m) =>
-        state.basis[(row, basisIndex index)] * source[row]
+    let coefficients : Tensor α [count] := Tensor.ofFn fun index =>
+      Tensor.sum <| Tensor.ofFn fun (row : Fin m) => basisEntry index row * source[row]
     let residual : Tensor α [m] := Tensor.ofFn fun row =>
-      source[row] - Tensor.sum (Tensor.ofFn fun (index : Fin state.count.val) =>
-        coefficients[index] * state.basis[(row, basisIndex index)])
+      source[row] - Tensor.sum (Tensor.ofFn fun (index : Fin count) =>
+        coefficients[index] * basisEntry index row)
     let diagonal := MathFunctions.sqrt (Tensor.sum (Tensor.square residual))
     let positive := Context.gtBool diagonal 0
-    let appendBasis := positive && decide (state.count.val < width)
-    let nextCoefficients : Tensor α [width, n] := Tensor.matrix fun row sourceColumn =>
-      if sourceColumn == column then
-        if h : row.val < state.count.val then coefficients[(⟨row.val, h⟩ : Fin state.count.val)]
-        else if row.val == state.count.val && appendBasis then diagonal else 0
-      else state.coefficients[(row, sourceColumn)]
-    if h : state.count.val < width then
-      if positive then
-        let nextBasis : Tensor α [m, width] := Tensor.matrix fun row basisColumn =>
-          if basisColumn.val == state.count.val then residual[row] / diagonal
-          else state.basis[(row, basisColumn)]
-        state :=
-          { count := ⟨state.count.val + 1, Nat.succ_lt_succ h⟩
-            basis := nextBasis, coefficients := nextCoefficients }
-      else state := { state with coefficients := nextCoefficients }
-    else state := { state with coefficients := nextCoefficients }
-  return { q := state.basis, r := state.coefficients }
+    let appendBasis := positive && decide (count < width)
+    coefficientColumns := coefficientColumns.push <| Tensor.ofFn fun (row : Fin width) =>
+      if h : row.val < count then coefficients[(⟨row.val, h⟩ : Fin count)]
+      else if row.val == count && appendBasis then diagonal else 0
+    if appendBasis then
+      basisColumns := basisColumns.push <| Tensor.ofFn fun row => residual[row] / diagonal
+  let q : Tensor α [m, width] := Tensor.matrix fun row basisColumn =>
+    if h : basisColumn.val < basisColumns.size then basisColumns[basisColumn.val][row] else 0
+  let r : Tensor α [width, n] := Tensor.matrix fun row sourceColumn =>
+    if h : sourceColumn.val < coefficientColumns.size then
+      coefficientColumns[sourceColumn.val][row]
+    else 0
+  return { q, r }
 
 end Internal
 
@@ -93,10 +79,11 @@ Compute a reduced QR factorization with classical Gram-Schmidt.
 
 The result uses the NumPy/PyTorch reduced shapes
 `q : Tensor α [m, min m n]` and `r : Tensor α [min m n, n]`.
-For tall and square inputs, this is the theorem-backed specification computation with its dimensions
-presented in reduced form. For wide inputs, linearly dependent source columns do not consume a
-basis column, so a later independent column can still enter the reduced basis. Any unused trailing
-basis columns are zero.
+For tall and square inputs, this is the specification computation with its dimensions
+presented in reduced form; its reconstruction and orthonormality theorems concern real scalars
+and require positive diagonal pivots. For wide inputs, linearly dependent source columns do not
+consume a basis column, so a later independent column can still enter the reduced basis. Any unused
+trailing basis columns are zero.
 -/
 def qr {α : Type} [TorchLean.Storage α] [Context α] {m n : Nat}
     (matrix : Tensor α [m, n]) : QRFactors α m n :=
@@ -113,9 +100,12 @@ def qr {α : Type} [TorchLean.Storage α] [Context α] {m n : Nat}
 /--
 Compute the lower-triangular Cholesky factor candidate of a square matrix.
 
-For symmetric inputs with positive executable pivots, the specification layer proves
-`A = L @ L.transpose`. Inputs outside that domain follow the scalar backend's arithmetic behavior;
-for example, `Float` produces `NaN` after a negative square root.
+For real symmetric inputs with positive pivots, the specification layer proves
+`A = L @ L.transpose` for its logical computation. Compilation substitutes an array implementation
+through `implemented_by`; equivalence to the logical computation is not proved. No exact
+reconstruction theorem is asserted for floating-point scalars. Inputs outside the intended domain
+follow the scalar backend's arithmetic behavior; for example, `Float` produces `NaN` after a
+negative square root.
 -/
 def cholesky {α : Type} [TorchLean.Storage α] [Context α] {n : Nat}
     (matrix : Tensor α [n, n]) : Tensor α [n, n] :=
@@ -126,6 +116,8 @@ Solve `(kernel + regularization * I) x = target` through the Cholesky path.
 
 The operation is intended for symmetric positive-semidefinite kernels and positive regularization.
 Its executable implementation is available across scalar backends supporting `Context`.
+The specification uses `implemented_by` substitutions for the compiled solve and Cholesky paths;
+their equivalence to the logical definitions is not proved.
 -/
 def solveRidge {α : Type} [TorchLean.Storage α] [Context α] {n : Nat}
     (kernel : Tensor α [n, n]) (regularization : α)

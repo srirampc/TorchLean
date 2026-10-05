@@ -24,6 +24,16 @@ open Proofs.Autograd.Algebra
 
 namespace Layers
 
+/-- Reject zero spatial, kernel, or stride extents, identifying the layer in the error message. -/
+def Internal.validateSpatialDimensions {rank : Nat} (kind : String)
+    (inputSize kernelSize stride : TorchLean.Tensor Nat [rank]) : Except String Unit := do
+  if inputSize.prod = 0 then
+    throw s!"{kind}: input spatial dimensions must be positive"
+  if !decide (∀ axis : Fin rank, kernelSize.getScalar axis ≠ 0) then
+    throw s!"{kind}: kernel size entries must be positive"
+  if !decide (∀ axis : Fin rank, stride.getScalar axis ≠ 0) then
+    throw s!"{kind}: stride entries must be positive"
+
 /--
 N-D convolution layer for a channels-first tensor `(batch, inputChannels, spatial...)`.
 
@@ -63,12 +73,7 @@ def conv
         throw "Conv: input channel count must be positive"
       if outputChannels = 0 then
         throw "Conv: output channel count must be positive"
-      if inputSize.prod = 0 then
-        throw "Conv: input spatial dimensions must be positive"
-      if !decide (∀ axis : Fin rank, kernelSize.getScalar axis ≠ 0) then
-        throw "Conv: kernel size entries must be positive"
-      if !decide (∀ axis : Fin rank, stride.getScalar axis ≠ 0) then
-        throw "Conv: stride entries must be positive"
+      Internal.validateSpatialDimensions "Conv" inputSize kernelSize stride
       if (Spec.convOutSpatial inputSize kernelSize stride padding).prod = 0 then
         throw "Conv: geometry produced an empty spatial grid"
       weightInit.validate
@@ -125,12 +130,7 @@ def convTranspose
         throw "ConvTranspose: input channel count must be positive"
       if outputChannels = 0 then
         throw "ConvTranspose: output channel count must be positive"
-      if inputSize.prod = 0 then
-        throw "ConvTranspose: input spatial dimensions must be positive"
-      if !decide (∀ axis : Fin rank, kernelSize.getScalar axis ≠ 0) then
-        throw "ConvTranspose: kernel size entries must be positive"
-      if !decide (∀ axis : Fin rank, stride.getScalar axis ≠ 0) then
-        throw "ConvTranspose: stride entries must be positive"
+      Internal.validateSpatialDimensions "ConvTranspose" inputSize kernelSize stride
       if (Spec.convTransposeOutSpatial inputSize kernelSize stride padding).prod = 0 then
         throw "ConvTranspose: geometry produced an empty spatial grid"
       weightInit.validate
@@ -166,12 +166,7 @@ def maxPool
     validateConfig := do
       if channels = 0 then
         throw "MaxPool: channel count must be positive"
-      if inputSize.prod = 0 then
-        throw "MaxPool: input spatial dimensions must be positive"
-      if !decide (∀ axis : Fin rank, kernelSize.getScalar axis ≠ 0) then
-        throw "MaxPool: kernel size entries must be positive"
-      if !decide (∀ axis : Fin rank, stride.getScalar axis ≠ 0) then
-        throw "MaxPool: stride entries must be positive"
+      Internal.validateSpatialDimensions "MaxPool" inputSize kernelSize stride
       if (Spec.poolOutSpatialPad inputSize kernelSize stride padding).prod = 0 then
         throw "MaxPool: geometry produced an empty spatial grid"
     forward := fun _ {α} _ _ =>
@@ -203,12 +198,7 @@ def avgPool
     validateConfig := do
       if channels = 0 then
         throw "AvgPool: channel count must be positive"
-      if inputSize.prod = 0 then
-        throw "AvgPool: input spatial dimensions must be positive"
-      if !decide (∀ axis : Fin rank, kernelSize.getScalar axis ≠ 0) then
-        throw "AvgPool: kernel size entries must be positive"
-      if !decide (∀ axis : Fin rank, stride.getScalar axis ≠ 0) then
-        throw "AvgPool: stride entries must be positive"
+      Internal.validateSpatialDimensions "AvgPool" inputSize kernelSize stride
       if (Spec.poolOutSpatialPad inputSize kernelSize stride padding).prod = 0 then
         throw "AvgPool: geometry produced an empty spatial grid"
     forward := fun _ {α} _ _ =>

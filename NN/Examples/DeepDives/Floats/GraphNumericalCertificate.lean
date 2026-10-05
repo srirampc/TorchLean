@@ -34,6 +34,7 @@ graphs use the same artifact-generation and replay path.
 @[expose] public section
 
 open FloatLib.Floats (ExecFloat)
+open FloatLib.Numerics (Interval)
 open FloatLib.Floats.ExecFloat (Binary)
 open FloatLib.Floats.ExecFloat.Binary (ofBits32)
 open FloatLib.Floats.Formats.BinaryInterchange (Model FloatFormat)
@@ -41,7 +42,6 @@ open FloatLib.Floats.Formats.BinaryInterchange (Model FloatFormat)
 open Proofs.RuntimeApprox.NumericalCertificate
 open Spec TorchLean
 open TorchLean
-open TorchLean.Floats.IEEE754
 
 namespace NN.Examples.DeepDives.Floats.GraphNumericalCertificate
 
@@ -59,11 +59,10 @@ def graph : NN.IR.Graph :=
 Build a binary32 interval from two bit patterns.
 
 Every source range in this file is written in hexadecimal rather than as a decimal literal. That
-keeps
-the certificate an exact artifact: no decimal-to-binary conversion sits between what is written here
-and what the checker sees.
+keeps the certificate an exact artifact: no decimal-to-binary conversion sits between the written
+endpoints and what the checker sees.
 -/
-def interval (lo hi : UInt32) : IEEE32Exec.Interval32 :=
+def interval (lo hi : UInt32) : Interval (Binary 8 23) :=
   { lo := ofBits32 lo, hi := ofBits32 hi }
 
 /-- Did an executable certificate operation return a checked value? -/
@@ -233,7 +232,7 @@ def usage : String :=
     [ "Numerical runtime certificate example"
     , ""
     , "Usage:"
-    , "  lake exe torchlean numerical_certificate"
+    , "  scripts/lake.sh exe torchlean numerical_certificate"
     , ""
     , "Runs range-certificate, backend-audit, tamper-rejection, and bit-level"
     , "binary32 replay checks. The final two checks run a complete two-layer MLP."

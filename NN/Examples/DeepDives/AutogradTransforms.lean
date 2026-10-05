@@ -71,11 +71,11 @@ def runDemo : IO Unit := do
   IO.println s!"Hessian of mean(x^2): {reprStr hessian}"
 
   let state : autograd.model.State model Float :=
-    autograd.model.initialState model
+    nn.initialState model
   let target : Tensor Float [3] := [0.7, 0.1, -0.5]
   let direction : autograd.model.State model Float :=
-    autograd.model.fullState model 0.1
-  let mse : autograd.model.Loss [3] [3] := autograd.model.Loss.meanSquaredError
+    nn.State.full 0.1
+  let mse : autograd.model.Loss [3] [3] := autograd.model.Loss.mse
 
   let directionalDerivative ←
     autograd.model.jvp model mse state x target direction
@@ -200,8 +200,8 @@ theorem expSquareProgram_eval {α : Type} [Storage α] [Context α] {shape : Spe
       (fun graph => graph.forward (TensorPack.singleton x)) =
       .ok (Tensor.expSpec (Tensor.mulSpec x x)) := by
   simp only [lowerToTypedGraph, lowerToTypedGraphWithData, expSquareProgram, GraphM.arg,
-    GraphM.square, GraphM.mul, GraphM.exp, GraphM.push, GraphM.emptyWith, GraphM.mkIdx,
-    GraphM.ctxLen]
+    GraphM.square, GraphM.mul, GraphM.exp, GraphM.Internal.unaryWithSharedDerivative,
+    GraphM.push, GraphM.emptyWith, GraphM.mkIdx, GraphM.ctxLen]
   simp
   dsimp only [Bind.bind, Except.bind, Functor.map, Except.map]
   simp

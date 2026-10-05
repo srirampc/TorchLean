@@ -26,7 +26,8 @@ Files:
   backward rules, including grouped and dilated convolution in both the block-diagonal dense and
   the PyTorch packed weight layouts.
 - `Pooling.lean` and `Pooling/Spatial.lean`: max/avg pooling, padded pooling, adaptive pooling, and
-  smooth max pooling surrogates for arbitrary spatial rank, including backward/JVP rules.
+  smooth max pooling surrogates for arbitrary spatial rank, including backward/JVP rules. Max-pool
+  rules follow the first selected maximum at ties.
 - `Normalization.lean`, `Normalization/Core.lean`, `Normalization/BatchNorm.lean`: LayerNorm,
   RMSNorm, and BatchNorm style utilities with explicit backward specs.
 - `Embedding.lean`: one-hot embeddings (`oneHot @ W`) and the corresponding VJP.
@@ -36,8 +37,10 @@ Files:
 - `Gnn.lean`: a compact GCN-style graph layer and backward rules.
 - `Rnn.lean`, `Lstm.lean`, `Gru.lean`: recurrent layers and BPTT-style backwards.
 - `SelectiveScan.lean`: affine scan primitives used by S4/Mamba style state space models.
+- `RealFFT.lean`: packed real-DFT matrices and their inverse synthesis matrices, used by Fourier
+  runtime operators and autograd.
 
 The underlying tensor primitives (maps, matmul, reshape, broadcasting) live under `NN/Spec/Core/*`.
 
-This folder defines meanings, not runtime performance. A typed graph node, fused CUDA kernel, or
-ATen provider should be documented against the spec operation it implements or approximates.
+This folder defines each operation's meaning. Typed graph nodes and ATen implementations should
+document which spec operation they implement or approximate.

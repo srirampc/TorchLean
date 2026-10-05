@@ -66,6 +66,14 @@ theorem jet_const {shape : Shape} {n : Nat} (directions : Fin n → E)
   intro i
   simp only [jet_apply, Dual.jet_const, Tensor.map, Tensor.Internal.Rep.map_apply]
 
+/-- The jet of the zero tensor is zero at every derivative order. -/
+theorem jet_full_zero {shape : Shape} {n : Nat} (directions : Fin n → E) (x : E) :
+    jet directions (fun _ => Tensor.full shape (0 : ℝ)) x =
+      Tensor.full shape (0 : Dual.Nested ℝ n) := by
+  apply Tensor.Internal.Rep.ext
+  intro i
+  simp only [jet_apply, Tensor.full_apply, Dual.jet_const, Dual.Nested.ofPrimal_zero]
+
 /-- Pointwise multiplication of complete jets follows the scalar product rule at every order. -/
 theorem jet_mul_at {shape : Shape} {n : Nat} (directions : Fin n → E)
     {f g : E → Tensor ℝ shape} {x : E} (hf : ContDiffAt ℝ n f x) (hg : ContDiffAt ℝ n g x) :

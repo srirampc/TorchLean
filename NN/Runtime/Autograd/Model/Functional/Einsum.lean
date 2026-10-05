@@ -21,115 +21,22 @@ open TorchLean TorchLean.Tensor
 
 namespace F
 
-/-! ## Einsum-ish building blocks -/
-
-/-!
-## Typed einsum wrappers (fast, total)
-
-These are non-`Option` equivalents for the most common einsum contractions in ML code.
-They are intended to be used directly (no string parsing), and serve as the fast-path targets for
-`einsum?`.
--/
-
-/-- `einsum("ij,jk->ik", A, B)` as a typed matmul. -/
-def einsumIjJkIk {α : Type} [TorchLean.Storage α] [Context α]
-    {m : Type → Type} [Monad m] [Ops (m := m) (α := α)]
-    {iDim jDim kDim : Nat}
-    (a : RefTy (m := m) (α := α) [iDim, jDim])
-    (b : RefTy (m := m) (α := α) [jDim, kDim]) :
-    m (RefTy (m := m) (α := α) [iDim, kDim]) :=
-  Runtime.Autograd.Torch.matmul (m := m) (α := α)
-    (batchA := .scalar) (batchB := .scalar) (batch := .scalar)
-    (mDim := iDim) (nDim := jDim) (pDim := kDim) a b
-
-/-- `einsum("bij,bjk->bik", A, B)` as a typed batched matmul. -/
-def einsumBijBjkBik {α : Type} [TorchLean.Storage α] [Context α]
-    {m : Type → Type} [Monad m] [Ops (m := m) (α := α)]
-    {batch iDim jDim kDim : Nat}
-    (a : RefTy (m := m) (α := α) [batch, iDim, jDim])
-    (b : RefTy (m := m) (α := α) [batch, jDim, kDim]) :
-    m (RefTy (m := m) (α := α) [batch, iDim, kDim]) :=
-  Runtime.Autograd.Torch.matmul (m := m) (α := α)
-    (batchA := [batch]) (batchB := [batch]) (batch := [batch])
-    (mDim := iDim) (nDim := jDim) (pDim := kDim) a b
-
-/-- Einsum pattern used in attention: `bhid,bhjd -> bhij` (batched Q·Kᵀ per head). -/
-def einsumBhidBhjdBhij {α : Type} [TorchLean.Storage α] [Context α]
-    {m : Type → Type} [Monad m] [Ops (m := m) (α := α)]
-    {batch heads iDim jDim dDim : Nat}
-    (q : RefTy (m := m) (α := α) [batch, heads, iDim, dDim])
-    (k : RefTy (m := m) (α := α) [batch, heads, jDim, dDim]) :
-    m (RefTy (m := m) (α := α) [batch, heads, iDim, jDim]) := do
-  let bh : Nat := batch * heads
-  let sQ4 : Shape := [batch, heads, iDim, dDim]
-  let sK4 : Shape := [batch, heads, jDim, dDim]
-  let sQ3 : Shape := [bh, iDim, dDim]
-  let sK3 : Shape := [bh, jDim, dDim]
-  let sKT : Shape := [bh, dDim, jDim]
-  let sOut3 : Shape := [bh, iDim, jDim]
-  let sOut4 : Shape := [batch, heads, iDim, jDim]
-  have hQ : Spec.Shape.size sQ4 = Spec.Shape.size sQ3 := by
-    simp [sQ4, sQ3, Spec.Shape.size, bh, Nat.mul_left_comm, Nat.mul_comm]
-  have hK : Spec.Shape.size sK4 = Spec.Shape.size sK3 := by
-    simp [sK4, sK3, Spec.Shape.size, bh, Nat.mul_left_comm, Nat.mul_comm]
-  have hOut : Spec.Shape.size sOut3 = Spec.Shape.size sOut4 := by
-    simp [sOut3, sOut4, Spec.Shape.size, bh, Nat.mul_left_comm, Nat.mul_comm]
-  let q3 ← reshape (m := m) (α := α) (s₁ := sQ4) (s₂ := sQ3) q hQ
-  let k3 ← reshape (m := m) (α := α) (s₁ := sK4) (s₂ := sK3) k hK
-  let kt ← Runtime.Autograd.Torch.swapAdjacentAtDepth
-    (m := m) (α := α) (s := sK3) 1 k3
-  let out3 ← Runtime.Autograd.Torch.matmul (m := m) (α := α)
-    (batchA := [bh]) (batchB := [bh]) (batch := [bh])
-    (mDim := iDim) (nDim := dDim) (pDim := jDim) q3 kt
-  reshape (m := m) (α := α) (s₁ := sOut3) (s₂ := sOut4) out3 hOut
-
-/-- Einsum pattern used in attention: `bhij,bhjd -> bhid` (batched Attn·V per head). -/
-def einsumBhijBhjdBhid {α : Type} [TorchLean.Storage α] [Context α]
-    {m : Type → Type} [Monad m] [Ops (m := m) (α := α)]
-    {batch heads iDim jDim dDim : Nat}
-    (attn : RefTy (m := m) (α := α) [batch, heads, iDim, jDim])
-    (v : RefTy (m := m) (α := α) [batch, heads, jDim, dDim]) :
-    m (RefTy (m := m) (α := α) [batch, heads, iDim, dDim]) := do
-  let bh : Nat := batch * heads
-  let sA4 : Shape := [batch, heads, iDim, jDim]
-  let sV4 : Shape := [batch, heads, jDim, dDim]
-  let sA3 : Shape := [bh, iDim, jDim]
-  let sV3 : Shape := [bh, jDim, dDim]
-  let sOut3 : Shape := [bh, iDim, dDim]
-  let sOut4 : Shape := [batch, heads, iDim, dDim]
-  have hA : Spec.Shape.size sA4 = Spec.Shape.size sA3 := by
-    simp [sA4, sA3, Spec.Shape.size, bh, Nat.mul_left_comm, Nat.mul_comm]
-  have hV : Spec.Shape.size sV4 = Spec.Shape.size sV3 := by
-    simp [sV4, sV3, Spec.Shape.size, bh, Nat.mul_left_comm, Nat.mul_comm]
-  have hOut : Spec.Shape.size sOut3 = Spec.Shape.size sOut4 := by
-    simp [sOut3, sOut4, Spec.Shape.size, bh, Nat.mul_left_comm, Nat.mul_comm]
-  let a3 ← reshape (m := m) (α := α) (s₁ := sA4) (s₂ := sA3) attn hA
-  let v3 ← reshape (m := m) (α := α) (s₁ := sV4) (s₂ := sV3) v hV
-  let out3 ← Runtime.Autograd.Torch.matmul (m := m) (α := α)
-    (batchA := [bh]) (batchB := [bh]) (batch := [bh])
-    (mDim := iDim) (nDim := jDim) (pDim := dDim) a3 v3
-  reshape (m := m) (α := α) (s₁ := sOut3) (s₂ := sOut4) out3 hOut
-
 /-! ## General einsum (PyTorch-style subscripts; runtime-checked) -/
 
 namespace Einsum
 
 -- Needed for runtime checks (e.g. to build a `HasNonemptyAxis` for reductions).
 /-- Decidable instance for `Shape.wellFormed`, used by the dynamic einsum lowering. -/
-def wellFormedDec : (s : Shape) → Decidable s.wellFormed
+instance instDecidableWellFormed : (s : Shape) → Decidable s.wellFormed
   | .scalar => isTrue trivial
   | .dim n s =>
       match (inferInstance : Decidable (n > 0)) with
       | isTrue hn =>
-          match wellFormedDec s with
+          match instDecidableWellFormed s with
           | isTrue hs => isTrue ⟨hn, hs⟩
           | isFalse hs => isFalse (fun h => hs h.2)
       | isFalse hn =>
           isFalse (fun h => hn h.1)
-
-/-- Local decidability instance for `Shape.wellFormed` (used by the dynamic einsum lowering). -/
-instance (s : Shape) : Decidable s.wellFormed :=
-  wellFormedDec s
 
 /--
 Label used by the dynamic einsum parser.
@@ -202,13 +109,6 @@ def parseEquation (raw : String) : Except String Parsed := do
   | _ =>
       throw s!"einsum: invalid equation `{raw}` (expected `lhs` or `lhs->rhs`)"
 
-/-- Detect whether a list of labels contains any duplicates (order-preserving scan). -/
-def hasDupLabels (xs : List Label) : Bool :=
-  let rec go (seen : List Label) : List Label → Bool
-    | .nil => false
-    | .cons x xs => if seen.contains x then true else go (x :: seen) xs
-  go [] xs
-
 /--
 Convert a permutation of axes into a sequence of adjacent swaps.
 
@@ -264,13 +164,9 @@ instead of `Std.HashMap`.
 /-- Occurrence counts for labels, represented as an association list. -/
 abbrev Counts : Type := List (Label × Nat)
 
-/-- Look up how many times a parsed einsum label occurs in the current signature. -/
-def countsFind? (cs : Counts) (x : Label) : Option Nat :=
-  (cs.find? (fun p => p.1 == x)).map (fun p => p.2)
-
 /-- Number of occurrences of a label. An absent label has count zero. -/
 def labelCount (cs : Counts) (x : Label) : Nat :=
-  (countsFind? cs x).getD 0
+  (cs.lookup x).getD 0
 
 /-- Increment a label’s count (inserting it if absent). -/
 def countsInc (cs : Counts) (x : Label) : Counts :=
@@ -287,21 +183,8 @@ def countsInc (cs : Counts) (x : Label) : Counts :=
 def labelCounts (xss : List (List Label)) : Counts :=
   xss.foldl (fun acc xs => xs.foldl countsInc acc) []
 
-/-- Keep first occurrences of labels, preserving order. -/
-def orderedUnique (xs : List Label) : List Label :=
-  let rec go (seen : List Label) : List Label → List Label
-    | .nil => []
-    | .cons x xs =>
-        if seen.contains x then go seen xs
-        else x :: go (x :: seen) xs
-  go [] xs
-
 /-- Map each label to its concrete dimension size (association list). -/
 abbrev DimMap : Type := List (Label × Nat)
-
-/-- Lookup a label’s dimension size. -/
-def dimFind? (mp : DimMap) (x : Label) : Option Nat :=
-  (mp.find? (fun p => p.1 == x)).map (fun p => p.2)
 
 /-- Insert/update a label’s dimension size in a `DimMap`. -/
 def dimUpdate (mp : DimMap) (x : Label) (d : Nat) : DimMap :=
@@ -327,7 +210,7 @@ def labelDimMap (xss : List (List Label)) (shapes : List Shape) : Except String 
     if xs.length != dims.length then
       throw "einsum: internal error (label/dim length mismatch)"
     for (lbl, d) in List.zip xs dims do
-      match dimFind? mp lbl with
+      match mp.lookup lbl with
       | none => mp := dimUpdate mp lbl d
       | some d0 =>
           if d0 = d then
@@ -368,12 +251,6 @@ def permuteBySwapsTyped {α : Type} [TorchLean.Storage α] [Context α]
   | .cons depth depths => do
       let moved ← swapAdjacentAtDepth (m := m) (α := α) (s := s) depth x
       permuteBySwapsTyped (m := m) (α := α) moved depths
-
-/-- Remove the element at index `n` (0-based), leaving the list unchanged if out of bounds. -/
-def removeAt {α : Type} : List α → Nat → List α
-  | .nil, _ => []
-  | .cons _ xs, 0 => xs
-  | .cons x xs, n + 1 => x :: removeAt xs n
 
 /--
 Compute a permutation that maps `src` to `tgt` when duplicates are present.
@@ -440,24 +317,18 @@ def diagMaskSpec {α : Type} [TorchLean.Storage α] [Zero α] [One α] :
 
 end Internal
 
-/-- Diagonal mask specification with fresh index-tracking state. -/
-def diagMaskSpec {α : Type} [TorchLean.Storage α] [Zero α] [One α]
-    (dims : List Nat) (p q : Nat) :
-    Tensor α (Shape.ofList dims) :=
-  Internal.diagMaskSpec (α := α) dims p q none none
-
-/-- Specialize `diagMaskSpec` to a concrete `Shape`. -/
+/-- Diagonal mask at a concrete shape, with fresh index-tracking state. -/
 def diagMaskForShape {α : Type} [TorchLean.Storage α] [Zero α] [One α]
     (s : Shape) (p q : Nat) : Tensor α s :=
-  diagMaskSpec (α := α) (Shape.toList s) p q
+  Internal.diagMaskSpec (α := α) (Shape.toList s) p q none none
 
 /-- Return the first duplicate label in `xs`, along with its original and duplicate positions. -/
 def firstDup? (xs : List Label) : Option (Label × Nat × Nat) :=
   let rec go (seen : List (Label × Nat)) (i : Nat) : List Label → Option (Label × Nat × Nat)
     | .nil => none
     | .cons x xs =>
-        match seen.find? (fun p => p.1 == x) with
-        | some p => some (x, p.2, i)
+        match seen.lookup x with
+        | some position => some (x, position, i)
         | none => go ((x, i) :: seen) (i + 1) xs
   go [] 0 xs
 

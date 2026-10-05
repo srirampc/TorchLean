@@ -10,7 +10,6 @@ public import NN.Proofs.RuntimeApprox.NF.BackwardOps
 public import NN.Proofs.RuntimeApprox.NF.Attention
 public import NN.Proofs.RuntimeApprox.NF.Convolution
 public import NN.Proofs.RuntimeApprox.NF.EndToEnd
-public import NN.Proofs.RuntimeApprox.NF.FoldLemmas
 public import NN.Proofs.RuntimeApprox.NF.Linalg
 public import NN.Proofs.RuntimeApprox.NF.Normalization
 public import NN.Proofs.RuntimeApprox.NF.Ops
@@ -41,7 +40,6 @@ File roles:
 - `Normalization`: rank-generic affine-normalization traces with explicit denominator margins.
 - `Optimizers`: SGD, momentum-SGD, and AdamW instances of one numerical optimizer contract.
 - `EndToEnd`: architecture-independent executable graph bridges, parameter updates, and reports.
-- `Utils`: shared list-fold and tensor approximation helpers.
 
 This is the backend we can reason about inside Lean. Hardware CUDA/IEEE execution remains an
 implementation trust boundary unless it is connected to this model by a separately proved or

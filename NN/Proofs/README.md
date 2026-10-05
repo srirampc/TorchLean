@@ -34,7 +34,8 @@ runtime approximation relation, an imported certificate, or a trusted native bou
 | `Tensor/` | Tensor algebra, folds, bounds/norms, finite linear algebra, and factorization facts. |
 | `Autograd/` | Selected reverse-mode/autograd correctness facts, Fréchet derivative rules, tape algebra, runtime links, and training-step algebra. |
 | `RuntimeApprox/` | Approximation relations between spec-level operations, graph forward/backward computations, normal-form operator rules, convolution, softmax-axis, FP32/CROWN bridges, and scale/tolerance lemmas. |
-| `Models/Attention/` | Attention invariants: causal masks, weights, and permutation/equivariance properties. |
+| `Backend/` | Planner dispatch, attention selection, lossless grouping, numerical-policy guards. |
+| `Models/` | Attention masks, weights, permutation equivariance, and closed rational MLP examples. |
 | `Analysis/` | Analytic facts for softmax, normalization, dropout, FFT, Lipschitz-style statements, and related helper theory. |
 | `Gradients/` | Smaller gradient facts for layers and activations. |
 | `RL/` | MDP, environment, replay-buffer, Gymnasium-boundary, DQN/PPO-adjacent, and checked-runtime RL facts. |
@@ -88,10 +89,10 @@ This is the right place for facts that are weaker than exact equality but strong
 - an FP32/CROWN bridge carries finite arithmetic assumptions into a bound statement.
 
 The `NF` rounded-real bounds for sigmoid, logistic, and mean are built on `divPosErrorBound`,
-with `sigmoid_bound_scalar_le_one` and `mean_row_bound_of_exact` as regression theorems. The FP32
-MLP and CROWN theorems are named `approxTensor_reluTwoLayerMlp_fp32` and
-`ibpBound_contains_reluTwoLayerMlp_fp32`; the `_fp32` suffix records that they are about the
-rounded-real `FP32 := NF ...` model, not Lean's `Float32`.
+with `reciprocal_sigmoid_bound_scalar_le_one` and `mean_row_bound_of_exact` as regression theorems.
+The FP32 MLP and CROWN theorems are named `approxTensor_reluTwoLayerMlp` and
+`ibpBound_contains_reluTwoLayerMlp`; their `FP32` namespace identifies the
+rounded-real `FP32 := NF ...` model, distinct from Lean's `Float32`.
 
 CUDA, libtorch, and other native paths remain external unless a theorem explicitly connects the
 native behavior to one of these approximation relations.

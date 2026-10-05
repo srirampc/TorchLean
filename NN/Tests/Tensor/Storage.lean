@@ -25,22 +25,20 @@ namespace NN.Tests.Tensor.Storage
 
 open TorchLean
 
-/-- `Float` tensors use Lean's native unboxed floating-point buffer. -/
-def floatBufferWitness (tensor : Tensor Float [3]) : FloatArray :=
+-- `Float` tensors use Lean's native unboxed floating-point buffer.
+example (tensor : Tensor Float [3]) : FloatArray :=
   tensor.buffer
 
-/-- `UInt8` tensors use Lean's native packed byte buffer. -/
-def byteBufferWitness (tensor : Tensor UInt8 [3]) : ByteArray :=
+-- `UInt8` tensors use Lean's native packed byte buffer.
+example (tensor : Tensor UInt8 [3]) : ByteArray :=
   tensor.buffer
 
-/-- Element types without a specialized instance retain the generic boxed array. -/
-def naturalBufferWitness (tensor : Tensor Nat [3]) : Array Nat :=
+-- Element types without a specialized instance retain the generic boxed array.
+example (tensor : Tensor Nat [3]) : Array Nat :=
   tensor.buffer
 
-/-- Composite element types also use the generic boxed array by default. -/
-def complexBufferWitness
-    (tensor : Tensor (TorchLean.Complex Float) [3]) :
-    Array (TorchLean.Complex Float) :=
+-- Composite element types also use the generic boxed array by default.
+example (tensor : Tensor (Complex Float) [3]) : Array (Complex Float) :=
   tensor.buffer
 
 def expect (label : String) (condition : Bool) : IO Unit := do

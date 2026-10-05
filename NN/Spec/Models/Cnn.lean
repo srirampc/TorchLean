@@ -20,12 +20,10 @@ Its spatial parameters are vectors, so the same model definition applies to sequ
 image, volume, and higher-rank data. Both the compositional module description and the explicit
 reverse-mode specification use the generic convolution and pooling operations.
 
-## Implementation status
-
-`nn.models.cnn` (`NN/API/Models/Cnn.lean`) builds a one-block classifier
-`convolution -> activation -> max pool -> flatten -> linear`, whereas this file specifies a
-two-block network; no theorem relates them. This specification is imported by
-`NN/Runtime/PyTorch/Export/CNN.lean`.
+The executable `nn.models.cnn` accepts a list of independently configured convolution/pooling
+stages. This module's two-block specification supplies the pure forward and backward functions
+used by `NN/Runtime/PyTorch/Export/CNN.lean`;
+it does not prove equivalence to the executable builder.
 -/
 
 @[expose] public section
@@ -172,26 +170,6 @@ def withReluSpec {α : Type} [TorchLean.Storage α] [Context α]
     |>.append poolModule₂
     |>.append flattenModule
     |>.append headModule
-
-/-- Evaluate a convolutional chain on one input tensor. -/
-def forward {α : Type} [TorchLean.Storage α] [Context α] [DecidableRel ((· > ·) : α → α → Prop)]
-    {d inChannels hiddenChannels outputSize : Nat}
-    {spatial kernel convStride₁ convPadding₁ convStride₂ convPadding₂ poolKernel poolStride₁
-      poolPadding₁ poolStride₂ poolPadding₂ : TorchLean.Tensor Nat [d]}
-    {hPoolKernel : ∀ i : Fin d, poolKernel.getScalar i ≠ 0}
-    {hPoolStride₁ : ∀ i : Fin d, poolStride₁.getScalar i ≠ 0}
-    {hPoolStride₂ : ∀ i : Fin d, poolStride₂.getScalar i ≠ 0}
-    (conv₁ : ConvSpec d inChannels hiddenChannels kernel convStride₁ convPadding₁ α)
-    (conv₂ : ConvSpec d hiddenChannels hiddenChannels kernel convStride₂ convPadding₂ α)
-    (pool₁ : MaxPoolSpec d poolKernel poolStride₁ poolPadding₁ hPoolKernel hPoolStride₁)
-    (pool₂ : MaxPoolSpec d poolKernel poolStride₂ poolPadding₂ hPoolKernel hPoolStride₂)
-    (head : LinearSpec α
-      (featureSize hiddenChannels spatial kernel convStride₁ convPadding₁ convStride₂
-        convPadding₂ poolKernel poolStride₁ poolPadding₁ poolStride₂ poolPadding₂)
-      outputSize)
-    (x : Tensor α (Shape.ofList (inChannels :: (Tensor.to spatial (List Nat))))) :
-    Tensor α [outputSize] :=
-  (spec conv₁ conv₂ pool₁ pool₂ head).forward x
 
 end Cnn
 

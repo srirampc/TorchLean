@@ -13,7 +13,7 @@ public import NN.GraphSpec.Chain.Semantics
 /-!
 # MLP Spec Equivalence
 
-`mlp_interp_eq_spec_mlp_forward` identifies the GraphSpec chain interpreter with the
+`mlp_interp` identifies the GraphSpec chain interpreter with the
 reference two-layer MLP: `Linear → ReLU → Linear`. Both receive the same weights and
 biases in the order `(W₁, b₁, W₂, b₂)`.
 
@@ -30,10 +30,6 @@ namespace Models
 
 open Spec TorchLean
 open TorchLean.Tensor
-
-/-- Parameter ABI for the 2-layer MLP: `(W₁, b₁, W₂, b₂)`. -/
-abbrev MLPParams (inputWidth hiddenWidth outputWidth : Nat) : List Shape :=
-  [[hiddenWidth, inputWidth], [hiddenWidth], [outputWidth, hiddenWidth], [outputWidth]]
 
 /--
 **Theorem (GraphSpec MLP agrees with Spec reference).**
@@ -58,11 +54,11 @@ $$
 where the dot/plus are the `Spec.linearSpec` and `Activation.reluSpec` operations already used by
 the Spec model.
 -/
-theorem mlp_interp_eq_spec_mlp_forward
+theorem mlp_interp
     {α : Type} [TorchLean.Storage α] [Context α]
     {inputWidth hiddenWidth outputWidth : Nat}
     (params : TorchLean.TensorPack α
-      (MLPParams inputWidth hiddenWidth outputWidth))
+      (mlpParams inputWidth hiddenWidth outputWidth))
     (x : TorchLean.Tensor α [inputWidth]) :
     Interp.spec
       (mlp

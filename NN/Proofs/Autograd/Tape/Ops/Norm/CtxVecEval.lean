@@ -33,17 +33,6 @@ open Spec TorchLean
 
 noncomputable section
 
-namespace Idx
-
-/-- Two typed indices with the same position are equal. -/
-theorem ext' {Γ : List Shape} {s : Shape} {a b : Idx Γ s} (h : a.i = b.i) : a = b := by
-  cases a
-  cases b
-  cases h
-  rfl
-
-end Idx
-
 namespace CtxVec
 
 /-- Offset of the block at list position `k` inside the flattened context vector. -/
@@ -120,20 +109,17 @@ theorem blockOffset_append_of_lt :
 theorem getBlock_flattenCtx_zero {s : Shape} {ss : List Shape} (X : Tensor ℝ s)
     (xs : TorchLean.TensorPack ℝ ss) (h : 0 < (s :: ss).length) :
     getBlock (Γ := s :: ss) ⟨0, h⟩ (flattenCtx (Γ := s :: ss) (.cons X xs)) = tensorToVec X := by
-  apply PiLp.ext
-  intro j
-  simp [getBlock, flattenCtx_cons]
+  rw [getBlock_flattenCtx, TorchLean.TensorPack.get_cons_zero]
 
 /-- Later blocks of a flattened tensor pack are blocks of the tail. -/
 theorem getBlock_flattenCtx_succ {s : Shape} {ss : List Shape} (X : Tensor ℝ s)
     (xs : TorchLean.TensorPack ℝ ss) (k : Nat) (hk : k + 1 < (s :: ss).length) :
     getBlock (Γ := s :: ss) ⟨k + 1, hk⟩ (flattenCtx (Γ := s :: ss) (.cons X xs)) =
       getBlock (Γ := ss) ⟨k, Nat.lt_of_succ_lt_succ hk⟩ (flattenCtx (Γ := ss) xs) := by
-  simp only [getBlock]
-  congr 1
-  apply PiLp.ext
-  intro j
-  simp [flattenCtx_cons]
+  -- Both sides are `tensorToVec` of a pack lookup, and the lookup at `k + 1` is the tail lookup
+  -- at `k` by definition of `TensorPack.get`.
+  rw [getBlock_flattenCtx, getBlock_flattenCtx]
+  rfl
 
 end CtxVec
 
@@ -228,7 +214,7 @@ theorem get_evalVec_input {Γ ss : List Shape} {s : Shape} (g : Graph Γ ss) (xV
     (idx : Idx (Γ ++ ss) s) (idx' : Idx Γ s) (hv : idx.i.val = idx'.i.val) :
     CtxVec.get (Γ := Γ ++ ss) (s := s) idx (evalVec (Γ := Γ) (ss := ss) g xV) =
       CtxVec.get (Γ := Γ) (s := s) idx' xV := by
-  have hidx : idx = Idx.weaken idx' ss := Idx.ext' (Fin.ext hv)
+  have hidx : idx = Idx.weaken idx' ss := Idx.ext (Fin.ext hv)
   rw [hidx]
   exact get_evalVec_weaken idx' g xV
 

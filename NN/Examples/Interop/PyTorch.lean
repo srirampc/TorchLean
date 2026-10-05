@@ -15,7 +15,7 @@ public import NN.Examples.Interop.PyTorch.Roundtrip
 forward pass. Companion Python scripts produce the reference weights.
 
 The reusable importers and exporters live under `NN.Runtime.PyTorch`. Graph-capture regression
-checks run separately with `lake exe pytorch_export_check`.
+checks run separately with `scripts/lake.sh exe pytorch_export_check`.
 -/
 
 @[expose] public section

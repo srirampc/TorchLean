@@ -6,7 +6,7 @@ Authors: TorchLean Team
 
 module
 
-public import NN.Runtime.Autograd.IRExec.Correctness.SemanticEquivalenceCommon
+public import NN.Runtime.Autograd.IRExec.Correctness.Common
 
 /-!
 # Structural Nodes
@@ -54,10 +54,8 @@ theorem buildFrom_denoteAllFrom_input_impossible
       (input := Spec.SomeTensor.mk (α := α) inShape x)
       (i := i) (vals := denoteAllState (α := α) inShape (st := (⟨ss, gd⟩ : State α inShape)) x) =
       .ok (denoteAllState (α := α) inShape st' x) := by
-  have : False := by
-    unfold buildFrom at hBuild
-    simp [hi, hN, hk, lowerInput, throw_eq_error] at hBuild
-  cases this
+  unfold buildFrom at hBuild
+  simp [hi, hN, hk, lowerInput, throw_eq_error] at hBuild
 
 /-- Semantic-preservation lemma for `.detach` lowering. -/
 theorem buildFrom_denoteAllFrom_detach
@@ -111,7 +109,7 @@ theorem buildFrom_denoteAllFrom_detach
                   · simp [hOut] at hBuild
                     let nodeData : ForwardNode α ([inShape] ++ ss) n.outShape :=
                       mkForwardNode (α := α) (Γ := [inShape] ++ ss) (τ := n.outShape) (fun ctx =>
-                        hOut ▸ Tensor.detachSpec (getIdx (α := α) (xs := ctx) ip))
+                        hOut ▸ Tensor.detachSpec (readTensor (α := α) (xs := ctx) ip))
                     let st1 : State α inShape :=
                       ⟨ss ++ [n.outShape], .snoc (ss := ss) gd nodeData⟩
                     have hRec :
@@ -142,55 +140,18 @@ theorem buildFrom_denoteAllFrom_detach
                               (Spec.SomeTensor.mk (α := α) pNode.outShape
                                 (getIdx (α := α) (xs := ctx) ip)) =
                             .ok (hOut ▸ getIdx (α := α) (xs := ctx) ip) := by
-                        -- `expectShape` is a dependent `if` on shape equality. We take the
-                        -- successful branch explicitly and then normalize the cast proof using
-                        -- proof-irrelevance for tensor transports.
-                        by_cases hEq : pNode.outShape = n.outShape
-                        · have hCast :
-                            (hEq ▸ getIdx (α := α) (xs := ctx) ip) =
-                              (hOut ▸ getIdx (α := α) (xs := ctx) ip) := by
-                            simp
-                          -- Reduce `expectShape` using `hEq`, then rewrite casts using `hCast`.
-                          -- We finish by normalizing `pure` to `.ok` explicitly to avoid
-                          -- depending on simp's unfolding heuristics for typeclass methods.
-                          have hOk :
-                              (pure (hEq ▸ getIdx (α := α) (xs := ctx) ip) :
-                                  Except String (Tensor α n.outShape)) =
-                                .ok (hOut ▸ getIdx (α := α) (xs := ctx) ip) := by
-                            -- `pure` for `Except` is definitional `.ok`, so this is just a cast
-                            -- proof-irrelevance step.
-                            change (.ok (hEq ▸ getIdx (α := α) (xs := ctx) ip) :
-                                Except String (Tensor α n.outShape)) =
-                              .ok (hOut ▸ getIdx (α := α) (xs := ctx) ip)
-                            simp [hCast]
-                          simp [NN.IR.Graph.expectShape, hEq, hOk]
-                        · cases (hEq hOut)
+                        simpa only [Tensor.eqRec_eq_cast_shape] using
+                          (Graph.expectShape_mk_of_eq hOut (getIdx (α := α) (xs := ctx) ip))
                       simp [NN.IR.Graph.evalAt, NN.IR.Graph.evalNode,
                         NN.IR.Graph.normalizeNodeOutput, hN, hk, hp, hGet, hExpect,
                         nodeData, mkForwardNode, hDetachCast, throw_eq_error,
                         Pure.pure, Except.pure]
 
                     have hTail := ih st1 hRec
-                    have hEvalForTail :
-                        NN.IR.Graph.evalAt (α := α) (g := g) (payload := payload)
-                            (input := Spec.SomeTensor.mk (α := α) inShape x)
-                            (vals := denoteAllState (α := α) inShape
-                              (st := (⟨ss, gd⟩ : State α inShape)) x)
-                            (i := i) =
-                          .ok (Spec.SomeTensor.mk (α := α) n.outShape
-                            (nodeData.eval
-                              (ForwardData.eval (α := α) (Γ := [inShape])
-                                (ss := ss) gd (.cons x .nil)))) := by
-                      change
-                        NN.IR.Graph.evalAt (α := α) (g := g) (payload := payload)
-                            (input := input) (vals := vals0) (i := i) =
-                          .ok (Spec.SomeTensor.mk (α := α) n.outShape
-                            (nodeData.eval ctx))
-                      exact hEval
                     exact buildFrom_denoteAllFrom_nodeData_exact (α := α) (g := g)
                       (payload := payload)
                       (gd := gd) (i := i) (st' := st') (x := x) (hi := hi)
-                      (τ := n.outShape) (nodeData := nodeData) hTail hEvalForTail
+                      (τ := n.outShape) (nodeData := nodeData) hTail hEval
                   · simp [hOut] at hBuild
                     try cases hBuild
 

@@ -115,18 +115,16 @@ def checkSoftmaxDimensions : IO Unit := do
     0.952574127, 0.952574127, 0.952574127]
   let columnExpected := #[0.090030573, 0.244728471, 0.665240956,
     0.090030573, 0.244728471, 0.665240956]
-  for (actual, expected) in (Tensor.to alongRows (Array Float)).zip rowExpected do
-    assertApprox "softmax axis 0" actual expected 1e-5
-  for (actual, expected) in (Tensor.to alongColumns (Array Float)).zip columnExpected do
-    assertApprox "softmax axis 1" actual expected 1e-5
+  assertArrayApprox "softmax axis 0" (Tensor.to alongRows (Array Float)) rowExpected 1e-5
+  assertArrayApprox "softmax axis 1" (Tensor.to alongColumns (Array Float)) columnExpected 1e-5
 
   let cube : Tensor Float [2, 2, 2] :=
     (Tensor.from (#[0, 2, 1, 4, 3, 8, 7, 9] : Array Float)).reshape [2, 2, 2] (by dsimp; decide)
   let alongMiddle ← evalSoftmaxAxis 1 cube
   let middleExpected := #[0.268941421, 0.119202922, 0.731058579, 0.880797078,
     0.017986210, 0.268941421, 0.982013790, 0.731058579]
-  for (actual, expected) in (Tensor.to alongMiddle (Array Float)).zip middleExpected do
-    assertApprox "softmax interior axis" actual expected 1e-5
+  assertArrayApprox "softmax interior axis"
+    (Tensor.to alongMiddle (Array Float)) middleExpected 1e-5
 
   let upstream : Tensor Float [2, 2, 2] :=
     (Tensor.from (#[1, -2, 3, 4, -1, 2, 5, -3] : Array Float)).reshape
@@ -135,9 +133,8 @@ def checkSoftmaxDimensions : IO Unit := do
   let expectedGradient :=
     Activation.softmaxBackwardSpec (α := Float) (s := [2, 2, 2])
       1 cube upstream
-  for (actual, expected) in
-      (Tensor.to gradient (Array Float)).zip (Tensor.to expectedGradient (Array Float)) do
-    assertApprox "softmax interior-axis gradient" actual expected 1e-5
+  assertArrayApprox "softmax interior-axis gradient"
+    (Tensor.to gradient (Array Float)) (Tensor.to expectedGradient (Array Float)) 1e-5
 
   let (logProbabilities, logGradient) ←
     evalLogSoftmaxAxisWithGradient 1 cube upstream
@@ -148,13 +145,11 @@ def checkSoftmaxDimensions : IO Unit := do
     Activation.logSoftmaxBackwardSpec
       (α := Float) (s := [2, 2, 2])
       1 expectedLogProbabilities upstream
-  for (actual, expected) in
-      (Tensor.to logProbabilities (Array Float)).zip
-        (Tensor.to expectedLogProbabilities (Array Float)) do
-    assertApprox "log-softmax interior axis" actual expected 1e-5
-  for (actual, expected) in
-      (Tensor.to logGradient (Array Float)).zip (Tensor.to expectedLogGradient (Array Float)) do
-    assertApprox "log-softmax interior-axis gradient" actual expected 1e-5
+  assertArrayApprox "log-softmax interior axis"
+    (Tensor.to logProbabilities (Array Float))
+    (Tensor.to expectedLogProbabilities (Array Float)) 1e-5
+  assertArrayApprox "log-softmax interior-axis gradient"
+    (Tensor.to logGradient (Array Float)) (Tensor.to expectedLogGradient (Array Float)) 1e-5
 
 /-- Check that classification metrics support outer and inner class axes. -/
 def checkClassificationAxes : IO Unit := do
@@ -366,7 +361,7 @@ ones, while the output projection must contain zeros.
 -/
 def checkAttentionOutputProjectionInitializer : IO Unit := do
   let layer :=
-    Runtime.Autograd.Model.Layers.multiHeadAttention
+    Runtime.Autograd.Model.Layers.attention
       1 1 2 1 2 (sequenceLengthNonzero := by decide)
       (weightInitialization? := some .ones)
       (outputWeightInitialization? := some .zeros)
@@ -375,10 +370,10 @@ def checkAttentionOutputProjectionInitializer : IO Unit := do
     | .cons wq (.cons wk (.cons wv (.cons wo .nil))) => (wq, wk, wv, wo)
   for i in List.finRange 2 do
     for j in List.finRange 2 do
-      assertApprox s!"attention Q initializer[{i.val},{j.val}]" (matVal wq i j) 1 1e-7
-      assertApprox s!"attention K initializer[{i.val},{j.val}]" (matVal wk i j) 1 1e-7
-      assertApprox s!"attention V initializer[{i.val},{j.val}]" (matVal wv i j) 1 1e-7
-      assertApprox s!"attention output initializer[{i.val},{j.val}]" (matVal wo i j) 0 1e-7
+      assertApprox s!"attention Q initializer[{i.val},{j.val}]" (Tensor.get2 wq i j) 1 1e-7
+      assertApprox s!"attention K initializer[{i.val},{j.val}]" (Tensor.get2 wk i j) 1 1e-7
+      assertApprox s!"attention V initializer[{i.val},{j.val}]" (Tensor.get2 wv i j) 1 1e-7
+      assertApprox s!"attention output initializer[{i.val},{j.val}]" (Tensor.get2 wo i j) 0 1e-7
 
 /-- Typed graph execution preserves leaf gradient flags and leaves frozen parameters unchanged. -/
 def checkTypedGraphLeafMetadata : IO Unit := do
@@ -450,7 +445,7 @@ def evalConcatFixture (execution : Runtime.Autograd.Torch.ExecutionMode) :
   let b : Tensor Float [3] := Tensor.ofFn fun i => 10.0 + Float.ofNat i.val
   let aR ← Runtime.Autograd.Model.Session.const sess (sh := [2]) a
   let bR ← Runtime.Autograd.Model.Session.const sess (sh := [3]) b
-  let cR ← Runtime.Autograd.Model.Session.concatLeadingAxis sess
+  let cR ← Runtime.Autograd.Model.Session.concat sess
     (n := 2) (m := 3) (sh := .scalar) aR bR
   Runtime.Autograd.Model.Session.getValue sess (sh := [5]) cR
 
@@ -628,10 +623,6 @@ sites below pass their own pair, so one helper is enough.
 def expectedBatchNormAffine (x gamma beta mean var : Float) : Float :=
   ((x - mean) / Float.sqrt (var + TorchLean.normalizationEpsilon)) * gamma + beta
 
-/-- Flatten a tensor in TorchLean's canonical row-major order for parity comparisons. -/
-def flattenRowMajor {s : Shape} (t : Tensor Float s) : Array Float :=
-  Tensor.to t (Array Float)
-
 /-- Small Python program used to compare TorchLean BatchNorm against PyTorch. -/
 def batchNormParityScript : String :=
   String.intercalate "\n"
@@ -674,7 +665,7 @@ def checkBatchNormAgainstPyTorch
     return ()
   IO.FS.createDirAll workDir
   IO.FS.writeFile batchNormParityScriptPath batchNormParityScript
-  let out ← TorchLean.External.Process.runStdoutChecked
+  let out ← TorchLean.External.Process.run
     (ctx := "torchlean_ops_check: batchnorm pytorch parity")
     (cmd := "python3")
     (args := #[batchNormParityScriptPath.toString])
@@ -689,11 +680,12 @@ def checkBatchNormAgainstPyTorch
     | .ok xs => pure xs
     | .error e => throw (IO.userError s!"torchlean_ops_check: {e}")
   assertArrayApprox "batchnorm_nchw pytorch mean"
-    #[vecVal mean ⟨0, by decide⟩, vecVal mean ⟨1, by decide⟩] (← readField "mean")
+    #[Tensor.getScalar mean ⟨0, by decide⟩, Tensor.getScalar mean ⟨1, by decide⟩]
+    (← readField "mean")
   assertArrayApprox "batchnorm_nchw pytorch var"
-    #[vecVal var ⟨0, by decide⟩, vecVal var ⟨1, by decide⟩] (← readField "var")
-  assertArrayApprox "batchnorm pytorch train" (flattenRowMajor trainY) (← readField "train")
-  assertArrayApprox "batchnorm pytorch eval" (flattenRowMajor evalY) (← readField "eval")
+    #[Tensor.getScalar var ⟨0, by decide⟩, Tensor.getScalar var ⟨1, by decide⟩] (← readField "var")
+  assertArrayApprox "batchnorm pytorch train" (Tensor.to trainY (Array Float)) (← readField "train")
+  assertArrayApprox "batchnorm pytorch eval" (Tensor.to evalY (Array Float)) (← readField "eval")
 
 /--
 Run the full BatchNorm check: closed-form expectations first, then optional PyTorch parity.
@@ -702,24 +694,25 @@ def checkBatchNorm : IO Unit := do
   let (trainY, mean, var) ← evalBatchNormTrain
   let evalY ← evalBatchNormEval
 
-  assertApprox "batchnorm_nchw mean[0] expected" (vecVal mean ⟨0, by decide⟩) 6.5
-  assertApprox "batchnorm_nchw mean[1] expected" (vecVal mean ⟨1, by decide⟩) (-10.5)
-  assertApprox "batchnorm_nchw var[0] expected" (vecVal var ⟨0, by decide⟩) 17.25
-  assertApprox "batchnorm_nchw var[1] expected" (vecVal var ⟨1, by decide⟩) 17.25
+  assertApprox "batchnorm_nchw mean[0] expected" (Tensor.getScalar mean ⟨0, by decide⟩) 6.5
+  assertApprox "batchnorm_nchw mean[1] expected" (Tensor.getScalar mean ⟨1, by decide⟩) (-10.5)
+  assertApprox "batchnorm_nchw var[0] expected" (Tensor.getScalar var ⟨0, by decide⟩) 17.25
+  assertApprox "batchnorm_nchw var[1] expected" (Tensor.getScalar var ⟨1, by decide⟩) 17.25
 
   for n in List.finRange bnN do
     for c in List.finRange bnC do
       for h in List.finRange bnH do
         for w in List.finRange bnW do
           let x := tensorVal bnInput [n, c, h, w]
-          let gamma := vecVal bnGamma c
-          let beta := vecVal bnBeta c
+          let gamma := Tensor.getScalar bnGamma c
+          let beta := Tensor.getScalar bnBeta c
           -- Training normalizes with the statistics of this very batch, ...
           let trainExpected :=
-            expectedBatchNormAffine x gamma beta (vecVal mean c) (vecVal var c)
+            expectedBatchNormAffine x gamma beta (Tensor.getScalar mean c) (Tensor.getScalar var c)
           -- ... while evaluation normalizes with the stored running statistics.
           let evalExpected :=
-            expectedBatchNormAffine x gamma beta (vecVal bnMean c) (vecVal bnVar c)
+            expectedBatchNormAffine x gamma beta
+              (Tensor.getScalar bnMean c) (Tensor.getScalar bnVar c)
           assertApprox s!"batchnorm_nchw train[{n.val},{c.val},{h.val},{w.val}] expected"
             (tensorVal trainY [n, c, h, w]) trainExpected 1e-5
           assertApprox s!"batchnorm_nchw eval[{n.val},{c.val},{h.val},{w.val}] expected"
@@ -733,7 +726,7 @@ def checkBatchNorm : IO Unit := do
 def checkCosineDerivative : IO Unit := do
   let aligned : Tensor Float [1] := [2]
   let alignedGradient := Spec.cosineSimilarityDerivSpec aligned aligned
-  assertApprox "cosine aligned nonunit gradient" (vecVal alignedGradient ⟨0, by decide⟩) 0
+  assertApprox "cosine aligned nonunit gradient" (Tensor.getScalar alignedGradient ⟨0, by decide⟩) 0
   for scale in (#[0.5, 2, 5] : Array Float) do
     for targetValues in (#[#[1.0, -2.0], #[0.01, 0.02]] : Array (Array Float)) do
       let values : Array Float := #[3 * scale, 4 * scale]
@@ -768,9 +761,12 @@ def checkLossSemantics : IO Unit := do
     (Tensor.from (#[1, 1, 1] : Array Float)).reshape [3] (by dsimp; decide)
   let probabilityGrad :=
     Spec.crossEntropyDerivSpec 0 probabilities distribution (epsilon := 0.1)
-  assertApprox "cross entropy lower clipped branch" (vecVal probabilityGrad ⟨0, by decide⟩) 0
-  assertApprox "cross entropy interior branch" (vecVal probabilityGrad ⟨1, by decide⟩) (-2)
-  assertApprox "cross entropy upper clipped branch" (vecVal probabilityGrad ⟨2, by decide⟩) 0
+  assertApprox "cross entropy lower clipped branch"
+    (Tensor.getScalar probabilityGrad ⟨0, by decide⟩) 0
+  assertApprox "cross entropy interior branch"
+    (Tensor.getScalar probabilityGrad ⟨1, by decide⟩) (-2)
+  assertApprox "cross entropy upper clipped branch"
+    (Tensor.getScalar probabilityGrad ⟨2, by decide⟩) 0
 
   assertApprox "BCE lower clipped branch"
     (Spec.binaryCrossEntropyDerivSpec 0.05 1 (epsilon := 0.1)) 0
@@ -787,9 +783,9 @@ def checkLossSemantics : IO Unit := do
     (Spec.huberSpec huberPrediction huberTarget (delta := 2)) 2.25
   let huberGrad := Spec.huberDerivSpec huberPrediction huberTarget (delta := 2)
   assertApprox "Huber delta=2 quadratic gradient"
-    (vecVal huberGrad ⟨0, by decide⟩) 0.5
+    (Tensor.getScalar huberGrad ⟨0, by decide⟩) 0.5
   assertApprox "Huber delta=2 linear gradient"
-    (vecVal huberGrad ⟨1, by decide⟩) 1
+    (Tensor.getScalar huberGrad ⟨1, by decide⟩) 1
   assertApprox "RL Huber uses the same delta convention"
     (Runtime.RL.Core.huberLoss (α := Float) 3 0 2) 4
 
@@ -798,8 +794,8 @@ def checkLossSemantics : IO Unit := do
     (Tensor.from (#[1, 0] : Array Float)).reshape [2] (by dsimp; decide)
   let cosineGrad :=
     Spec.cosineSimilarityDerivSpec shortPrediction unitTarget (epsilon := 0.1)
-  assertApprox "cosine epsilon branch[0]" (vecVal cosineGrad ⟨0, by decide⟩) (-10)
-  assertApprox "cosine epsilon branch[1]" (vecVal cosineGrad ⟨1, by decide⟩) 0
+  assertApprox "cosine epsilon branch[0]" (Tensor.getScalar cosineGrad ⟨0, by decide⟩) (-10)
+  assertApprox "cosine epsilon branch[1]" (Tensor.getScalar cosineGrad ⟨1, by decide⟩) 0
 
   assertApprox "zero-feature attention scale"
     (Spec.attentionScaleDenom (α := Float) 0) 1
@@ -827,7 +823,7 @@ def checkCorrectedMathematicalSpecs : IO Unit := do
     (Tensor.from #[1.0e12, 1.0e12 + 1]).reshape [2] (by dsimp; decide)
   let clusteredVariance := TorchLean.Tensor.reduceVar 0 clustered Spec.Shape.NonemptyAxis.zero
   assertApprox "centered population variance"
-    (scalarVal clusteredVariance) 0.25 1e-8
+    (Tensor.item clusteredVariance) 0.25 1e-8
 
   assertApprox "softplus large positive input"
     (Activation.Math.softplusSpec (1000 : Float)) 1000 1e-10
@@ -865,7 +861,7 @@ def checkCorrectedMathematicalSpecs : IO Unit := do
     (-1 / 2) * beta * 2 +
       (1 / 2) * Generative.Diffusion.safeDiv beta sigma
   assertApprox "probability-flow ODE coefficient"
-    (vecVal rhs ⟨0, by decide⟩) expectedRhs
+    (Tensor.getScalar rhs ⟨0, by decide⟩) expectedRhs
 
   let dt : Float := -0.5
   let afterT1 := Generative.Diffusion.eulerStep
@@ -874,7 +870,7 @@ def checkCorrectedMathematicalSpecs : IO Unit := do
     (Generative.Diffusion.pfOdeRhs schedule epsModel) afterT1 0.5 dt
   let sampled := Generative.Diffusion.pfOdeSampleEuler schedule epsModel 2 state
   assertApprox "probability-flow Euler time order"
-    (vecVal sampled ⟨0, by decide⟩) (vecVal expectedSample ⟨0, by decide⟩)
+    (Tensor.getScalar sampled ⟨0, by decide⟩) (Tensor.getScalar expectedSample ⟨0, by decide⟩)
 
   let impossibleHmm : Spec.HMMSpec Float 1 1 :=
     { initial := (Tensor.from (#[1] : Array Float)).reshape [1] (by dsimp; decide)
@@ -943,25 +939,23 @@ def run : IO Unit := do
       | .eager => "eager"
       | .typedGraph => "typed_graph"
     let (actualSoftmax, actualLogSoftmax) ← evalSessionSoftmaxFixture execution
-    for (actual, expected) in
-        (Tensor.to actualSoftmax (Array Float)).zip (Tensor.to expectedSoftmax (Array Float)) do
-      assertApprox s!"session softmax axis 1 ({executionName})" actual expected 1e-5
-    for (actual, expected) in
-        (Tensor.to actualLogSoftmax (Array Float)).zip
-          (Tensor.to expectedLogSoftmax (Array Float)) do
-      assertApprox s!"session log-softmax axis 1 ({executionName})" actual expected 1e-5
+    assertArrayApprox s!"session softmax axis 1 ({executionName})"
+      (Tensor.to actualSoftmax (Array Float)) (Tensor.to expectedSoftmax (Array Float)) 1e-5
+    assertArrayApprox s!"session log-softmax axis 1 ({executionName})"
+      (Tensor.to actualLogSoftmax (Array Float)) (Tensor.to expectedLogSoftmax (Array Float)) 1e-5
 
   let mmE ← evalMatmulFixture .eager
   let mmC ← evalMatmulFixture .typedGraph
   for i in List.finRange 2 do
     for j in List.finRange 2 do
-      assertApprox s!"matmul[{i.val},{j.val}] eager/typed-graph" (matVal mmE i j)
-        (matVal mmC i j) 1e-5
+      assertApprox s!"matmul[{i.val},{j.val}] eager/typed-graph" (Tensor.get2 mmE i j)
+        (Tensor.get2 mmC i j) 1e-5
 
   let cvE ← evalConcatFixture .eager
   let cvC ← evalConcatFixture .typedGraph
   for i in List.finRange 5 do
-    assertApprox s!"concat[{i.val}] eager/typed-graph" (vecVal cvE i) (vecVal cvC i) 1e-5
+    assertApprox s!"concat[{i.val}] eager/typed-graph"
+      (Tensor.getScalar cvE i) (Tensor.getScalar cvC i) 1e-5
 
   let mpE ← evalMaxPoolFixture .eager
   let mpC ← evalMaxPoolFixture .typedGraph

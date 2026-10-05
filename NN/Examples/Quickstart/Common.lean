@@ -34,8 +34,9 @@ structure Flags where
 
 /-- Parse `--seed`, `--steps`, and the runtime flags, rejecting anything else. -/
 def parseFlags (exeName : String) (args : List String) (defaultSteps : Nat) : IO Flags := do
-  let (seed, args) ← CLI.seed exeName args
-  let (steps, args) ← CLI.positiveNatFlag exeName args "steps" defaultSteps
+  let (seed, args) ← CLI.orThrow exeName <| CLI.takeSeed args
+  let (steps, args) ← CLI.orThrow exeName <|
+    CLI.takePositiveNatFlag args exeName "steps" defaultSteps
   let runtime ← CLI.Trainer.parseCommandLine exeName args
   pure { seed, steps, runtime }
 

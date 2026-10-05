@@ -5,7 +5,7 @@ import NN.Proofs.RuntimeApprox.FP32
 import NN.Proofs.RuntimeApprox.FP32.Layers
 import NN.Proofs.RuntimeApprox.FP32.MLP
 import NN.Proofs.RuntimeApprox.FP32.CROWN
-import NN.Runtime.Autograd.Engine.Cuda.Float32Contract
+import NN.Runtime.Autograd.Engine.LibTorch.Float32Contract
 -- The parity example is the test behind the native-agreement assumption, and the last
 -- section evaluates its API directly rather than paraphrasing what the CLI printed.
 import NN.Tests.Floats.NativePrimitiveParity
@@ -28,7 +28,7 @@ open TorchLean.Floats.IEEE754
 
 -- The CUDA float32 contract is where the "which provider actually ran this?" question is stated
 -- as a hypothesis rather than assumed away, so the last section quotes it directly.
-open Runtime.Autograd.Cuda.Float32Contract
+open Runtime.Autograd.LibTorch.Float32Contract
 
 -- `caseRows`, `summary`, `sweep` and `nanOracleReport` come from the parity example. They are
 -- evaluated below, so the numbers on this page are produced by the same code the CLI runs.
@@ -143,11 +143,12 @@ magnitude recovers the two regimes visible above:
 ```lean
 -- The same exponent policy describes normal spacing and the
 -- fixed subnormal floor.
-example : fexp32 1 = -23 := by
-  simp [fexp32, fltExp]
+example : Model.fexpOf FloatFormat.binary32 1 = -23 := by
+  decide
 
-example : fexp32 (-200) = -149 := by
-  simp [fexp32, fltExp]
+example :
+    Model.fexpOf FloatFormat.binary32 (-200) = -149 := by
+  decide
 ```
 
 `fltExp emin prec` is `fun e => max (e - prec) emin`. Here `e` is the magnitude exponent, and
@@ -280,12 +281,15 @@ The spacing at `1` is a theorem, not a measurement:
 ```lean
 -- Express one as a radix power so the generic ULP theorem
 -- applies directly.
-theorem fpsUlpOne : ulp32 1 = 1 / 8388608 := by
+theorem fpsUlpOne :
+    Model.ulpAt FloatFormat.binary32 1 = 1 / 8388608 := by
   have h : (1 : ℝ) = bpow binaryRadix 0 := by
     simp [bpow]
-  rw [ulp32, h, ulp_bpow]
-  norm_num [fexp32, fltExp, bpow,
-    Radix.toReal, binaryRadix]
+  change ulp binaryRadix
+    (Model.fexpOf FloatFormat.binary32) 1 = _
+  rw [h, ulp_bpow]
+  change bpow binaryRadix (-23) = _
+  norm_num [bpow, Radix.toReal, binaryRadix]
 ```
 
 The useful error theorem applies at an arbitrary exact result, including values that are not
@@ -295,9 +299,11 @@ representable. Instantiating it at $`1` alone would have zero actual rounding er
 -- Instantiate the nearest-rounding theorem at an arbitrary
 -- exact real result.
 theorem fpsHalfUlp (x : ℝ) :
-    |round32 x - x| ≤ ulp32 x / 2 := by
+    |Model.roundAt FloatFormat.binary32 x - x| ≤
+      Model.ulpAt FloatFormat.binary32 x / 2 := by
   exact error_bound_ulp (β := binaryRadix)
-    (fexp := fexp32) rnd32 x
+    (fexp := Model.fexpOf FloatFormat.binary32)
+    nearestEven x
 ```
 
 `8388608` is $`2^{23}` ; half that local spacing is $`2^{-24}` . That is the whole relationship
@@ -362,7 +368,8 @@ anything about error.
 ```
 -- The proof model fixes binary radix, gradual underflow,
 -- and nearest-even rounding.
-abbrev FP32 := NF binaryRadix fexp32 rnd32
+abbrev FP32 :=
+  NF binaryRadix (Model.fexpOf FloatFormat.binary32) nearestEven
 ```
 
 Arithmetic is performed exactly over the reals, then rounded to the binary32-precision grid with
@@ -380,14 +387,14 @@ requires a separate account of those cases, whose numerical consequences are dis
 The two ends of the format are a good way to see what "no upper cutoff" costs and what it does not.
 At the bottom, the two models agree, because `FP32` keeps the same smallest step:
 
-```lean (name := fpsUlpZero)
--- Zero lies on the fixed subnormal grid, whose spacing
--- remains positive.
-#check @ulp32_zero
-```
-
-```leanOutput fpsUlpZero (whitespace := lax)
-ulp32_zero : ulp32 0 = bpow binaryRadix (-149)
+```lean
+-- Specialize the spacing theorem at binary32.
+example :
+    Model.ulpAt FloatFormat.binary32 0 =
+      bpow binaryRadix (-149) := by
+  exact ulp_zero_FLT (β := binaryRadix)
+    FloatFormat.binary32.minSubnormalExponent
+    (FloatFormat.binary32.fracWidth + 1) (by positivity)
 ```
 
 An exact magnitude at or below half of $`2^{-149}` rounds to zero under nearest-even rounding.
@@ -428,9 +435,11 @@ result bits. The two APIs begin at the
 {ref "floats"}[the direct FloatLib representation and arithmetic].
 
 Exact bridge theorems join the models for covered finite-path operations: basic arithmetic, FMA,
-square root, order, and min/max. Their qualifications are operation-specific; for example, division
-needs a nonzero denominator and a composite expression needs finite intermediate results rather
-than merely finite inputs. Executable `log` and `tanh` still need a separate accuracy or refinement
+square root, order, and min/max. Their qualifications are operation-specific; for example, the
+total division
+bridge assumes a finite quotient, while the dyadic form states a nonzero-denominator condition
+explicitly. A composite expression needs finite intermediate results rather than merely finite
+inputs. Executable `log` and `tanh` still need a separate accuracy or refinement
 contract. A subnormal result is finite; `0/0`, overflow to infinity, and square root of a negative
 value are not paths that the rounded-real theorem silently absorbs.
 
@@ -450,13 +459,13 @@ source docstrings record the following correspondences:
 :::table +header
 *
   * Flocq (Rocq)
-  * TorchLean (Lean 4)
+  * FloatLib / TorchLean (Lean 4)
 *
   * `Valid_exp`
   * `ValidExp`, whose one field is literally named `flocq_valid`
 *
   * `FLT_exp emin prec`
-  * `fltExp emin prec`, and `fexp32 = fltExp (-149) 24`
+  * `fltExp emin prec`; `Model.fexpOf FloatFormat.binary32 = fltExp (-149) 24`
 *
   * `FLX_exp prec`
   * `flxExp prec`, the same family without a lower cutoff
@@ -477,10 +486,10 @@ source docstrings record the following correspondences:
   * `negligibleExp`
 *
   * `ulp`
-  * `ulp`, pinned to binary32 as `ulp32`
+  * `ulp`, with descriptor-based specialization `Model.ulpAt`
 *
   * `round`
-  * `round`, pinned to binary32 as `round32`
+  * `round`, with nearest-even descriptor-based specialization `Model.roundAt`
 *
   * `error_le_half_ulp`
   * `error_bound_ulp`
@@ -510,7 +519,7 @@ The validity class records the conditions on the exponent function that the gene
 proofs need. Its `flocq_valid` field and names such as `negligibleExp` retain the source
 terminology, allowing the two definitions to be compared directly.
 
-The rounding mode is a separate argument to `round`; `rnd32` selects nearest-even for this
+The rounding mode is a separate argument to `round`; `nearestEven` supplies that choice for this
 specialization. Directed interval rounding can use the same format and ULP machinery. The
 half-ULP estimate depends on nearest rounding, while the grid alone only determines which values
 are representable.
@@ -545,16 +554,18 @@ rounding, half an ULP of the exact real result. Here it is for addition.
 ```leanOutput fpsAtom (whitespace := lax)
 FP32.add_approxR : ∀ (a b : FP32),
   Proofs.RuntimeApprox.approxR (a.val + b.val) (a + b).val
-    (Proofs.RuntimeApprox.ApproxTol.absOnly (eps32 (a.val + b.val)))
+    (Proofs.RuntimeApprox.ApproxTol.absOnly (Model.epsilonAt FloatFormat.binary32 (a.val + b.val)))
 ```
 
 Read `a.val` as the exact real value of the float `a`, and `(a + b).val` as the real value of the
-rounded sum. The claim is that they differ by at most `eps32` of the exact sum, which is `ulp32`
+rounded sum. The claim is that they differ by at most `Model.epsilonAt FloatFormat.binary32` of
+the exact sum, which is `Model.ulpAt FloatFormat.binary32`
 of it divided by two, as stated by `fpsHalfUlp`. The library has the same statement
 for subtraction, multiplication, division, square root, `exp`, `log`, the trigonometric and
 hyperbolic functions, and `abs`.
 
-The tolerance is `eps32` evaluated at the exact real result of the operation. It describes the
+The tolerance is `Model.epsilonAt FloatFormat.binary32` evaluated at the exact real result of
+the operation. It describes the
 rounding introduced by this step; errors already present in its operands must be accounted for
 separately when composing operations. A relative form is available separately through
 `relative_error_round_ulp`, and it is the better tool when the question is about significant digits
@@ -583,7 +594,7 @@ $$`y_i=b_i+\sum_{j=0}^{n-1}W_{ij}x_j.`
 The runtime weights, bias, and input may begin near their real counterparts. Each product
 introduces another rounded result, the dot product accumulates those results in a declared order,
 and the bias addition rounds once more. `linearErrorBudget` is the explicit expression obtained by
-composing the matrix-vector and final-addition bounds. `approxTensor_linear_fp32` proves that this
+composing the matrix-vector and final-addition bounds. `approxTensor_linear` proves that this
 expression bounds every output coordinate.
 
 The budget takes error bounds for weights, bias, and input. The theorem requires approximation
@@ -603,11 +614,11 @@ evidence for each of those three quantities:
 ```lean (name := fpsLinThm)
 -- Three approximation premises feed the bound for the
 -- shaped affine output.
-#check @approxTensor_linear_fp32
+#check @approxTensor_linear
 ```
 
 ```leanOutput fpsLinThm (whitespace := lax)
-@approxTensor_linear_fp32 : ∀ {inDim outDim : ℕ}
+@approxTensor_linear : ∀ {inDim outDim : ℕ}
   {WS : Spec.LinearSpec ℝ inDim outDim} {xS : Spec.SpecTensor [inDim]}
   {WR : Spec.LinearSpec R inDim outDim} {xR : TorchLean.Tensor R [inDim]} {epsW epsb epsx : ℝ},
   Proofs.RuntimeApprox.approxTensor toSpec WS.weights WR.weights epsW →
@@ -631,7 +642,8 @@ adds three contributions to the accumulated error:
 - `ulp(a_k * b_k) / 2`, from rounding the product;
 - `ulp(acc + prod) / 2`, from rounding the accumulation.
 
-The fold starts at `ulp(0) / 2`, which by `ulp32_zero` is $`2^{-150}` for binary32, the half-step at
+The fold starts at `ulp(0) / 2`, which by `ulp_zero FloatFormat.binary32` is $`2^{-150}` for
+binary32, the half-step at
 the very bottom of the grid. This is a conservative initial budget: the zero accumulator itself
 is exact, so the term does not claim that initializing it incurs an error. The bias addition then
 contributes one more
@@ -685,15 +697,15 @@ them behind an existential tolerance.
 Five real errors go in: weights and bias of each layer, and the input. The composed correctness
 theorems are long enough that printing them in full would obscure the point, so the page elaborates
 them without displaying the result. Their conclusion has exactly the shape of
-`approxTensor_linear_fp32` above, with the network's forward expression in place of the single
+`approxTensor_linear` above, with the network's forward expression in place of the single
 `linearSpec` call:
 
 ```lean
 -- Inspect the composed network statements rather than
 -- assuming closure for every architecture.
-#check @approxTensor_reluTwoLayerMlp_fp32
+#check @approxTensor_reluTwoLayerMlp
 #check @tanhMlp3ErrorBudget
-#check @approxTensor_tanhMlp3_fp32
+#check @approxTensor_tanhMlp3
 ```
 
 Read the argument lists and the shape of the composition is visible: the two-layer budget consumes
@@ -713,12 +725,12 @@ These are architecture-shaped theorems for `Linear → ReLU → Linear` and
 corresponding examples; they are not a claim that every model assembled from arbitrary operations
 already has an FP32 theorem.
 
-In the displayed three-layer signatures, the seven error arguments correspond to six parameter
+In the three-layer statements, the seven error arguments correspond to six parameter
 tensors and one input tensor. The approximation theorem consumes evidence for each of them.
-It first obtains a bound for the first affine output, feeds that into the tanh bound, and uses
-the resulting activation error as the next layer's input error. The later bounds therefore
-depend on earlier ones; adding independent per-layer tolerances after evaluating the network
-would not express the same composition.
+The affine stages consume input and parameter errors, but the current tanh rule ignores its
+incoming error and uses the unconditional bound `2 + ulp(tanh a) / 2`. Its activation budget is
+therefore at least two per coordinate even for exact inputs. The theorem demonstrates composition,
+but a tanh Lipschitz bound would be needed to propagate small input errors sharply as ReLU does.
 
 These statements concern forward values. ReLU's Lipschitz property remains valid when an input
 perturbation crosses zero, so the forward bound does not need a fixed activation pattern.
@@ -734,8 +746,8 @@ amount gives
 
 $$`[\mathrm{lo}-\varepsilon_{\mathrm{out}},\;\mathrm{hi}+\varepsilon_{\mathrm{out}}].`
 
-`ibpBound_contains_reluTwoLayerMlp_fp32` proves this construction pointwise for the two-layer
-ReLU MLP. It combines the real IBP theorem with `approxTensor_reluTwoLayerMlp_fp32`; its named
+`ibpBound_contains_reluTwoLayerMlp` proves this construction pointwise for the two-layer
+ReLU MLP. It combines the real IBP theorem with `approxTensor_reluTwoLayerMlp`; its named
 budget is `ibpReluTwoLayerErrorBudget`.
 
 ```lean (name := fpsIbpBudget)
@@ -753,7 +765,7 @@ budget is `ibpReluTwoLayerErrorBudget`.
 ```lean
 -- Combine real enclosure at the input with the network’s
 -- numerical approximation.
-#check @ibpBound_contains_reluTwoLayerMlp_fp32
+#check @ibpBound_contains_reluTwoLayerMlp
 ```
 
 The tensor argument makes this budget pointwise in the runtime input. `inflateBoxUniform`
@@ -781,11 +793,11 @@ content of the `0.12` calculation this chapter opened with:
 ```lean (name := leMargin)
 -- An upper-threshold proof must reserve room for upward
 -- runtime error.
-#check @fp32_le_of_real_le_sub_margin
+#check @le_of_real_le_sub_margin
 ```
 
 ```leanOutput leMargin (whitespace := lax)
-@fp32_le_of_real_le_sub_margin : ∀ {y t : ℝ} {yR : R}
+@le_of_real_le_sub_margin : ∀ {y t : ℝ} {yR : R}
   {eps : ℝ}, y ≤ t - eps → |toSpec yR - y| ≤ eps →
   toSpec yR ≤ t
 ```
@@ -793,17 +805,17 @@ content of the `0.12` calculation this chapter opened with:
 ```lean (name := geMargin)
 -- A lower-threshold proof must reserve room for downward
 -- runtime error.
-#check @fp32_ge_of_real_ge_add_margin
+#check @ge_of_real_ge_add_margin
 ```
 
 ```leanOutput geMargin (whitespace := lax)
-@fp32_ge_of_real_ge_add_margin : ∀ {y t : ℝ} {yR : R}
+@ge_of_real_ge_add_margin : ∀ {y t : ℝ} {yR : R}
   {eps : ℝ}, y ≥ t + eps → |toSpec yR - y| ≤ eps →
   toSpec yR ≥ t
 ```
 
-For a scalar threshold, `fp32_le_of_real_le_sub_margin` and
-`fp32_ge_of_real_ge_add_margin` package the same arithmetic. For a classifier, apply it to both
+For a scalar threshold, `le_of_real_le_sub_margin` and
+`ge_of_real_ge_add_margin` package the same arithmetic. For a classifier, apply it to both
 logits: the true logit may fall by its budget and the competitor may rise by its budget. The real
 margin must pay both costs, just as in the `0.12` example at the start.
 
@@ -882,11 +894,11 @@ payload:
 ```lean (name := fpsNativeEq)
 -- Provider agreement and a finite result identify the
 -- executable reference sum.
-#check @native_add_eq_ieee32_of_isFinite
+#check @native_add_eq_reference_of_isFinite
 ```
 
 ```leanOutput fpsNativeEq (whitespace := lax)
-@native_add_eq_ieee32_of_isFinite : ∀ {native : NativePrimitiveBits},
+@native_add_eq_reference_of_isFinite : ∀ {native : NativePrimitiveBits},
   NativePrimitiveAgreement native →
     ∀ (x y : RefScalar),
       ExecFloat.Binary.isFinite (fromNativeBits (native.addBits x y)) = true →
@@ -908,7 +920,8 @@ And the half-ULP bound follows for the native result, with the same finiteness s
       ExecFloat.Binary.isFinite (fromNativeBits (native.addBits x y)) = true →
         |(ExecFloat.Binary.toModel (fromNativeBits (native.addBits x y))).toReal -
             ((ExecFloat.Binary.toModel x).toReal + (ExecFloat.Binary.toModel y).toReal)| ≤
-          eps32 ((ExecFloat.Binary.toModel x).toReal + (ExecFloat.Binary.toModel y).toReal)
+          Model.epsilonAt FloatFormat.binary32
+            ((ExecFloat.Binary.toModel x).toReal + (ExecFloat.Binary.toModel y).toReal)
 ```
 
 `NativePrimitiveAgreement` remains an assumption about the provider's operations. Tests can
@@ -982,7 +995,8 @@ the guard and selected result at the boundary. Comparing that API with the row r
 accounting for the branch before invoking the primitive contract. The bit-level example helps
 identify which part of such a computation an agreement theorem would cover.
 
-The fifteen curated cases were each chosen for a reason a reader can check: a tie that rounds down
+The fifteen curated cases were chosen for reasons a reader can check, including: a tie that
+rounds down
 and a tie that rounds up, a subnormal sum, an overflow to infinity, a cancellation that leaves one
 ULP, the signed zeros above, the minimum normal halved into the subnormal range, the minimum
 subnormal halved into nothing, one third as the canonical inexact quotient, and the invalid
@@ -1014,11 +1028,9 @@ makes the sequence reproducible, so a disagreement can be investigated using the
   sqrt: 19839/19839 bit-exact
 ```
 
-That is the interpreter, running inside the elaborator that built this page. A recorded compiled
-run before the FloatLib migration made two million draws in about six and a half seconds and
-reported 1,984,327 pairs bit-exact for all four primitives. That timing does not characterize the
-migrated implementation. The gap between 20,000 and 19,839, and between two million and 1,984,327,
-is draws whose operands were `NaN`, which the sweep skips.
+That is the interpreter, running inside the elaborator that built this page. The gap between
+20,000 draws and 19,839 tested pairs consists of draws whose operands were `NaN`, which the sweep
+skips.
 
 This bit-exact sweep deliberately skips NaN operands. Lean's `Float32` cannot serve as an oracle for
 `NaN` payloads at all,
@@ -1038,94 +1050,47 @@ NaN 0x7fac6de8: Float32 keeps 0x7fc00000, configured binary32 keeps 0x7fac6de8
 The disagreement occurs during conversion, before arithmetic. It therefore cannot establish a
 mismatch in addition or division; a payload-sensitive arithmetic test must preserve the input bits.
 
-The second half runs on the GPU. `scripts/checks/cuda_float32_parity.sh` asks the example for
-reference bits with `--emit-cases`, then hands them to a CUDA program that evaluates every case
-twice: once with the host C library, and once on the device with the round-to-nearest intrinsics
-`__fadd_rn`, `__fmul_rn`, `__fdiv_rn`, `__fsqrt_rn` and `__fmaf_rn`. The intrinsics are deliberate.
-Writing `x * y + z` in CUDA lets the compiler contract the pair into a fused instruction, which is
-one of the ways this assumption fails, so the check asks for the operation it means. This also
-brings `fma` into scope, which is outside this four-operation Lean comparison. The CUDA harness
-evaluates a separate
-fused multiply-add primitive. This recorded A100 run also predates the FloatLib migration; the
-same comparison must be rerun for a claim about a new source and binary:
+The GPU check uses the same Lean reference stream and the production LibTorch backend.
+`scripts/checks/cuda_float32_parity.sh` generates reference bits with `--emit-cases`, builds a C++
+regression against the selected SDK and TorchLean library, and checks addition, multiplication,
+division, square root, and fused multiply-add:
 
-```terminal +output
-$ TMPDIR=/mnt/build scripts/checks/cuda_float32_parity.sh --sweep 100000
-reference cases: 494175
-== CUDA binary32 parity against IEEE32Exec ==
-device: NVIDIA A100-SXM4-80GB, compute capability 8.0
-cases: 494175
-  payload div(0x80000000, 0x00000000): model 0x7fc00000 host 0xffc00000 device 0x7fffffff
-  payload div(0x7f800000, 0x7f800000): model 0x7fc00000 host 0xffc00000 device 0x7fffffff
-  payload sqrt(0xbf800000): model 0x7fc00000 host 0xffc00000 device 0x7fffffff
-  payload sqrt(0xadd02374): model 0x7fc00000 host 0xffc00000 device 0x7fffffff
-  add  contract host 98834/98834 device 98834/98834  strict host 98834/98834 device 98834/98834
-  mul  contract host 98834/98834 device 98834/98834  strict host 98834/98834 device 98834/98834
-  div  contract host 98834/98834 device 98834/98834  strict host 98832/98834 device 98832/98834
-  sqrt contract host 98834/98834 device 98834/98834  strict host 49523/98834 device 49523/98834
-  fma  contract host 98839/98839 device 98839/98839  strict host 98839/98839 device 98839/98839
-distinct NaN encodings produced:
-  model   0x7fc00000
-  host    0xffc00000
-  device  0x7fffffff
-all five contract fields hold on this device and this compiler
-98626 of them only up to the NaN payload, which is what AgreeUpToNaN allows
+```terminal
+# Use the same SDK and shared library as the CUDA build.
+export TORCHLEAN_LIBTORCH_HOME=/path/to/libtorch
+export TORCHLEAN_BACKEND_LIBRARY=/path/to/libtorchlean_libtorch.so
+scripts/checks/cuda_float32_parity.sh --sweep 200000
 ```
 
-The `strict` columns count exact bit matches. For `add`,
-`mul` and `fma` they are perfect. For `div` two of 98,834 cases differ. For `sqrt` almost exactly
-half differ, which is the giveaway: half of a uniformly random 32-bit pattern is negative, and the
-square root of a negative number is an invalid operation. Every one of those differences is a `NaN`
-payload, and the three encodings are printed at the bottom: FloatLib binary32 produces the canonical
-`0x7fc00000`, this x86-64 host produces `0xffc00000` with the sign bit set, and the A100 produces
-`0x7fffffff`.
+Every finite result and signed zero must match the reference bits. When both results are NaNs,
+`AgreeUpToNaN` permits different signs and payloads; the harness reports those encoding differences
+separately. A zero result in place of a nonzero subnormal is a failure, as is a NaN in place of a
+finite quotient. Ignoring NaN payloads does not relax those finite-value requirements.
 
-All three are quiet `NaN`s. IEEE 754-2019 leaves the sign and the payload of a `NaN` produced by an
-invalid operation to the implementation, so this is not a bug in any of the three; it is three
-implementations exercising the same permission differently. What it does mean is that
-requiring plain bit equality in all five fields would fail for both providers on this machine.
-The `AgreeUpToNaN` fields allow these payload differences, so
-the `contract` columns, which are the ones the exit status watches, read perfectly here across
-988,350 comparisons.
+The test reaches the operations TorchLean actually uses. Addition, multiplication, division, and
+scalar AXPY pass through the production buffer interface. AXPY routes through ATen `addcmul` with
+its scalar multiplier set to one, which the selected SDK's CUDA kernel evaluates as a
+single-rounding
+FMA. The fixtures check that property for the selected build. Square root has two checks: the raw
+IEEE operation and `Buffer.sqrt`, whose selected activation returns zero for nonpositive inputs.
+The latter is a different function and needs a different expected result.
 
-The same script also tests a `--fast-math` build, which disagrees on a finite quotient:
+Fusing a multiply and an add changes rounding. For binary32 inputs
+$`x=1+2^{-23}`, $`y=1+2^{-23}`, and $`z=-(1+2^{-22})`, a fused operation retains $`2^{-46}`;
+rounding the product first loses that residual. A second fixture distinguishes a true binary32
+FMA from computing in binary64 and then rounding. These cases check the production AXPY path and
+the staged Adam update, so passing a standalone arithmetic instruction would not be sufficient.
 
-```terminal +output
-$ TMPDIR=/mnt/build scripts/checks/cuda_float32_parity.sh --sweep 200000 --fast-math
-== second pass: --use_fast_math ==
-  broken  add(0x00000001, 0x00000001): model 0x00000002 host 0x00000002 device 0x00000000
-  broken  div(0x00000001, 0x00000001): model 0x3f800000 host 0x3f800000 device 0x7fffffff
-  broken  sqrt(0x00000001): model 0x1a3504f3 host 0x1a3504f3 device 0x00000000
-  broken  mul(0x00800000, 0x3f000000): model 0x00400000 host 0x00400000 device 0x00000000
-  add  contract host 197626/197626 device 197474/197626
-  mul  contract host 197626/197626 device 188345/197626
-  div  contract host 197626/197626 device 188360/197626
-  sqrt contract host 197626/197626 device 196887/197626
-  fma  contract host 197631/197631 device 197251/197631
-19818 comparisons disagree: NativePrimitiveAgreement is false here
-```
+The regression also observes ATen calls with the caller's autograd mode both enabled and disabled.
+TorchLean's native boundary must disable recording during the operation, return tensors without
+LibTorch gradient history, and restore the caller's mode. TorchLean's own tape remains responsible
+for recording dependencies and traversing local VJPs.
 
-`--use_fast_math` enables denormal flushing for affected device operations. Here the smallest
-subnormal divided by itself behaves as `0/0` , rather than producing the exact quotient `1` . The
-host column is untouched, since
-only the device compilation changed. Nothing about the Lean proofs is wrong in this run; the
-hypothesis they are conditioned on is simply not satisfied by the binary that ran. This is what the
-assumption is for, and it is why a build flag belongs in the audit trail next to the driver version.
-
-These results have two limits. The test covers one GPU, one driver and one compiler, on inputs
-drawn from a specific stream, so it is evidence about a configuration rather than a proof about a
-class of machines; changing any of the three means running it again. And a kernel does more than
-call primitives, so a reduction whose atomics land in a different order is still free to disagree
-with the reference model even though every individual operation in it satisfies the contract. That
-is a separate question, and the determinism controls in *GPU Execution And CUDA* are where it is
-addressed.
-
-The fast-math report contains disagreements that the NaN allowance cannot repair. Adding two
-minimum subnormals produces zero instead of the reference's nonzero subnormal, and the
-subnormal quotient produces NaN instead of one. Those are changes of finite value or result
-classification, unlike the invalid-operation payload differences in the preceding report.
-Keeping both reports makes the contract's boundary concrete: ignoring NaN payloads preserves
-the finite consequences, while ignoring these additional differences would destroy them.
+Passing this sweep is evidence about its inputs, the linked SDK, and the tested device. It does not
+construct `NativePrimitiveAgreement` for every possible input. Retain the SDK version, source and
+binary hashes, device, and precision settings with the result. A reduction also needs an
+expression-level argument: primitive agreement does not determine the order in which its partial
+sums are added.
 
 # Remaining Deployment Proof Obligations
 
@@ -1141,11 +1106,10 @@ composed theorems; other architectures need their own composition and any missin
 The transcendental bridge is missing. `tanh` and `log` have rounded-real bounds and executable
 implementations, and no theorem relating the two, so tanh networks stop at the proof model.
 
-Native agreement remains an assumption. The recorded run exercised just under a million
-comparisons on one configuration; the tested fast-math configuration falsifies it.
-Contraction and reduction schedules need
-additional expression-level policies. Native conformance remains supported by tests and the
-declared toolchain boundary.
+Native agreement remains an assumption. The production parity sweep tests concrete inputs and
+rejects finite-bit disagreements. Contraction and reduction schedules need additional
+expression-level policies. Native conformance remains supported by tests and the declared
+toolchain boundary.
 
 # References
 

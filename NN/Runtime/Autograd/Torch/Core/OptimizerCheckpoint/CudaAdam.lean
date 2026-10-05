@@ -29,9 +29,9 @@ namespace EagerSession
 /-- Device-side Adam moment buffers for one parameter leaf. -/
 structure CudaAdamParamState where
   /-- First moment buffer. -/
-  m : Runtime.Autograd.Cuda.Buffer
+  m : Runtime.Autograd.LibTorch.Buffer
   /-- Second moment buffer. -/
-  v : Runtime.Autograd.Cuda.Buffer
+  v : Runtime.Autograd.LibTorch.Buffer
   /-- Adam step counter for this parameter. -/
   t : Nat
 
@@ -66,14 +66,20 @@ def sameBits (left right : CudaAdamConfig) : Bool :=
     left.epsilon.toBits == right.epsilon.toBits &&
     left.weightDecay.toBits == right.weightDecay.toBits
 
-/-- Reject non-finite or mathematically invalid Adam-family hyperparameters. -/
+/--
+Reject invalid Adam-family hyperparameters before updating or restoring device state.
+
+The denominator uses float32 arithmetic, so epsilon must remain finite and positive after the
+same conversion performed by the native kernel.
+-/
 def validate (config : CudaAdamConfig) : Except String Unit := do
   unless config.beta1.isFinite && 0.0 ≤ config.beta1 && config.beta1 < 1.0 do
     throw s!"{checkpointName}: `beta1` must be finite and lie in [0, 1)"
   unless config.beta2.isFinite && 0.0 ≤ config.beta2 && config.beta2 < 1.0 do
     throw s!"{checkpointName}: `beta2` must be finite and lie in [0, 1)"
-  unless config.epsilon.isFinite && 0.0 < config.epsilon do
-    throw s!"{checkpointName}: `epsilon` must be finite and positive"
+  let effectiveEpsilon := config.epsilon.toFloat32.toFloat
+  unless effectiveEpsilon.isFinite && 0.0 < effectiveEpsilon do
+    throw s!"{checkpointName}: `epsilon` must remain finite and positive in float32"
   match config.kind with
   | .adam =>
       unless config.weightDecay == 0.0 do
@@ -139,9 +145,7 @@ than silently reinterpreting existing moments.
 -/
 def ensureCudaAdamConfig
     (configRef : IO.Ref (Option CudaAdamConfig)) (expected : CudaAdamConfig) : IO Unit := do
-  match expected.validate with
-  | .ok () => pure ()
-  | .error message => throw <| IO.userError message
+  okOrThrow expected.validate
   match ← configRef.get with
   | none => configRef.set (some expected)
   | some actual =>
@@ -176,9 +180,8 @@ def readConfig (handle : IO.FS.Handle) : IO CudaAdamConfig := do
   let weightDecay :=
     Float.ofBits (UInt64.ofNat (← CheckpointIO.readNat64 checkpointName handle))
   let config : CudaAdamConfig := { kind, beta1, beta2, epsilon, weightDecay }
-  match config.validate with
-  | .ok () => pure config
-  | .error message => throw <| IO.userError message
+  okOrThrow config.validate
+  pure config
 
 /--
 Stream CUDA Adam or AdamW moments to disk.
@@ -199,9 +202,7 @@ def writeCudaAdamStateFloat32
     | some config => pure config
     | none => throw <| IO.userError <|
         s!"{checkpointName}: no Adam or AdamW update has initialized optimizer state"
-  match config.validate with
-  | .ok () => pure ()
-  | .error message => throw <| IO.userError message
+  okOrThrow config.validate
   let state ← stateRef.get
   if state.size != schema.optimizerStateCount then
     throw <| IO.userError <|
@@ -228,11 +229,11 @@ def writeCudaAdamStateFloat32
       if entry.t == 0 then
         throw <| IO.userError s!"{checkpointName}: zero step counter for parameter {id}"
       let count := Spec.Shape.size shape
-      if (Runtime.Autograd.Cuda.Buffer.size entry.m).toNat != count ||
-          (Runtime.Autograd.Cuda.Buffer.size entry.v).toNat != count then
+      if (Runtime.Autograd.LibTorch.Buffer.size entry.m).toNat != count ||
+          (Runtime.Autograd.LibTorch.Buffer.size entry.v).toNat != count then
         throw <| IO.userError s!"{checkpointName}: moment-size mismatch for parameter {id}"
-      let mBytes ← Runtime.Autograd.Cuda.Buffer.toFloat32BytesIO entry.m
-      let vBytes ← Runtime.Autograd.Cuda.Buffer.toFloat32BytesIO entry.v
+      let mBytes ← Runtime.Autograd.LibTorch.Buffer.toFloat32BytesIO entry.m
+      let vBytes ← Runtime.Autograd.LibTorch.Buffer.toFloat32BytesIO entry.v
       if mBytes.size != count * 4 || vBytes.size != count * 4 then
         throw <| IO.userError s!"{checkpointName}: invalid float32 payload for parameter {id}"
       CheckpointIO.writeNat64 checkpointName handle id
@@ -288,9 +289,9 @@ def readCheckpoint
             s!"(file={count}, expected={Spec.Shape.size shape})"
       let mBytes ← CheckpointIO.readExact checkpointName handle (count * 4)
       let vBytes ← CheckpointIO.readExact checkpointName handle (count * 4)
-      let m ← Runtime.Autograd.Cuda.Buffer.ofFloat32BytesIO mBytes
+      let m ← Runtime.Autograd.LibTorch.Buffer.ofFloat32BytesIO mBytes
       let v ← try
-        Runtime.Autograd.Cuda.Buffer.ofFloat32BytesIO vBytes
+        Runtime.Autograd.LibTorch.Buffer.ofFloat32BytesIO vBytes
       catch error =>
         releaseCudaBuffer m
         throw error

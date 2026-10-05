@@ -112,8 +112,8 @@ def rowLowerBoundOnBox {n : Nat} (row yLo yHi : Tensor Float [n]) : Float :=
 /-- Check whether a conjunction term is refuted by an equally dimensioned output box. -/
 def termRefutedByOutputBox (box : FlatBox Float) (term : Term) : Bool :=
   if h : box.dim = term.cols then
-    let lo : Tensor Float [term.cols] := h ▸ box.lo
-    let hi : Tensor Float [term.cols] := h ▸ box.hi
+    let lo := Tensor.castShape box.lo (congrArg (fun n => Spec.Shape.dim n .scalar) h)
+    let hi := Tensor.castShape box.hi (congrArg (fun n => Spec.Shape.dim n .scalar) h)
     NN.Verification.Util.Tensor.boundsOrdered lo hi &&
       (List.finRange term.rows).any (fun i =>
         rowLowerBoundOnBox (term.mat.unstack i) lo hi > term.rhs.getScalar i)

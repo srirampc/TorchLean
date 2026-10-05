@@ -94,10 +94,6 @@ def bytesLatin1B : Array Nat :=
 def baseBytes : Array Nat :=
   bytesVisible ++ bytesLatin1A ++ bytesLatin1B
 
-/-- Boolean membership test used while constructing the byte escape table. -/
-def containsNat (xs : Array Nat) (x : Nat) : Bool :=
-  xs.any (fun y => y == x)
-
 /-- GPT-2 byte-to-Unicode code-point table for all 256 byte values. -/
 def byteCodeTable : Array Nat := Id.run do
   let mut codes := Array.replicate 256 0
@@ -105,7 +101,7 @@ def byteCodeTable : Array Nat := Id.run do
     codes := codes.set! b b
   let mut next := 0
   for b in Array.range 256 do
-    if !Internal.containsNat baseBytes b then
+    if !baseBytes.contains b then
       codes := codes.set! b (256 + next)
       next := next + 1
   return codes
@@ -221,24 +217,15 @@ def pretokenizeWithFuel : Nat → List Char → List String
   | 0, _ => []
   | _fuel + 1, List.nil => []
   | fuel + 1, xs =>
-      match consumeContraction? xs with
-      | some (tok, rest) => tok :: pretokenizeWithFuel fuel rest
-      | none =>
-          match consumeClassRun? .letter xs with
-          | some (tok, rest) => tok :: pretokenizeWithFuel fuel rest
-          | none =>
-              match consumeClassRun? .number xs with
-              | some (tok, rest) => tok :: pretokenizeWithFuel fuel rest
-              | none =>
-                  match consumeClassRun? .other xs with
-                  | some (tok, rest) => tok :: pretokenizeWithFuel fuel rest
-                  | none =>
-                      match consumeLookaheadWhitespace? xs with
-                      | some (tok, rest) => tok :: pretokenizeWithFuel fuel rest
-                      | none =>
-                          match consumeWhitespaceRun? xs with
-                          | some (tok, rest) => tok :: pretokenizeWithFuel fuel rest
-                          | none => []
+      let fragment? := consumeContraction? xs <|>
+        consumeClassRun? .letter xs <|>
+        consumeClassRun? .number xs <|>
+        consumeClassRun? .other xs <|>
+        consumeLookaheadWhitespace? xs <|>
+        consumeWhitespaceRun? xs
+      match fragment? with
+      | some (token, rest) => token :: pretokenizeWithFuel fuel rest
+      | none => []
 
 /-- Split a string into GPT-2-style pre-token fragments. -/
 def pretokenize (s : String) : List String :=
@@ -595,8 +582,7 @@ def parseMergeLine (rank : Nat) (line : String) : Except String (Option MergeRan
 /-- Parse GPT-2 `merges.txt`, retaining hash-prefixed symbols and rejecting malformed pairs. -/
 def parseMerges (s : String) : Except String (Array MergeRank) := do
   let lines := s.splitOn "\n"
-  let parsed ← (List.zip (List.range lines.length) lines).mapM
-    (fun (rank, line) => parseMergeLine rank line)
+  let parsed ← lines.zipIdx.mapM (fun (line, rank) => parseMergeLine rank line)
   pure (parsed.filterMap id).toArray
 
 end Internal
@@ -619,18 +605,12 @@ def load (vocabularyFile mergesFile : System.FilePath)
   if progress then
     IO.eprintln
       s!"{label}: parsing BPE vocab.json chars={vocabularyText.length}"
-  let vocabulary ←
-    match Internal.parseVocabularyText vocabularyText with
-    | .ok parsed => pure parsed
-    | .error message => throw <| IO.userError message
+  let vocabulary ← IO.ofExcept <| Internal.parseVocabularyText vocabularyText
   if progress then
     IO.eprintln s!"{label}: parsed BPE vocabulary entries={vocabulary.size}"
     IO.eprintln s!"{label}: reading BPE merges.txt"
   let mergesText ← IO.FS.readFile mergesFile
-  let merges ←
-    match Internal.parseMerges mergesText with
-    | .ok parsed => pure parsed
-    | .error message => throw <| IO.userError message
+  let merges ← IO.ofExcept <| Internal.parseMerges mergesText
   if progress then
     IO.eprintln s!"{label}: parsed BPE merges={merges.size}"
     IO.eprintln s!"{label}: building BPE lookup maps"

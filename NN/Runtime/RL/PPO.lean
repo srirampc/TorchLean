@@ -19,7 +19,8 @@ The PPO runtime code is organized around:
 
 - `NN.Runtime.RL.PPO.Rollout`: rollout record + minibatch conversion (GAE/returns live in
   `Runtime.RL.Core`).
-- `NN.Runtime.RL.PPO.Collect`: data collection from `Runtime.RL.Gymnasium.Session`.
+- `NN.Runtime.RL.PPO.Collect`: data collection through `Runtime.RL.Session.CheckedSession`,
+  including native and Gymnasium environments.
 - `NN.Runtime.RL.PPO.Training`: rollout, update, and evaluation scheduling.
 
 References:

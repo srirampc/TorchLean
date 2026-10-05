@@ -13,11 +13,10 @@ nScores = 5
 nOut = 3
 
 
-def seed_params():
-    """Return deterministic query/value matrices for the attention fixture."""
-    score_weight = [[float(1 + (i + 2 * j)) for j in range(nIn)] for i in range(nScores)]
+def seed_value_weight():
+    """Return the deterministic value matrix used by the exported bound."""
     value_weight = [[float(2 + (i + j)) for j in range(nScores)] for i in range(nOut)]
-    return score_weight, value_weight
+    return value_weight
 
 
 def seed_input_box(eps: float = 0.5):
@@ -28,11 +27,9 @@ def seed_input_box(eps: float = 0.5):
 
 def run_ibp() -> dict[str, Any]:
     """Compute the attention certificate payload consumed by Lean."""
-    score_weight, value_weight = seed_params()
+    value_weight = seed_value_weight()
     x_lo, x_hi = seed_input_box(0.5)
-    # The score projection is part of the graph even though the format-independent checker only
-    # needs the softmax row length for its conservative range enclosure.
-    matmul_interval(score_weight, x_lo, x_hi)
+    # The conservative softmax enclosure depends only on row length, not score bounds.
     prob_lo, prob_hi = softmax_range_interval(nScores)
     output_lo, output_hi = matmul_interval(value_weight, prob_lo, prob_hi)
     return {

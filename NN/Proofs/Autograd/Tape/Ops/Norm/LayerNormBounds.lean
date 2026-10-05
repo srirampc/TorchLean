@@ -48,16 +48,20 @@ theorem invStd_le_inv_sqrt {ε : ℝ} (hε : 0 < ε)
   apply inv_anti₀ (Real.sqrt_pos.mpr hε)
   exact Real.sqrt_le_sqrt (le_add_of_nonneg_left (rowVar_nonneg X i))
 
+/-- Termwise absolute bounds give a bound on the absolute value of a mean over `Fin n`. -/
+theorem abs_sum_div_le (f bounds : Fin n → ℝ) (h : ∀ k, |f k| ≤ bounds k) :
+    |(∑ k, f k) / n| ≤ (∑ k, bounds k) / n := by
+  rw [abs_div, abs_of_nonneg (Nat.cast_nonneg n : (0 : ℝ) ≤ n)]
+  exact div_le_div_of_nonneg_right
+    ((Finset.abs_sum_le_sum_abs _ _).trans (Finset.sum_le_sum fun k _ => h k))
+    (Nat.cast_nonneg n)
+
 /-- Coordinate bounds on a row give a bound on the absolute value of its mean. -/
 theorem abs_rowMean_le (X : Vec (matSize m n)) (i : Fin m)
     (bounds : Fin n → ℝ)
     (hbounds : ∀ j, |X (idxMN (m := m) (n := n) i j)| ≤ bounds j) :
-    |rowMean X i| ≤ (∑ j, bounds j) / n := by
-  have hn0 : (0 : ℝ) ≤ n := Nat.cast_nonneg n
-  rw [rowMean, abs_div, abs_of_nonneg hn0]
-  apply div_le_div_of_nonneg_right _ hn0
-  exact (Finset.abs_sum_le_sum_abs _ _).trans
-    (Finset.sum_le_sum fun j _ => hbounds j)
+    |rowMean X i| ≤ (∑ j, bounds j) / n :=
+  abs_sum_div_le _ bounds hbounds
 
 /-- A centered-input bound gives a normalized-input bound without a variance lower estimate. -/
 theorem abs_nrm_le {ε : ℝ} (hε : 0 < ε)
@@ -91,28 +95,22 @@ theorem abs_nrmJvp_le {ε : ℝ} (hε : 0 < ε)
   have ht : 0 ≤ t := inv_nonneg.mpr (Real.sqrt_nonneg ε)
   have hu0 (k) : 0 ≤ u k := (abs_nonneg _).trans (hu k)
   have hd0 (k) : 0 ≤ d k := (abs_nonneg _).trans (hd k)
-  have hn0 : (0 : ℝ) ≤ n := Nat.cast_nonneg n
   have hnorm (k) : |nrm X ε i k| ≤ u k * t :=
     abs_nrm_le hε X i k (hu k)
   have hmean := abs_rowMean_le dX i d hd
-  have hsub (a b : ℝ) : |a - b| ≤ |a| + |b| := by
-    simpa only [sub_eq_add_neg, abs_neg] using abs_add_le a (-b)
   have hproduct :
       |(∑ k, dX (idxMN (m := m) (n := n) i k) * nrm X ε i k) / n| ≤
-        (∑ k, d k * (u k * t)) / n := by
-    rw [abs_div, abs_of_nonneg hn0]
-    apply div_le_div_of_nonneg_right _ hn0
-    refine (Finset.abs_sum_le_sum_abs _ _).trans (Finset.sum_le_sum ?_)
-    intro k _
-    rw [abs_mul]
-    exact mul_le_mul (hd k) (hnorm k) (abs_nonneg _) (hd0 k)
+        (∑ k, d k * (u k * t)) / n :=
+    abs_sum_div_le _ _ fun k => by
+      rw [abs_mul]
+      exact mul_le_mul (hd k) (hnorm k) (abs_nonneg _) (hd0 k)
   have hbracket :
       |dX (idxMN (m := m) (n := n) i j) - rowMean dX i -
           nrm X ε i j *
             ((∑ k, dX (idxMN (m := m) (n := n) i k) * nrm X ε i k) / n)| ≤
         d j + (∑ k, d k) / n + (u j * t) * ((∑ k, d k * (u k * t)) / n) := by
-    refine (hsub _ _).trans (add_le_add ?_ ?_)
-    · exact (hsub _ _).trans (add_le_add (hd j) hmean)
+    refine (abs_sub _ _).trans (add_le_add ?_ ?_)
+    · exact (abs_sub _ _).trans (add_le_add (hd j) hmean)
     · rw [abs_mul]
       exact mul_le_mul (hnorm j) hproduct (abs_nonneg _) (mul_nonneg (hu0 j) ht)
   rw [nrmJvp, abs_mul, abs_of_nonneg (invStd_nonneg X ε i)]

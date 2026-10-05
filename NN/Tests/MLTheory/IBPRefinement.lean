@@ -17,11 +17,10 @@ and failed branches. They check containment as well as tighter bounds: returning
 subset of the input region would give narrow but incorrect answers.
 -/
 
-@[expose] public section
+public section
 
 open FloatLib.Floats (ExecFloat)
 open FloatLib.Floats.ExecFloat (Binary)
-open FloatLib.Floats.Formats.BinaryInterchange (Model FloatFormat)
 
 namespace NN.Tests.MLTheory.IBPRefinement
 
@@ -29,28 +28,29 @@ open Spec TorchLean
 open NN.MLTheory.CROWN
 open NN.MLTheory.CROWN.Graph
 
-def require (condition : Bool) (message : String) : IO Unit :=
+private def require (condition : Bool) (message : String) : IO Unit :=
   unless condition do throw <| IO.userError s!"IBP refinement: {message}"
 
-def interval (lo hi : Float) : FlatBox Float :=
+private def interval (lo hi : Float) : FlatBox Float :=
   { dim := 1, lo := Tensor.ofFn fun _ => lo, hi := Tensor.ofFn fun _ => hi }
 
-def endpoints (box : FlatBox Float) : Float × Float :=
+private def endpoints (box : FlatBox Float) : Float × Float :=
   (getAtOrZero box.lo [0], getAtOrZero box.hi [0])
 
-def output (g : Graph) (ps : ParamStore Float) (outId budget : Nat) : IO (Float × Float) := do
+private def output (g : Graph) (ps : ParamStore Float) (outId budget : Nat) :
+    IO (Float × Float) := do
   let some box := refinedIBPOutput? g ps 0 outId budget
     | throw <| IO.userError "IBP refinement: expected an output box"
   pure (endpoints box)
 
-def inputNode (id : Nat) : Node :=
+private def inputNode (id : Nat) : Node :=
   { id, kind := .input, parents := #[], outShape := [1] }
 
-def checkContainment (bounds : Float × Float) (value : Float) : IO Unit :=
+private def checkContainment (bounds : Float × Float) (value : Float) : IO Unit :=
   require (bounds.1 ≤ value && value ≤ bounds.2) s!"lost value {value} from {bounds}"
 
 /-- The shared refinement applies through different operations, without inspecting model names. -/
-def checkGraphs : IO Unit := do
+private def checkGraphs : IO Unit := do
   let ps : ParamStore Float := ({} : ParamStore Float).seedInputBox 0 (interval (-1) 1)
   let dense : Graph := { nodes := #[inputNode 0,
     { id := 1, kind := .linear, parents := #[0], outShape := [2] },
@@ -65,8 +65,9 @@ def checkGraphs : IO Unit := do
   IO.FS.withTempFile fun handle path => do
     handle.putStr "{\"result\":{\"lo\":[-0.01],\"hi\":[1.01]}}"
     handle.flush
-    let baselineAccepted ← NN.Verification.IBPCert.check dense densePs 3 path.toString
-    let refinedAccepted ← NN.Verification.IBPCert.check dense densePs 3 path.toString (some (0, 1))
+    let baselineAccepted ← NN.Verification.Cert.IBPCert.check dense densePs 3 path.toString
+    let refinedAccepted ←
+      NN.Verification.Cert.IBPCert.check dense densePs 3 path.toString (some (0, 1))
     require (!baselineAccepted && refinedAccepted) "refinement not used by certificate checker"
   let square : Graph := { nodes := #[inputNode 0,
     { id := 1, kind := .mulElem, parents := #[0, 0], outShape := [1] }] }
@@ -86,8 +87,8 @@ def checkGraphs : IO Unit := do
   require ((refinedIBPOutput? square ps 9 1 3).isNone) "missing input accepted"
 
 /-- The same subdivision code runs on both native and modeled binary32 endpoints. -/
-def checkScalarBackend (α : Type) [TorchLean.Storage α] [Context α]
-    [BoundOps α] [NonlinearBoundOps α] (label : String) : IO Unit := do
+private def checkScalarBackend (α : Type) [TorchLean.Storage α] [Context α]
+    [BoundOps α] [NonlinearBoundOps α] [DecidableLE α] (label : String) : IO Unit := do
   let g : Graph := { nodes := #[inputNode 0,
     { id := 1, kind := .mulElem, parents := #[0, 0], outShape := [1] }] }
   let input : FlatBox α :=
@@ -98,14 +99,14 @@ def checkScalarBackend (α : Type) [TorchLean.Storage α] [Context α]
   let lo := getAtOrZero result.lo [0]
   let hi := getAtOrZero result.hi [0]
   require (decide (lo > -(1 : α) / 100)) s!"{label} square did not tighten"
-  require (!(decide (lo > (0 : α))) && !(decide ((1 : α) > hi)))
+  require (decide (lo ≤ (0 : α)) && decide ((1 : α) ≤ hi))
     s!"{label} square lost an endpoint"
 
 /-- Many small products must not disappear from a matrix product's real enclosure.
 The exact dyadic sum is representable, while nearest-rounded accumulation loses every small term.
 Both matrix ranks use the same directed endpoint policy. -/
-def checkMatmulAccumulation (α : Type) [TorchLean.Storage α] [Context α]
-    [BoundOps α] [NonlinearBoundOps α] (small : α) (label : String) : IO Unit := do
+private def checkMatmulAccumulation (α : Type) [TorchLean.Storage α] [Context α]
+    [BoundOps α] [NonlinearBoundOps α] [DecidableLE α] (small : α) (label : String) : IO Unit := do
   let k := 129
   let a : FlatBox α := FlatBox.ofTensor <|
     Tensor.ofFn (n := k) fun i => if i.val = 0 then 1 else small
@@ -123,12 +124,12 @@ def checkMatmulAccumulation (α : Type) [TorchLean.Storage α] [Context α]
     let some box := (runIBP g ps)[2]?.join
       | throw <| IO.userError s!"IBP refinement: {label} missing matrix product"
     require (Refinement.valid box) s!"{label} invalid matrix endpoints"
-    require (!(decide (getAtOrZero box.lo [0] > exact)) &&
-      !(decide (exact > getAtOrZero box.hi [0])))
+    require (decide (getAtOrZero box.lo [0] ≤ exact) &&
+      decide (exact ≤ getAtOrZero box.hi [0]))
       s!"{label} lost small terms in batched={batched} matrix bounds"
 
 /-- Degenerate domains and failed child enclosures cannot silently lose coverage. -/
-def checkFailures : IO Unit := do
+private def checkFailures : IO Unit := do
   require ((Refinement.split? (interval 1 1)).isNone) "singleton split"
   require ((Refinement.split? (interval 1 (HostFloat.nextUp 1))).isNone)
     "adjacent endpoints split without an interior value"
@@ -150,14 +151,14 @@ def checkFailures : IO Unit := do
   checkContainment (endpoints hull) 2
 
 /-- Invalid recomputed bounds must fail before comparing against a serialized certificate. -/
-def checkInvalidCertificate : IO Unit := do
+private def checkInvalidCertificate : IO Unit := do
   let g : Graph := { nodes := #[inputNode 0] }
   let wrongShape : FlatBox Float :=
     { dim := 0, lo := Tensor.ofFn fun i => Fin.elim0 i, hi := Tensor.ofFn fun i => Fin.elim0 i }
   for box in [interval 2 1, interval (0 / 0) 1, wrongShape] do
     let ps : ParamStore Float := ({} : ParamStore Float).seedInputBox 0 box
     let rejected ← try
-      let _ ← NN.Verification.IBPCert.check g ps 0 "/unused-invalid-ibp-certificate.json"
+      let _ ← NN.Verification.Cert.IBPCert.check g ps 0 "/unused-invalid-ibp-certificate.json"
       pure false
     catch error => pure (error.toString.contains "invalid input bounds")
     require rejected "invalid input interval reached certificate comparison"

@@ -129,16 +129,7 @@ namespace Internal
 /-- Concatenated shapes add their ranks. -/
 theorem rank_concat (left right : Shape) :
     (left.concat right).rank = left.rank + right.rank := by
-  induction left with
-  | scalar => simp [Shape.rank]
-  | dim _ tail ih =>
-      simp only [Shape.rank, ih]
-      grind
-
-/-- Appending the same suffix preserves equal ranks. -/
-theorem sameRank_concat_right (left right suffix : Shape) (same : Shape.SameRank left right) :
-    Shape.SameRank (left.concat suffix) (right.concat suffix) :=
-  ⟨by simp only [rank_concat, same.rank_eq]⟩
+  simp only [Shape.rank_eq_length, Shape.concat_eq_append, List.length_append]
 
 /-- Extend prefix-broadcast evidence across a fixed non-broadcasted tensor suffix. -/
 theorem extendBroadcastSuffix {source target : Shape} (suffix : Shape)

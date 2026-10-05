@@ -93,12 +93,7 @@ direction; it does not assume the per-patch score characterizes perfect reconstr
 theorem maskedLoss_eq_zero_of_all_zero {n : Nat} (idxs : Array (Fin n))
     (perPatchLoss : Fin n → Nat) (h : ∀ i ∈ idxs, perPatchLoss i = 0) :
     maskedLoss idxs perPatchLoss = 0 := by
-  have hmap : idxs.map perPatchLoss = Array.replicate idxs.size 0 := by
-    apply Array.ext <;> simp only [Array.size_map, Array.size_replicate]
-    intro i hiMap hiReplicate
-    rw [Array.getElem_map, Array.getElem_replicate]
-    exact h idxs[i] (Array.getElem_mem hiMap)
-  rw [maskedLoss, hmap]
+  rw [maskedLoss, Array.map_congr_left (g := fun _ => 0) h, Array.map_const']
   simp
 
 end NN.MLTheory.SelfSupervised

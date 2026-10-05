@@ -6,7 +6,7 @@ Authors: TorchLean Team
 
 module
 
-public import NN.Verification.Builtin.Proved.Correctness.Eval.Core
+public import NN.Verification.Builtin.Proved.Correctness.Eval.PayloadOps
 
 /-!
 # Parameter Store To IR Payload Bridge
@@ -94,8 +94,10 @@ theorem evalAt_const_from_paramStore_of_getNode
       some ({ n := Spec.Shape.size s, v := v } : ConstFlat α) := by
     rw [payloadOfParamStore_const?_eq, hStore]
     rfl
-  simp [Graph.evalAt, Graph.evalNode, hNode, Graph.evalConst, hPayload, Graph.castDimScalar,
-    Bind.bind, Except.bind, Pure.pure, Except.pure]
+  have hConst :=
+    evalConst_eq_unflatten_of_const? (payloadOfParamStore (α := α) ps) id s v hPayload
+  simp [Graph.evalAt, Graph.evalNode, hNode, hConst, Bind.bind, Except.bind, Pure.pure,
+    Except.pure]
 
 /-- A `linear` node reads its weights and bias from the matching parameter-store entry. -/
 theorem evalAt_linear_from_paramStore_of_getNode
@@ -120,16 +122,8 @@ theorem evalAt_linear_from_paramStore_of_getNode
         (input := Spec.SomeTensor.ofTensor input) (vals := vals) (i := i) =
       .ok (Spec.SomeTensor.ofTensor
         (Tensor.addSpec (Spec.matVecMulSpec weight x) bias)) := by
-  have hParentShape : parent.shape = [inDim] :=
-    shape_eq_of_expectShape_eq_ok hParent
-  have hTensor : parent.cast hParentShape = x := by
-    have h := (expectShape_eq_ok parent hParentShape).symm.trans hParent
-    injection h
-  have hParentEq : parent = Spec.SomeTensor.ofTensor x := by
-    calc
-      parent = Spec.SomeTensor.ofTensor (parent.cast hParentShape) :=
-        (Spec.SomeTensor.ofTensor_cast parent hParentShape).symm
-      _ = Spec.SomeTensor.ofTensor x := congrArg Spec.SomeTensor.ofTensor hTensor
+  have hParentEq : parent = Spec.SomeTensor.ofTensor x :=
+    eq_mk_of_expectShape_eq_ok hParent
   subst parent
   have hPayload : (payloadOfParamStore (α := α) ps).linear? id =
       some ({ outDim := outDim, inDim := inDim, W := weight, b := bias } : LinearWB α) := by
@@ -139,12 +133,9 @@ theorem evalAt_linear_from_paramStore_of_getNode
       Graph.evalLinear (α := α) (payloadOfParamStore (α := α) ps) id
           (Spec.SomeTensor.mk (α := α) [inDim] x) (.dim outDim .scalar) =
         .ok (Spec.SomeTensor.mk (α := α) [outDim]
-          (Tensor.addSpec (Spec.matVecMulSpec weight x) bias)) := by
-    simp [Graph.evalLinear, hPayload, Graph.expectShape, Graph.linearLeading,
-      Shape.toList, Shape.ofList, Shape.concat,
-      Bind.bind, Except.bind, Pure.pure, Except.pure]
-    cases x
-    rfl
+          (Tensor.addSpec (Spec.matVecMulSpec weight x) bias)) :=
+    evalLinear_eq_affine_of_linear? (payloadOfParamStore (α := α) ps) id outDim inDim weight
+      bias x hPayload
   simp [Graph.evalAt, Graph.evalNode, Graph.normalizeNodeOutput, hNode,
     Graph.unaryParentId, NN.IR.unaryParent?, hParentValue, hLinear,
     Bind.bind, Except.bind, Pure.pure, Except.pure]
@@ -212,26 +203,22 @@ theorem evalAt_conv_from_paramStore_of_getNode
             (dilation := params.dilation) (paddingBefore := params.padding)
             (paddingAfter := params.paddingAfter) params.groups params.spec.kernel params.spec.bias)
           x)) := by
-  have hParentShape : parent.shape = params.input leading :=
-    shape_eq_of_expectShape_eq_ok hParent
-  have hTensor : parent.cast hParentShape = x := by
-    have h := (expectShape_eq_ok parent hParentShape).symm.trans hParent
-    injection h
-  have hTensor' : hParentShape ▸ parent.tensor = x := by
-    rw [Tensor.eqRec_eq_cast_shape]
-    exact hTensor
+  have hParentEq : parent = Spec.SomeTensor.mk (α := α) (params.input leading) x :=
+    eq_mk_of_expectShape_eq_ok hParent
+  subst hParentEq
   have hEval :
-      Graph.evalConv (α := α) (payloadOfParamStore (α := α) ps) id config parent =
+      Graph.evalConv (α := α) (payloadOfParamStore (α := α) ps) id config
+          (Spec.SomeTensor.mk (α := α) (params.input leading) x) =
         .ok (Spec.SomeTensor.ofTensor
           (Tensor.mapLeading leading
             (Spec.groupedConvSpec (α := α) (stride := params.stride)
               (dilation := params.dilation) (paddingBefore := params.padding)
               (paddingAfter := params.paddingAfter) params.groups params.spec.kernel
                 params.spec.bias)
-            x)) := by
-    simpa [hTensor'] using
-      evalConv_from_paramStore (ps := ps) (id := id) (params := params) (config := config)
-        (parent := parent) (leading := leading) hStore hConfig hInfer hLeading hParentShape
+            x)) :=
+    evalConv_from_paramStore (ps := ps) (id := id) (params := params) (config := config)
+      (parent := Spec.SomeTensor.mk (α := α) (params.input leading) x) (leading := leading)
+      hStore hConfig hInfer hLeading rfl
   simp [Graph.evalAt, Graph.evalNode, Graph.normalizeNodeOutput, hNode,
     Graph.unaryParentId, NN.IR.unaryParent?, hParentValue, hEval, ConvParams.output,
     Bind.bind, Except.bind, Pure.pure, Except.pure]

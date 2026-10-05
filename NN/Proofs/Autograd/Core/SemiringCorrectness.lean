@@ -34,8 +34,9 @@ their reverse-mode rules can be proved from algebraic identities alone. This fil
 “pure algebra” portion so it can be instantiated for exact backends (e.g. `ℚ`) without pulling in
 real-analytic structure.
 
-Ops that require extra structure (e.g. ReLU needs an order/max, MSE needs division by
-`Spec.Shape.size`) appear here only under the corresponding extra typeclass assumptions.
+Ops that require extra structure (e.g. ReLU needs an order/max, MSE needs division by the
+totalized element count `TorchLean.Tensor.meanDenominator`) appear here only under the
+corresponding extra typeclass assumptions.
 
 If you only care about real-valued training semantics, prefer
 `NN.Proofs.Autograd.Core.RealCorrectness`. If you want proofs that can be instantiated for exact
@@ -159,7 +160,7 @@ def reluCorrect {α : Type} [TorchLean.Storage α] [CommSemiring α]
   jvp := fun x dx => mulSpec dx (Activation.reluDerivSpec (α := α) (s := s) x)
   correct := by
     intro x dx δ
-    simpa [Spec.reluOp, Spec.liftElementwiseBackward, Spec.liftElementwise,
+    simpa [Spec.reluOp, Spec.liftElementwiseBackward,
       Activation.reluDerivSpec] using
         (dot_elemwise_adjoint (α := α) (s := s) (dx := dx)
           (df := Activation.reluDerivSpec (α := α) (s := s) x) (δ := δ))
@@ -186,12 +187,10 @@ def linearCorrect {α : Type} [TorchLean.Storage α] [CommSemiring α]
     calc
       dot (α := α) (matVecMulSpec m.weights dx) δ
           = dot (α := α) δ (matVecMulSpec m.weights dx) := by
-              simpa using (TensorAlgebra.dot_comm (α := α) (a := matVecMulSpec m.weights dx) (b
-                := δ))
+              exact TensorAlgebra.dot_comm _ _
       _ = dot (α := α) (vecMatMulSpec δ m.weights) dx := hadj
       _ = dot (α := α) dx (vecMatMulSpec δ m.weights) := by
-              simpa using (TensorAlgebra.dot_comm (α := α) (a := vecMatMulSpec δ m.weights) (b :=
-                dx))
+              exact TensorAlgebra.dot_comm _ _
 }
 
 /--
@@ -208,8 +207,8 @@ def scaleCorrect {α : Type} [TorchLean.Storage α] [CommSemiring α] {s : Shape
   jvp := fun _x dx => scaleSpec (α := α) (s := s) dx c
   correct := by
     intro x dx δ
-    have hL := TensorAlgebra.dot_scale_left (α := α) (s := s) (a := dx) (b := δ) (k := c)
-    have hR := TensorAlgebra.dot_scale_right (α := α) (s := s) (a := dx) (b := δ) (k := c)
+    have hL := TensorAlgebra.dot_scale_left dx δ c
+    have hR := TensorAlgebra.dot_scale_right dx δ c
     -- Both sides reduce to `dot dx δ * c`.
     simpa [VJPCorrect] using hL.trans hR.symm
 }
@@ -268,7 +267,7 @@ def mseLossCorrect {s : Shape} (target : Tensor α s) :
     set g := δ.item
     set grad := Spec.mseDerivSpec (α := α) yhat target
     have hscale :=
-      TensorAlgebra.dot_scale_right (α := α) (s := s) (a := dyhat) (b := grad) (k := g)
+      TensorAlgebra.dot_scale_right dyhat grad g
     -- LHS: ⟪⟪dyhat, grad⟫, g⟫ = (⟪dyhat, grad⟫) * g
     -- RHS: ⟪dyhat, g • grad⟫ = (⟪dyhat, grad⟫) * g
     calc

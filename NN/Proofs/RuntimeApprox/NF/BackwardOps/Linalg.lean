@@ -62,7 +62,7 @@ theorem approxTensor_unsqueezeAfterLeading {n : Nat} {s : Shape}
   intro i
   apply approxTensor_dim_of_forall heps
   intro _
-  simpa [unsqueezeAfterLeading] using (approxTensor_dim_get hx i)
+  simpa [unsqueezeAfterLeading] using (approxTensor_unstack hx i)
 
 -- ---------------------------------------------------------------------------
 -- Linear algebra reverse nodes (`mat_vec_mul_spec`, `mat_mul_spec`)
@@ -76,9 +76,8 @@ with NF error bounds layered over the primitive ops.
 -/
 def matVecMulRevNode {Γ : List Shape} {m n : Nat}
     (A : Idx Γ (.dim m (.dim n .scalar))) (v : Idx Γ (.dim n .scalar)) :
-    RevNode (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd)) Γ (.dim m .scalar) :=
-by
-  classical
+    RevNode (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd)) Γ
+      (.dim m .scalar) := by
   refine
     { toFwdNode := matVecMulNode (β := β) (fexp := fexp) (rnd := rnd) (Γ := Γ) (m := m) (n := n) A v
       vjpSpec := fun ctx δ =>
@@ -233,18 +232,10 @@ by
         (epsA := getIdxEps (Γ := Γ) (s := .dim m (.dim n .scalar)) epsCtx A) (epsV := epsδ)
         hAT hδ)
 
-  have hne : A.i ≠ v.i := by
-    intro hEq
-    -- Shapes would have to coincide.
-    have hshapeEq :
-        Shape.dim m (Shape.dim n Shape.scalar) = Shape.dim n Shape.scalar := by
-      have : Γ.get A.i = Γ.get v.i := by simp [hEq]
-      calc
-        Shape.dim m (Shape.dim n Shape.scalar) = Γ.get A.i := by simpa using A.h.symm
-        _ = Γ.get v.i := this
-        _ = Shape.dim n Shape.scalar := by simpa using v.h
-    -- Contradiction by constructor discrimination.
-    cases hshapeEq
+  -- Equal positions would force the matrix and vector shapes to coincide, but their ranks differ.
+  have hne : A.i ≠ v.i := fun hEq => by
+    have hshape := idx_shape_eq_of_i_eq (Γ := Γ) (a := A) (b := v) hEq
+    cases hshape
 
   have hctx' :=
     approxCtx_set2Idx_ne (β := β) (fexp := fexp) (rnd := rnd)
@@ -298,13 +289,11 @@ with NF error bounds layered over the primitive ops.
 -/
 def matMulRevNode {Γ : List Shape} {m n p : Nat}
     (A : Idx Γ (.dim m (.dim n .scalar))) (B : Idx Γ (.dim n (.dim p .scalar))) :
-    RevNode (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd)) Γ (.dim m (.dim p
-      .scalar)) :=
-by
-  classical
+    RevNode (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd)) Γ
+      (.dim m (.dim p .scalar)) := by
   refine
-    { toFwdNode := matMulNode (β := β) (fexp := fexp) (rnd := rnd) (Γ := Γ) (m := m) (n := n) (p :=
-      p) A B
+    { toFwdNode :=
+        matMulNode (β := β) (fexp := fexp) (rnd := rnd) (Γ := Γ) (m := m) (n := n) (p := p) A B
       vjpSpec := fun ctx δ =>
         if h : A.i = B.i then
           -- both contributions land in the same slot
@@ -369,7 +358,6 @@ by
             A epsδA B epsδB 0
       vjpSound := ?_ }
   intro ctxS ctxR epsCtx δS δR epsδ hctx hδ
-  classical
   have hA := approxCtx_getIdx (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd)) hctx
     A
   have hB := approxCtx_getIdx (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd)) hctx

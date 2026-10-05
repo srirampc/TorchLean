@@ -11,7 +11,8 @@ public import NN.API.Neural.Execution
 public import NN.API.Optim
 public import NN.Runtime.Autograd.Train
 public import NN.Spec.Models.Mlp
-public import NN.Tests.Utils
+public import NN.Tests.Runtime.Floats.Utils
+public import NN.Tests.Runtime.TypedGraphScalingRegression
 
 /-!
 # Consolidated Float Runtime Autograd Tests
@@ -302,10 +303,15 @@ def run : IO Unit := do
   match res with
   | .error msg => throw <| IO.userError s!"autograd_linear_regression_test (Float): {msg}"
   | .ok (reports, evalReport) =>
-    for report in reports do
-      Tests.Utils.assertFinite "linear regression training loss" report.loss
-    Tests.Utils.assertFinite "linear regression evaluation loss" evalReport.loss
-    IO.println "autograd_linear_regression_test (Float): OK"
+    if hReports : reports.size = 5 then
+      for report in reports do
+        Tests.Utils.assertFinite "linear regression training loss" report.loss
+      Tests.Utils.assertFinite "linear regression evaluation loss" evalReport.loss
+      unless evalReport.loss < reports[0].loss do
+        throw <| IO.userError "linear regression: training did not reduce the dataset loss"
+      IO.println "autograd_linear_regression_test (Float): OK"
+    else
+      throw <| IO.userError "linear regression: expected five training reports"
 
 end AutogradLinearRegression
 end Floats
@@ -412,7 +418,7 @@ def trainStep (parameters : Parameters) (learningRate : Float := 0.1) :
           outputBias := outputBiasStep.parameters }
       output := lossVal }
 
-/-- Run the low-level step driver and retain each loss for the finite-value checks. -/
+/-- Run the low-level step driver and retain each loss to check progress. -/
 def train (epochs : Nat) (learningRate : Float := 0.1) :
   Runtime.Autograd.Result (Array Float) := do
   let result ← Train.runSteps (m := Runtime.Autograd.Result) epochs initialParameters
@@ -422,8 +428,12 @@ def train (epochs : Nat) (learningRate : Float := 0.1) :
 def run : IO Unit := do
   match train 6 0.1 with
   | .ok losses =>
+    unless losses.size == 6 do
+      throw <| IO.userError "MLP training: expected six losses"
     for loss in losses do
       Tests.Utils.assertFinite "MLP training loss" loss
+    unless losses[5]! < losses[0]! do
+      throw <| IO.userError "MLP training: SGD did not reduce the loss"
     IO.println "autograd_train_test (Float): OK"
   | .error msg => throw <| IO.userError s!"autograd_train_test (Float): {msg}"
 
@@ -432,7 +442,7 @@ end Floats
 end Tests
 
 /-!
-CPU LayerNorm tape execution, including lookup and finite-value checks for all three gradients.
+CPU LayerNorm tape execution, including analytic checks for all three gradients.
 -/
 
 open Spec TorchLean
@@ -495,6 +505,20 @@ def run : IO Unit := do
       Tests.Utils.assertFinite "LayerNorm scale gradient" value
     for value in Tensor.to dBeta (Array Float) do
       Tests.Utils.assertFinite "LayerNorm bias gradient" value
+    -- Both rows have centered coordinates [-0.1, 0, 0.1] and variance 1/150.
+    -- For the summed output, dx_i = (gamma_i - mean gamma
+    --   - centered_i * mean(gamma * centered) / (variance + epsilon)) / stddev.
+    let variance : Float := 1 / 150 + TorchLean.normalizationEpsilon
+    let stddev := Float.sqrt variance
+    let first := (0.1 / 300 / variance) / stddev
+    let middle := -0.1 / stddev
+    let last := (0.1 - 0.1 / 300 / variance) / stddev
+    Utils.assertArrayApprox "LayerNorm input gradient"
+      (Tensor.to dX (Array Float)) #[first, middle, last, first, middle, last] 1e-10
+    Utils.assertArrayApprox "LayerNorm scale gradient"
+      (Tensor.to dGamma (Array Float)) #[-0.2 / stddev, 0, 0.2 / stddev] 1e-10
+    Utils.assertArrayApprox "LayerNorm bias gradient" (Tensor.to dBeta (Array Float)) #[2, 2, 2] 0
+    Tests.Utils.assertApprox "LayerNorm summed output" loss (0.02 / stddev) 1e-10
     IO.println "autograd_layernorm_test (Float): OK"
 
 end AutogradLayerNorm
@@ -502,7 +526,7 @@ end Floats
 end Tests
 
 /-!
-CPU convolution tape execution with two spatial axes and finite kernel/bias gradients.
+CPU convolution tape execution with exact kernel/bias gradients for one two-dimensional window.
 -/
 
 open Spec TorchLean
@@ -522,10 +546,6 @@ abbrev stride := 1
 abbrev padding := 0
 abbrev inH := 2
 abbrev inW := 2
-
-theorem h1 : inC ≠ 0 := by decide
-theorem h2 : kH ≠ 0 := by decide
-theorem h3 : kW ≠ 0 := by decide
 
 def outH : Nat := Spec.Shape.slidingWindowOutDim inH kH stride padding
 def outW : Nat := Spec.Shape.slidingWindowOutDim inW kW stride padding
@@ -570,6 +590,10 @@ def run : IO Unit := do
       Tests.Utils.assertFinite "convolution kernel gradient" value
     for value in Tensor.to dB (Array Float) do
       Tests.Utils.assertFinite "convolution bias gradient" value
+    -- A single unpadded window gives dK = input and dB = 1 for the summed output.
+    Utils.assertArrayApprox "convolution kernel gradient" (Tensor.to dK (Array Float))
+      #[1, 2, 3, 4] 0
+    Utils.assertArrayApprox "convolution bias gradient" (Tensor.to dB (Array Float)) #[1] 0
     IO.println "autograd_conv_test (Float): OK"
 
 end AutogradConv
@@ -824,7 +848,122 @@ def checkSparseAdamSteps : Runtime.Autograd.Result Bool := do
       secondStep.optimizerState.parameterStepCount? 0 == some 1 &&
       secondStep.optimizerState.parameterStepCount? 1 == some 1 &&
       restored.parameterStepCount? 0 == some 1 &&
-      restored.parameterStepCount? 1 == some 1
+      restored.parameterStepCount? 1 == some 1 &&
+      restored.parameterGroups.any (fun group =>
+        (group.adamPowers.get? 0).map (·.1) == some 1 &&
+          (group.adamPowers.get? 1).map (·.1) == some 1)
+
+/-- Cached powers retain the native Float recurrence's bits across a long sequence of updates. -/
+def checkAdamPowerRecurrence : Bool := Id.run do
+  let beta1 : Float := 0.9999
+  let beta2 : Float := 0.99999
+  let mut powers : Σ stepCount, Optim.AdamPowers beta1 beta2 stepCount :=
+    ⟨0, Optim.AdamPowers.compute beta1 beta2 0⟩
+  for step in [:20000] do
+    powers := ⟨powers.1 + 1, powers.2.advance⟩
+    if step == 0 || step == 15 || step == 127 || step == 1023 || step == 19999 then
+      if powers.2.first.toBits != (Optim.scalarPowNat beta1 powers.1).toBits ||
+          powers.2.second.toBits != (Optim.scalarPowNat beta2 powers.1).toBits then
+        return false
+  return true
+
+/-- Changing only a beta's dual tangent must rebuild its bias-correction powers. -/
+def checkAdamDualCoefficientChange : Bool :=
+  let beta : Model.Dual Float := ⟨0.9, 0.0⟩
+  let betaWithTangent : Model.Dual Float := ⟨0.9, 1.0⟩
+  let group : Train.ParameterGroup (Model.Dual Float) :=
+    { parameterIds := #[0], learningRate := ⟨0.01, 0.0⟩, beta1 := beta }
+  let cachedPowers :=
+    group.adamPowers.insert 0 ⟨5, Optim.AdamPowers.compute group.beta1 group.beta2 5⟩
+  let cached := { group with adamPowers := cachedPowers }
+  let changed := { cached with beta1 := betaWithTangent, adamPowers := ∅ }
+  let powers := Train.Optimizer.Internal.adamPowers changed 0 5
+  let expected := Optim.scalarPowNat betaWithTangent 5
+  beta == betaWithTangent &&
+    powers.first.re.toBits == expected.re.toBits &&
+    powers.first.du.toBits == expected.du.toBits &&
+    powers.first.du != 0.0
+
+/-- Compare Adam moments and counters without relying on scalar Boolean equality. -/
+def sameAdamBuffers (first second : Train.OptimizerState Float) (id : Nat) : Bool :=
+  match first.parameterStates.get? id, second.parameterStates.get? id with
+  | none, none => true
+  | some ⟨s₁, .adam t₁ m₁ v₁⟩, some ⟨s₂, .adam t₂ m₂ v₂⟩ =>
+      if h₁ : s₁ = .scalar then
+        if h₂ : s₂ = .scalar then
+          t₁ == t₂ &&
+            (Tensor.castShape m₁ h₁).item.toBits == (Tensor.castShape m₂ h₂).item.toBits &&
+            (Tensor.castShape v₁ h₁).item.toBits == (Tensor.castShape v₂ h₂).item.toBits
+        else false
+      else false
+  | _, _ => false
+
+/--
+Cached Adam/AdamW agree bit for bit with reconstructed powers after sparse updates, snapshots,
+coefficient changes, and a restored parameter-local counter.
+-/
+def checkAdamCacheLifecycle (algorithm : Train.OptimizerAlgorithm) :
+    Runtime.Autograd.Result Bool := do
+  let mut optimizerState : Train.OptimizerState Float :=
+    { algorithm := algorithm
+      parameterGroups :=
+        #[{ parameterIds := #[0, 1]
+            learningRate := 0.01
+            weightDecay := 0.02
+            beta1 := 0.9
+            beta2 := 0.999
+            epsilon := 1e-8 }] }
+  let mut parameters : Train.ParameterTable Float :=
+    #[scalarParameter 0 1.0, scalarParameter 1 (-0.5)]
+  for step in [:64] do
+    if step == 8 then
+      let some group := optimizerState.parameterGroups[0]?
+        | return false
+      let nextGroup := { group with learningRate := 0.005 }
+      if group.adamPowers.size == 0 || nextGroup.adamPowers.size != group.adamPowers.size then
+        return false
+      optimizerState := { optimizerState with parameterGroups := #[nextGroup] }
+    if step == 16 then
+      optimizerState := Train.OptimizerState.restore optimizerState.snapshot
+    if step == 24 then
+      optimizerState := { optimizerState with
+        parameterGroups := optimizerState.parameterGroups.map fun group =>
+          { group with beta1 := 0.8, beta2 := 0.99, adamPowers := ∅ } }
+    if step == 32 || step == 40 then
+      if let some ⟨shape, .adam _ firstMoment secondMoment⟩ :=
+          optimizerState.parameterStates.get? 0 then
+        optimizerState := { optimizerState with
+          parameterStates := optimizerState.parameterStates.insert 0
+            ⟨shape, .adam (if step == 32 then 7 else 53) firstMoment secondMoment⟩ }
+    if step == 48 then
+      let some group := optimizerState.parameterGroups[0]?
+        | return false
+      optimizerState := { optimizerState with parameterGroups :=
+        #[{ group with parameterIds := #[1] },
+          { group with parameterIds := #[0], beta1 := 0.7, adamPowers := ∅ }] }
+    let gradient := scalarGradient (step % 2) (if step % 3 == 0 then -0.25 else 0.5)
+    let referenceState := { optimizerState with
+      parameterGroups := optimizerState.parameterGroups.map fun group =>
+        { group with adamPowers := ∅ } }
+    let reference ← Train.Optimizer.step referenceState parameters gradient
+    let cached ← Train.Optimizer.step optimizerState parameters gradient
+    let updatedId := step % 2
+    let some group := cached.optimizerState.parameterGroups.find?
+        (fun group => group.parameterIds.contains updatedId)
+      | return false
+    let some ⟨cachedStep, _⟩ := group.adamPowers.get? updatedId
+      | return false
+    if cached.optimizerState.parameterStepCount? updatedId != some cachedStep then
+      return false
+    for id in [:2] do
+      let expected ← scalarParameterValue "Adam reconstructed powers" reference.parameters id
+      let actual ← scalarParameterValue "Adam cached powers" cached.parameters id
+      if actual.toBits != expected.toBits ||
+          !sameAdamBuffers cached.optimizerState reference.optimizerState id then
+        return false
+    optimizerState := cached.optimizerState
+    parameters := cached.parameters
+  pure true
 
 /-- Momentum dampening does not scale the first buffer, matching the standard SGD convention. -/
 def checkMomentumInitialization : Runtime.Autograd.Result Bool := do
@@ -853,6 +992,42 @@ def checkAdadeltaAccumulator : Bool :=
   close result.optimizerState.squaredUpdateAverage.item 0.8 &&
     close result.parameters.item (10.0 - 1.0 / Float.sqrt 5.0)
 
+open TorchLean.Tensor in
+/-- The compiled single-pass adaptive learning rate matches the reference tensor expression bit for
+bit, including the clamp of negative denominators to zero. -/
+def checkAdaptiveLearningRateFastPath : Bool :=
+  let denominator : Tensor Float [6] := [0.0, -4.0, 1e-12, 0.25, 3.0, 1e20]
+  let learningRate : Float := 0.001
+  let epsilon : Float := 1e-8
+  let fast := Optim.adaptiveLearningRate learningRate epsilon denominator
+  let reference :=
+    divSpec (Tensor.full [6] learningRate)
+      (addSpec (sqrtSpec denominator) (Tensor.full [6] epsilon))
+  (List.finRange 6).all fun i =>
+    (fast.getScalar i).toBits == (reference.getScalar i).toBits
+
+open TorchLean.Tensor in
+/-- Adadelta's fused RMS terms match the reference `sqrt (average + epsilon)` expression. -/
+def checkAdadeltaFastPath : Bool :=
+  let parameters : Tensor Float [3] := [1.0, -2.0, 0.5]
+  let gradients : Tensor Float [3] := [0.3, -0.7, 0.0]
+  let initial := Optim.Adadelta.init 1.0 0.9 1e-6 parameters
+  let first := Optim.Adadelta.update initial parameters gradients
+  let state := first.optimizerState
+  let result := Optim.Adadelta.update state first.parameters gradients
+  let epsilon := Tensor.full [3] state.epsilon
+  let nextAverage :=
+    addSpec (scaleSpec state.squaredGradientAverage state.rho)
+      (scaleSpec (squareSpec gradients) (1 - state.rho))
+  let ratio :=
+    divSpec (sqrtSpec (addSpec state.squaredUpdateAverage epsilon))
+      (sqrtSpec (addSpec nextAverage epsilon))
+  let reference :=
+    subSpec first.parameters
+      (scaleSpec (mulSpec ratio gradients) state.learningRate)
+  (List.finRange 3).all fun i =>
+    (result.parameters.getScalar i).toBits == (reference.getScalar i).toBits
+
 /-- Warmup-cosine decay remains at zero after its finite schedule has ended. -/
 def checkWarmupCosineStops : Bool :=
   let base : Optim.Scheduler.WarmupCosine Float :=
@@ -861,17 +1036,21 @@ def checkWarmupCosineStops : Bool :=
   let afterEnd := { base with currentStep := 20 }
   atEnd.current == 0.0 && afterEnd.current == 0.0
 
+/-- Native one-cycle ends at `initial_lr / final_div_factor`, PyTorch's `OneCycleLR` endpoint. -/
+def checkOneCycleEndpoints : Bool :=
+  let base : Optim.Scheduler.OneCycle Float :=
+    Optim.Scheduler.OneCycle.create 1.0 10 25.0 0.3 1.0e4
+  let finished := { base with currentStep := 10 }
+  base.current == 1.0 / 25.0 && finished.current == (1.0 / 25.0) / 1.0e4
+
 /-- Public optimizer configurations reject domains that make their updates undefined. -/
 def checkPublicOptimizerValidation : Bool :=
-  let rejected : Except String Unit -> Bool
-    | .error _ => true
-    | .ok () => false
   (TorchLean.optim.adam { learningRate := 1e-3 }).validate.isOk &&
-    rejected (TorchLean.optim.adam { learningRate := 1e-3, beta1 := 1.0 }).validate &&
-    rejected (TorchLean.optim.adamW { learningRate := 1e-3, weightDecay := -0.1 }).validate &&
-    rejected (TorchLean.optim.rmsProp { learningRate := 1e-3, epsilon := 0.0 }).validate &&
-    rejected (TorchLean.optim.sgd
-      { learningRate := 0.1, momentum := Float.ofBits 0x7ff8000000000000 }).validate
+    (!(TorchLean.optim.adam { learningRate := 1e-3, beta1 := 1.0 }).validate.isOk) &&
+    (!(TorchLean.optim.adamW { learningRate := 1e-3, weightDecay := -0.1 }).validate.isOk) &&
+    (!(TorchLean.optim.rmsProp { learningRate := 1e-3, epsilon := 0.0 }).validate.isOk) &&
+    (!(TorchLean.optim.sgd
+      { learningRate := 0.1, momentum := Float.ofBits 0x7ff8000000000000 }).validate.isOk)
 
 /-- Run the optimizer and scheduler edge-case regressions. -/
 def run : IO Unit := do
@@ -879,14 +1058,29 @@ def run : IO Unit := do
   | .error msg => throw <| IO.userError s!"optimizer numerics (sparse Adam): {msg}"
   | .ok false => throw <| IO.userError "optimizer numerics (sparse Adam): FAILED"
   | .ok true => pure ()
+  unless checkAdamPowerRecurrence do
+    throw <| IO.userError "optimizer numerics (Adam power recurrence): FAILED"
+  unless checkAdamDualCoefficientChange do
+    throw <| IO.userError "optimizer numerics (Adam dual coefficient change): FAILED"
+  for algorithm in [Train.OptimizerAlgorithm.adam, .adamw] do
+    match checkAdamCacheLifecycle algorithm with
+    | .error msg => throw <| IO.userError s!"optimizer numerics (Adam power cache): {msg}"
+    | .ok false => throw <| IO.userError "optimizer numerics (Adam power cache): FAILED"
+    | .ok true => pure ()
   match checkMomentumInitialization with
   | .error msg => throw <| IO.userError s!"optimizer numerics (momentum): {msg}"
   | .ok false => throw <| IO.userError "optimizer numerics (momentum): FAILED"
   | .ok true => pure ()
   unless checkAdadeltaAccumulator do
     throw <| IO.userError "optimizer numerics (Adadelta accumulator): FAILED"
+  unless checkAdaptiveLearningRateFastPath do
+    throw <| IO.userError "optimizer numerics (adaptive learning-rate fast path): FAILED"
+  unless checkAdadeltaFastPath do
+    throw <| IO.userError "optimizer numerics (Adadelta fast path): FAILED"
   unless checkWarmupCosineStops do
     throw <| IO.userError "optimizer numerics (warmup cosine): FAILED"
+  unless checkOneCycleEndpoints do
+    throw <| IO.userError "optimizer numerics (one-cycle endpoints): FAILED"
   unless checkPublicOptimizerValidation do
     throw <| IO.userError "optimizer configuration validation: FAILED"
   IO.println "optimizer and scheduler edge cases (Float): OK"
@@ -909,6 +1103,7 @@ def runAllAutogradTests : IO Unit := do
   TypedGraphOutputReference.run
   TypedGraphSmoothMaxDomain.run
   DisconnectedDenseGradient.run
+  TypedGraphScalingRegression.run
   OptimizerNumerics.run
   IO.println "=== Autograd test suite completed ==="
 

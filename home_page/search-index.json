@@ -16,8 +16,8 @@ layout: null
   },
   {
     "title": "Getting Started",
-    "url": "{{ '/blueprint/Introduction/' | relative_url }}",
-    "section": "Guide",
+    "url": "{{ '/start/' | relative_url }}",
+    "section": "Getting started",
     "text": "install start introduction Lean models tensors examples first workflow"
   },
   {
@@ -36,19 +36,19 @@ layout: null
     "title": "GPU and CUDA Boundaries",
     "url": "{{ '/blueprint/Floating-Point-and-Native-Boundaries/From-A-Tensor-Operation-To-A-GPU-Kernel/' | relative_url }}",
     "section": "Guide",
-    "text": "CUDA GPU kernels native runtime trust boundary fast kernels memcheck device buffers"
+    "text": "CUDA GPU LibTorch ATen numerical primitives Lean attention native runtime trust boundary memcheck device buffers"
   },
   {
     "title": "Backend Selection and Trust",
     "url": "{{ '/blueprint/Runtime___-Autograd___-and-Interop/Choosing-How-A-Model-Runs/' | relative_url }}",
     "section": "Guide",
-    "text": "backend eager typed graph lowering CUDA ATen PyTorch runtime provider tape backward trust boundary"
+    "text": "backend eager typed graph lowering CUDA LibTorch ATen PyTorch runtime provider tape backward trust boundary"
   },
   {
     "title": "Floating-Point Semantics",
     "url": "{{ '/blueprint/Floating-Point-and-Native-Boundaries/Floating-Point-Semantics/' | relative_url }}",
     "section": "Guide",
-    "text": "FP32 IEEE floating point real semantics rounding runtime approximation"
+    "text": "FloatLib FP32 binary32 binary128 configurable IEEE floating point formats real semantics rounding runtime approximation"
   },
   {
     "title": "Optimization Theory",
@@ -102,7 +102,7 @@ layout: null
     "title": "CUDA Notes",
     "url": "{{ '/cuda/' | relative_url }}",
     "section": "Runtime",
-    "text": "CUDA build flags kernels fast kernels native backend tests sanitizer profiling"
+    "text": "CUDA LibTorch ATen build flags native backend tests sanitizer deterministic execution"
   },
   {
     "title": "Dependency Graphs",

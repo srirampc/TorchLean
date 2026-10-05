@@ -271,7 +271,12 @@ namespace LexicalWhitespace
 def transformation : LexicalWhitespace where
   isWhitespace := fun char => char == ' '
 
-/-- Packing uses Python's whitespace splitting behavior. -/
+/--
+Packing accepts spaces, tabs, carriage returns, and newlines.
+
+This is Lean's `Char.isWhitespace` predicate; other Python whitespace
+characters, such as nonbreaking space, are not separators.
+-/
 def general : LexicalWhitespace where
   isWhitespace := Char.isWhitespace
 
@@ -507,8 +512,8 @@ private theorem lexChars_word_append (policy : IdentifierPolicy)
 /--
 A nonempty string consisting entirely of word characters lexes as one word.
 
-This is the compositional lexer fact used by canonical pattern rendering;
-identifier and decimal validation remain the parser's responsibility.
+The result records the exact source span; identifier and decimal validation
+remain the parser's responsibility.
 -/
 theorem lex_word (policy : IdentifierPolicy)
     (whitespace : LexicalWhitespace) (text : String)

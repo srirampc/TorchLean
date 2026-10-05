@@ -24,6 +24,7 @@ namespace Autograd
 namespace Model
 
 open Spec TorchLean
+open Runtime.Autograd.Torch.Internal (EagerSession)
 open TorchLean TorchLean.Tensor
 
 namespace Session
@@ -95,7 +96,7 @@ tape size / node index). So even with the same `RngState`, changing the surround
 can change the exact samples. This is still fully deterministic for a fixed graph.
 
 In evaluation mode (`train=false`) and at `p = 0`, this is the identity. At `p = 1`, training
-returns zero. Other values must satisfy $0 < p < 1$.
+scales by zero, so non-finite inputs can still produce NaN. Other values must satisfy $0 < p < 1$.
 -/
 def dropout {α : Type} [TorchLean.Storage α] [Context α]
     [Runtime.Autograd.Torch.TensorTransfer α]
@@ -128,21 +129,13 @@ def dropout {α : Type} [TorchLean.Storage α] [Context α]
       let maskRef ←
         match s.state with
         | .eager sess =>
-            Runtime.Autograd.Torch.Internal.EagerSession.bernoulliMask (α := α) sess.inner
+            Runtime.Autograd.Torch.Internal.EagerSession.bernoulliMask (α := α) sess
               (sh := sh) keepProbRef opSeed
         | .typedGraph sess =>
-            Runtime.Autograd.Torch.Internal.TypedGraphSession.commitGraphM (α := α) sess
-              (β := Runtime.Autograd.Torch.TensorRef α sh)
-              (refs := #[keepProbRef.identity?]) (fun {Γ} {ss} xv nat g => do
-                let (v, st') ← Runtime.Autograd.Torch.Internal.TypedGraphSession.runGraphM (α := α)
-                  (Γ := Γ)
-                  (Runtime.Autograd.TypedGraph.GraphM.bernoulliMask (α := α) (Γ := Γ) (s := sh)
-                    { id := keepProbRef.id } (seed := opSeed))
-                  ss g
-                let ⟨ss', g'⟩ := st'
-                let st1 : Runtime.Autograd.Torch.Internal.TypedGraphSessionState α :=
-                  { Γ := Γ, x := xv, nat := nat, ss := ss', g := g' }
-                pure ({ id := v.id }, st1))
+            Runtime.Autograd.Torch.Internal.TypedGraphSession.recordGraphM (α := α) sess
+              (refs := #[keepProbRef.identity?]) (fun {Γ} =>
+                Runtime.Autograd.TypedGraph.GraphM.bernoulliMask (α := α) (Γ := Γ) (s := sh)
+                  { id := keepProbRef.id } (seed := opSeed))
 
       let y ← mul (α := α) s (sh := sh) x maskRef
       let invKeep : α := (1 : α) / keepProb
@@ -222,16 +215,16 @@ def matmul {α : Type} [TorchLean.Storage α] (s : Session α) [Context α]
 
 /-- Concatenate along the outermost dimension (dimension 0) (dispatches to eager vs typed graph
   backend). -/
-def concatLeadingAxis {α : Type} [TorchLean.Storage α] (s : Session α)
+def concat {α : Type} [TorchLean.Storage α] (s : Session α)
     [Context α]
   {n m : Nat} {sh : Shape}
   (a : Runtime.Autograd.Torch.TensorRef α (.dim n sh))
   (b : Runtime.Autograd.Torch.TensorRef α (.dim m sh)) :
   IO (Runtime.Autograd.Torch.TensorRef α (.dim (n + m) sh)) := do
   match s.state with
-  | .eager sess => EagerSession.concatLeadingAxis (α := α) sess (n := n) (m := m) (sh := sh) a b
+  | .eager sess => EagerSession.concat (α := α) sess (n := n) (m := m) (sh := sh) a b
   | .typedGraph sess =>
-      Runtime.Autograd.Torch.Internal.TypedGraphSession.concatLeadingAxis (α := α) sess
+      Runtime.Autograd.Torch.Internal.TypedGraphSession.concat (α := α) sess
         (n := n) (m := m) (sh := sh) a b
 
 /--
@@ -239,7 +232,7 @@ Slice a contiguous `[start, start+len)` range from dimension 0.
 
 PyTorch analogy: `x[start:start+len]` for the first dimension.
 -/
-def sliceLeadingAxisRange {α : Type} [TorchLean.Storage α] (s : Session α)
+def slice {α : Type} [TorchLean.Storage α] (s : Session α)
     [Zero α]
   {n : Nat} {sh : Shape}
   (x : Runtime.Autograd.Torch.TensorRef α (.dim n sh)) (start len : Nat) (h : start + len ≤
@@ -247,9 +240,9 @@ def sliceLeadingAxisRange {α : Type} [TorchLean.Storage α] (s : Session α)
   IO (Runtime.Autograd.Torch.TensorRef α (.dim len sh)) := do
   match s.state with
   | .eager sess =>
-      EagerSession.sliceLeadingAxisRange (α := α) sess (n := n) (sh := sh) x start len h
+      EagerSession.slice (α := α) sess (n := n) (sh := sh) x start len h
   | .typedGraph sess =>
-      Runtime.Autograd.Torch.Internal.TypedGraphSession.sliceLeadingAxisRange (α := α) sess
+      Runtime.Autograd.Torch.Internal.TypedGraphSession.slice (α := α) sess
         (n := n) (sh := sh) x start len h
 
 /-- Apply max pooling over an arbitrary number of spatial axes. -/
@@ -264,7 +257,7 @@ def maxPool {α : Type} [TorchLean.Storage α] (s : Session α) [Context α]
   match s.state with
   | .eager session =>
       EagerSession.maxPool (α := α) session
-        (d := d) (channels := channels) (spatial := spatial)
+        (d := d) (C := channels) (inSpatial := spatial)
         (kernel := kernel) (stride := stride) (padding := padding) x
   | .typedGraph session =>
       Runtime.Autograd.Torch.Internal.TypedGraphSession.maxPool (α := α) session
@@ -284,7 +277,7 @@ def smoothMaxPool {α : Type} [TorchLean.Storage α] (s : Session α) [Context �
   match s.state with
   | .eager session =>
       EagerSession.smoothMaxPool (α := α) session
-        (d := d) (channels := channels) (spatial := spatial)
+        (d := d) (C := channels) (inSpatial := spatial)
         (kernel := kernel) (stride := stride) (padding := padding) x beta
   | .typedGraph session =>
       Runtime.Autograd.Torch.Internal.TypedGraphSession.smoothMaxPool (α := α) session
@@ -303,7 +296,7 @@ def avgPool {α : Type} [TorchLean.Storage α] (s : Session α) [Context α]
   match s.state with
   | .eager session =>
       EagerSession.avgPool (α := α) session
-        (d := d) (channels := channels) (spatial := spatial)
+        (d := d) (C := channels) (inSpatial := spatial)
         (kernel := kernel) (stride := stride) (padding := padding) x
   | .typedGraph session =>
       Runtime.Autograd.Torch.Internal.TypedGraphSession.avgPool (α := α) session

@@ -79,19 +79,13 @@ theorem weightedTwoTerm_mono_weight
     (hw : w₁ ≤ w₂) (hreg : 0 ≤ terms.regularizer) :
     weightedTwoTerm w₁ terms ≤ weightedTwoTerm w₂ terms := by
   unfold weightedTwoTerm
-  simp
-  exact mul_le_mul_of_nonneg_right hw hreg
+  exact add_le_add le_rfl (mul_le_mul_of_nonneg_right hw hreg)
 
 /-- A weighted three-term objective collapses to $\mathrm{base}+\mathrm{middle}$ when the
 regularizer is zero. -/
 @[simp] theorem weightedThreeTerm_zero_regularizer (weight base middle : ℝ) :
     weightedThreeTerm weight { base := base, middle := middle, regularizer := 0 } =
       base + middle := by
-  simp [weightedThreeTerm]
-
-/-- A weighted three-term objective collapses to `base` when both auxiliary terms are zero. -/
-@[simp] theorem weightedThreeTerm_zero_middle_zero_regularizer (weight base : ℝ) :
-    weightedThreeTerm weight { base := base, middle := 0, regularizer := 0 } = base := by
   simp [weightedThreeTerm]
 
 /-- At weight zero, a weighted three-term objective keeps only its base and middle terms. -/
@@ -110,7 +104,6 @@ theorem weightedThreeTerm_mono_weight
     (hw : w₁ ≤ w₂) (hreg : 0 ≤ terms.regularizer) :
     weightedThreeTerm w₁ terms ≤ weightedThreeTerm w₂ terms := by
   unfold weightedThreeTerm
-  simp
-  exact mul_le_mul_of_nonneg_right hw hreg
+  exact add_le_add le_rfl (mul_le_mul_of_nonneg_right hw hreg)
 
 end NN.MLTheory.Generative.Latent.Objective

@@ -3,7 +3,7 @@
 Run the bundled example from the repository root:
 
 ```bash
-lake exe verify -- spline-cert
+scripts/lake.sh exe verify -- spline-cert
 ```
 
 No Julia installation or trained model is needed. `piecewise_linear_cert.json` describes three

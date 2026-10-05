@@ -33,8 +33,8 @@ Recommended runs:
 - lower `--lr` if the reported forecast error increases.
 
 ```bash
-lake -R -K cuda=true exe torchlean lstm_regression --device cuda --steps 1 --windows 1
-lake -R -K cuda=true exe torchlean lstm_regression --device cuda --steps 200 --windows 96
+scripts/lake.sh -Kcuda=true exe torchlean lstm_regression --device cuda --steps 1 --windows 1
+scripts/lake.sh -Kcuda=true exe torchlean lstm_regression --device cuda --steps 200 --windows 96
 ```
 
 Dataset citation: Hebrail and Berard, "Individual Household Electric Power Consumption", UCI Machine
@@ -47,7 +47,7 @@ open TorchLean
 
 namespace NN.Examples.Models.Supervised.LstmRegression
 
-/-- Runner subcommand: `lake exe torchlean lstm_regression ...`. -/
+/-- Runner subcommand: `scripts/lake.sh exe torchlean lstm_regression ...`. -/
 def exeName : String := "lstm_regression"
 
 /--
@@ -78,7 +78,7 @@ feature is the next power-consumption prediction at each time step.
 abbrev modelConfig : nn.models.Recurrent.Config :=
   { sequenceLength := sequenceLength
     inputWidth := featureCount
-    hiddenWidth := hiddenWidth
+    hiddenWidths := [hiddenWidth]
     outputWidth := outputWidth }
 
 /-- Input shape: one scalar observation at each timestep. -/
@@ -123,10 +123,6 @@ def loadReportSamples (xPath yPath : System.FilePath) (windows : Nat) :
     simpa [input, output, modelConfig, source,
       Data.SupervisedSource.fromFiles] using samples.toArray
 
-/-- Read `t[row,0]` from a forecast tensor. -/
-def readSeriesAt (t : Tensor Float output) (row : Fin sequenceLength) : Float :=
-  t (row, ⟨0, by decide⟩, PUnit.unit)
-
 /--
 Render the first few target values for one forecast window.
 -/
@@ -135,10 +131,10 @@ def targetSummary (sample : Sample.Supervised Float input output) : String :=
     (List.finRange (Nat.min sequenceLength 8)).map (fun i =>
       let row : Fin sequenceLength :=
         ⟨i.val, Nat.lt_of_lt_of_le i.isLt (Nat.min_le_left sequenceLength 8)⟩
-      s!"t+{i.val + 1}={readSeriesAt sample.target row}")
+      s!"t+{i.val + 1}={sample.target (row, ⟨0, by decide⟩, PUnit.unit)}")
 
 /-- Public trainer probe for a deterministic forecast window. -/
-def probeOfSample
+def probe
     (sample : Sample.Supervised Float input output)
     (index : Nat) :
     Trainer.Probe input :=
@@ -148,16 +144,10 @@ def probeOfSample
     (inputText := s!"report_index={index}")
     (expected := some (targetSummary sample))
 
-/-
-LSTM regression uses the same public training recipe as the other supervised examples:
-
-1. name the model;
-2. name the dataset;
-3. choose persistent runtime settings;
-4. choose per-training options; and
-5. call the configured public trainer session.
--/
-def trainForecast (runtime : Runtime.Config) (flags : RealData.HouseholdPowerModelTrainFlags) := do
+/-- Train on the prepared windows and report predictions for one selected window. -/
+def train (runtime : Runtime.Config)
+    (flags : Support.Training.Options Support.Forecast.Options) :
+    IO (Trainer.Result input output) := do
   Data.requirePairedFiles exeName
     "household-power inputs" flags.data.xPath
     "household-power targets" flags.data.yPath
@@ -174,31 +164,32 @@ def trainForecast (runtime : Runtime.Config) (flags : RealData.HouseholdPowerMod
     match samples[probeIndex]? with
     | some sample => pure sample
     | none => throw <| IO.userError s!"{exeName}: no training windows loaded"
-  let probe := probeOfSample probeSample probeIndex
+  let reportProbe := probe probeSample probeIndex
   let trainer :=
     Trainer.new model <|
       Trainer.RunConfig.forObjective
         (Trainer.RunConfig.fromRuntime runtime
           { optimizer := optim.adam { learningRate := flags.training.learningRate } })
-        .meanSquaredError
+        .mse
         (seed := flags.data.seed)
   trainer.train
     (Data.fromSamples samples)
     (flags.training.trainOptions
       (logTitle := "LSTM seasonal regression")
-      (logNotes := Support.ForecastWindowDataFlags.trainLogNotes flags.data ++
+      (logNotes := Support.Forecast.Options.logNotes flags.data ++
         #[s!"lr={flags.training.learningRate}",
           s!"cuda_mem_watch={flags.training.cudaMemorySampleEvery}",
           "task=next-step household power forecasting"] ++
         dataTags flags.data.xPath flags.data.yPath))
-    #[probe]
+    #[reportProbe]
 
 /-- Executable entrypoint for CPU/CUDA Float training. -/
 def main (args : List String) : IO UInt32 :=
-  TrainCommand.forecastWindow exeName args
+  TrainCommand.forecast exeName args
     (fun rest =>
-      RealData.HouseholdPowerModelTrainFlags.parse exeName rest defaultLogPath 100 0.01 512 96)
-    (Support.bannerWithDevice exeName "LSTM time-series regression")
-    trainForecast
+      Support.Training.Options.parse exeName rest defaultLogPath 100 0.01
+        (parseData := fun args => RealData.Forecast.Options.parse exeName args 512 96))
+    (Support.banner exeName "LSTM time-series regression")
+    train (fun result => result.printSummary)
 
 end NN.Examples.Models.Supervised.LstmRegression

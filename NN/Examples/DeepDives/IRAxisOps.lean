@@ -28,7 +28,7 @@ cases explicitly.
 
 Run:
 
-`lake exe torchlean ir_axis_ops --execution eager`
+`scripts/lake.sh exe torchlean ir_axis_ops --execution eager`
 -/
 
 @[expose] public section
@@ -46,12 +46,12 @@ def usage : String :=
     [ "TorchLean IR axis-ops tutorial"
     , ""
     , "Usage:"
-    , "  lake exe torchlean ir_axis_ops [options]"
+    , "  scripts/lake.sh exe torchlean ir_axis_ops [options]"
     , ""
     , "Options:"
     , "  --arithmetic native|ieee|complex"
     , "  --execution eager|typed-graph"
-    , "  --device auto|cpu|cuda|rocm|metal|wasm|tpu|trainium|custom|external"
+    , "  --device auto|cpu|gpu|cuda|rocm|metal|wasm|tpu|trainium|custom|external"
     , "  --show-backend                    print backend capsules as they execute"
     ]
 

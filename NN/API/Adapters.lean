@@ -48,7 +48,7 @@ def weightUpdate {α : Type} [TorchLean.Storage α] [Add α] [Mul α] [Zero α]
   Tensor.scale (Tensor.matmul parameters.inputFactor parameters.outputFactor) scale
 
 /-- Add a LoRA update to a base linear weight. -/
-def effectiveWeight {α : Type} [TorchLean.Storage α] [Add α] [Mul α] [Sub α] [Zero α]
+def effectiveWeight {α : Type} [TorchLean.Storage α] [Add α] [Mul α] [Zero α]
     {inputWidth rank outputWidth : Nat}
     (baseWeight : Tensor α [inputWidth, outputWidth])
     (parameters : Parameters α inputWidth rank outputWidth) (scale : α) :
@@ -56,7 +56,7 @@ def effectiveWeight {α : Type} [TorchLean.Storage α] [Add α] [Mul α] [Sub α
   Tensor.add baseWeight (weightUpdate parameters scale)
 
 /-- Apply a linear map whose weight is augmented by a LoRA update over an arbitrary batch shape. -/
-def linear {α : Type} [TorchLean.Storage α] [Add α] [Mul α] [Sub α] [Zero α]
+def linear {α : Type} [TorchLean.Storage α] [Add α] [Mul α] [Zero α]
     {batchShape : Shape} {inputWidth rank outputWidth : Nat}
     (input : Tensor α (batchShape.appendDim inputWidth))
     (baseWeight : Tensor α [inputWidth, outputWidth])
@@ -64,10 +64,10 @@ def linear {α : Type} [TorchLean.Storage α] [Add α] [Mul α] [Sub α] [Zero �
     Tensor α (batchShape.appendDim outputWidth) := by
   let input' : Tensor α (batchShape.concat [inputWidth]) := by
     simpa only [Shape.appendDim_eq_concat] using input
+  let weight := effectiveWeight baseWeight parameters scale
   simpa only [Shape.appendDim_eq_concat] using
     TorchLean.Tensor.mapLeading batchShape
-      (fun row =>
-        Tensor.vecmat row (effectiveWeight baseWeight parameters scale))
+      (fun row => Tensor.vecmat row weight)
       input'
 
 end TorchLean.Adapters.LoRA

@@ -46,28 +46,29 @@ noncomputable section
 
 /-- Intermediate list for MHA followed by one residual-add output. -/
 abbrev ssMHAResidual (n dModel numHeads headDim : Nat) : List Shape :=
-  MultiHeadAttention.ssMHA n dModel numHeads headDim ++ [MultiHeadAttention.XShape n dModel]
+  DirectReshapeAttention.ssMHA n dModel numHeads headDim ++ [DirectReshapeAttention.XShape n dModel]
 
 /-- Original sequence input `x`, weakened into the context after the MHA intermediates. -/
 def residualIdxX {n dModel numHeads headDim : Nat} :
-    Idx (MultiHeadAttention.ΓMHA n dModel numHeads headDim ++
-        MultiHeadAttention.ssMHA n dModel numHeads headDim)
-      (MultiHeadAttention.XShape n dModel) :=
-  MultiHeadAttention.idxX (n := n) (dModel := dModel) (numHeads := numHeads) (headDim := headDim)
-    (ss := MultiHeadAttention.ssMHA n dModel numHeads headDim)
+    Idx (DirectReshapeAttention.ΓMHA n dModel numHeads headDim ++
+        DirectReshapeAttention.ssMHA n dModel numHeads headDim)
+      (DirectReshapeAttention.XShape n dModel) :=
+  DirectReshapeAttention.idxX (n := n) (dModel := dModel)
+    (numHeads := numHeads) (headDim := headDim)
+    (ss := DirectReshapeAttention.ssMHA n dModel numHeads headDim)
 
 /--
 The final output of `mhaDGraph`, i.e. the projected attention result.
 
-The literal index is intentional: `MultiHeadAttention.ssMHA` is a fixed 14-entry saved-value pack,
+The literal index is intentional: `DirectReshapeAttention.ssMHA` has 14 saved values,
 and the final entry is the attention output with the same shape as the input sequence.
 -/
 def residualIdxAttnOut {n dModel numHeads headDim : Nat} :
-    Idx (MultiHeadAttention.ΓMHA n dModel numHeads headDim ++
-        MultiHeadAttention.ssMHA n dModel numHeads headDim)
-      (MultiHeadAttention.XShape n dModel) :=
-  ⟨⟨18, by simp [MultiHeadAttention.ΓMHA, MultiHeadAttention.ssMHA]⟩,
-    by simp [MultiHeadAttention.ΓMHA, MultiHeadAttention.ssMHA]⟩
+    Idx (DirectReshapeAttention.ΓMHA n dModel numHeads headDim ++
+        DirectReshapeAttention.ssMHA n dModel numHeads headDim)
+      (DirectReshapeAttention.XShape n dModel) :=
+  ⟨⟨18, by simp [DirectReshapeAttention.ΓMHA, DirectReshapeAttention.ssMHA]⟩,
+    by simp [DirectReshapeAttention.ΓMHA, DirectReshapeAttention.ssMHA]⟩
 
 /--
 Proof-carrying graph for `x + MHA(x)`.
@@ -76,28 +77,27 @@ Context layout is inherited from MHA:
 `[x, Wq, Wk, Wv, Wo]`.
 -/
 def mhaResidualDGraph {n dModel numHeads headDim : Nat} (c : ℝ) :
-    DGraph (MultiHeadAttention.ΓMHA n dModel numHeads headDim)
-      (ssMHAResidual n dModel numHeads headDim) := by
-  let dgMha := MultiHeadAttention.mhaDGraph (n := n) (dModel := dModel) (numHeads := numHeads)
-    (headDim := headDim) c
-  exact
-    DGraph.snoc (dg := dgMha)
-      (node := add
-        (Γ := MultiHeadAttention.ΓMHA n dModel numHeads headDim ++
-          MultiHeadAttention.ssMHA n dModel numHeads headDim)
-        (s := MultiHeadAttention.XShape n dModel)
-        (a := residualIdxX (n := n) (dModel := dModel) (numHeads := numHeads)
-          (headDim := headDim))
-        (b := residualIdxAttnOut (n := n) (dModel := dModel) (numHeads := numHeads)
-          (headDim := headDim)))
-      (hn := addFderiv
-        (Γ := MultiHeadAttention.ΓMHA n dModel numHeads headDim ++
-          MultiHeadAttention.ssMHA n dModel numHeads headDim)
-        (s := MultiHeadAttention.XShape n dModel)
-        (a := residualIdxX (n := n) (dModel := dModel) (numHeads := numHeads)
-          (headDim := headDim))
-        (b := residualIdxAttnOut (n := n) (dModel := dModel) (numHeads := numHeads)
-          (headDim := headDim)))
+    DGraph (DirectReshapeAttention.ΓMHA n dModel numHeads headDim)
+      (ssMHAResidual n dModel numHeads headDim) :=
+  DGraph.snoc
+    (dg := DirectReshapeAttention.mhaDGraph (n := n) (dModel := dModel) (numHeads := numHeads)
+      (headDim := headDim) c)
+    (node := add
+      (Γ := DirectReshapeAttention.ΓMHA n dModel numHeads headDim ++
+        DirectReshapeAttention.ssMHA n dModel numHeads headDim)
+      (s := DirectReshapeAttention.XShape n dModel)
+      (a := residualIdxX (n := n) (dModel := dModel) (numHeads := numHeads)
+        (headDim := headDim))
+      (b := residualIdxAttnOut (n := n) (dModel := dModel) (numHeads := numHeads)
+        (headDim := headDim)))
+    (hn := addFderiv
+      (Γ := DirectReshapeAttention.ΓMHA n dModel numHeads headDim ++
+        DirectReshapeAttention.ssMHA n dModel numHeads headDim)
+      (s := DirectReshapeAttention.XShape n dModel)
+      (a := residualIdxX (n := n) (dModel := dModel) (numHeads := numHeads)
+        (headDim := headDim))
+      (b := residualIdxAttnOut (n := n) (dModel := dModel) (numHeads := numHeads)
+        (headDim := headDim)))
 
 /--
 End-to-end VJP theorem for the residual-attention sublayer `x + MHA(x)`.
@@ -109,18 +109,18 @@ post-norm attention sublayer and the two-sublayer post-norm bridge are packaged 
 -/
 theorem mhaResidual_backpropVec_eq_adjoint_fderiv
     {n dModel numHeads headDim : Nat} (c : ℝ)
-    (xV : CtxVec (MultiHeadAttention.ΓMHA n dModel numHeads headDim))
-    (seedV : CtxVec (MultiHeadAttention.ΓMHA n dModel numHeads headDim ++
+    (xV : CtxVec (DirectReshapeAttention.ΓMHA n dModel numHeads headDim))
+    (seedV : CtxVec (DirectReshapeAttention.ΓMHA n dModel numHeads headDim ++
       ssMHAResidual n dModel numHeads headDim)) :
     Graph.backpropVec
-        (Γ := MultiHeadAttention.ΓMHA n dModel numHeads headDim)
+        (Γ := DirectReshapeAttention.ΓMHA n dModel numHeads headDim)
         (ss := ssMHAResidual n dModel numHeads headDim)
         (mhaResidualDGraph (n := n) (dModel := dModel) (numHeads := numHeads) (headDim := headDim)
           c).g xV seedV
       =
     (fderiv ℝ
         (Graph.evalVec
-          (Γ := MultiHeadAttention.ΓMHA n dModel numHeads headDim)
+          (Γ := DirectReshapeAttention.ΓMHA n dModel numHeads headDim)
           (ss := ssMHAResidual n dModel numHeads headDim)
           (mhaResidualDGraph (n := n) (dModel := dModel) (numHeads := numHeads)
             (headDim := headDim) c).g)

@@ -72,7 +72,7 @@ theorem energy_eq_energyU (p : Params ℝ n) (s : State n) :
 /-- Likewise for the net input. -/
 theorem net_eq_netx (p : Params ℝ n) (s : State n) (u : Fin n) :
     net (α := ℝ) p s u = netx (n := n) p (x (n := n) s) u := by
-  simp [Spec.Hopfield.net, Spec.Hopfield.mulVec, netx, x, U, Spec.Hopfield.actVec]
+  simp [Spec.Hopfield.net, Spec.Hopfield.mulVec, dotProduct, netx, x, U, Spec.Hopfield.actVec]
 
 /-- An update of the state becomes a `Function.update` of the activation vector. -/
 theorem x_updateAt_eq_update (p : Params ℝ n) (s : State n) (u : Fin n) :
@@ -354,108 +354,6 @@ theorem quad_delta_update (p : Params ℝ n) (hsym : SymmetricW (n := n) p)
     _ = 2 * (xu' - x0 u) * netx (n := n) p x0 u := by
           ring
 
-/-- A single asynchronous update never increases the energy. -/
-theorem energy_updateAt_le (p : Params ℝ n) (hsym : SymmetricW (n := n) p) (hdiag : DiagonalZero (n
-  := n) p)
-    (s : State n) (u : Fin n) :
-    energy (α := ℝ) p (updateAt (α := ℝ) p s u) ≤ energy (α := ℝ) p s := by
-  classical
-  -- Let `x0` be the activation vector, and `xu'` the updated activation at `u`.
-  let x0 : Fin n → ℝ := x (n := n) s
-  let xu' : ℝ := act (α := ℝ) (decide (p.θ u ≤ net (α := ℝ) p s u))
-  let x1 : Fin n → ℝ := Function.update x0 u xu'
-  -- Rewrite `actVec` after update.
-  have hx1 : x (n := n) (updateAt (α := ℝ) p s u) = x1 := by
-    simpa [x0, xu', x1] using x_updateAt_eq_update (n := n) p s u
-  -- Use the quadratic delta formula.
-  have hquad :
-      quad (n := n) p x1 - quad (n := n) p x0 =
-        2 * (xu' - x0 u) * netx (n := n) p x0 u :=
-    quad_delta_update (n := n) p hsym hdiag x0 u xu'
-  -- Linear term changes only at `u`.
-  have hlin :
-      (∑ i ∈ (U (n := n)), p.θ i * x1 i) - (∑ i ∈ (U (n := n)), p.θ i * x0 i) = p.θ u * (xu' - x0 u)
-        := by
-    have hu : u ∈ (U (n := n)) := by simp [U]
-    let f : Fin n → ℝ := fun i => p.θ i * x0 i
-    have hs1 :
-        (∑ i ∈ (U (n := n)), p.θ i * x1 i)
-          =
-        (p.θ u * xu') + ∑ i ∈ (U (n := n) \ {u}), p.θ i * x0 i := by
-      have := (Finset.sum_update_of_mem (s := (U (n := n))) (i := u) hu f (p.θ u * xu'))
-      -- Match `x1` as an update on `x0`.
-      have hx : (fun i => p.θ i * x1 i) =
-          (fun i => Function.update (fun i => p.θ i * x0 i) u (p.θ u * xu') i) := by
-        funext i
-        by_cases hi : i = u
-        · subst hi; simp [x1]
-        · simp [x1, Function.update, hi]
-      simpa [hx, U, f] using this
-    have hs0 :
-        (∑ i ∈ (U (n := n)), p.θ i * x0 i)
-          =
-        (p.θ u * x0 u) + ∑ i ∈ (U (n := n) \ {u}), p.θ i * x0 i := by
-      rw [Finset.sum_eq_add_sum_sdiff_singleton_of_mem hu]
-    calc
-      (∑ i ∈ (U (n := n)), p.θ i * x1 i) - (∑ i ∈ (U (n := n)), p.θ i * x0 i)
-          =
-        ((p.θ u * xu') + ∑ i ∈ (U (n := n) \ {u}), p.θ i * x0 i)
-          -
-        ((p.θ u * x0 u) + ∑ i ∈ (U (n := n) \ {u}), p.θ i * x0 i) := by
-        simp [hs1, hs0]
-      _ = p.θ u * (xu' - x0 u) := by ring
-  -- Energy is `-(1/2)*quad + linear`.
-  -- Show the net change is `-(xu'-xu)*(net-θ) ≤ 0`.
-  have hnet : netx (n := n) p x0 u = net (α := ℝ) p s u := by
-    symm; simpa [x0] using net_eq_netx (n := n) p s u
-  -- Compute `ΔE = E(x1) - E(x0)` and show it is ≤ 0.
-  -- Then rewrite `E(updateAt s) = E(x1)` by `hx1`.
-  have hΔ :
-      (-(1 / (2 : ℝ))) * (quad (n := n) p x1 - quad (n := n) p x0) +
-          ((∑ i ∈ (U (n := n)), p.θ i * x1 i) - (∑ i ∈ (U (n := n)), p.θ i * x0 i))
-        =
-      - (xu' - x0 u) * (net (α := ℝ) p s u - p.θ u) := by
-    -- Substitute `hquad`/`hlin` and simplify.
-    simp [hquad, hlin, hnet]
-    ring
-  -- Prove the RHS is ≤ 0 by case split on the update decision.
-  have hRhs : - (xu' - x0 u) * (net (α := ℝ) p s u - p.θ u) ≤ 0 := by
-    by_cases hθ : p.θ u ≤ net (α := ℝ) p s u
-    · have hnetθ : 0 ≤ net (α := ℝ) p s u - p.θ u := by linarith
-      cases hs : s u <;> (simp [x0, xu', x, Spec.Hopfield.actVec, Spec.Hopfield.act, hθ, hs] ; try
-        linarith)
-    · have hnetθ : net (α := ℝ) p s u - p.θ u < 0 := by
-        have : net (α := ℝ) p s u < p.θ u := lt_of_not_ge hθ
-        linarith
-      cases hs : s u <;> (simp [x0, xu', x, Spec.Hopfield.actVec, Spec.Hopfield.act, hθ, hs] ; try
-        linarith)
-  -- Finish: rewrite energies via `energyU`, then use `hΔ` + `hRhs`.
-  let s' : State n := updateAt (α := ℝ) p s u
-  have hE0 : energy (α := ℝ) p s = energyU (n := n) p x0 := by
-    simpa [x0] using (energy_eq_energyU (n := n) p s)
-  have hE1 : energy (α := ℝ) p s' = energyU (n := n) p x1 := by
-    -- Use `hx1 : x s' = x1`.
-    have hx1' : x (n := n) s' = x1 := by simpa [s'] using hx1
-    simpa [hx1'] using (energy_eq_energyU (n := n) p s')
-  have hdiff :
-      energy (α := ℝ) p s' - energy (α := ℝ) p s
-        =
-      (-(1 / (2 : ℝ))) * (quad (n := n) p x1 - quad (n := n) p x0) +
-        ((∑ i ∈ (U (n := n)), p.θ i * x1 i) - (∑ i ∈ (U (n := n)), p.θ i * x0 i)) := by
-    -- Expand the two `energyU` forms and regroup.
-    simp [hE0, hE1, energyU, sub_eq_add_neg, add_assoc, add_left_comm, add_comm, mul_add]
-  -- Use `hΔ` to rewrite the RHS, then apply `hRhs`.
-  have : energy (α := ℝ) p s' - energy (α := ℝ) p s ≤ 0 := by
-    -- Replace using `hdiff` then `hΔ`.
-    -- `hΔ` was exactly the RHS of `hdiff`.
-    have : energy (α := ℝ) p s' - energy (α := ℝ) p s = - (xu' - x0 u) * (net (α := ℝ) p s u - p.θ
-      u) := by
-      simpa [hdiff] using hΔ
-    -- Conclude with `hRhs`.
-    simpa [this] using hRhs
-  -- `E' - E ≤ 0` implies `E' ≤ E`.
-  linarith
-
 /-- Exact energy change of one update: `-(x'ᵤ - xᵤ)(netᵤ - θᵤ)`.
 
 The sign is forced: the update sets `x'ᵤ` to agree with the sign of `netᵤ - θᵤ`, so the product is
@@ -532,6 +430,20 @@ theorem energy_updateAt_delta (p : Params ℝ n)
         simp [hquad, hlin, hnet]
         ring
 
+/-- A single asynchronous update never increases the energy. -/
+theorem energy_updateAt_le (p : Params ℝ n) (hsym : SymmetricW (n := n) p) (hdiag : DiagonalZero (n
+  := n) p)
+    (s : State n) (u : Fin n) :
+    energy (α := ℝ) p (updateAt (α := ℝ) p s u) ≤ energy (α := ℝ) p s := by
+  classical
+  apply sub_nonpos.mp
+  rw [energy_updateAt_delta p hsym hdiag s u]
+  by_cases hθ : p.θ u ≤ net (α := ℝ) p s u
+  · apply mul_nonpos_of_nonpos_of_nonneg ?_ (sub_nonneg.mpr hθ)
+    cases hs : s u <;> simp [x, Spec.Hopfield.actVec, Spec.Hopfield.act, hθ, hs]
+  · apply mul_nonpos_of_nonneg_of_nonpos ?_ (le_of_lt (sub_neg.mpr (lt_of_not_ge hθ)))
+    cases hs : s u <;> simp [x, Spec.Hopfield.actVec, Spec.Hopfield.act, hθ, hs]
+
 /-- Exactly at the threshold the energy does not move, which is the flat case the active-unit
 counter has to handle. -/
 theorem energy_updateAt_eq_of_net_eq_theta (p : Params ℝ n)
@@ -558,29 +470,13 @@ theorem energy_updateAt_lt_of_change_of_ne (p : Params ℝ n)
   -- Reduce to showing the delta is negative.
   have hΔ :=
     energy_updateAt_delta (n := n) p hsym hdiag s u
-  -- Extract that `u` is indeed the changed coordinate.
-  have hsu : updateAt (α := ℝ) p s u u ≠ s u := by
-    intro hEq
-    apply hchange
-    funext i
-    by_cases hi : i = u
-    · subst hi; simpa using hEq
-    · simp [updateAt_apply_ne (p := p) (s := s) (u := u) (v := i) hi]
   -- Case split on the update decision.
   by_cases hθ : p.θ u ≤ net (α := ℝ) p s u
   · -- Update sets `u := true`, so changing means it was `false`.
     have hdec : decide (p.θ u ≤ net (α := ℝ) p s u) = true := by
       simp [hθ]
-    have hup : updateAt (α := ℝ) p s u u = true := by
-      have hu'' :
-          updateAt (α := ℝ) p s u u = decide (p.θ u ≤ net (α := ℝ) p s u) := by
-        simp [updateAt]
-      exact hu''.trans hdec
     have hsuf : s u = false := by
-      cases hsu0 : s u <;> try rfl
-      -- If `s u = true`, then `updateAt` wouldn't change at `u`.
-      exfalso
-      exact hsu (by simpa [hsu0] using hup)
+      simpa [hdec] using apply_eq_not_decide_of_updateAt_ne p s u hchange
     have hθlt : p.θ u < net (α := ℝ) p s u := by
       exact lt_of_le_of_ne hθ (by simpa [eq_comm] using hne)
     have hpos : 0 < net (α := ℝ) p s u - p.θ u := by linarith
@@ -598,16 +494,8 @@ theorem energy_updateAt_lt_of_change_of_ne (p : Params ℝ n)
     have hdec : decide (p.θ u ≤ net (α := ℝ) p s u) = false := by
       -- `decide p = false` when `¬ p`.
       simpa [decide_eq_false_iff_not] using (show ¬ p.θ u ≤ net (α := ℝ) p s u from hθ)
-    have hup : updateAt (α := ℝ) p s u u = false := by
-      have hu'' :
-          updateAt (α := ℝ) p s u u = decide (p.θ u ≤ net (α := ℝ) p s u) := by
-        simp [updateAt]
-      exact hu''.trans hdec
     have hsut : s u = true := by
-      cases hsu0 : s u <;> try rfl
-      -- If `s u = false`, then `updateAt` wouldn't change at `u`.
-      exfalso
-      exact hsu (by simpa [hsu0] using hup)
+      simpa [hdec] using apply_eq_not_decide_of_updateAt_ne p s u hchange
     have hlt : net (α := ℝ) p s u < p.θ u := lt_of_not_ge hθ
     have hΔ' :
         energy (α := ℝ) p (updateAt (α := ℝ) p s u) - energy (α := ℝ) p s

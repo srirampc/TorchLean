@@ -165,7 +165,7 @@ theorem mae_is_predictive_view_objective {n : Nat} {Patch Pred : Type}
     (patchLoss : Patch → Pred → Nat) :
     predictiveViewObjective (maeAsPredictiveViewContract maskedIdxs target pred patchLoss) =
       maeLoss maskedIdxs target pred patchLoss := by
-  simp [predictiveViewObjective, predictiveLoss, maeAsPredictiveViewContract, maeLoss]
+  rfl
 
 /-! ## JEPA as predictive-view SSL with latent target representation -/
 
@@ -211,7 +211,7 @@ theorem jepa_is_predictive_view_objective {n : Nat} {Context Target Pred : Type}
     predictiveViewObjective
         (jepaAsPredictiveViewContract targetIdxs context target predict repLoss) =
       jepaLoss targetIdxs context target predict repLoss := by
-  simp [predictiveViewObjective, predictiveLoss, jepaAsPredictiveViewContract, jepaLoss]
+  rfl
 
 /--
 More general JEPA/predictive-view contract with a separate target encoder.
@@ -372,18 +372,12 @@ noncomputable def graphAlignmentEnergy {n d : Nat}
 theorem graphAlignmentEnergy_nonneg {n d : Nat}
     (graph : SSLViewGraph n) (rep : Fin n → EuclideanRep d) :
     0 ≤ graphAlignmentEnergy graph rep := by
-  let energies := graph.positiveEdges.map (fun edge => sqDist (rep edge.1) (rep edge.2))
-  change 0 ≤ energies.sum
-  have henergy : ∀ energy ∈ energies, 0 ≤ energy := by
-    intro energy hmem
-    rw [Array.mem_map] at hmem
-    obtain ⟨edge, _, rfl⟩ := hmem
-    exact sqDist_nonneg _ _
-  unfold Array.sum
+  unfold graphAlignmentEnergy Array.sum
   apply Array.foldr_induction (motive := fun _ total => 0 ≤ total)
-  · simp
+  · exact le_rfl
   · intro i total htotal
-    exact add_nonneg (henergy energies[i] (Array.getElem_mem i.isLt)) htotal
+    obtain ⟨edge, -, hedge⟩ := Array.mem_map.1 (Array.getElem_mem i.isLt)
+    exact add_nonneg (le_of_le_of_eq (sqDist_nonneg _ _) hedge) htotal
 
 /-- A collapsed representation maps every view to the same finite vector. -/
 def CollapsedRep {n d : Nat} (rep : Fin n → EuclideanRep d) : Prop :=
@@ -398,23 +392,14 @@ theorem graphAlignmentEnergy_eq_zero_of_collapsed {n d : Nat}
     (hcollapsed : CollapsedRep rep) :
     graphAlignmentEnergy graph rep = 0 := by
   rcases hcollapsed with ⟨z, hz⟩
-  unfold graphAlignmentEnergy
-  have hmap :
-      graph.positiveEdges.map (fun edge => sqDist (rep edge.1) (rep edge.2)) =
-        Array.replicate graph.positiveEdges.size 0 := by
-    apply Array.ext <;> simp only [Array.size_map, Array.size_replicate]
-    intro i hiMap hiReplicate
-    rw [Array.getElem_map, Array.getElem_replicate]
-    simp [hz]
-  rw [hmap]
-  have hzero : ∀ count, (Array.replicate count (0 : ℝ)).sum = 0 := by
-    intro count
-    induction count with
-    | zero => simp
-    | succ count ih =>
-        rw [Array.replicate_succ, Array.sum_push, ih]
-        simp
-  exact hzero graph.positiveEdges.size
+  -- Every edge energy is `sqDist z z = 0`, so the fold over the edge array stays at zero.
+  unfold graphAlignmentEnergy Array.sum
+  apply Array.foldr_induction (motive := fun _ total => total = 0)
+  · rfl
+  · intro i total htotal
+    obtain ⟨edge, -, hedge⟩ := Array.mem_map.1 (Array.getElem_mem i.isLt)
+    rw [htotal, add_zero]
+    exact hedge.symm.trans (by simp [hz])
 
 /--
 Coordinate spread is a finite pairwise squared-difference summary for one embedding coordinate.
@@ -511,9 +496,7 @@ theorem predictiveLoss_eq_viewGraphEnergy_from_anchor
           contract.distance (contract.targetEncoder i (contract.target i))
             (contract.predict contract.context i)) := by
   unfold predictiveLoss viewGraphEnergy maskedLoss
-  apply congrArg Array.sum
-  apply Array.ext <;> simp only [Array.size_map]
-  intro i hiLeft hiRight
-  simp [Array.getElem_map]
+  rw [Array.map_map]
+  rfl
 
 end NN.MLTheory.SelfSupervised

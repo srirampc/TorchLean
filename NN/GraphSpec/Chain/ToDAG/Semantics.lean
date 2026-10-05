@@ -74,9 +74,9 @@ private theorem get_append_right_heq {ss ts : List Shape}
 
 variable [Context α]
 
-private theorem eval_castTerm_heq {Γ : List Shape} {s t : Shape}
+private theorem eval_cast_heq {Γ : List Shape} {s t : Shape}
     (env : TensorPack α Γ) (h : s = t) (term : DAG.Term Γ s) :
-    HEq (DAG.Term.eval env (castTerm h term)) (DAG.Term.eval env term) := by
+    HEq (DAG.Term.eval env (DAG.Term.cast term h)) (DAG.Term.eval env term) := by
   cases h
   rfl
 
@@ -88,7 +88,7 @@ private theorem eval_mkParamTerm {pre ps post extra : List Shape}
       TensorPack.get b i := by
   unfold mkParamTerm
   apply eq_of_heq
-  apply HEq.trans (eval_castTerm_heq _ _ _)
+  apply HEq.trans (eval_cast_heq _ _ _)
   simp only [DAG.Term.eval, DAG.Env.tget_ofFin]
   let j : Fin (pre ++ ps).length := ⟨pre.length + i.val, by simp⟩
   let k : Fin ((pre ++ ps) ++ post).length := ⟨j.val, by simp only [j, List.length_append]; omega⟩
@@ -110,17 +110,6 @@ private theorem eval_argsOfFn {Γ ps : List Shape} (env : TensorPack α Γ)
         intro i
         exact hf ⟨i.val + 1, Nat.succ_lt_succ i.isLt⟩
 
-private theorem eval_append1 {Γ ps : List Shape} {σ : Shape}
-    (env : TensorPack α Γ) (args : DAG.Args Γ ps) (x : DAG.Term Γ σ) :
-    DAG.Term.evalArgs env (Args.append1 args x) =
-      TensorPack.append (DAG.Term.evalArgs env args) (.cons (DAG.Term.eval env x) .nil) := by
-  induction ps with
-  | nil => cases args; rfl
-  | cons shape ps ih =>
-    cases args with
-    | cons value rest =>
-      simp only [Args.append1, DAG.Term.evalArgs, TensorPack.append, ih rest]
-
 private theorem eval_primCall {pre ps post extra : List Shape} {σ τ : Shape}
     (a : TensorPack α pre) (b : TensorPack α ps)
     (c : TensorPack α post) (d : TensorPack α extra)
@@ -131,20 +120,15 @@ private theorem eval_primCall {pre ps post extra : List Shape} {σ τ : Shape}
   unfold primCall
   dsimp only
   simp only [eq_mpr_eq_cast, eq_mp_eq_cast, cast_cast, cast_eq]
-  rw [DAG.Term.eval_op, eval_append1, eval_argsOfFn _ b _ (eval_mkParamTerm a b c d)]
+  rw [DAG.Term.eval_op, DAG.Term.evalArgs_append,
+    eval_argsOfFn _ b _ (eval_mkParamTerm a b c d)]
   simp only [Primitive.toDAGPrimOp, TensorPack.split_append]
-
-private theorem eval_castEnvTerm {Γ Δ : List Shape} {σ : Shape}
-    (env : TensorPack α Δ) (h : Γ = Δ) (term : DAG.Term Γ σ) :
-    DAG.Term.eval env (castEnvTerm h term) = DAG.Term.eval (TensorPack.cast h.symm env) term := by
-  cases h
   rfl
 
-omit [Context α] in
-private theorem pack_cast_cons {s : Shape} {ss ts : List Shape} (h : ss = ts)
-    (x : Tensor α s) (xs : TensorPack α ss) :
-    TensorPack.cast (congrArg (List.cons s) h) (.cons x xs) =
-      .cons x (TensorPack.cast h xs) := by
+private theorem eval_castEnv {Γ Δ : List Shape} {σ : Shape}
+    (env : TensorPack α Δ) (h : Γ = Δ) (term : DAG.Term Γ σ) :
+    DAG.Term.eval env (DAG.Term.castEnv term h) =
+      DAG.Term.eval (TensorPack.cast h.symm env) term := by
   cases h
   rfl
 
@@ -161,7 +145,7 @@ private theorem pack_cast_assoc {ss ts us : List Shape}
     | cons x xs =>
       change TensorPack.cast (congrArg (List.cons s) (List.append_assoc ss ts us))
         (.cons x ((xs.append ys).append zs)) = .cons x (xs.append (ys.append zs))
-      rw [pack_cast_cons (List.append_assoc ss ts us), ih xs]
+      rw [TensorPack.cast_cons _ (List.append_assoc ss ts us), ih xs]
 
 omit [Context α] in
 private theorem pack_append_split {ps qs : List Shape} (params : TensorPack α (ps ++ qs)) :
@@ -215,9 +199,9 @@ private theorem eval_lastOfFin {Γ : List Shape} {s : Shape}
     (i : Fin (Γ ++ [s]).length) (hi : i.val = Γ.length)
     (h : (Γ ++ [s]).get i = s) :
     DAG.Term.eval (env.append (.cons value .nil))
-      (castTerm h (DAG.Term.var (DAG.Var.ofFin i))) = value := by
+      (DAG.Term.cast (DAG.Term.var (DAG.Var.ofFin i)) h) = value := by
   apply eq_of_heq
-  apply (eval_castTerm_heq _ _ _).trans
+  apply (eval_cast_heq _ _ _).trans
   simp only [DAG.Term.eval, DAG.Env.tget_ofFin]
   exact get_append_right_heq env (.cons value .nil) ⟨0, by simp⟩ i (by simpa using hi)
 
@@ -243,7 +227,7 @@ private theorem eval_toTerm {ps : List Shape} {σ τ : Shape} (g : Chain ps σ �
     generalize hright : (TensorPack.split b).2 = b₂ at hb
     subst b
     simp only [toTerm, eq_mpr_eq_cast, eq_mp_eq_cast, cast_cast, cast_eq]
-    simp only [DAG.Term.eval, eval_castEnvTerm, Interp.spec, TensorPack.split_append]
+    simp only [DAG.Term.eval, eval_castEnv, Interp.spec, TensorPack.split_append]
     -- The first stage reads its own parameter prefix; the second stage sees the bound result.
     have env₁ : TensorPack.cast (by simp [List.append_assoc])
         (((a.append (b₁.append b₂)).append c).append d) =
@@ -251,7 +235,7 @@ private theorem eval_toTerm {ps : List Shape} {σ τ : Shape} (g : Chain ps σ �
       apply pack_cast_eq_of_heq
       exact pack_append_heq (by simp [List.append_assoc]) rfl (pack_four_heq a b₁ b₂ c) HEq.rfl
     rw [env₁, ih₁]
-    rw [eval_castEnvTerm]
+    rw [eval_castEnv]
     have env₁back : TensorPack.cast (by simp [List.append_assoc])
         (((a.append b₁).append (b₂.append c)).append d) =
         (((a.append (b₁.append b₂)).append c).append d) := by
@@ -270,7 +254,7 @@ private theorem eval_toTerm {ps : List Shape} {σ τ : Shape} (g : Chain ps σ �
       exact (pack_append_heq (by simp [List.append_assoc]) rfl habcd
         (HEq.rfl : HEq (.cons v .nil : TensorPack α [middle]) (.cons v .nil))).trans
         (pack_assoc_heq (((a.append b₁).append b₂).append c) d (.cons v .nil))
-    rw [pack_cast_eq_of_heq _ henv₂, ih₂, eval_castEnvTerm,
+    rw [pack_cast_eq_of_heq _ henv₂, ih₂, eval_castEnv,
       pack_cast_eq_of_heq _ henv₂.symm, eval_lastOfFin _ _ _ rfl]
 
 private theorem eval_transport {Γ Δ : List Shape} {s : Shape}
@@ -293,7 +277,7 @@ private theorem pack_append_nil_heq {ps : List Shape} (params : TensorPack α ps
           (.cons value rest)) from ?_)
       · exact cast_heq _ _
       · apply HEq.symm
-        apply HEq.trans (heq_of_eq (pack_cast_cons (List.append_nil ps).symm value rest))
+        apply HEq.trans (heq_of_eq (TensorPack.cast_cons _ (List.append_nil ps).symm value rest))
         have hr := pack_cast_eq_of_heq (List.append_nil ps).symm (ih rest).symm
         rw [hr]
 

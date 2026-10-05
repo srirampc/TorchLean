@@ -8,9 +8,6 @@ module
 
 public import NN.Spec.Layers.Normalization.BatchNorm
 public import NN.Spec.Core.Context.Real
-import Mathlib.Analysis.SpecialFunctions.Pow.NNReal
-import Mathlib.Data.Sym.Sym2.Init
-import Mathlib.Tactic.NormNum.GCD
 
 /-!
 # Normalization analysis properties
@@ -59,18 +56,7 @@ $\beta-\mu\gamma/\operatorname{std}$.
 -/
 private theorem batchNorm_inference_affine_scalar (x μ γ β std : ℝ) :
     ((x - μ) / std) * γ + β = x * (γ / std) + (β - μ * (γ / std)) := by
-  -- Treat `γ / std` as an atom, so we can use `ring` on the remaining algebra.
-  set t : ℝ := γ / std
-  have hrewrite : ((x - μ) / std) * γ = (x - μ) * t := by
-    calc
-      ((x - μ) / std) * γ = ((x - μ) * γ) / std := by
-        simp [div_mul_eq_mul_div]
-      _ = (x - μ) * (γ / std) := by
-        simp [mul_div_assoc]
-      _ = (x - μ) * t := by
-        simp [t]
-  -- Now `ring` closes: `(x - μ) * t + β = x * t + (β - μ * t)`.
-  simpa [hrewrite, t] using (by ring : (x - μ) * t + β = x * t + (β - μ * t))
+  ring
 
 /--
 Shape-generic tensor version of `batchNorm_inference_affine_scalar`.

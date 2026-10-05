@@ -67,8 +67,6 @@ def checkOneExample (numClasses : Nat) (ex : Json) : IO (Bool × Bool) := do
   let label ← expectFieldNat exObj "label" "example"
   let lo ← expectFieldFiniteFloatArray exObj "logits_lo" "example"
   let hi ← expectFieldFiniteFloatArray exObj "logits_hi" "example"
-  if lo.size ≠ numClasses || hi.size ≠ numClasses then
-    throw <| IO.userError s!"example logits length mismatch (expected {numClasses})"
   let lo ← NN.Verification.Util.Tensor.requireVecOfArray "logits_lo" numClasses lo
   let hi ← NN.Verification.Util.Tensor.requireVecOfArray "logits_hi" numClasses hi
   if !NN.Verification.Util.Tensor.boundsOrdered lo hi then
@@ -145,10 +143,6 @@ def checkWithTiming (path : String) (timing : Bool) (timingEvery : Nat) : IO Uni
       checkNatField "nominal_ok" counts.nominalOk
       checkNatField "certified_ok" counts.certifiedOk
 
-/-- Check a logit-bound report with timing disabled. -/
-def check (path : String) : IO Unit :=
-  checkWithTiming path false 0
-
 /-- Parsed CLI flags for a logit-bound report run. -/
 structure RunArgs where
   /-- Report JSON path. -/
@@ -169,10 +163,7 @@ def parseRunArgs (defaultPath : String) (args : List String) : Except String Run
 
 /-- Run the checker with a caller-provided default report path. -/
 def runWithDefault (defaultPath : String) (args : List String) : IO Unit := do
-  let parsed ←
-    match parseRunArgs defaultPath args with
-    | .ok parsed => pure parsed
-    | .error err => throw <| IO.userError err
+  let parsed ← IO.ofExcept (parseRunArgs defaultPath args)
   checkWithTiming parsed.path parsed.timing parsed.timingEvery
 
 end MarginCert

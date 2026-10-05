@@ -19,9 +19,10 @@ open Verso.Genre.Manual.InlineLean
 
 -- The checkers quoted below sit in a handful of sibling namespaces under `NN.Verification`, and
 -- Verso keeps displayed code narrow enough to read beside the text. Opening the namespaces here
--- lets each `#check` fit on one line; the printed signatures still spell out every name in full.
+-- lets each `#check` fit on one line; the printed signatures use those open namespaces.
 open NN.Verification
-open NN.Verification.CROWNNodeCertAlphaBeta
+open NN.Verification.Cert
+open NN.Verification.Cert.CROWNNodeCertAlphaBeta
 open NN.Verification.Util (approxEq)
 open NN.Verification.Util.Tensor
 open TorchLean (Tensor)
@@ -76,11 +77,12 @@ During a branch-and-bound verification run, an instrumented external verifier ca
 subdomains. TorchLean's helper converts that terminal-domain data into a small JSON *leaf artifact*
 for each represented subdomain. TorchLean can parse that JSON and validate several
 properties entirely inside Lean: every leaf box lies inside the declared root input region; every
-leaf marked as verified satisfies the exported local prune test
+leaf satisfies the exported local prune test
 ($`\exists i,\;lb_i>threshold_i` in the exported fields); and the document is internally consistent
-(dimensions, array lengths, and cross-references line up).
+(dimensions, array lengths, and cross-references line up). The leaf boxes must also cover the root.
 
-These checks focus on the JSON artifact itself: boxes nest correctly, verified leaves satisfy the
+These checks focus on the JSON artifact itself: boxes nest correctly, cover the root, and all
+leaves satisfy the
 stated prune rule, and the fields fit together. The numeric bound propagation that produced each
 `lb` belongs to the external producer unless a separate recompute-and-compare certificate path is
 added.
@@ -105,13 +107,15 @@ exported lower bound is `1.0`, and its threshold is `0.0`.
 ```terminal
 # Check the bundled artifact against the leaf format's
 # structural predicates.
-lake exe verify -- abcrown-leaf
+scripts/lake.sh exe verify -- abcrown-leaf
 ```
 
 Lean reports:
 
 ```terminal +output
 [artifact] Checked 1 leaves: ok=1, bad=0
+[artifact] consistent: the leaves cover the root and every leaf clears its threshold.
+[artifact] The lower bounds are the producer's claims; TorchLean did not recompute them.
 ```
 
 This counts represented leaves. `ok=1` means that the one parsed leaf passed containment and
@@ -129,7 +133,7 @@ jq '.leaves[0].threshold=[2.0] | .leaves[0].witness_margin=-1.0' \
   NN/Examples/Verification/AbCrown/sample_abcrown_leaf_artifact_v0_1.json \
   > /tmp/torchlean_bad_leaf.json
 
-lake exe verify -- abcrown-leaf /tmp/torchlean_bad_leaf.json
+scripts/lake.sh exe verify -- abcrown-leaf /tmp/torchlean_bad_leaf.json
 ```
 
 The command exits unsuccessfully:
@@ -443,7 +447,7 @@ Leaf nesting has the form:
 
 $$`B_\ell\subseteq B_{\mathrm{root}}.`
 
-A stronger branch certificate would also check coverage:
+The artifact-level checker also requires coverage:
 
 $$`B_{\mathrm{root}}\subseteq\bigcup_\ell B_\ell.`
 
@@ -453,15 +457,14 @@ $$`\forall x\in B_\ell,\qquad c^\top f(x)\ge threshold.`
 
 The current checker does not establish that quantified statement. It accepts when the exported
 boxes and witness fields are coherent and every represented leaf passes the finite comparison
-$`lb_i>threshold_i`. Even if the lower-bound provenance were added, turning the leaves into a
-root-region proof would still require separately checked coverage. In this fragment, the
-certificate is structural.
+$`lb_i>threshold_i`, and the leaves cover the root. The missing lower-bound provenance still
+prevents a semantic root-region proof. In this fragment, the certificate is structural.
 
 Containment and coverage point in opposite directions. Containment prevents a leaf from making
 claims outside the named problem. Coverage prevents parts of that problem from being omitted.
 For example, two leaves can both lie inside a square while leaving an unrepresented strip
 between them. Every local check may pass, yet no leaf says anything about an input in that strip.
-Checking more carefully inside the two existing leaves cannot repair the missing region.
+The artifact-level coverage check rejects this missing strip even when both local checks pass.
 
 The existential prune rule also needs to be read in the producer's property convention.
 If an unsafe specification is a conjunction of inequalities, falsifying one required inequality
@@ -499,14 +502,16 @@ nor its bound transfers are present in the artifact, so the checker cannot recom
 bound.
 
 When the producer supplies `witness_idx`, the checker validates that coordinate rather than
-searching for a replacement. Omitting it requests the existential check. Neither mode checks
-coverage, so a dropped leaf can go undetected while all remaining leaves pass.
+searching for a replacement. Omitting it requests the existential check. In both modes, after all
+leaves pass, `leavesCoverRoot` checks coverage on the closed grid cut out by the endpoints. It skips
+coordinates spanned fully by every leaf and returns an error if the grid exceeds one million cells.
 
 # Certificate Checking And Soundness
 
 The `v0.1` format intentionally stops at structural checking. Lean checks that every represented
 leaf lies inside the root box, that dimensions and arrays agree, that numeric fields are finite,
-and that every leaf's witness satisfies $`\exists i,\;lb_i>threshold_i`.
+that every leaf's witness satisfies $`\exists i,\;lb_i>threshold_i`, and that the leaves cover
+the root.
 
 The current artifact checks $`lb_i>threshold_i` for an exported lower bound. A stronger artifact
 would also check that $`lb_i` is a sound lower bound for the graph on the leaf.
@@ -514,7 +519,7 @@ would also check that $`lb_i` is a sound lower bound for the graph on the leaf.
 There are three progressively stronger designs:
 
 - *Structural checking:* the artifact is self-consistent and each exported witness passes its
-  stated arithmetic test. This is what `abcrown-leaf` provides.
+  stated arithmetic test, with the leaves covering the root. This is what `abcrown-leaf` provides.
 - *Recompute and compare:* the artifact contains a network and enough node data for Lean to
   reproduce the bound calculation. TorchLean's node-certificate checkers recompute the complete
   trace with FloatLib binary32: interval entries must contain the authoritative trace, while affine
@@ -684,8 +689,21 @@ premise must be established throughout that region.
 
 With those hypotheses, each available engine box encloses the corresponding semantic value.
 The statement is over $`ℝ`. The demonstration above used `Float`; applying the real theorem to a
-rounded pass requires an arithmetic bridge. Using FloatLib binary32 in the node checkers fixes the
-reference binary32 operations for replay, but does not by itself provide that bridge. The
+rounded pass requires an arithmetic bridge. Backends with `LawfulBoundOps`,
+`LawfulNonlinearBoundOps`, and `LawfulMinBoundOps`, together with a nonnegative real interpretation
+of the fixed `normalizationEpsilon`, have the full forward theorem `runIBP_encloses_all`.
+The rounded-real `FP32` model satisfies these scalar requirements. The theorem covers every
+operation kind under `RealNodeEquation`, ordered parents, and enclosed inputs, and establishes
+enclosure for every returned box without assuming intermediate enclosures.
+With exact affine reassociation disabled, consistent node identifiers, and valid input, output,
+and objective dimensions,
+`backwardObjectiveBox_encloses_runIBP_all` carries these enclosures through the backward sweep and
+final interval evaluation. It derives the backward node equations from the same real semantics.
+Its successful result encloses the real objective; neither theorem promises a result for every
+graph or a particular bound tightness.
+
+Host `Float` has no such lawful arithmetic instance. Using FloatLib binary32 in the node checkers
+fixes the reference binary32 operations for replay, but does not by itself provide that bridge. The
 {ref "fp32-soundness"}[floating-point soundness chapter] develops the relevant distinction.
 
 The {ref "certificates"}[leaf artifact described here] carries no graph or transfer evidence, so
@@ -714,7 +732,7 @@ leaf entry point takes a file path:
 ```
 
 ```leanOutput leafEntry
-Cert.AbCrownLeafCert.checkAbCrownLeafArtifact : String → IO Unit
+AbCrownLeafCert.checkAbCrownLeafArtifact : String → IO Unit
 ```
 
 The leaf CLI prints counts and raises `IO.userError` if any leaf fails, producing an unsuccessful
@@ -802,7 +820,8 @@ a compact Float output-bound artifact against a supplied graph and parameter sto
 `IBPNodeCert` instead
 replays per-node interval data with FloatLib binary32. `CROWNNodeCert` adds affine CROWN data, and
 the
-alpha-beta variant adds the corresponding relaxation parameters. These formats are related, but
+alpha-beta variant adds ReLU phase tags already justified by the IBP intervals. It replays α-CROWN
+bounds, with no β multipliers or branch splits. These formats are related, but
 they are not interchangeable transcripts.
 
 When reporting an accepted artifact, name the checker and the condition it established:
@@ -812,9 +831,10 @@ When reporting an accepted artifact, name the checker and the condition it estab
   imported node boxes to contain it.
 - `checkCROWNNodeCertificate` checks the additional affine transcript for the supported CROWN
   fragment.
-- `checkAlphaBetaCROWNNodeCertificate` checks per-node α,β-CROWN transfer data by recomputation and
-  exact binary32 transcript comparison; its interval side data may widen the recomputed boxes but
-  may never shrink them.
+- `checkAlphaBetaCROWNNodeCertificate` recomputes α-CROWN transfers and validates IBP-stable phase
+  tags, with exact binary32 transcript comparison. Parsed interval side data may widen the
+  recomputed boxes but may never shrink them; decimal endpoints are first rounded outward to
+  binary32.
 - graph soundness theorems apply only when the certificate format and graph fragment supply the
   hypotheses those theorems demand.
 
@@ -846,14 +866,13 @@ Semantics:
 - For real verification runs, pass the original input-property box as `root`. If the raw dump does
   not contain a root, the exporter can infer the componentwise leaf envelope as a structural
   fallback, but that fallback is only the envelope of the represented leaves.
-- Each `leaf` is a sub-box of `root`.
+- Each `leaf` is a sub-box of `root`, and together the leaves must cover `root`.
 - The root and every leaf must contain finite coordinates ordered coordinatewise
   ($`lo_i\le hi_i`), and the leaf array must be nonempty.
 - `lb` and `threshold` are the lower bounds and thresholds reported by the external producer for
   that leaf at the moment it was pruned or verified.
-- A leaf is considered "verified" iff $`\exists i,\;lb_i>threshold_i`.
-  (This matches how `complete_verifier/input_split/branching_domains.py` filters out verified
-  domains.)
+- The exported prune test passes iff $`\exists i,\;lb_i>threshold_i`; this is a comparison
+  of producer-supplied fields, not proof of a network bound.
 - `witness_idx` and `witness_margin` are a convenience witness for the check above:
   $`witness\_margin=lb_{witness\_idx}-threshold_{witness\_idx}`.
   When `witness_idx` is present, the checker validates that exact coordinate rather than searching
@@ -900,6 +919,8 @@ $ python3 scripts/verification/abcrown/export_leaf_artifact.py \
     --input raw_dump.json --out exported.json --check
 Wrote TorchLean alpha-beta-CROWN-style leaf artifact to exported.json
 [artifact] Checked 2 leaves: ok=2, bad=0
+[artifact] consistent: the leaves cover the root and every leaf clears its threshold.
+[artifact] The lower bounds are the producer's claims; TorchLean did not recompute them.
 ```
 
 Two details of that conversion matter to a producer. The exporter reads the root box from the top
@@ -923,11 +944,12 @@ Example:
 ```terminal
 # With no path argument, this command checks the maintained
 # sample file.
-lake exe verify -- abcrown-leaf
+scripts/lake.sh exe verify -- abcrown-leaf
 ```
 
 With no path, the command uses the bundled sample. With a path, it checks that artifact instead.
-Run `lake exe verify -- list` to see the other registered certificate and workflow checkers,
+Run `scripts/lake.sh exe verify -- list` to see the other registered certificate and workflow
+checkers,
 including LiRPA, PINN, spline, logit-margin, and TorchLean-to-IR robustness paths.
 
 The leaf command answers whether the exported leaf document satisfies

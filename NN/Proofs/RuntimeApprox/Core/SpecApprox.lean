@@ -87,77 +87,55 @@ def approxTensorWithTol {α : Type} [TorchLean.Storage α] {s : Shape}
 /-- A plain `eps` bound is an abs-only tolerance bound.
 
 The clamping in `Real.toNNReal` only ever weakens the claim, so no sign hypothesis on `eps` is
-needed
-in this direction; the converse `approx_with_tol_absOnly_iff` does need one. -/
-theorem approx_with_to_approx_with_tol_absOnly {α : Type} [TorchLean.Storage α] {s : Shape}
+needed in this direction; the converse `approxWithTol_absOnly_iff` does need one. -/
+theorem approxWithTol_absOnly_of_approxWith {α : Type} [TorchLean.Storage α] {s : Shape}
     {toSpec : α → SpecScalar}
     {norm : ∀ {s : Shape}, SpecTensor s → SpecScalar}
     {spec : SpecTensor s} {runtime : Tensor α s} (eps : ℝ)
     (h : approxWith (toSpec := toSpec) (norm := norm) spec runtime eps) :
     approxWithTol (toSpec := toSpec) (norm := norm) spec runtime (ApproxTol.absOnly eps) := by
-  -- Enlarge `eps` to `Real.toNNReal eps` (i.e. `max eps 0`), which is what `absOnly` uses.
   dsimp [approxWithTol]
-  set runtimeS := tensorToSpec toSpec runtime
-  have : tensorDistance (α := SpecScalar) norm spec runtimeS ≤ (Real.toNNReal eps : ℝ) := by
-    exact le_trans (by simpa [approxWith, runtimeS] using h) (Real.le_coe_toNNReal eps)
-  simpa [approxBound_absOnly] using this
+  rw [approxBound_absOnly]
+  exact le_trans h (Real.le_coe_toNNReal eps)
 
 /-- The same lift specialized to the default `linfNorm` tensor relation. -/
-theorem approxTensor_to_approxTensorWithTol_absOnly {α : Type} [TorchLean.Storage α] {s : Shape}
+theorem approxTensorWithTol_absOnly_of_approxWith {α : Type} [TorchLean.Storage α] {s : Shape}
     {toSpec : α → SpecScalar}
     {spec : SpecTensor s} {runtime : Tensor α s} (eps : ℝ)
     (h : approxWith (toSpec := toSpec) (norm := linfNorm) spec runtime eps) :
-    approxTensorWithTol (toSpec := toSpec) spec runtime (ApproxTol.absOnly eps) := by
-  simpa [approxTensorWithTol] using
-    (approx_with_to_approx_with_tol_absOnly (toSpec := toSpec) (norm := linfNorm)
-      (spec := spec) (runtime := runtime) eps h)
+    approxTensorWithTol (toSpec := toSpec) spec runtime (ApproxTol.absOnly eps) :=
+  approxWithTol_absOnly_of_approxWith (toSpec := toSpec) (norm := linfNorm) eps h
 
 /-- Conversely, a tolerance bound is a plain bound at the tolerance's own evaluated budget. -/
-theorem approx_with_tol_to_approx_with {α : Type} [TorchLean.Storage α] {s : Shape}
+theorem approxWith_of_approxWithTol {α : Type} [TorchLean.Storage α] {s : Shape}
     {toSpec : α → SpecScalar}
     {norm : ∀ {s : Shape}, SpecTensor s → SpecScalar}
     {spec : SpecTensor s} {runtime : Tensor α s} {tol : ApproxTol}
     (h : approxWithTol (toSpec := toSpec) (norm := norm) spec runtime tol) :
     approxWith (toSpec := toSpec) (norm := norm) spec runtime
-      (approxBound tol (norm spec) (norm (tensorToSpec toSpec runtime))) := by
-  simpa [approxWith, approxWithTol] using h
+      (approxBound tol (norm spec) (norm (tensorToSpec toSpec runtime))) :=
+  h
 
 /-- Tensor approximation is preserved when the tolerance is weakened in any field. -/
-theorem approx_with_tol_mono {α : Type} [TorchLean.Storage α] {s : Shape}
+theorem approxWithTol_mono {α : Type} [TorchLean.Storage α] {s : Shape}
     {toSpec : α → SpecScalar}
     {norm : ∀ {s : Shape}, SpecTensor s → SpecScalar}
     {spec : SpecTensor s} {runtime : Tensor α s} {tol₁ tol₂ : ApproxTol}
     (habs : tol₁.abs ≤ tol₂.abs) (hrel : tol₁.rel ≤ tol₂.rel) (hslack : tol₁.slack ≤ tol₂.slack)
     (h : approxWithTol (toSpec := toSpec) (norm := norm) spec runtime tol₁) :
-    approxWithTol (toSpec := toSpec) (norm := norm) spec runtime tol₂ := by
-  -- Just enlarge the RHS bound via monotonicity of `approxBound`.
-  dsimp [approxWithTol] at h ⊢
-  set runtimeS := tensorToSpec toSpec runtime
-  have hmono : approxBound tol₁ (norm spec) (norm runtimeS) ≤ approxBound tol₂ (norm spec) (norm
-    runtimeS) :=
-    approxBound_mono (t₁ := tol₁) (t₂ := tol₂) habs hrel hslack (norm spec) (norm runtimeS)
-  exact le_trans h hmono
+    approxWithTol (toSpec := toSpec) (norm := norm) spec runtime tol₂ :=
+  le_trans h (approxBound_mono habs hrel hslack _ _)
 
 /-- For nonnegative `eps` the two formulations coincide, so nothing is lost by working with
-whichever
-is convenient at each step. -/
-theorem approx_with_tol_absOnly_iff {α : Type} [TorchLean.Storage α] {s : Shape}
+whichever is convenient at each step. -/
+theorem approxWithTol_absOnly_iff {α : Type} [TorchLean.Storage α] {s : Shape}
     {toSpec : α → SpecScalar}
     {norm : ∀ {s : Shape}, SpecTensor s → SpecScalar}
     {spec : SpecTensor s} {runtime : Tensor α s} {eps : ℝ} (heps : 0 ≤ eps) :
     approxWithTol (toSpec := toSpec) (norm := norm) spec runtime (ApproxTol.absOnly eps) ↔
       approxWith (toSpec := toSpec) (norm := norm) spec runtime eps := by
-  -- `absOnly eps` makes `approxBound` equal to `eps` when `eps ≥ 0`.
-  have hcoe : (Real.toNNReal eps : ℝ) = eps := by
-    simp [Real.toNNReal_of_nonneg heps]
-  constructor <;> intro h
-  · dsimp [approxWithTol] at h
-    dsimp [approxWith]
-    -- unfold the tol RHS and rewrite it to `eps`
-    simpa [approxBound_absOnly, hcoe] using h
-  · dsimp [approxWith] at h
-    dsimp [approxWithTol]
-    simpa [approxBound_absOnly, hcoe] using h
+  -- With no relative part, `absOnly eps` evaluates to the constant budget `eps`.
+  simp [approxWithTol, approxWith, approxBound_absOnly, Real.coe_toNNReal eps heps]
 
 /-! ## Notation
 

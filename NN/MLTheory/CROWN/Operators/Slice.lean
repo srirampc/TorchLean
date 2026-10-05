@@ -30,18 +30,14 @@ open NN.MLTheory.CROWN
 
 variable {α : Type} [TorchLean.Storage α] [Context α]
 
-/-- View a vector tensor through its leading-axis slices. -/
-def getDimScalarFn {n : Nat} (t : Tensor α [n]) : Fin n → Tensor α .scalar :=
-  fun i => TorchLean.Tensor.unstack t i
-
 /-- IBP for Slice: extract elements [start, stop) from a flattened vector.
     Slice is a linear operation, so bounds propagate exactly.
 -/
 def ibpSlice? (xB : FlatBox α) (start stop : Nat) : Option (FlatBox α) :=
   let outDim := stop - start
   if start < stop ∧ stop ≤ xB.dim then
-    let flo := getDimScalarFn xB.lo
-    let fhi := getDimScalarFn xB.hi
+    let flo := Tensor.unstack xB.lo
+    let fhi := Tensor.unstack xB.hi
     let outLo := Tensor.dim (fun i : Fin outDim =>
       let idx := start + i.val
       if hidx : idx < xB.dim then
@@ -65,8 +61,8 @@ $y_j=x_{\mathrm{indices}[j]}$. This is a permutation or selection.
 -/
 def ibpGather? (xB : FlatBox α) (indices : Array Nat) : Option (FlatBox α) :=
   let outDim := indices.size
-  let flo := getDimScalarFn xB.lo
-  let fhi := getDimScalarFn xB.hi
+  let flo := Tensor.unstack xB.lo
+  let fhi := Tensor.unstack xB.hi
   if indices.all (· < xB.dim) then
     let outLo := Tensor.dim (fun j : Fin outDim =>
       match indices[j.val]? with
@@ -86,8 +82,8 @@ def ibpGather? (xB : FlatBox α) (indices : Array Nat) : Option (FlatBox α) :=
     Returns an array of `FlatBox` values, one for each split.
 -/
 def ibpSplit? (xB : FlatBox α) (splitSizes : Array Nat) : Option (Array (FlatBox α)) :=
-  let flo := getDimScalarFn xB.lo
-  let fhi := getDimScalarFn xB.hi
+  let flo := Tensor.unstack xB.lo
+  let fhi := Tensor.unstack xB.hi
   let buildSplits : Array (FlatBox α) × Nat :=
     splitSizes.foldl (fun (state : Array (FlatBox α) × Nat) size =>
       let boxes := state.1
@@ -153,40 +149,21 @@ def affGather? {inDim outDim : Nat} (indices : Array Nat)
   else
     none
 
-/-- Derivative bounds for Slice: derivatives just slice through. -/
-def derivSlice? (dB : FlatBox α) (start stop : Nat) : Option (FlatBox α) :=
-  ibpSlice? dB start stop
-
-/-- Derivative bounds for Gather: derivatives follow the same indexing. -/
-def derivGather? (dB : FlatBox α) (indices : Array Nat) : Option (FlatBox α) :=
-  ibpGather? dB indices
-
 /-- Concatenate multiple FlatBoxes into one. -/
 def ibpConcat (boxes : Array (FlatBox α)) : FlatBox α :=
   let totalDim := boxes.foldl (fun acc b => acc + b.dim) 0
-  if h : totalDim > 0 then
-    let buildConcat := boxes.foldl (fun (acc : Array α × Array α) b =>
-      let (loArr, hiArr) := acc
-      let flo := getDimScalarFn b.lo
-      let fhi := getDimScalarFn b.hi
-      let newLo := (Array.finRange b.dim).foldl (fun arr i =>
-        arr.push (flo i).item
-      ) loArr
-      let newHi := (Array.finRange b.dim).foldl (fun arr i =>
-        arr.push (fhi i).item
-      ) hiArr
-      (newLo, newHi)
-    ) ((#[] : Array α), (#[] : Array α))
-    let (loArr, hiArr) := buildConcat
-    { dim := totalDim
-    , lo := Tensor.dim (fun i : Fin totalDim =>
-        Tensor.scalar (if h : i.val < loArr.size then loArr[i.val] else 0))
-    , hi := Tensor.dim (fun i : Fin totalDim =>
-        Tensor.scalar (if h : i.val < hiArr.size then hiArr[i.val] else 0))
-    }
-  else
-    { dim := 0
-    , lo := Tensor.dim (fun i : Fin 0 => i.elim0)
-    , hi := Tensor.dim (fun i : Fin 0 => i.elim0) }
+  let buildConcat := boxes.foldl (fun (acc : Array α × Array α) b =>
+    let (loArr, hiArr) := acc
+    let flo := Tensor.unstack b.lo
+    let fhi := Tensor.unstack b.hi
+    let newLo := (Array.finRange b.dim).foldl (fun arr i => arr.push (flo i).item) loArr
+    let newHi := (Array.finRange b.dim).foldl (fun arr i => arr.push (fhi i).item) hiArr
+    (newLo, newHi)) ((#[] : Array α), (#[] : Array α))
+  let (loArr, hiArr) := buildConcat
+  { dim := totalDim
+    lo := Tensor.dim (fun i : Fin totalDim =>
+      Tensor.scalar (if h : i.val < loArr.size then loArr[i.val] else 0))
+    hi := Tensor.dim (fun i : Fin totalDim =>
+      Tensor.scalar (if h : i.val < hiArr.size then hiArr[i.val] else 0)) }
 
 end NN.MLTheory.CROWN.Operators.Slice

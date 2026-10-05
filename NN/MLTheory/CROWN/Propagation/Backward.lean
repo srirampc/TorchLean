@@ -48,13 +48,13 @@ variable {α : Type} [TorchLean.Storage α] [Context α]
 /-- Per-neuron activation relaxation parameters. -/
 structure NeuronRelax (α : Type) where
   /-- Slope of the lower affine envelope. -/
-  slope_lower : α
+  slopeLower : α
   /-- Bias of the lower affine envelope. -/
-  bias_lower : α
+  biasLower : α
   /-- Slope of the upper affine envelope. -/
-  slope_upper : α
+  slopeUpper : α
   /-- Bias of the upper affine envelope. -/
-  bias_upper : α
+  biasUpper : α
 
 /-- Layer-wise relaxation parameters. -/
 structure LayerRelax (α : Type) [TorchLean.Storage α] [Context α] where
@@ -64,53 +64,27 @@ structure LayerRelax (α : Type) [TorchLean.Storage α] [Context α] where
   params : Tensor (NeuronRelax α) [dim]
 
 /-- Extract relaxation slopes as diagonal matrix (for lower bound). -/
-def layerSlopesLower {n : Nat} (relax : LayerRelax α)
-    (h : relax.dim = n) : Tensor α [n, n] :=
-  by
-    cases h
-    exact
-      Tensor.dim (fun i : Fin relax.dim =>
-        Tensor.dim (fun j : Fin relax.dim =>
-          Tensor.scalar <|
-            if decide (i.val = j.val) then
-              (relax.params.getScalar i).slope_lower
-            else
-              0))
+def layerSlopesLower {n : Nat} (relax : LayerRelax α) (h : relax.dim = n) : Tensor α [n, n] :=
+  h ▸ Tensor.dim fun i : Fin relax.dim =>
+    Tensor.dim fun j : Fin relax.dim =>
+      Tensor.scalar (if decide (i.val = j.val) then (relax.params.getScalar i).slopeLower else 0)
 
 /-- Extract relaxation slopes as diagonal matrix (for upper bound). -/
-def layerSlopesUpper {n : Nat} (relax : LayerRelax α)
-    (h : relax.dim = n) : Tensor α [n, n] :=
-  by
-    cases h
-    exact
-      Tensor.dim (fun i : Fin relax.dim =>
-        Tensor.dim (fun j : Fin relax.dim =>
-          Tensor.scalar <|
-            if decide (i.val = j.val) then
-              (relax.params.getScalar i).slope_upper
-            else
-              0))
+def layerSlopesUpper {n : Nat} (relax : LayerRelax α) (h : relax.dim = n) : Tensor α [n, n] :=
+  h ▸ Tensor.dim fun i : Fin relax.dim =>
+    Tensor.dim fun j : Fin relax.dim =>
+      Tensor.scalar (if decide (i.val = j.val) then (relax.params.getScalar i).slopeUpper else 0)
 
 /-- Extract bias vector (for lower bound). -/
-def layerBiasLower {n : Nat} (relax : LayerRelax α)
-    (h : relax.dim = n) : Tensor α [n] :=
-  by
-    cases h
-    exact
-      Tensor.dim (fun i : Fin relax.dim =>
-        Tensor.scalar (relax.params.getScalar i).bias_lower)
+def layerBiasLower {n : Nat} (relax : LayerRelax α) (h : relax.dim = n) : Tensor α [n] :=
+  h ▸ Tensor.dim fun i : Fin relax.dim => Tensor.scalar (relax.params.getScalar i).biasLower
 
 /-- Extract bias vector (for upper bound). -/
-def layerBiasUpper {n : Nat} (relax : LayerRelax α)
-    (h : relax.dim = n) : Tensor α [n] :=
-  by
-    cases h
-    exact
-      Tensor.dim (fun i : Fin relax.dim =>
-        Tensor.scalar (relax.params.getScalar i).bias_upper)
+def layerBiasUpper {n : Nat} (relax : LayerRelax α) (h : relax.dim = n) : Tensor α [n] :=
+  h ▸ Tensor.dim fun i : Fin relax.dim => Tensor.scalar (relax.params.getScalar i).biasUpper
 
-/-- Network structure for backward propagation.
-    Stores weights, biases, and pre-computed activation relaxations. -/
+/-- Network structure for backward propagation: weights, biases, and pre-computed activation
+relaxations, indexed by layer. -/
 structure BackwardNetwork (α : Type) [TorchLean.Storage α] [Context α] where
   /-- Number of layers (not counting input) -/
   numLayers : Nat
@@ -127,16 +101,17 @@ structure BackwardNetwork (α : Type) [TorchLean.Storage α] [Context α] where
   /-- Per-layer activation relaxations (empty for output layer) -/
   relaxations : Array (LayerRelax α)
 
-/-- Backward state during propagation. -/
+/-- Backward state during propagation: the affine forms `A x + b` bounding the objective from
+below and from above. -/
 structure BackwardState (α : Type) [TorchLean.Storage α] [Context α] where
-  /-- Current lower-bound affine coefficient matrix `A` (`output_dim × input_dim`). -/
-  A_lower : Σ m n : Nat, Tensor α [m, n]
-  /-- Current upper-bound affine coefficient matrix `A` (`output_dim × input_dim`). -/
-  A_upper : Σ m n : Nat, Tensor α [m, n]
-  /-- Current lower-bound affine bias vector `b` (`output_dim`). -/
-  b_lower : Σ n : Nat, Tensor α [n]
-  /-- Current upper-bound affine bias vector `b` (`output_dim`). -/
-  b_upper : Σ n : Nat, Tensor α [n]
+  /-- Coefficient matrix `A` of the lower affine bound (`output_dim × input_dim`). -/
+  coeffLower : Σ m n : Nat, Tensor α [m, n]
+  /-- Coefficient matrix `A` of the upper affine bound (`output_dim × input_dim`). -/
+  coeffUpper : Σ m n : Nat, Tensor α [m, n]
+  /-- Bias vector `b` of the lower affine bound (`output_dim`). -/
+  biasLower : Σ n : Nat, Tensor α [n]
+  /-- Bias vector `b` of the upper affine bound (`output_dim`). -/
+  biasUpper : Σ n : Nat, Tensor α [n]
 
 /-- Helper: matrix multiplication for sigma-typed tensors. -/
 def sigmaMatMul (A : Σ m n : Nat, Tensor α [m, n])
@@ -145,7 +120,7 @@ def sigmaMatMul (A : Σ m n : Nat, Tensor α [m, n])
   let ⟨m, n, matA⟩ := A
   let ⟨p, q, matB⟩ := B
   if h : n = p then
-    some ⟨m, q, Spec.matMulSpec (α:=α) matA (by cases h; exact matB)⟩
+    some ⟨m, q, Spec.matMulSpec (α := α) matA (by cases h; exact matB)⟩
   else
     none
 
@@ -156,7 +131,7 @@ def sigmaMatVecMul (A : Σ m n : Nat, Tensor α [m, n])
   let ⟨m, n, matA⟩ := A
   let ⟨p, vecV⟩ := v
   if h : n = p then
-    some ⟨m, Spec.matVecMulSpec (α:=α) matA (by cases h; exact vecV)⟩
+    some ⟨m, Spec.matVecMulSpec (α := α) matA (by cases h; exact vecV)⟩
   else
     none
 
@@ -177,11 +152,11 @@ def initBackwardState (outDim : Nat) : BackwardState α :=
       Tensor.dim (fun j =>
         Tensor.scalar (if decide (i.val = j.val) then 1 else 0)))
   let zero : Tensor α [outDim] :=
-    Tensor.full (α:=α) (.dim outDim .scalar) 0
-  { A_lower := ⟨outDim, outDim, identity⟩
-  , A_upper := ⟨outDim, outDim, identity⟩
-  , b_lower := ⟨outDim, zero⟩
-  , b_upper := ⟨outDim, zero⟩ }
+    Tensor.full (α := α) (.dim outDim .scalar) 0
+  { coeffLower := ⟨outDim, outDim, identity⟩
+  , coeffUpper := ⟨outDim, outDim, identity⟩
+  , biasLower := ⟨outDim, zero⟩
+  , biasUpper := ⟨outDim, zero⟩ }
 
 /-- Process one layer in backward propagation.
 
@@ -189,7 +164,9 @@ def initBackwardState (outDim : Nat) : BackwardState α :=
     A^(l-1) = A^(l) · Λ · W
     b^(l-1) = A^(l) · (Λ · b + offset) + b^(l)
 
-    Here we handle lower and upper bounds separately.
+    Here we handle lower and upper bounds separately. The result is `none` when the weight rows,
+    the bias, and the relaxation do not cover the same neurons, or when the running state does not
+    compose with this layer.
 -/
 def backwardOneLayer (state : BackwardState α)
     (W : Σ m n : Nat, Tensor α [m, n])
@@ -201,76 +178,92 @@ def backwardOneLayer (state : BackwardState α)
   -- Check that the matrix, bias, and relaxation dimensions match.
   if h : wm = relax.dim ∧ bn = wm then
     -- Build diagonal slope matrices for the relaxation dimension
-    let slopeLower := layerSlopesLower (n:=relax.dim) relax rfl
-    let slopeUpper := layerSlopesUpper (n:=relax.dim) relax rfl
-    let biasLower := layerBiasLower (n:=relax.dim) relax rfl
-    let biasUpper := layerBiasUpper (n:=relax.dim) relax rfl
+    let slopesLower := layerSlopesLower (n := relax.dim) relax rfl
+    let slopesUpper := layerSlopesUpper (n := relax.dim) relax rfl
+    let offsetsLower := layerBiasLower (n := relax.dim) relax rfl
+    let offsetsUpper := layerBiasUpper (n := relax.dim) relax rfl
 
-    -- A_new_lower = A_lower · diag(slopeLower) · W
-    -- First: temp = diag(slopeLower) · W
-    -- Cast matW to match dimensions using equality h.1
-    let matW' : Tensor α [relax.dim, wn] :=
-      cast (by rw [h.1]) matW
-    let tempLower := Spec.matMulSpec (α:=α) slopeLower matW'
-    -- Then: A_new = A_lower · temp
-    let A_new_lower ← sigmaMatMul state.A_lower ⟨relax.dim, wn, tempLower⟩
+    -- A_new = A · diag(slope) · W, with the weight rows indexed by the relaxation dimension.
+    let matW' : Tensor α [relax.dim, wn] := h.1 ▸ matW
+    let tempLower := Spec.matMulSpec (α := α) slopesLower matW'
+    let coeffLowerNext ← sigmaMatMul state.coeffLower ⟨relax.dim, wn, tempLower⟩
 
-    -- Similar for upper
-    let tempUpper := Spec.matMulSpec (α:=α) slopeUpper matW'
-    let A_new_upper ← sigmaMatMul state.A_upper ⟨relax.dim, wn, tempUpper⟩
+    let tempUpper := Spec.matMulSpec (α := α) slopesUpper matW'
+    let coeffUpperNext ← sigmaMatMul state.coeffUpper ⟨relax.dim, wn, tempUpper⟩
 
-    -- b_new_lower = A_lower · (slopeLower · bias + biasLower) + b_lower
-    -- First: scaled_bias = slopeLower · bias + biasLower (elementwise)
+    -- b_new = A · (diag(slope) · bias + offset) + b, the inner sum taken elementwise.
     let scaledBiasLower : Tensor α [relax.dim] :=
       Tensor.dim (fun i =>
-        let biasValue := biasLower.getScalar i
+        let offset := offsetsLower.getScalar i
         let vectorIndex : Fin bn := ⟨i.val, by rw [h.2, h.1]; exact i.isLt⟩
         let vectorValue := vecB.getScalar vectorIndex
-        let slope := Spec.get2 slopeLower i i
-        Tensor.scalar (slope * vectorValue + biasValue))
+        let slope := Spec.get2 slopesLower i i
+        Tensor.scalar (slope * vectorValue + offset))
 
     let scaledBiasUpper : Tensor α [relax.dim] :=
       Tensor.dim (fun i =>
-        let biasValue := biasUpper.getScalar i
+        let offset := offsetsUpper.getScalar i
         let vectorIndex : Fin bn := ⟨i.val, by rw [h.2, h.1]; exact i.isLt⟩
         let vectorValue := vecB.getScalar vectorIndex
-        let slope := Spec.get2 slopeUpper i i
-        Tensor.scalar (slope * vectorValue + biasValue))
+        let slope := Spec.get2 slopesUpper i i
+        Tensor.scalar (slope * vectorValue + offset))
 
     -- Multiply by current A and add to b
-    let Ab_lower ← sigmaMatVecMul state.A_lower ⟨relax.dim, scaledBiasLower⟩
-    let b_new_lower ← sigmaVecAdd Ab_lower state.b_lower
+    let shiftLower ← sigmaMatVecMul state.coeffLower ⟨relax.dim, scaledBiasLower⟩
+    let biasLowerNext ← sigmaVecAdd shiftLower state.biasLower
 
-    let Ab_upper ← sigmaMatVecMul state.A_upper ⟨relax.dim, scaledBiasUpper⟩
-    let b_new_upper ← sigmaVecAdd Ab_upper state.b_upper
+    let shiftUpper ← sigmaMatVecMul state.coeffUpper ⟨relax.dim, scaledBiasUpper⟩
+    let biasUpperNext ← sigmaVecAdd shiftUpper state.biasUpper
 
     return {
-      A_lower := A_new_lower
-      A_upper := A_new_upper
-      b_lower := b_new_lower
-      b_upper := b_new_upper
+      coeffLower := coeffLowerNext
+      coeffUpper := coeffUpperNext
+      biasLower := biasLowerNext
+      biasUpper := biasUpperNext
     }
   else
     none
 
-/-- Run full backward propagation through network. -/
-def runBackward (net : BackwardNetwork α) : Option (BackwardState α) := do
-  let mut state := initBackwardState (α:=α) net.outDim
+/-- A weight whose row count differs from the relaxation dimension, or a bias whose length differs
+from the row count, is rejected by `backwardOneLayer`. -/
+theorem backwardOneLayer_eq_none (state : BackwardState α) {wm wn bn : Nat}
+    (matW : Tensor α [wm, wn]) (vecB : Tensor α [bn]) (relax : LayerRelax α)
+    (h : ¬ (wm = relax.dim ∧ bn = wm)) :
+    backwardOneLayer state ⟨wm, wn, matW⟩ ⟨bn, vecB⟩ relax = none := by
+  simp [backwardOneLayer, h]
 
-  -- Process layers from output to input
-  for i in [0:net.numLayers] do
-    let layerIdx := net.numLayers - 1 - i
+/-- Run the backward propagation through the network, from the output layer to the input.
+
+Layers are visited in decreasing index order. A layer whose weight, bias, and relaxation
+dimensions disagree, or that does not compose with the running state, makes the whole run fail
+with `none`; a partially propagated state is never returned. A layer index missing from any of the
+three arrays is skipped. -/
+def runBackward (net : BackwardNetwork α) : Option (BackwardState α) := do
+  let mut state := initBackwardState (α := α) net.outDim
+  for layerIdx in (List.range net.numLayers).reverse do
     if hlw : layerIdx < net.weights.size then
       if hlb : layerIdx < net.biases.size then
         if hlr : layerIdx < net.relaxations.size then
-          let W := net.weights[layerIdx]
-          let b := net.biases[layerIdx]
-          let relax := net.relaxations[layerIdx]
-          match backwardOneLayer (α:=α) state W b relax with
-          | some newState => state := newState
-          | none => return state -- Early exit on error
-
+          state ← backwardOneLayer (α := α) state net.weights[layerIdx] net.biases[layerIdx]
+            net.relaxations[layerIdx]
   return state
+
+/-- A one-layer network whose weight has two rows while its relaxation covers one neuron. -/
+private noncomputable def mismatchedNetwork : BackwardNetwork ℝ where
+  numLayers := 1
+  inDim := 1
+  outDim := 2
+  dims := #[2]
+  weights := #[⟨2, 1, Tensor.full (α := ℝ) (.dim 2 (.dim 1 .scalar)) 0⟩]
+  biases := #[⟨2, Tensor.full (α := ℝ) (.dim 2 .scalar) 0⟩]
+  relaxations := #[{
+    dim := 1
+    params := Tensor.dim fun _ =>
+      Tensor.scalar { slopeLower := 0, biasLower := 0, slopeUpper := 0, biasUpper := 0 } }]
+
+/-- A dimension mismatch between a weight and its relaxation is rejected rather than skipped. -/
+private theorem runBackward_mismatchedNetwork_eq_none :
+    runBackward mismatchedNetwork = none := rfl
 
 /-- Evaluate backward bounds on an input box.
 
@@ -279,10 +272,10 @@ Given $Ax+b$ with $x\in[\mathrm{lo},\mathrm{hi}]$, compute the corresponding out
 def evalBackwardBounds (outDim inDim : Nat) (state : BackwardState α)
     [BoundOps α] (xB : Box α (.dim inDim .scalar)) :
     Option (Box α (.dim outDim .scalar)) :=
-  let ⟨mL, nL, A_lo⟩ := state.A_lower
-  let ⟨mU, nU, A_up⟩ := state.A_upper
-  let ⟨bDimL, b_lo⟩ := state.b_lower
-  let ⟨bDimU, b_up⟩ := state.b_upper
+  let ⟨mL, nL, coeffLo⟩ := state.coeffLower
+  let ⟨mU, nU, coeffHi⟩ := state.coeffUpper
+  let ⟨bDimL, biasLo⟩ := state.biasLower
+  let ⟨bDimU, biasHi⟩ := state.biasUpper
 
   if hmL : mL = outDim then
     if hnL : nL = inDim then
@@ -292,10 +285,10 @@ def evalBackwardBounds (outDim inDim : Nat) (state : BackwardState α)
             if hbU : bDimU = outDim then
               by
                 cases hmL; cases hnL; cases hmU; cases hnU; cases hbL; cases hbU
-                let bBLower : Box α (.dim outDim .scalar) := { lo := b_lo, hi := b_lo }
-                let bBUpper : Box α (.dim outDim .scalar) := { lo := b_up, hi := b_up }
-                let yLower := NN.MLTheory.CROWN.IBP.linear (α:=α) A_lo xB bBLower
-                let yUpper := NN.MLTheory.CROWN.IBP.linear (α:=α) A_up xB bBUpper
+                let bBLower : Box α (.dim outDim .scalar) := { lo := biasLo, hi := biasLo }
+                let bBUpper : Box α (.dim outDim .scalar) := { lo := biasHi, hi := biasHi }
+                let yLower := NN.MLTheory.CROWN.IBP.linear (α := α) coeffLo xB bBLower
+                let yUpper := NN.MLTheory.CROWN.IBP.linear (α := α) coeffHi xB bBUpper
                 exact some { lo := yLower.lo, hi := yUpper.hi }
             else
               none
@@ -310,7 +303,12 @@ def evalBackwardBounds (outDim inDim : Nat) (state : BackwardState α)
   else
     none
 
-/-- Compute ReLU relaxation parameters from pre-activation bounds. -/
+/-- Compute ReLU relaxation parameters from pre-activation bounds.
+
+The inactive test is `u < 0`, so the degenerate interval `u = 0` takes the crossing branch and
+evaluates `u / (u - l)` there (dividing zero by zero when `l = 0` as well).
+`Runtime.Ops.ReLU.relaxScalar` tests `u > 0` and treats `u = 0` as inactive; the two relaxations
+are deliberately not unified. -/
 def computeReLURelax (n : Nat) (preB : Box α (.dim n .scalar)) : LayerRelax α :=
   let params := Tensor.dim (fun i : Fin n =>
     let l := preB.lo.getScalar i
@@ -318,30 +316,24 @@ def computeReLURelax (n : Nat) (preB : Box α (.dim n .scalar)) : LayerRelax α 
     let relax : NeuronRelax α :=
       if u < 0 then
         -- Inactive: y = 0
-        { slope_lower := 0
-        , bias_lower := 0
-        , slope_upper := 0
-        , bias_upper := 0 }
+        { slopeLower := 0
+        , biasLower := 0
+        , slopeUpper := 0
+        , biasUpper := 0 }
       else if l > 0 then
         -- Active: y = x
-        { slope_lower := 1
-        , bias_lower := 0
-        , slope_upper := 1
-        , bias_upper := 0 }
+        { slopeLower := 1
+        , biasLower := 0
+        , slopeUpper := 1
+        , biasUpper := 0 }
       else
         -- Crossing: lower y ≥ 0, upper y ≤ αx - αl
         let α := u / (u - l)
-        { slope_lower := 0  -- Conservative lower
-        , bias_lower := 0
-        , slope_upper := α
-        , bias_upper := -(α * l) }
+        { slopeLower := 0  -- Conservative lower
+        , biasLower := 0
+        , slopeUpper := α
+        , biasUpper := -(α * l) }
     Tensor.scalar relax)
   { dim := n, params := params }
 
 end NN.MLTheory.CROWN.Propagation.Backward
-/-!
-Backward (reverse) bound propagation for the CROWN development.
-
-This file contains the backward pass that pushes linear bounds from outputs back to inputs through
-the graph, as used by the CROWN-style certification proofs/checkers.
--/

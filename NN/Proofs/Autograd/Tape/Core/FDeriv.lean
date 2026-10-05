@@ -17,8 +17,7 @@ public import Mathlib.Analysis.InnerProductSpace.Adjoint
 Analytic (`HasFDerivAt`/`fderiv`) correctness for **tape-style SSA/DAG graphs**.
 
 `NN/Proofs/Autograd/Tape/Core/Soundness.lean` proves the global JVP/VJP adjointness law for DAG
-  graphs
-against the tensor dot product.
+graphs against the tensor dot product.
 
 This file adds the analytic upgrade (spec-level over `ℝ`):
 
@@ -113,46 +112,6 @@ def ctxSize : List Shape → Nat
 
 /-- A vectorized context containing every entry of a `TorchLean.TensorPack ℝ Γ`. -/
 abbrev CtxVec (Γ : List Shape) := Vec (ctxSize Γ)
-
-/--
-Build a Euclidean vector from its coordinate function.
-
-This is the small helper used throughout the file when reindexing vectors across context
-concatenation and shape casts.
--/
-def vecOfFun {n : Nat} (f : Fin n → ℝ) : Vec n :=
-  (EuclideanSpace.equiv (𝕜 := ℝ) (ι := Fin n)).symm f
-
-/-- Coordinates of `vecOfFun f` are the values of `f`. -/
-@[simp] theorem vecOfFun_apply {n : Nat} (f : Fin n → ℝ) (i : Fin n) :
-    vecOfFun (n := n) f i = f i := by
-  simp [vecOfFun, EuclideanSpace.equiv]
-
-/-- The same statement through the `WithLp` wrapper, which is the form `simp` meets in practice. -/
-@[simp] theorem vecOfFun_ofLp {n : Nat} (f : Fin n → ℝ) (i : Fin n) :
-    (vecOfFun (n := n) f).ofLp i = f i := by
-  simp [vecOfFun, EuclideanSpace.equiv]
-
-/-- Removing the `WithLp` wrapper from `vecOfFun` recovers its coordinate function. -/
-theorem vecOfFun_ofLp_eq {n : Nat} (f : Fin n → ℝ) :
-    (vecOfFun (n := n) f).ofLp = f := by
-  funext i
-  exact vecOfFun_ofLp f i
-
-/-- Rebuilding a vector from its own coordinates changes nothing. -/
-@[simp] theorem vecOfFun_eta {n : Nat} (v : Vec n) :
-    vecOfFun (n := n) (fun i => v i) = v := by
-  classical
-  -- `vecOfFun` is `EuclideanSpace.equiv.symm`, and the forward map is definitionally `fun i => v
-  -- i`.
-  simp [vecOfFun, EuclideanSpace.equiv]
-
-/-- The `ofLp` variant of eta. Both directions are needed because the reindexing lemmas below
-sometimes produce a bare coordinate function and sometimes an unwrapped one. -/
-@[simp] theorem vecOfFun_eta_ofLp {n : Nat} (v : Vec n) :
-    vecOfFun (n := n) (fun i => v.ofLp i) = v := by
-  classical
-  simp [vecOfFun, EuclideanSpace.equiv]
 
 /--
 Flatten a typed context `TorchLean.TensorPack ℝ Γ` into one big Euclidean vector.
@@ -261,7 +220,7 @@ def castVec {n m : Nat} (h : n = m) : Vec n → Vec m :=
     castVec (n := n) (m := m) h (u + v) = castVec (n := n) (m := m) h u + castVec (n := n) (m := m)
       h v := by
   ext i
-  simp []
+  simp
 
 /-- `castVec` commutes with scalar multiplication; with additivity this makes it linear, which is
 what allows a cast to be pushed through a derivative without a separate argument each time. -/
@@ -288,51 +247,22 @@ theorem inner_castVec_castVec {n m : Nat} (h : n = m) (x y : Vec n) :
   cases h
   simp [castVec]
 
-/--
-`sumSpec` over an outer dimension is a sum over slices.
+/-- A cast on the left of an inner product becomes the inverse cast on the right. -/
+theorem inner_castVec_left {n m : Nat} (h : n = m) (x : Vec n) (y : Vec m) :
+    inner ℝ (castVec h x) y = inner ℝ x (castVec h.symm y) := by
+  cases h
+  simp
 
-This tensor-level “Fubini rule” is used to relate `Spec.dot` to Euclidean inner products after
-vectorization.
--/
-theorem sum_spec_dim {n : Nat} {s : Shape} (values : Fin n → Tensor ℝ s) :
-    sumSpec (Tensor.dim values) = ∑ i : Fin n, sumSpec (values i) := by
-  simpa only [get_dim] using
-    (Spec.sum_spec_dim (t := Tensor.dim values))
-
--- Decompose `tensorToVec` along `finProdFinEquiv` when the inner size is positive.
 /--
 Coordinate characterization of `tensorToVec` on a tensor `.dim n s`.
 
 Informally, the vectorization order is the standard product order induced by `finProdFinEquiv`.
+No positivity hypothesis on `Spec.Shape.size s` is needed: the coordinate
+`p.2 : Fin (Spec.Shape.size s)` already witnesses it.
 -/
-theorem tensorToVec_dim_apply {n : Nat} {s : Shape} (hmpos : 0 < Spec.Shape.size s)
+theorem tensorToVec_dim_apply {n : Nat} {s : Shape}
     (f : Fin n → Tensor ℝ s) (p : Fin n × Fin (Spec.Shape.size s)) :
     tensorToVec (t := Tensor.dim f) (finProdFinEquiv p) = tensorToVec (t := f p.1) p.2 := by
-  classical
-  let m : Nat := Spec.Shape.size s
-  have hmpos' : 0 < m := by
-    dsimp [m]
-    exact hmpos
-  have hp2lt : p.2.val < m := by
-    dsimp [m]
-    exact p.2.isLt
-  have hdiv : (p.2.val + m * p.1.val) / m = p.1.val := by
-    calc
-      (p.2.val + m * p.1.val) / m = p.2.val / m + p.1.val := Nat.add_mul_div_left p.2.val p.1.val
-        hmpos'
-      _ = p.1.val := by
-        have : p.2.val / m = 0 := Nat.div_eq_of_lt hp2lt
-        simp [this]
-  have hmod : (p.2.val + m * p.1.val) % m = p.2.val := by
-    calc
-      (p.2.val + m * p.1.val) % m = p.2.val % m := Nat.add_mul_mod_self_left p.2.val m p.1.val
-      _ = p.2.val := by
-        simp [Nat.mod_eq_of_lt hp2lt]
-  have houter : (p.2.val + m * p.1.val) / m < n := by
-    simp [hdiv]
-  have hi : (⟨(p.2.val + m * p.1.val) / m, houter⟩ : Fin n) = p.1 := by
-    apply Fin.ext
-    simp [hdiv]
   calc
     tensorToVec (t := Tensor.dim f) (finProdFinEquiv p) =
         TorchLean.Tensor.getScalar (flattenSpec (Tensor.dim f)) (finProdFinEquiv p) :=
@@ -354,7 +284,6 @@ theorem tensorToVec_dim_apply {n : Nat} {s : Shape} (hmpos : 0 < Spec.Shape.size
           (values := f) (outer := p.1) (inner := p.2) hidx
     _ = tensorToVec (t := f p.1) p.2 := (getScalarE_ofLp _ _).symm
 
--- Inner product decomposition across an outer dimension.
 /-- `tensorToVec` turns dot products on `.dim n s` into sums of Euclidean inner products over
 slices. -/
 theorem inner_tensorToVec_dim {n : Nat} {s : Shape} (a b : Fin n → Tensor ℝ s) :
@@ -362,87 +291,43 @@ theorem inner_tensorToVec_dim {n : Nat} {s : Shape} (a b : Fin n → Tensor ℝ 
       =
     ∑ i : Fin n, inner ℝ (tensorToVec (t := a i)) (tensorToVec (t := b i)) := by
   classical
-  by_cases hm : Spec.Shape.size s = 0
-  · have hmul : n * Spec.Shape.size s = 0 := by simp [hm]
-    -- LHS: transport to `Fin 0`.
-    have hL :
-        inner ℝ (tensorToVec (t := Tensor.dim a)) (tensorToVec (t := Tensor.dim b)) = 0 := by
-      let e : Fin 0 ≃ Fin (n * Spec.Shape.size s) := Equiv.cast (congrArg Fin hmul.symm)
-      calc
-        inner ℝ (tensorToVec (t := Tensor.dim a)) (tensorToVec (t := Tensor.dim b))
-            =
-          ∑ i : Fin (n * Spec.Shape.size s),
-            tensorToVec (t := Tensor.dim a) i * tensorToVec (t := Tensor.dim b) i := by
-              rw [inner_eq_sum_mul]
-              rfl
-        _ =
-          ∑ i : Fin 0,
-            tensorToVec (t := Tensor.dim a) (e i) * tensorToVec (t := Tensor.dim b) (e i) := by
-              simpa using
-                (Equiv.sum_comp (e := e)
-                  (g := fun i : Fin (n * Spec.Shape.size s) =>
-                    tensorToVec (t := Tensor.dim a) i * tensorToVec (t := Tensor.dim b) i)).symm
-        _ = 0 := by simp
-    have hterm : ∀ i : Fin n, inner ℝ (tensorToVec (t := a i)) (tensorToVec (t := b i)) = 0 := by
-      intro i
-      let e : Fin 0 ≃ Fin (Spec.Shape.size s) := Equiv.cast (congrArg Fin hm.symm)
-      calc
-        inner ℝ (tensorToVec (t := a i)) (tensorToVec (t := b i))
-            =
-          ∑ j : Fin (Spec.Shape.size s),
-            tensorToVec (t := a i) j * tensorToVec (t := b i) j := by
-              simpa using
-                inner_eq_sum_mul (x := tensorToVec (t := a i)) (y := tensorToVec (t := b i))
-        _ =
-          ∑ j : Fin 0,
-            tensorToVec (t := a i) (e j) * tensorToVec (t := b i) (e j) := by
-              simpa using
-                (Equiv.sum_comp (e := e)
-                  (g := fun j : Fin (Spec.Shape.size s) =>
-                    tensorToVec (t := a i) j * tensorToVec (t := b i) j)).symm
-        _ = 0 := by simp
-    have hR :
-        (∑ i : Fin n, inner ℝ (tensorToVec (t := a i)) (tensorToVec (t := b i))) = 0 := by
-      simp [hterm]
-    simp [hL, hR]
-  · have hmpos : 0 < Spec.Shape.size s := Nat.pos_of_ne_zero hm
-    calc
-      inner ℝ (tensorToVec (t := Tensor.dim a)) (tensorToVec (t := Tensor.dim b))
-          =
-        ∑ i : Fin (n * Spec.Shape.size s),
-          tensorToVec (t := Tensor.dim a) i * tensorToVec (t := Tensor.dim b) i := by
-            rw [inner_eq_sum_mul]
-            rfl
-      _ =
-        ∑ p : Fin n × Fin (Spec.Shape.size s),
-          tensorToVec (t := Tensor.dim a) (finProdFinEquiv p) *
-            tensorToVec (t := Tensor.dim b) (finProdFinEquiv p) := by
-          simpa using
-            (Equiv.sum_comp (e := finProdFinEquiv)
-              (g := fun i : Fin (n * Spec.Shape.size s) =>
-                tensorToVec (t := Tensor.dim a) i * tensorToVec (t := Tensor.dim b) i)).symm
-      _ =
-        ∑ p : Fin n × Fin (Spec.Shape.size s),
-          tensorToVec (t := a p.1) p.2 * tensorToVec (t := b p.1) p.2 := by
-          refine Finset.sum_congr rfl ?_
-          intro p _
-          simp [tensorToVec_dim_apply (hmpos := hmpos)]
-      _ =
-        ∑ i : Fin n, ∑ j : Fin (Spec.Shape.size s),
-          tensorToVec (t := a i) j * tensorToVec (t := b i) j := by
-          simp [Fintype.sum_prod_type]
-      _ =
-        ∑ i : Fin n, inner ℝ (tensorToVec (t := a i)) (tensorToVec (t := b i)) := by
-          refine Finset.sum_congr rfl ?_
-          intro i _
-          simpa using
-            (inner_eq_sum_mul (x := tensorToVec (t := a i)) (y := tensorToVec (t := b i))).symm
+  -- Reindex the flat coordinate sum by `finProdFinEquiv`, then split it into outer and inner sums.
+  calc
+    inner ℝ (tensorToVec (t := Tensor.dim a)) (tensorToVec (t := Tensor.dim b))
+        =
+      ∑ i : Fin (n * Spec.Shape.size s),
+        tensorToVec (t := Tensor.dim a) i * tensorToVec (t := Tensor.dim b) i := by
+          rw [inner_eq_sum_mul]
+          rfl
+    _ =
+      ∑ p : Fin n × Fin (Spec.Shape.size s),
+        tensorToVec (t := Tensor.dim a) (finProdFinEquiv p) *
+          tensorToVec (t := Tensor.dim b) (finProdFinEquiv p) := by
+        simpa using
+          (Equiv.sum_comp (e := finProdFinEquiv)
+            (g := fun i : Fin (n * Spec.Shape.size s) =>
+              tensorToVec (t := Tensor.dim a) i * tensorToVec (t := Tensor.dim b) i)).symm
+    _ =
+      ∑ p : Fin n × Fin (Spec.Shape.size s),
+        tensorToVec (t := a p.1) p.2 * tensorToVec (t := b p.1) p.2 := by
+        refine Finset.sum_congr rfl ?_
+        intro p _
+        simp [tensorToVec_dim_apply]
+    _ =
+      ∑ i : Fin n, ∑ j : Fin (Spec.Shape.size s),
+        tensorToVec (t := a i) j * tensorToVec (t := b i) j := by
+        simp [Fintype.sum_prod_type]
+    _ =
+      ∑ i : Fin n, inner ℝ (tensorToVec (t := a i)) (tensorToVec (t := b i)) := by
+        refine Finset.sum_congr rfl ?_
+        intro i _
+        simpa using
+          (inner_eq_sum_mul (x := tensorToVec (t := a i)) (y := tensorToVec (t := b i))).symm
 
--- Dot product agrees with the Euclidean inner product after vectorization.
 /--
 Main agreement lemma: tensor dot equals Euclidean inner product of vectorizations.
 
-This is the bridge between `soundness.lean` (stated using `Spec.dot`) and the analytic theorems
+This is the bridge between `Soundness.lean` (stated using `Spec.dot`) and the analytic theorems
 here (stated using Euclidean `inner`).
 -/
 theorem dot_eq_inner_tensorToVec {s : Shape} (a b : Tensor ℝ s) :
@@ -565,40 +450,8 @@ theorem inner_append {m n : Nat} (a c : Vec m) (b d : Vec n) :
     inner ℝ (appendVec (m := m) (n := n) a b) (appendVec (m := m) (n := n) c d)
       =
     inner ℝ a c + inner ℝ b d := by
-  classical
-  have h0 :=
-    inner_eq_sum_mul (x := appendVec (m := m) (n := n) a b)
-      (y := appendVec (m := m) (n := n) c d)
-  have hsum :
-      (∑ i : Fin (m + n), (Fin.append a b i) * (Fin.append c d i))
-        =
-      ∑ s : Fin m ⊕ Fin n, (Fin.append a b (finSumFinEquiv s)) * (Fin.append c d (finSumFinEquiv s))
-        := by
-    simpa using
-      (Equiv.sum_comp (e := finSumFinEquiv)
-        (g := fun i : Fin (m + n) => (Fin.append a b i) * (Fin.append c d i))).symm
-  let fSum : Fin m ⊕ Fin n → ℝ := fun s =>
-    (Fin.append a b (finSumFinEquiv s)) * (Fin.append c d (finSumFinEquiv s))
-  have hsplit : (∑ s : Fin m ⊕ Fin n, fSum s)
-      = (∑ i : Fin m, fSum (Sum.inl i)) + (∑ j : Fin n, fSum (Sum.inr j)) := by
-    simp [fSum]
-  have hleft : (∑ i : Fin m, fSum (Sum.inl i)) = ∑ i : Fin m, a i * c i := by
-    refine Finset.sum_congr rfl ?_
-    intro i _
-    simp [fSum, finSumFinEquiv_apply_left]
-  have hright : (∑ j : Fin n, fSum (Sum.inr j)) = ∑ j : Fin n, b j * d j := by
-    refine Finset.sum_congr rfl ?_
-    intro j _
-    simp [fSum, finSumFinEquiv_apply_right]
-  calc
-    inner ℝ (appendVec (m := m) (n := n) a b) (appendVec (m := m) (n := n) c d)
-        = ∑ i : Fin (m + n), (Fin.append a b i) * (Fin.append c d i) := h0
-    _ = ∑ s : Fin m ⊕ Fin n, fSum s := by
-          simpa [fSum] using hsum
-    _ = (∑ i : Fin m, a i * c i) + (∑ j : Fin n, b j * d j) := by
-          simp [hsplit, hleft, hright]
-    _ = inner ℝ a c + inner ℝ b d := by
-          simp [inner_eq_sum_mul]
+  -- Split the coordinate sum over `Fin (m + n)` into its `castAdd` and `natAdd` halves.
+  simp [inner_eq_sum_mul, Fin.sum_univ_add, appendVec]
 
 /--
 `TensorPack.dotList` equals Euclidean inner product of `flattenCtx`.
@@ -682,14 +535,6 @@ The next few lemmas are bookkeeping for splitting/concatenating vectorized conte
 They are “obvious” from the list structure of `Γ`, but it is useful to expose them as named facts
 so that the calculus proofs later can use them without redoing shape arithmetic.
 -/
-
-/-- `castCtxVec` is inner-product preserving (up to flipping the cast on the other argument). -/
-theorem inner_castCtxVec {Γ₁ Γ₂ : List Shape} (h : Γ₁ = Γ₂) (x : CtxVec Γ₁) (y : CtxVec Γ₂) :
-    inner ℝ (castCtxVec (Γ₁ := Γ₁) (Γ₂ := Γ₂) h x) y
-      =
-    inner ℝ x (castCtxVec (Γ₁ := Γ₂) (Γ₂ := Γ₁) h.symm y) := by
-  cases h
-  simp [castCtxVec, castVec]
 
 /-- `ctxSize` respects list append (sizes add). -/
 theorem ctxSize_append (Γ ss : List Shape) : ctxSize (Γ ++ ss) = ctxSize Γ + ctxSize ss := by
@@ -861,108 +706,183 @@ def backpropVec {ss : List Shape} (g : Graph Γ ss) (xV : CtxVec Γ) (seedV : Ct
       let contribV : CtxVec (Γ ++ ss) := node.vjpVec (Γ := Γ ++ ss) (τ := τ) ctxV seedOutV
       backpropVec (ss := ss) g xV (seedPrevV + contribV)
 
-/-!
-The next theorem is exactly `soundness.lean` rewritten into Euclidean vector form.
-It is the key input to later “`backprop = (fderiv eval)†`” proofs.
--/
+end Graph
 
-/-- Vectorized tape soundness: `⟪jvp, seed⟫ = ⟪dx, backprop seed⟫`. -/
+-- ---------------------------------------------------------------------------
+-- Vectorization transport: `flattenCtx` commutes with the context operations
+-- ---------------------------------------------------------------------------
+
+/-- `flattenCtx` commutes with casting a context along a shape-list equality. -/
+theorem flattenCtx_cast {Γ₁ Γ₂ : List Shape} (h : Γ₁ = Γ₂) (xs : TorchLean.TensorPack ℝ Γ₁) :
+    flattenCtx (Γ := Γ₂) (TorchLean.TensorPack.cast h xs) =
+      castCtxVec (Γ₁ := Γ₁) (Γ₂ := Γ₂) h (flattenCtx xs) := by
+  cases h
+  simp
+
+/-- Vectorization is additive: `tensorToVec` maps `addSpec` to vector addition. -/
+theorem tensorToVec_addSpec {s : Shape} (a b : Tensor ℝ s) :
+    tensorToVec (t := addSpec a b) = tensorToVec (t := a) + tensorToVec (t := b) := by
+  refine ext_inner_right ℝ ?_
+  intro w
+  have hw : w = tensorToVec (t := vecToTensor (s := s) w) :=
+    (tensorToVec_vecToTensor (s := s) w).symm
+  rw [hw, ← dot_eq_inner_tensorToVec, inner_add_left, ← dot_eq_inner_tensorToVec,
+    ← dot_eq_inner_tensorToVec, dot_add_left]
+
+/-- The context inner product is additive in its left argument. -/
+private theorem dotList_add_left' {Γ : List Shape} (u v z : TorchLean.TensorPack ℝ Γ) :
+    TensorPack.dotList (TorchLean.TensorPack.add u v) z =
+      TensorPack.dotList u z + TensorPack.dotList v z := by
+  induction Γ with
+  | nil =>
+    cases u
+    cases v
+    cases z
+    simp [TensorPack.dotList, TorchLean.TensorPack.add]
+  | cons s Γ ih =>
+    cases u with
+    | cons uh ut =>
+      cases v with
+      | cons vh vt =>
+        cases z with
+        | cons zh zt =>
+          show TensorPack.dotList
+              (TorchLean.TensorPack.cons (addSpec uh vh) (TorchLean.TensorPack.add ut vt))
+              (TorchLean.TensorPack.cons zh zt)
+              = _
+          simp only [TensorPack.dotList, dot_add_left, ih]
+          ring
+
+/-- `flattenCtx` maps context addition to vector addition. -/
+theorem flattenCtx_add {Γ : List Shape} (u v : TorchLean.TensorPack ℝ Γ) :
+    flattenCtx (TorchLean.TensorPack.add u v) = flattenCtx u + flattenCtx v := by
+  refine ext_inner_right ℝ ?_
+  intro w
+  have hw : w = flattenCtx (unflattenCtx (Γ := Γ) w) :=
+    (flattenCtx_unflattenCtx (Γ := Γ) w).symm
+  rw [hw, ← dotList_eq_inner_flattenCtx, inner_add_left, ← dotList_eq_inner_flattenCtx,
+    ← dotList_eq_inner_flattenCtx]
+  exact dotList_add_left' u v _
+
+/-- `flattenCtx` maps `TorchLean.TensorPack.snoc` to `snocCtx`. -/
+theorem flattenCtx_snoc {Γ : List Shape} {τ : Shape} (xs : TorchLean.TensorPack ℝ Γ)
+    (y : Tensor ℝ τ) :
+    flattenCtx (Γ := Γ ++ [τ]) (TorchLean.TensorPack.snoc xs y)
+      = snocCtx (Γ := Γ) (τ := τ) (flattenCtx xs) (tensorToVec (t := y)) := by
+  induction Γ with
+  | nil =>
+    cases xs
+    change flattenCtx (TorchLean.TensorPack.cons y TorchLean.TensorPack.nil) = _
+    rw [flattenCtx_cons, flattenCtx_nil]
+    have h : ctxSize [] + τ.size = τ.size + ctxSize [] := by simp [ctxSize]
+    change appendVec (tensorToVec y) 0 = castVec h (appendVec 0 (tensorToVec y))
+    apply PiLp.ext
+    intro i
+    induction i using Fin.addCases with
+    | left i =>
+      rw [appendVec_ofLp_castAdd, castVec_ofLp]
+      have hidx :
+          Fin.cast h.symm (Fin.castAdd (ctxSize []) i) = Fin.natAdd (ctxSize []) i := by
+        apply Fin.ext
+        simpa only [ctxSize, Fin.val_natAdd, Nat.zero_add, Fin.val_castAdd] using
+          Fin.val_cast h.symm (Fin.castAdd (ctxSize []) i)
+      rw [hidx, appendVec_ofLp_natAdd]
+    | right i => exact i.elim0
+  | cons s Γ ih =>
+    cases xs with
+    | cons x xs =>
+      change flattenCtx (TorchLean.TensorPack.cons x (TorchLean.TensorPack.snoc xs y)) = _
+      rw [flattenCtx_cons, ih, flattenCtx_cons, appendVec_snocCtx]
+
+/-- `flattenCtx` maps `TorchLean.TensorPack.unsnoc` to `unsnocCtx`. -/
+theorem unsnocCtx_flattenCtx {Γ : List Shape} {τ : Shape} (w : TorchLean.TensorPack ℝ (Γ ++ [τ])) :
+    unsnocCtx (Γ := Γ) (τ := τ) (flattenCtx w)
+      = (flattenCtx (TorchLean.TensorPack.unsnoc w).1,
+          tensorToVec (t := (TorchLean.TensorPack.unsnoc w).2)) := by
+  conv_lhs => rw [← TorchLean.TensorPack.snoc_unsnoc (α := ℝ) (ss := Γ) (τ := τ) (xs := w)]
+  rw [flattenCtx_snoc, unsnocCtx_snocCtx]
+
+namespace Node
+
+/-- The vectorized forward map, evaluated on a flattened context. -/
+theorem forwardVec_flattenCtx {Γ : List Shape} {τ : Shape} (node : Node Γ τ)
+    (x : TorchLean.TensorPack ℝ Γ) :
+    node.forwardVec (Γ := Γ) (τ := τ) (flattenCtx x) = tensorToVec (t := node.forward x) := by
+  simp [Node.forwardVec]
+
+/-- The vectorized JVP, evaluated on flattened contexts. -/
+theorem jvpVec_flattenCtx {Γ : List Shape} {τ : Shape} (node : Node Γ τ)
+    (x dx : TorchLean.TensorPack ℝ Γ) :
+    node.jvpVec (Γ := Γ) (τ := τ) (flattenCtx x) (flattenCtx dx)
+      = tensorToVec (t := node.jvp x dx) := by
+  simp [Node.jvpVec]
+
+/-- The vectorized VJP, evaluated on a flattened context and a vectorized cotangent. -/
+theorem vjpVec_flattenCtx {Γ : List Shape} {τ : Shape} (node : Node Γ τ)
+    (x : TorchLean.TensorPack ℝ Γ) (δ : Tensor ℝ τ) :
+    node.vjpVec (Γ := Γ) (τ := τ) (flattenCtx x) (tensorToVec (t := δ))
+      = flattenCtx (node.vjp x δ) := by
+  simp [Node.vjpVec]
+
+end Node
+
+namespace Graph
+
+variable {Γ : List Shape}
+
+/-- The Euclidean graph evaluation is the flattening of the `TensorPack` evaluation. -/
+theorem evalVec_flattenCtx {ss : List Shape} (g : Graph Γ ss) (x : TorchLean.TensorPack ℝ Γ) :
+    evalVec (Γ := Γ) (ss := ss) g (flattenCtx x) = flattenCtx (eval (Γ := Γ) (ss := ss) g x) := by
+  induction g with
+  | nil =>
+    simp [evalVec, eval, flattenCtx_cast]
+  | snoc g node ih =>
+    simp [evalVec, eval, flattenCtx_cast, flattenCtx_snoc, ih, Node.forwardVec_flattenCtx]
+
+/-- The Euclidean graph JVP is the flattening of the `TensorPack` JVP. -/
+theorem jvpVec_flattenCtx {ss : List Shape} (g : Graph Γ ss) (x dx : TorchLean.TensorPack ℝ Γ) :
+    jvpVec (Γ := Γ) (ss := ss) g (flattenCtx x) (flattenCtx dx)
+      = flattenCtx (jvpCtx (Γ := Γ) (ss := ss) g x dx) := by
+  induction g with
+  | nil =>
+    simp [jvpVec, jvpCtx, flattenCtx_cast]
+  | snoc g node ih =>
+    simp [jvpVec, jvpCtx, flattenCtx_cast, flattenCtx_snoc, ih, evalVec_flattenCtx,
+      Node.jvpVec_flattenCtx]
+
+/-- The Euclidean reverse pass is the flattening of the `TensorPack` reverse pass. -/
+theorem backpropVec_flattenCtx {ss : List Shape} (g : Graph Γ ss) (x : TorchLean.TensorPack ℝ Γ)
+    (seed : TorchLean.TensorPack ℝ (Γ ++ ss)) :
+    backpropVec (Γ := Γ) (ss := ss) g (flattenCtx x) (flattenCtx seed)
+      = flattenCtx (backpropCtx (Γ := Γ) (ss := ss) g x seed) := by
+  induction g with
+  | nil =>
+    simp [backpropVec, backpropCtx, flattenCtx_cast]
+  | snoc g node ih =>
+    rename_i ss τ
+    simp only [backpropVec, backpropCtx]
+    rw [← flattenCtx_cast, unsnocCtx_flattenCtx, evalVec_flattenCtx,
+      Node.vjpVec_flattenCtx, ← flattenCtx_add, ih]
+
+end Graph
+
+namespace Graph
+
+variable {Γ : List Shape}
+
+/-- Vectorized tape soundness: `⟪jvp, seed⟫ = ⟪dx, backprop seed⟫`. It is `backprop_correct`
+read through `flattenCtx`, a bijection carrying `dotList` to the Euclidean inner product. -/
 theorem backprop_correct_inner {ss : List Shape} (g : Graph Γ ss) :
     ∀ xV dxV seedV,
       inner ℝ (jvpVec (Γ := Γ) (ss := ss) g xV dxV) seedV =
         inner ℝ dxV (backpropVec (Γ := Γ) (ss := ss) g xV seedV) := by
-  classical
-  induction g with
-  | nil =>
-      intro xV dxV seedV
-      -- casts are inverse on inner products
-      have hleft := inner_castCtxVec (Γ₁ := Γ) (Γ₂ := Γ ++ []) (h := (List.append_nil Γ).symm) dxV
-        seedV
-      -- `backpropVec nil` is the inverse cast
-      simpa [Graph.jvpVec, Graph.backpropVec] using hleft
-  | snoc g node ih =>
-      intro xV dxV seedV
-      rename_i ss τ
-      let ctxV : CtxVec (Γ ++ ss) := evalVec (Γ := Γ) (ss := ss) g xV
-      let dctxV : CtxVec (Γ ++ ss) := jvpVec (Γ := Γ) (ss := ss) g xV dxV
-      let dyV : Vec (Spec.Shape.size τ) := node.jvpVec (Γ := Γ ++ ss) (τ := τ) ctxV dctxV
-      let assoc := List.append_assoc Γ ss [τ]
-      let seedV' : CtxVec ((Γ ++ ss) ++ [τ]) :=
-        castCtxVec (Γ₁ := Γ ++ (ss ++ [τ])) (Γ₂ := (Γ ++ ss) ++ [τ]) assoc.symm seedV
-      let seedPrevV : CtxVec (Γ ++ ss) := (unsnocCtx (Γ := (Γ ++ ss)) (τ := τ) seedV').1
-      let seedOutV : Vec (Spec.Shape.size τ) := (unsnocCtx (Γ := (Γ ++ ss)) (τ := τ) seedV').2
-      have hseed : snocCtx (Γ := (Γ ++ ss)) (τ := τ) seedPrevV seedOutV = seedV' := by
-        simpa [seedPrevV, seedOutV] using
-          (snocCtx_unsnocCtx (Γ := (Γ ++ ss)) (τ := τ) seedV')
-
-      -- Move the outer `assoc` cast from the JVP output onto the seed.
-      have hjvp_cast :
-          inner ℝ (jvpVec (Γ := Γ) (ss := ss ++ [τ]) (Graph.snoc g node) xV dxV) seedV
-            =
-          inner ℝ (snocCtx (Γ := (Γ ++ ss)) (τ := τ) dctxV dyV) seedV' := by
-        have hcast := inner_castCtxVec (Γ₁ := (Γ ++ ss) ++ [τ]) (Γ₂ := Γ ++ (ss ++ [τ])) (h :=
-          assoc)
-          (snocCtx (Γ := (Γ ++ ss)) (τ := τ) dctxV dyV) seedV
-        simpa [Graph.jvpVec, ctxV, dctxV, dyV, seedV', assoc] using hcast
-
-      -- Split the inner product across the `snocCtx` append.
-      have hinter :
-          inner ℝ (snocCtx (Γ := (Γ ++ ss)) (τ := τ) dctxV dyV) seedV'
-            =
-          inner ℝ dctxV seedPrevV + inner ℝ dyV seedOutV := by
-        -- Cancel the `snocCtx` casts on both sides and use `inner_append`.
-        have hsnoc :
-            inner ℝ (snocCtx (Γ := (Γ ++ ss)) (τ := τ) dctxV dyV)
-                  (snocCtx (Γ := (Γ ++ ss)) (τ := τ) seedPrevV seedOutV)
-              =
-            inner ℝ dctxV seedPrevV + inner ℝ dyV seedOutV := by
-          -- transport to the `(ctxSize + size)` representation
-          have hcast' :
-              inner ℝ (snocCtx (Γ := (Γ ++ ss)) (τ := τ) dctxV dyV)
-                    (snocCtx (Γ := (Γ ++ ss)) (τ := τ) seedPrevV seedOutV)
-                =
-              inner ℝ (appendVec (m := ctxSize (Γ ++ ss)) (n := Spec.Shape.size τ) dctxV dyV)
-                    (appendVec (m := ctxSize (Γ ++ ss)) (n := Spec.Shape.size τ)
-                      seedPrevV seedOutV) := by
-            simpa [snocCtx] using
-              (inner_castVec_castVec (h := (ctxSize_snoc (Γ ++ ss) τ).symm)
-                (x := appendVec (m := ctxSize (Γ ++ ss)) (n := Spec.Shape.size τ) dctxV dyV)
-                (y := appendVec (m := ctxSize (Γ ++ ss)) (n := Spec.Shape.size τ)
-                  seedPrevV seedOutV))
-          -- apply `inner_append` and simplify
-          simp [hcast', inner_append]
-        simpa [hseed] using hsnoc
-
-      -- Use node-level adjointness to rewrite the output term.
-      have hlocal :
-          inner ℝ dyV seedOutV = inner ℝ dctxV (node.vjpVec (Γ := Γ ++ ss) (τ := τ) ctxV seedOutV)
-            := by
-        simpa [dyV] using (Node.correct_inner (node := node) ctxV dctxV seedOutV)
-
-      -- Combine and apply IH on the previous graph.
-      have hadd :
-          inner ℝ dctxV seedPrevV + inner ℝ dctxV (node.vjpVec (Γ := Γ ++ ss) (τ := τ) ctxV
-            seedOutV)
-            =
-          inner ℝ dctxV (seedPrevV + node.vjpVec (Γ := Γ ++ ss) (τ := τ) ctxV seedOutV) := by
-        simpa using
-          (inner_add_right (x := dctxV) (y := seedPrevV)
-            (z := node.vjpVec (Γ := Γ ++ ss) (τ := τ) ctxV seedOutV)).symm
-
-      calc
-        inner ℝ (jvpVec (Γ := Γ) (ss := ss ++ [τ]) (Graph.snoc g node) xV dxV) seedV
-            = inner ℝ (snocCtx (Γ := (Γ ++ ss)) (τ := τ) dctxV dyV) seedV' := hjvp_cast
-        _ = inner ℝ dctxV seedPrevV + inner ℝ dyV seedOutV := hinter
-        _ = inner ℝ dctxV seedPrevV + inner ℝ dctxV (node.vjpVec (Γ := Γ ++ ss) (τ := τ) ctxV
-          seedOutV) := by
-              simp [hlocal]
-        _ = inner ℝ dctxV (seedPrevV + node.vjpVec (Γ := Γ ++ ss) (τ := τ) ctxV seedOutV) := hadd
-        _ = inner ℝ dxV (backpropVec (Γ := Γ) (ss := ss) g xV (seedPrevV + node.vjpVec (Γ := Γ ++
-          ss) (τ := τ) ctxV seedOutV)) := by
-              simpa [dctxV] using (ih xV dxV (seedPrevV + node.vjpVec (Γ := Γ ++ ss) (τ := τ) ctxV
-                seedOutV))
-        _ = inner ℝ dxV (backpropVec (Γ := Γ) (ss := ss ++ [τ]) (Graph.snoc g node) xV seedV) := by
-              simp [Graph.backpropVec, ctxV, seedV', seedPrevV, seedOutV]
+  intro xV dxV seedV
+  obtain ⟨x, rfl⟩ : ∃ x, flattenCtx x = xV := ⟨_, flattenCtx_unflattenCtx xV⟩
+  obtain ⟨dx, rfl⟩ : ∃ dx, flattenCtx dx = dxV := ⟨_, flattenCtx_unflattenCtx dxV⟩
+  obtain ⟨seed, rfl⟩ : ∃ seed, flattenCtx seed = seedV := ⟨_, flattenCtx_unflattenCtx seedV⟩
+  rw [jvpVec_flattenCtx, backpropVec_flattenCtx, ← dotList_eq_inner_flattenCtx,
+    ← dotList_eq_inner_flattenCtx]
+  exact backprop_correct g x dx seed
 
 end Graph
 
@@ -1027,11 +947,28 @@ def GraphFDerivCorrectAt {Γ : List Shape} : ∀ {ss : List Shape}, Graph Γ ss 
   | _, .snoc g node => fun xV => GraphFDerivCorrectAt g xV × NodeFDerivCorrectAt node (Graph.evalVec
     (Γ := Γ) g xV)
 
+/--
+Specialize an everywhere-correct graph proof to a pointwise graph proof, the graph-level analogue
+of `NodeFDerivCorrect.at`.
+
+Each node certificate is read at the intermediate value that `Graph.evalVec` produces there. This
+is how a globally smooth block feeds a pointwise block such as LayerNorm, and how the global
+`fderiv` theorems below are obtained from their pointwise versions.
+-/
+def GraphFDerivCorrect.at {Γ : List Shape} {ss : List Shape} {g : Graph Γ ss}
+    (hg : GraphFDerivCorrect (Γ := Γ) g) (xV : CtxVec Γ) :
+    GraphFDerivCorrectAt (Γ := Γ) (ss := ss) g xV := by
+  induction g with
+  | nil =>
+      exact PUnit.unit
+  | @snoc ss τ g node ih =>
+      rcases hg with ⟨hgPrefix, hn⟩
+      exact ⟨ih hgPrefix, NodeFDerivCorrect.at hn (Graph.evalVec (Γ := Γ) (ss := ss) g xV)⟩
+
 namespace Graph
 
 variable {Γ : List Shape}
 
--- A linear map wrapper for `Fin.append` on Euclidean vectors.
 /-- `Fin.append` packaged as a continuous linear map on Euclidean vectors. -/
 def appendCLM (m n : Nat) : (Vec m × Vec n) →L[ℝ] Vec (m + n) := by
   classical
@@ -1049,221 +986,37 @@ def appendCLM (m n : Nat) : (Vec m × Vec n) →L[ℝ] Vec (m + n) := by
   refine { toLinearMap := fLin, cont := ?_ }
   exact LinearMap.continuous_of_finiteDimensional (f := fLin)
 
--- Reindexing a vector along an equality of dimensions.
 /-- `castVec` packaged as a continuous linear map (finite-dimensional, hence continuous). -/
 def castCLM {n m : Nat} (h : n = m) : Vec n →L[ℝ] Vec m := by
   classical
   let fLin : Vec n →ₗ[ℝ] Vec m :=
     { toFun := castVec h
-      map_add' := by
-        intro x y
-        ext i
-        simp [castVec]
-      map_smul' := by
-        intro r x
-        ext i
-        simp [castVec] }
+      map_add' := castVec_add h
+      map_smul' := castVec_smul h }
   refine { toLinearMap := fLin, cont := ?_ }
   exact LinearMap.continuous_of_finiteDimensional (f := fLin)
 
--- The CLM for `snocCtx` viewed as a function on pairs.
+/-- `Graph.castCLM` acts by `castVec`. -/
+@[simp] theorem castCLM_apply {a b : Nat} (h : a = b) (v : Vec a) :
+    castCLM (h := h) v = castVec h v :=
+  rfl
+
 /-- Continuous linear map version of `snocCtx` (concatenation + cast). -/
 def snocCLM {Γ : List Shape} {τ : Shape} :
     (CtxVec Γ × Vec (Spec.Shape.size τ)) →L[ℝ] CtxVec (Γ ++ [τ]) :=
   (castCLM (h := (ctxSize_snoc Γ τ).symm)).comp
     (appendCLM (m := ctxSize Γ) (n := Spec.Shape.size τ))
 
--- Main analytic statement: `HasFDerivAt` for `evalVec` and identification of `jvpVec`.
-/--
-Main induction: `evalVec` is differentiable and its derivative agrees with `jvpVec`.
-
-This is the technical heart of the `jvp = fderiv` theorem.
--/
-theorem hasFDerivAt_evalVec_and_jvp
-    {ss : List Shape} (g : Graph Γ ss)
-    (hg : GraphFDerivCorrect (Γ := Γ) g) :
-    ∀ xV : CtxVec Γ,
-      ∃ D : CtxVec Γ →L[ℝ] CtxVec (Γ ++ ss),
-        HasFDerivAt (evalVec (Γ := Γ) (ss := ss) g) D xV
-          ∧
-        (∀ dxV : CtxVec Γ, jvpVec (Γ := Γ) (ss := ss) g xV dxV = D dxV) := by
-  classical
-  induction g with
-  | nil =>
-      intro xV
-      -- `evalVec`/`jvpVec` are just casts along `append_nil`.
-      let h : ctxSize Γ = ctxSize (Γ ++ []) := congrArg ctxSize (List.append_nil Γ).symm
-      let D : CtxVec Γ →L[ℝ] CtxVec (Γ ++ []) := castCLM (h := h)
-      refine ⟨D, ?_, ?_⟩
-      · -- `evalVec` is the CLM itself.
-        change HasFDerivAt (castVec h) D xV
-        exact D.hasFDerivAt
-      · intro dxV
-        simp [Graph.jvpVec, castCtxVec, castVec, castCLM, D]
-  | snoc g node ih =>
-      intro xV
-      rename_i ss τ
-      rcases hg with ⟨hg_g, hg_node⟩
-      -- IH for the prefix graph.
-      rcases ih (hg := hg_g) xV with ⟨Dg, hDg, hJg⟩
-      let ctxV : CtxVec (Γ ++ ss) := evalVec (Γ := Γ) (ss := ss) g xV
-      -- node derivative at the vectorized context.
-      let Dn : CtxVec (Γ ++ ss) →L[ℝ] Vec (Spec.Shape.size τ) := hg_node.deriv ctxV
-      have hnode : HasFDerivAt (node.forwardVec (Γ := Γ ++ ss) (τ := τ)) Dn ctxV :=
-        hg_node.hasFDerivAt ctxV
-      -- derivative for the output component `yV`.
-      have hy :
-          HasFDerivAt
-            (fun xV : CtxVec Γ => node.forwardVec (Γ := Γ ++ ss) (τ := τ) (evalVec (Γ := Γ) (ss :=
-              ss) g xV))
-            (Dn.comp Dg) xV := by
-        change HasFDerivAt
-          ((node.forwardVec (Γ := Γ ++ ss) (τ := τ)) ∘
-            (evalVec (Γ := Γ) (ss := ss) g))
-          (Dn.comp Dg) xV
-        simpa [ctxV, Function.comp] using (hnode.comp xV hDg)
-      -- pair derivative: `(ctxV, yV)`.
-      have hpair :
-          HasFDerivAt
-            (fun xV : CtxVec Γ =>
-              (evalVec (Γ := Γ) (ss := ss) g xV,
-                node.forwardVec (Γ := Γ ++ ss) (τ := τ) (evalVec (Γ := Γ) (ss := ss) g xV)))
-            (Dg.prod (Dn.comp Dg)) xV :=
-        hDg.prodMk hy
-      -- the `snocCtx` CLM and the assoc cast.
-      let assoc := List.append_assoc Γ ss [τ]
-      let hAssoc : ctxSize ((Γ ++ ss) ++ [τ]) = ctxSize (Γ ++ (ss ++ [τ])) := congrArg ctxSize assoc
-      let Dcast : CtxVec ((Γ ++ ss) ++ [τ]) →L[ℝ] CtxVec (Γ ++ (ss ++ [τ])) := castCLM (h := hAssoc)
-      let D : CtxVec Γ →L[ℝ] CtxVec (Γ ++ (ss ++ [τ])) := (Dcast.comp (snocCLM (Γ := Γ ++ ss) (τ :=
-        τ))).comp (Dg.prod (Dn.comp Dg))
-      refine ⟨D, ?_, ?_⟩
-      · -- `HasFDerivAt` for the composed graph evaluation.
-        have hsnoc :
-            HasFDerivAt
-              (fun p : CtxVec (Γ ++ ss) × Vec (Spec.Shape.size τ) =>
-                snocCtx (Γ := Γ ++ ss) (τ := τ) p.1 p.2)
-              (snocCLM (Γ := Γ ++ ss) (τ := τ)) (ctxV, node.forwardVec (Γ := Γ ++ ss) (τ := τ) ctxV)
-                := by
-          change HasFDerivAt
-            (snocCLM (Γ := Γ ++ ss) (τ := τ))
-            (snocCLM (Γ := Γ ++ ss) (τ := τ))
-            (ctxV, node.forwardVec (Γ := Γ ++ ss) (τ := τ) ctxV)
-          exact (snocCLM (Γ := Γ ++ ss) (τ := τ)).hasFDerivAt
-        have hcomp1 :=
-          (Dcast.hasFDerivAt (x := snocCtx (Γ := Γ ++ ss) (τ := τ) ctxV (node.forwardVec (Γ := Γ ++
-            ss) (τ := τ) ctxV))).comp xV
-            (hsnoc.comp xV hpair)
-        -- `evalVec` is definitionally this composition.
-        change HasFDerivAt
-          ((castCLM hAssoc) ∘
-            (fun p : CtxVec (Γ ++ ss) × Vec (Spec.Shape.size τ) =>
-              snocCtx (Γ := Γ ++ ss) (τ := τ) p.1 p.2) ∘
-            fun xV : CtxVec Γ =>
-              (evalVec (Γ := Γ) (ss := ss) g xV,
-                node.forwardVec (Γ := Γ ++ ss) (τ := τ) (evalVec (Γ := Γ) (ss := ss) g xV)))
-          D xV
-        simpa [ctxV, D, Dcast, snocCLM, Function.comp, ContinuousLinearMap.comp_assoc] using hcomp1
-      · intro dxV
-        -- identify the JVP with the derivative application
-        have hx : jvpVec (Γ := Γ) (ss := ss) g xV dxV = Dg dxV := hJg dxV
-        have hy' :
-            node.jvpVec (Γ := Γ ++ ss) (τ := τ) ctxV (Dg dxV) = (Dn.comp Dg) dxV := by
-          simpa [Dn, ContinuousLinearMap.comp_apply] using (hg_node.jvp_eq ctxV (Dg dxV))
-        -- unfold the graph JVP and simplify pointwise through casts/append.
-        ext i
-        simp [Graph.jvpVec, ctxV, hx, hy', D, Dcast, snocCLM, snocCtx, castCtxVec, castVec, castCLM,
-          appendCLM,
-          ContinuousLinearMap.comp_apply, ContinuousLinearMap.prod_apply]
-
-/-!
-Convenience corollaries:
-
-Once we have `HasFDerivAt evalVec = jvpVec`, the rest are immediate:
-`jvpVec = fderiv`, then `backpropVec = (fderiv evalVec)†` by the inner-product characterization of
-  adjoints.
--/
-
-/-- Under `GraphFDerivCorrect`, the graph JVP equals the Fréchet derivative `fderiv` of `evalVec`.
-  -/
-theorem jvpVec_eq_fderiv
-    {ss : List Shape} (g : Graph Γ ss) (hg : GraphFDerivCorrect (Γ := Γ) g) :
-    ∀ xV dxV,
-      jvpVec (Γ := Γ) (ss := ss) g xV dxV = (fderiv ℝ (evalVec (Γ := Γ) (ss := ss) g) xV) dxV := by
-  intro xV dxV
-  rcases hasFDerivAt_evalVec_and_jvp (Γ := Γ) (ss := ss) (g := g) hg xV with ⟨D, hD, hJ⟩
-  have hfderiv : fderiv ℝ (evalVec (Γ := Γ) (ss := ss) g) xV = D := by
-    simpa using hD.fderiv
-  simpa [hfderiv] using hJ dxV
-
-/--
-Main analytic theorem: `backpropVec` equals the adjoint of the derivative of `evalVec`.
-
-This is the proof-level formalization of “reverse-mode computes a VJP”, stated as an equality of
-linear maps in a Euclidean space.
--/
-theorem backpropVec_eq_adjoint_fderiv
-    {ss : List Shape} (g : Graph Γ ss) (hg : GraphFDerivCorrect (Γ := Γ) g) :
-    ∀ (xV : CtxVec Γ) (seedV : CtxVec (Γ ++ ss)),
-      backpropVec (Γ := Γ) (ss := ss) g xV seedV
-        =
-      (fderiv ℝ (evalVec (Γ := Γ) (ss := ss) g) xV).adjoint seedV := by
-  intro xV seedV
-  classical
-  rcases hasFDerivAt_evalVec_and_jvp (Γ := Γ) (ss := ss) (g := g) hg xV with ⟨D, hD, hJ⟩
-  have hfderiv : fderiv ℝ (evalVec (Γ := Γ) (ss := ss) g) xV = D := by
-    simpa using hD.fderiv
-
-  -- Use the global inner-product adjointness law.
-  have hdot :
-      ∀ dxV : CtxVec Γ,
-        inner ℝ (D dxV) seedV =
-          inner ℝ dxV (backpropVec (Γ := Γ) (ss := ss) g xV seedV) := by
-    intro dxV
-    -- From tape soundness on vectors.
-    have h := Graph.backprop_correct_inner (Γ := Γ) (ss := ss) g xV dxV seedV
-    simpa [hJ dxV] using h
-
-  -- Identify the unique vector satisfying the adjointness law.
-  let u : CtxVec Γ := backpropVec (Γ := Γ) (ss := ss) g xV seedV
-  let v : CtxVec Γ := D.adjoint seedV
-  have hforall : ∀ dxV : CtxVec Γ, inner ℝ dxV u = inner ℝ dxV v := by
-    intro dxV
-    calc
-      inner ℝ dxV u
-          = inner ℝ (D dxV) seedV := by
-              simpa [u] using (hdot dxV).symm
-      _ = inner ℝ dxV (D.adjoint seedV) := by
-            simpa using
-              (ContinuousLinearMap.adjoint_inner_right (A := D) (x := dxV) (y := seedV)).symm
-      _ = inner ℝ dxV v := by simp [v]
-
-  have h0 : inner ℝ (u - v) (u - v) = 0 := by
-    have hEq := hforall (dxV := (u - v))
-    have : inner ℝ (u - v) u - inner ℝ (u - v) v = 0 := by
-      simpa [sub_eq_zero] using congrArg (fun t => t - inner ℝ (u - v) v) hEq
-    calc
-      inner ℝ (u - v) (u - v) = inner ℝ (u - v) u - inner ℝ (u - v) v := by
-        -- avoid simp rewriting `inner_self` to `‖·‖^2`
-        exact inner_sub_right (x := (u - v)) (y := u) (z := v)
-      _ = 0 := this
-  have huv : u - v = 0 := (inner_self_eq_zero (𝕜 := ℝ) (x := (u - v))).1 h0
-  have huv' : u = v := sub_eq_zero.mp huv
-
-  -- Rewrite `v` using `fderiv` and finish.
-  calc
-    backpropVec (Γ := Γ) (ss := ss) g xV seedV = v := by simpa [u] using huv'
-    _ = (fderiv ℝ (evalVec (Γ := Γ) (ss := ss) g) xV).adjoint seedV := by
-          simp [v, hfderiv]
-
 -- ---------------------------------------------------------------------------
--- Pointwise versions: `HasFDerivAt` only at the actual execution point.
+-- Pointwise analytic statements: `HasFDerivAt` only at the actual execution point.
 -- ---------------------------------------------------------------------------
 
 /--
-Pointwise induction: `evalVec` is differentiable at `xV`, and its derivative agrees with `jvpVec`.
+Main induction: `evalVec` is differentiable at `xV`, and its derivative agrees with `jvpVec`.
 
-This is the version used for graphs involving non-smooth or partial primitives, where we only
-assume differentiability at the values encountered during execution.
+This is the technical heart of the `jvp = fderiv` theorem. It is stated pointwise so that graphs
+involving non-smooth or partial primitives only need differentiability at the values encountered
+during execution; the everywhere-differentiable version below is its specialization.
 -/
 theorem hasFDerivAt_evalVec_and_jvp_at
     {ss : List Shape} (g : Graph Γ ss) :
@@ -1342,11 +1095,13 @@ theorem hasFDerivAt_evalVec_and_jvp_at
           castCLM, appendCLM, ContinuousLinearMap.comp_apply, ContinuousLinearMap.prod_apply]
 
 /-!
-Pointwise corollaries: these mirror `jvpVec_eq_fderiv` and `backpropVec_eq_adjoint_fderiv`, but
-only require `GraphFDerivCorrectAt` at the specific execution point.
+Pointwise corollaries. Once `HasFDerivAt evalVec = jvpVec` is known, `jvpVec = fderiv` is
+immediate, and `backpropVec = (fderiv evalVec)†` follows from the inner-product characterization
+of the adjoint together with the vectorized tape soundness law `backprop_correct_inner`.
 -/
 
-/-- Pointwise version of `jvpVec_eq_fderiv`. -/
+/-- Under `GraphFDerivCorrectAt`, the graph JVP at `xV` equals the Fréchet derivative of `evalVec`
+at `xV`. -/
 theorem jvpVec_eq_fderiv_at
     {ss : List Shape} (g : Graph Γ ss) :
     ∀ xV dxV,
@@ -1355,13 +1110,13 @@ theorem jvpVec_eq_fderiv_at
           =
         (fderiv ℝ (evalVec (Γ := Γ) (ss := ss) g) xV) dxV := by
   intro xV dxV hg
-  rcases hasFDerivAt_evalVec_and_jvp_at (Γ := Γ) (ss := ss) (g := g) (xV := xV) hg with
-    ⟨D, hD, hJ⟩
-  have hfderiv : fderiv ℝ (evalVec (Γ := Γ) (ss := ss) g) xV = D := by
-    simpa using hD.fderiv
-  simpa [hfderiv] using hJ dxV
+  obtain ⟨D, hD, hJ⟩ :=
+    hasFDerivAt_evalVec_and_jvp_at (Γ := Γ) (ss := ss) (g := g) (xV := xV) hg
+  rw [hD.fderiv]
+  exact hJ dxV
 
-/-- Pointwise version of `backpropVec_eq_adjoint_fderiv`. -/
+/-- Under `GraphFDerivCorrectAt`, `backpropVec` at `xV` is the adjoint of the derivative of
+`evalVec` at `xV`. -/
 theorem backpropVec_eq_adjoint_fderiv_at
     {ss : List Shape} (g : Graph Γ ss) :
     ∀ (xV : CtxVec Γ) (seedV : CtxVec (Γ ++ ss)),
@@ -1370,49 +1125,56 @@ theorem backpropVec_eq_adjoint_fderiv_at
           =
         (fderiv ℝ (evalVec (Γ := Γ) (ss := ss) g) xV).adjoint seedV := by
   intro xV seedV hg
-  classical
-  rcases hasFDerivAt_evalVec_and_jvp_at (Γ := Γ) (ss := ss) (g := g) (xV := xV) hg with
-    ⟨D, hD, hJ⟩
-  have hfderiv : fderiv ℝ (evalVec (Γ := Γ) (ss := ss) g) xV = D := by
-    simpa using hD.fderiv
+  obtain ⟨D, hD, hJ⟩ :=
+    hasFDerivAt_evalVec_and_jvp_at (Γ := Γ) (ss := ss) (g := g) (xV := xV) hg
+  rw [hD.fderiv]
+  -- Both sides have the same inner product against every tangent `dxV`: the adjoint by
+  -- definition, `backpropVec` by tape soundness once `jvpVec` is identified with `D`.
+  refine ext_inner_left ℝ fun dxV => ?_
+  rw [ContinuousLinearMap.adjoint_inner_right, ← hJ dxV]
+  exact (Graph.backprop_correct_inner (Γ := Γ) (ss := ss) g xV dxV seedV).symm
 
-  have hdot :
-      ∀ dxV : CtxVec Γ,
-        inner ℝ (D dxV) seedV =
-          inner ℝ dxV (backpropVec (Γ := Γ) (ss := ss) g xV seedV) := by
-    intro dxV
-    have h := Graph.backprop_correct_inner (Γ := Γ) (ss := ss) g xV dxV seedV
-    simpa [hJ dxV] using h
+-- ---------------------------------------------------------------------------
+-- Everywhere-differentiable versions: read the global certificate at the basepoint.
+-- ---------------------------------------------------------------------------
 
-  let u : CtxVec Γ := backpropVec (Γ := Γ) (ss := ss) g xV seedV
-  let v : CtxVec Γ := D.adjoint seedV
-  have hforall : ∀ dxV : CtxVec Γ, inner ℝ dxV u = inner ℝ dxV v := by
-    intro dxV
-    calc
-      inner ℝ dxV u
-          = inner ℝ (D dxV) seedV := by
-              simpa [u] using (hdot dxV).symm
-      _ = inner ℝ dxV (D.adjoint seedV) := by
-            simpa using
-              (ContinuousLinearMap.adjoint_inner_right (A := D) (x := dxV) (y := seedV)).symm
-      _ = inner ℝ dxV v := by simp [v]
+/-- `evalVec` is differentiable everywhere and its derivative agrees with `jvpVec`, for a graph
+whose nodes carry global `NodeFDerivCorrect` certificates. -/
+theorem hasFDerivAt_evalVec_and_jvp
+    {ss : List Shape} (g : Graph Γ ss)
+    (hg : GraphFDerivCorrect (Γ := Γ) g) :
+    ∀ xV : CtxVec Γ,
+      ∃ D : CtxVec Γ →L[ℝ] CtxVec (Γ ++ ss),
+        HasFDerivAt (evalVec (Γ := Γ) (ss := ss) g) D xV
+          ∧
+        (∀ dxV : CtxVec Γ, jvpVec (Γ := Γ) (ss := ss) g xV dxV = D dxV) :=
+  fun xV =>
+    hasFDerivAt_evalVec_and_jvp_at (Γ := Γ) (ss := ss) g xV (GraphFDerivCorrect.at hg xV)
 
-  have h0 : inner ℝ (u - v) (u - v) = 0 := by
-    have hEq := hforall (dxV := (u - v))
-    have : inner ℝ (u - v) u - inner ℝ (u - v) v = 0 := by
-      simpa [sub_eq_zero] using congrArg (fun t => t - inner ℝ (u - v) v) hEq
-    calc
-      inner ℝ (u - v) (u - v) = inner ℝ (u - v) u - inner ℝ (u - v) v := by
-        -- avoid simp rewriting `inner_self` to `‖·‖^2`
-        exact inner_sub_right (x := (u - v)) (y := u) (z := v)
-      _ = 0 := this
-  have huv : u - v = 0 := (inner_self_eq_zero (𝕜 := ℝ) (x := (u - v))).1 h0
-  have huv' : u = v := sub_eq_zero.mp huv
+/-- Under `GraphFDerivCorrect`, the graph JVP equals the Fréchet derivative `fderiv` of `evalVec`.
+  -/
+theorem jvpVec_eq_fderiv
+    {ss : List Shape} (g : Graph Γ ss) (hg : GraphFDerivCorrect (Γ := Γ) g) :
+    ∀ xV dxV,
+      jvpVec (Γ := Γ) (ss := ss) g xV dxV = (fderiv ℝ (evalVec (Γ := Γ) (ss := ss) g) xV) dxV :=
+  fun xV dxV =>
+    jvpVec_eq_fderiv_at (Γ := Γ) (ss := ss) g xV dxV (GraphFDerivCorrect.at hg xV)
 
-  calc
-    backpropVec (Γ := Γ) (ss := ss) g xV seedV = v := by simpa [u] using huv'
-    _ = (fderiv ℝ (evalVec (Γ := Γ) (ss := ss) g) xV).adjoint seedV := by
-          simp [v, hfderiv]
+/--
+Main analytic theorem: `backpropVec` equals the adjoint of the derivative of `evalVec`.
+
+This is the proof-level formalization of “reverse-mode computes a VJP”, stated as an equality of
+linear maps in a Euclidean space.
+-/
+theorem backpropVec_eq_adjoint_fderiv
+    {ss : List Shape} (g : Graph Γ ss) (hg : GraphFDerivCorrect (Γ := Γ) g) :
+    ∀ (xV : CtxVec Γ) (seedV : CtxVec (Γ ++ ss)),
+      backpropVec (Γ := Γ) (ss := ss) g xV seedV
+        =
+      (fderiv ℝ (evalVec (Γ := Γ) (ss := ss) g) xV).adjoint seedV :=
+  fun xV seedV =>
+    backpropVec_eq_adjoint_fderiv_at (Γ := Γ) (ss := ss) g xV seedV
+      (GraphFDerivCorrect.at hg xV)
 
 end Graph
 

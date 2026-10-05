@@ -43,7 +43,7 @@ theorem layerNormWithoutAffine_eq_spec
           (gamma := Tensor.full (α := α) (.dim embedDim .scalar) 1)
           (beta := Tensor.full (α := α) (.dim embedDim .scalar) 0)
           (h_seq_pos := hSeq) (h_embed_pos := hEmb)) := by
-  simp [Graph.layerNormWithoutAffine, Graph.layerNormMatrix, hSeq, hEmb]
+  simp [Graph.layerNormWithoutAffine, Graph.layerNormMatrix, Graph.layerNormMatrixValue, hSeq, hEmb]
   rfl
 
 /--
@@ -80,8 +80,8 @@ theorem evalAt_layernorm_eq
           (Tensor.reshapeSpec (α := α) (source := s)
             (target := .dim seqLen (.dim embedDim .scalar)) x hNumel)
           (Tensor.full (α := α) [embedDim] 1) (Tensor.full (α := α) [embedDim] 0)
-          TorchLean.normalizationEpsilon = .ok y2d := by
-    simpa [Graph.layerNormWithoutAffine, Graph.layerNormMatrix] using hLayerNorm
+          TorchLean.normalizationEpsilon = .ok y2d :=
+    hLayerNorm
   simp [Graph.evalAt, Graph.evalNode, Graph.normalizeNodeOutput, unaryGraphOut, unaryNodeOut,
     Graph.getNode, Graph.getNode?, Graph.unaryParentId, unaryParent?, Graph.expectShape, hParams,
     hNumel, Graph.resolveLayerNormAffine, hLayerNormMatrix, Bind.bind, Except.bind, Pure.pure,

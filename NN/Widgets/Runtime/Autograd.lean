@@ -52,8 +52,7 @@ private def tapeDot {α : Type} [TorchLean.Storage α] (t : Tape α) : String :=
       let label := escapeDotLabel (if name = "" then s!"{i}" else s!"{i}: {name}")
       s!"  n{i} [label=\"{label}\"];")
   let edges : List String :=
-    pairs.foldl (fun acc (i, n) =>
-      acc ++ (n.parents.map (fun p => s!"  n{p} -> n{i};")).toList) []
+    pairs.flatMap (fun (i, n) => (n.parents.map (fun p => s!"  n{p} -> n{i};")).toList)
   header ++ String.intercalate "\n" (nodes ++ edges) ++ "\n}\n"
 
 /-- Build a colored DOT view where output/gradient coverage is highlighted. -/
@@ -80,8 +79,7 @@ private def tapeDotColored {α : Type} [TorchLean.Storage α] (t : Tape α) (out
           "#f7f7f7"
       s!"  n{i} [label=\"{label}\", fillcolor=\"{fill}\"];")
   let edges : List String :=
-    pairs.foldl (fun acc (i, n) =>
-      acc ++ (n.parents.map (fun p => s!"  n{p} -> n{i};")).toList) []
+    pairs.flatMap (fun (i, n) => (n.parents.map (fun p => s!"  n{p} -> n{i};")).toList)
   header ++ String.intercalate "\n" (nodes ++ edges) ++ "\n}\n"
 
 /-- Render one tape node with metadata and forward tensor preview. -/
@@ -189,8 +187,8 @@ private def gradCoverageHtml {α : Type} [TorchLean.Storage α] (t : Tape α) (o
       <div>{pill "missing leaves"} {monospace (listPreviewNat 30 missingLeaves)}</div>
         <div style={json% {"opacity": 0.8}}>
           {.text
-          ("Tip: missing grads usually means a `requiresGrad=false` break, " ++
-            "a disconnected tape, or choosing a non-scalar output id.")}
+          ("Missing gradients can come from a `requiresGrad=false` break " ++
+            "or a node disconnected from the selected output.")}
         </div>
       </div>
     </details>
@@ -246,7 +244,8 @@ see the reverse traversal itself:
 - the upstream cotangent at each node, and
 - the per-parent contributions returned by the node’s local VJP rule.
 
-This viewer runs reverse-mode and renders a step-by-step trace in reverse id order.
+This viewer runs reverse-mode, then recomputes each visited node's local VJP from its accumulated
+cotangent for display in reverse id order. It does not record intermediate accumulator updates.
 -/
 
 /-- Render a reverse-pass trace for a tape, starting from a scalar output node `outId`. -/
@@ -301,8 +300,10 @@ def tapeTraceHtml {α : Type} [TorchLean.Storage α] [ToString α] [Add α] [One
                         {pill "upstream dL/dy"}
                         <div style={json% {"margin-top": "6px"}}>{packedTensorHtml (α := α) g}</div>
                       </div>}
-                {match g? with
-                  | none => ProofWidgets.Html.text ""
+                {match (if node.requiresGrad then g? else none) with
+                  | none =>
+                      if node.requiresGrad then ProofWidgets.Html.text ""
+                      else <div>{pill "VJP skipped (requiresGrad=false)"}</div>
                   | some g =>
                       match node.backward g with
                       | .error msg =>
@@ -347,8 +348,8 @@ def tapeTraceHtml {α : Type} [TorchLean.Storage α] [ToString α] [Add α] [One
           </div>
           <div style={json% {"opacity": 0.85, "margin-bottom": "10px"}}>
             {.text
-              ("Each step shows the upstream gradient at that node and the parent contributions " ++
-                "produced by the node’s VJP rule.")}
+              ("Each step shows the accumulated upstream gradient and recomputes the parent " ++
+                "contributions from the node’s VJP rule. Disabled VJPs remain skipped.")}
           </div>
           <details «open»={true}>
             <summary>{.text "Steps (reverse id order)"}</summary>

@@ -6,7 +6,8 @@ Authors: TorchLean Team
 
 module
 
-public import NN.Floats.FP32.Sterbenz
+public import NN.Floats.FP32
+public import FloatLib.Floats.Formats.BinaryInterchange.Analysis.Sterbenz
 public import NN.Proofs.RuntimeApprox.Reductions.IEEE32
 public import NN.Spec.Quantization
 public import NN.Spec.Core.FloatInstances -- shake: keep
@@ -16,9 +17,8 @@ public import NN.Spec.Core.FloatInstances -- shake: keep
 
 This example uses the same shape-indexed tensor operation twice.  The `FP32` tensor gives the
 proof-oriented rounded-real semantics.  The `ExecFloat.Binary 8 23` tensor executes binary32
-arithmetic from
-bits.  On a finite result, the IEEE bridge and the effective rounding calculation identify the
-same canonical mantissa and exponent.
+arithmetic from bits. On a finite result, the IEEE bridge and the effective rounding calculation
+identify the same canonical mantissa and exponent.
 -/
 
 @[expose] public section
@@ -60,11 +60,11 @@ def runtimeSum : Tensor (Binary 8 23) vectorShape :=
 
 /-- Proof-oriented tensors use the same tensor API with rounded-real FP32 scalars. -/
 noncomputable def specOne : FP32 :=
-  NF.ofReal (β := binaryRadix) (fexp := fexp32) (rnd := rnd32) 1
+  NF.ofReal (β := binaryRadix) (fexp := (Model.fexpOf FloatFormat.binary32)) (rnd := nearestEven) 1
 
 /-- The rounded-real counterpart of `2`. Exactly representable, so rounding is the identity here. -/
 noncomputable def specTwo : FP32 :=
-  NF.ofReal (β := binaryRadix) (fexp := fexp32) (rnd := rnd32) 2
+  NF.ofReal (β := binaryRadix) (fexp := (Model.fexpOf FloatFormat.binary32)) (rnd := nearestEven) 2
 
 /-- A vector of ones in the proof-oriented model. -/
 noncomputable def specOnes : Tensor FP32 vectorShape :=
@@ -76,8 +76,7 @@ noncomputable def specTwos : Tensor FP32 vectorShape :=
 
 /--
 Their sum, computed by the same `addSpec` the executable tensors use. The two models share the
-tensor
-API and differ only in the scalar type, which is what makes the comparison below meaningful.
+tensor API and differ only in the scalar type, which is what makes the comparison below meaningful.
 -/
 noncomputable def specSum : Tensor FP32 vectorShape :=
   Tensor.addSpec specOnes specTwos
@@ -87,14 +86,16 @@ theorem specSum_entry_computed (i : Fin width) :
     FP32.toReal specSum[i] =
       FloatLib.Floats.Formats.Flocq.toReal (β := binaryRadix) {
         mantissa := nearestEvenMantissa
-          (scaledMantissa binaryRadix fexp32 (specOne.val + specTwo.val))
-        exponent := cexp binaryRadix fexp32 (specOne.val + specTwo.val) } := by
+          (scaledMantissa binaryRadix (Model.fexpOf FloatFormat.binary32)
+            (specOne.val + specTwo.val))
+        exponent := cexp binaryRadix (Model.fexpOf FloatFormat.binary32)
+          (specOne.val + specTwo.val) } := by
   have hitem : specSum[i] = specOne + specTwo := by
     change specSum.getScalar i = specOne + specTwo
     simp [specSum, specOnes, specTwos, Tensor.addSpec,
       Tensor.map2Spec, Tensor.getScalar_eq_apply]
   rw [hitem]
-  exact FP32.add_toReal_eq_computed specOne specTwo
+  exact round_nearestEven_computed (specOne.val + specTwo.val)
 
 /--
 Every executable tensor entry reaches the same effective representation once finiteness is checked.
@@ -104,17 +105,15 @@ theorem runtimeSum_entry_computed (i : Fin width) :
     (toModel runtimeSum[i]).toReal =
       FloatLib.Floats.Formats.Flocq.toReal (β := binaryRadix) {
         mantissa := nearestEvenMantissa
-          (scaledMantissa binaryRadix fexp32
+          (scaledMantissa binaryRadix (Model.fexpOf FloatFormat.binary32)
             ((toModel (1 : Binary 8 23)).toReal + (toModel (ofBits32 0x40000000)).toReal))
-        exponent := cexp binaryRadix fexp32
+        exponent := cexp binaryRadix (Model.fexpOf FloatFormat.binary32)
           ((toModel (1 : Binary 8 23)).toReal + (toModel (ofBits32 0x40000000)).toReal) } := by
-  have hadd (a b : Binary 8 23) : a + b = ExecFloat.add a b := by
-    rfl
   have hitem : @Eq (Binary 8 23) (runtimeSum.getScalar i)
       (ExecFloat.add (1 : Binary 8 23) (ofBits32 0x40000000)) := by
     simp only [runtimeSum, runtimeOnes, runtimeTwos, Tensor.addSpec,
       Tensor.getScalar_map2Spec, Tensor.getScalar_full]
-    exact hadd _ _
+    rfl
   have hfinite :
       Binary.isFinite (ExecFloat.add (1 : Binary 8 23) (ofBits32 0x40000000)) = true := by
     change Model.isFinite (toModel (ExecFloat.add (1 : Binary 8 23) (ofBits32 0x40000000))) = true
@@ -123,22 +122,25 @@ theorem runtimeSum_entry_computed (i : Fin width) :
   have hlookup : @Eq (Binary 8 23) runtimeSum[i] (runtimeSum.getScalar i) := by
     exact (Tensor.getScalar_eq_apply runtimeSum i).symm
   rw [hlookup, hitem]
-  rw [toReal_add_eq_fp32Round_of_isFinite hfinite, fp32Round_eq_computed]
+  rw [toReal_add_eq_round_of_isFinite hfinite]
+  exact round_nearestEven_computed _
 
 /-! ## Exact subtraction, local spacing, and absorption -/
 
 /-- Sterbenz's lemma certifies the concrete binary32 subtraction $2-1$ as exact. -/
 theorem two_sub_one_exact :
-    round32 ((2 : ℝ) - 1) = (2 : ℝ) - 1 := by
-  have hOne : genericFormat binaryRadix fexp32 (1 : ℝ) := by
+    Model.roundAt FloatFormat.binary32 ((2 : ℝ) - 1) = (2 : ℝ) - 1 := by
+  have hOne : genericFormat binaryRadix (Model.fexpOf FloatFormat.binary32) (1 : ℝ) := by
     simpa [bpow, binaryRadix, Radix.toReal] using
-      (generic_format_bpow (β := binaryRadix) (fexp := fexp32) 0
-        (by norm_num [fexp32, fltExp]))
-  have hTwo : genericFormat binaryRadix fexp32 (2 : ℝ) := by
+      (generic_format_bpow (β := binaryRadix) (fexp := (Model.fexpOf FloatFormat.binary32)) 0
+        (by norm_num [Model.fexpOf, FloatFormat.binary32, fltExp,
+          FloatFormat.minSubnormalExponent, FloatFormat.minNormalExponent]))
+  have hTwo : genericFormat binaryRadix (Model.fexpOf FloatFormat.binary32) (2 : ℝ) := by
     simpa [bpow, binaryRadix, Radix.toReal] using
-      (generic_format_bpow (β := binaryRadix) (fexp := fexp32) 1
-        (by norm_num [fexp32, fltExp]))
-  exact round32_sub_exact_of_sterbenz hTwo hOne (by norm_num) (by norm_num)
+      (generic_format_bpow (β := binaryRadix) (fexp := (Model.fexpOf FloatFormat.binary32)) 1
+        (by norm_num [Model.fexpOf, FloatFormat.binary32, fltExp,
+          FloatFormat.minSubnormalExponent, FloatFormat.minNormalExponent]))
+  exact Model.roundAt_sub_eq_of_sterbenz FloatFormat.binary32 hTwo hOne (by norm_num) (by norm_num)
     (by norm_num) (by norm_num)
 
 private theorem toReal_of_decoded {x : (Binary 8 23)} {d : FloatLib.Numerics.Dyadic}
@@ -167,35 +169,40 @@ theorem runtime_two_sub_one_exact :
   norm_num
 
 /-- The decoded significand at `1.0` has scale `2^-23`, its binary32 spacing. -/
-theorem posOne_ulpExp : ((toModel (1 : Binary 8 23)).toDyadic?).map (·.exponent) = some (-23) := by
+theorem one_dyadic_exponent :
+    ((toModel (1 : Binary 8 23)).toDyadic?).map (·.exponent) = some (-23) := by
   decide
 
 /-- The computed exponent therefore denotes the mathematical ULP at `1.0`. -/
-theorem posOne_ulp :
-    bpow binaryRadix (-23) = ulp32 ((toModel (1 : Binary 8 23)).toReal) := by
+theorem one_ulp :
+    bpow binaryRadix (-23) =
+      Model.ulpAt FloatFormat.binary32 ((toModel (1 : Binary 8 23)).toReal) := by
   rw [toReal_one]
-  simpa [bpow, binaryRadix, Radix.toReal, fexp32, fltExp] using
-    (ulp_bpow (β := binaryRadix) (fexp := fexp32) 0).symm
+  simpa [bpow, binaryRadix, Radix.toReal, Model.ulpAt, Model.fexpOf,
+    FloatFormat.binary32, fltExp, FloatFormat.minSubnormalExponent,
+    FloatFormat.minNormalExponent] using
+    (ulp_bpow (β := binaryRadix) (fexp := (Model.fexpOf FloatFormat.binary32)) 0).symm
 
 /-- Infinity has no finite dyadic significand or scale. -/
-theorem posInf_ulpExp : ((toModel (Binary.infinity false : Binary 8 23)).toDyadic?).map (·.exponent)
-  = none := by
+theorem infinity_dyadic_exponent :
+    ((toModel (Binary.infinity false : Binary 8 23)).toDyadic?).map (·.exponent) = none := by
   decide
 
 /-- Adding the smallest positive subnormal does not change executable binary32 `1.0`. -/
-theorem posOne_absorbs_posMinSubnormal : ExecFloat.add (1 : Binary 8 23) (ofBits32 1) = (1 : Binary
+theorem one_add_min_subnormal : ExecFloat.add (1 : Binary 8 23) (ofBits32 1) = (1 : Binary
   8 23) := by
   decide
 
 /--
 The executable absorption result transports to the rounded-real binary32 specification.
 -/
-theorem posOne_add_posMinSubnormal_rounds_to_posOne :
-    round32 ((toModel (1 : Binary 8 23)).toReal + (toModel (ofBits32 1)).toReal) = (toModel (1 :
-      Binary 8 23)).toReal := by
-  have h := toReal_add_eq_fp32Round_of_isFinite
+theorem one_add_min_subnormal_rounds_to_one :
+    Model.roundAt FloatFormat.binary32
+      ((toModel (1 : Binary 8 23)).toReal + (toModel (ofBits32 1)).toReal) =
+        (toModel (1 : Binary 8 23)).toReal := by
+  have h := toReal_add_eq_round_of_isFinite
     (x := (1 : Binary 8 23)) (y := ofBits32 1) (by decide)
-  rw [posOne_absorbs_posMinSubnormal] at h
+  rw [one_add_min_subnormal] at h
   exact h.symm
 
 /-! ## Named rounding modes and fused enclosures -/
@@ -203,21 +210,21 @@ theorem posOne_add_posMinSubnormal_rounds_to_posOne :
 /-- The public mode API avoids passing a raw integer-rounding function at each call site. -/
 noncomputable def oneThirdDown : ℝ :=
   RoundingMode.towardNegative.round
-    (β := binaryRadix) (fexp := fexp32) (1 / 3)
+    (β := binaryRadix) (fexp := (Model.fexpOf FloatFormat.binary32)) (1 / 3)
 
 /-- Directed rounding gives a certified lower endpoint, not merely a differently named value. -/
 theorem oneThirdDown_le : oneThirdDown ≤ 1 / 3 := by
   simpa [oneThirdDown, RoundingMode.round, RoundingMode.roundingFunction] using
-    (round_floor_le (β := binaryRadix) (fexp := fexp32) (1 / 3))
+    (round_floor_le (β := binaryRadix) (fexp := (Model.fexpOf FloatFormat.binary32)) (1 / 3))
 
 /-- A concrete fused multiply-add lower endpoint, computed directly from binary32 inputs. -/
 def fusedLower : Binary 8 23 :=
-  Binary.fma (1 : Binary 8 23) (ofBits32 0x40000000) (ofBits32 0x3e800000)
+  Binary.fmaWithRounding (1 : Binary 8 23) (ofBits32 0x40000000) (ofBits32 0x3e800000)
     .towardNegativeInfinity
 
 /-- The corresponding upper endpoint. -/
 def fusedUpper : Binary 8 23 :=
-  Binary.fma (1 : Binary 8 23) (ofBits32 0x40000000) (ofBits32 0x3e800000)
+  Binary.fmaWithRounding (1 : Binary 8 23) (ofBits32 0x40000000) (ofBits32 0x3e800000)
     .towardPositiveInfinity
 
 /-- The executable directed FMA endpoints enclose the exact single-rounding expression. -/
@@ -246,11 +253,11 @@ theorem fused_enclosure :
 
 /-- Directed binary32 square-root endpoints for the exact input `2`. -/
 def sqrtLower : Binary 8 23 :=
-  (Binary.sqrt (rounding := .towardNegativeInfinity)) (ofBits32 0x40000000)
+  (Binary.sqrtWithRounding (rounding := .towardNegativeInfinity)) (ofBits32 0x40000000)
 
 /-- The upper endpoint, rounded away from zero, so the pair brackets the exact `sqrt 2`. -/
 def sqrtUpper : Binary 8 23 :=
-  (Binary.sqrt (rounding := .towardPositiveInfinity)) (ofBits32 0x40000000)
+  (Binary.sqrtWithRounding (rounding := .towardPositiveInfinity)) (ofBits32 0x40000000)
 
 /-- The executable endpoints enclose the exact real value `sqrt 2`. -/
 theorem sqrt_enclosure :
@@ -258,9 +265,9 @@ theorem sqrt_enclosure :
       (Real.sqrt ((toModel (ofBits32 0x40000000)).toReal) : EReal) ≤
         (toModel sqrtUpper).toEReal := by
   have hlo : toModel sqrtLower = Model.sqrtDown (toModel (ofBits32 0x40000000)) :=
-    Binary.toModel_sqrt (ofBits32 0x40000000) .towardNegativeInfinity
+    Binary.toModel_sqrtWithRounding (ofBits32 0x40000000) .towardNegativeInfinity
   have hhi : toModel sqrtUpper = Model.sqrtUp (toModel (ofBits32 0x40000000)) :=
-    Binary.toModel_sqrt (ofBits32 0x40000000) .towardPositiveInfinity
+    Binary.toModel_sqrtWithRounding (ofBits32 0x40000000) .towardPositiveInfinity
   constructor
   · rw [hlo]
     exact Model.toEReal_sqrtDown_le (toModel (ofBits32 0x40000000))
@@ -319,7 +326,7 @@ theorem quarterCodes_roundtrip :
   grind
 
 /-- Round-to-odd on a sufficiently fine binary grid prevents double rounding on the quarter grid. -/
-theorem quarterGrid_doubleRounding_safe (extra : ℕ) (x : ℝ) :
+theorem quarterGrid_double_rounding_safe (extra : ℕ) (x : ℝ) :
     roundAtScale nearestEven (1 / 4) (by norm_num)
         (roundAtScale oddRound
           ((1 / 4) / (2 : ℝ) ^ (extra + 2)) (by positivity) x) =
@@ -367,10 +374,10 @@ theorem runtimeDotTree_computed :
     (toModel (evalDotIEEE runtimeDotTree)).toReal =
       FloatLib.Floats.Formats.Flocq.toReal (β := binaryRadix) {
         mantissa := nearestEvenMantissa
-          (scaledMantissa binaryRadix fexp32
+          (scaledMantissa binaryRadix (Model.fexpOf FloatFormat.binary32)
             (evalRealDotIEEE (.leaf ((1 : Binary 8 23), ofBits32 0x40000000)) +
               evalRealDotIEEE (.leaf (ofBits32 0x40400000, ofBits32 0x40800000))))
-        exponent := cexp binaryRadix fexp32
+        exponent := cexp binaryRadix (Model.fexpOf FloatFormat.binary32)
           (evalRealDotIEEE (.leaf ((1 : Binary 8 23), ofBits32 0x40000000)) +
             evalRealDotIEEE (.leaf (ofBits32 0x40400000, ofBits32 0x40800000))) } := by
   rw [toReal_evalDotIEEE_eq_evalRealDotIEEE_of_FiniteEvalDot runtimeDotTree runtimeDotTree_finite]

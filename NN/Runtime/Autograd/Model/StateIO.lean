@@ -8,7 +8,6 @@ module
 
 public import NN.Runtime.Autograd.Torch.Core.CheckpointIO
 public import NN.Tensor.Conversion
-import Mathlib.Tactic.Positivity.Finset
 public import NN.Runtime.Autograd.Torch.Core.Trainer.Parameters
 public import NN.Tensor.Internal.Elab.TensorLiteral
 public import NN.Runtime.Autograd.Model.StateIO.Encoding
@@ -104,14 +103,18 @@ def tensorFromJsonBits (tag : String) (s : Shape) (j : Lean.Json) :
       s!"{tag}: expected {Shape.size s} scalars for shape {Shape.toList s}, " ++
         s!"got {vals.size}"
 
-/-- Encode shape-indexed model state as the JSON array stored under `state`. -/
-def stateToJsonBits {ss : List Shape} : TorchLean.TensorPack α ss → Lean.Json
-  | .nil => Lean.Json.arr #[]
+-- Encode the tail before the head, as in the original recursive serializer. Pushing in reverse
+-- order avoids copying the growing tail array at every parameter.
+/-- Encode state tensors in reverse order, preserving each tensor's bit representation. -/
+def Internal.stateToJsonBitsRev {ss : List Shape} :
+    TorchLean.TensorPack α ss → Array Lean.Json
+  | .nil => #[]
   | .cons (s := s) t ts =>
-      match stateToJsonBits (ss := _) ts with
-      | Lean.Json.arr xs =>
-          Lean.Json.arr (#[tensorToJsonBits s t] ++ xs)
-      | _ => Lean.Json.arr #[]
+      (Internal.stateToJsonBitsRev ts).push (tensorToJsonBits s t)
+
+/-- Encode shape-indexed model state as the JSON array stored under `state`. -/
+def stateToJsonBits {ss : List Shape} (state : TorchLean.TensorPack α ss) : Lean.Json :=
+  Lean.Json.arr (Internal.stateToJsonBitsRev state).reverse
 
 /-- Decode an expected state layout from a tensor array, starting at `offset`. -/
 def stateFromJsonBitsArray (tag : String) (xs : Array Lean.Json) :
@@ -245,7 +248,7 @@ def tensorFloat32Bytes {α : Type} [TorchLean.Storage α] (encode : α → Float
         throw <| IO.userError <|
           s!"StateIO: CUDA state-tensor shape mismatch "
             ++ s!"(buffer={Shape.pretty value.s}, expected={Shape.pretty shape})"
-      Runtime.Autograd.Cuda.Buffer.toFloat32BytesIO value.buf
+      Runtime.Autograd.LibTorch.Buffer.toFloat32BytesIO value.buf
   | none =>
       let tensor ← tensorRef.value.get
       pure <| tensorToFloat32Bytes encode tensor
@@ -293,12 +296,10 @@ def readTensorFloat32Into {α : Type} [TorchLean.Storage α] (decode : Float32 �
   let bytes ← Torch.Internal.CheckpointIO.readExact
     "StateIO" handle (Shape.size shape * 4)
   if useCuda then
-    let buffer ← Runtime.Autograd.Cuda.Buffer.ofFloat32BytesIO bytes
+    let buffer ← Runtime.Autograd.LibTorch.Buffer.ofFloat32BytesIO bytes
     Torch.Internal.setParamCudaValue tensorRef { s := shape, buf := buffer }
   else
-    let tensor ← match tensorFromFloat32Bytes decode shape bytes with
-      | .ok tensor => pure tensor
-      | .error message => throw <| IO.userError message
+    let tensor ← okOrThrow (tensorFromFloat32Bytes decode shape bytes)
     Torch.Internal.setParamHostValue tensorRef tensor
 
 /-- Stream a checkpoint into shape-indexed runtime state. -/

@@ -29,20 +29,20 @@ open Examples
 open Spec.Module
 
 /-- Input width of the worked example: two features. -/
-abbrev exInDim  := 2
+abbrev exampleInDim  := 2
 
 /-- Hidden width of the worked example: three ReLU units. -/
-abbrev exHidDim := 3
+abbrev exampleHidDim := 3
 
 /-- Output width of the worked example: one scalar prediction. -/
-abbrev exOutDim := 1
+abbrev exampleOutDim := 1
 
 /-- Hidden weight matrix, with entries chosen as small rationals.
 
 Everything in this file is over `ℚ`, so the numbers below are exact and the examples at the end of
 the file close by `simp` alone. The same computation in `Float` would only be true up to rounding,
 which is the point of keeping the closed-form check separate from the runtime. -/
-def exampleHiddenWeight : TorchLean.Tensor ℚ [exHidDim, exInDim] :=
+def exampleHiddenWeight : TorchLean.Tensor ℚ [exampleHidDim, exampleInDim] :=
   TorchLean.Tensor.matrix (fun i j =>
     match i.val, j.val with
     | 0, 0 => 1 / 10
@@ -54,7 +54,7 @@ def exampleHiddenWeight : TorchLean.Tensor ℚ [exHidDim, exInDim] :=
     | _, _ => 0)
 
 /-- Hidden bias of the worked example. -/
-def exampleHiddenBias : TorchLean.Tensor ℚ [exHidDim] :=
+def exampleHiddenBias : TorchLean.Tensor ℚ [exampleHidDim] :=
   TorchLean.Tensor.ofFn (fun i =>
     match i.val with
     | 0 => 1 / 10
@@ -64,7 +64,7 @@ def exampleHiddenBias : TorchLean.Tensor ℚ [exHidDim] :=
 
 /-- Output weight row of the worked example. All entries are positive, so the single output unit is
 active and the backward pass exercises the interesting branch of `reluDerivSpec`. -/
-def exampleOutputWeight : TorchLean.Tensor ℚ [exOutDim, exHidDim] :=
+def exampleOutputWeight : TorchLean.Tensor ℚ [exampleOutDim, exampleHidDim] :=
   TorchLean.Tensor.matrix (fun _ j =>
     match j.val with
     | 0 => 7 / 10
@@ -73,19 +73,19 @@ def exampleOutputWeight : TorchLean.Tensor ℚ [exOutDim, exHidDim] :=
     | _ => 0)
 
 /-- Output bias of the worked example. -/
-def exampleOutputBias : TorchLean.Tensor ℚ [exOutDim] :=
+def exampleOutputBias : TorchLean.Tensor ℚ [exampleOutDim] :=
   TorchLean.Tensor.ofFn (fun _ => 2 / 5)
 
 /-- The hidden layer, packaging its weight and bias. -/
-def exampleHiddenLayer : Spec.LinearSpec ℚ exInDim exHidDim :=
+def exampleHiddenLayer : Spec.LinearSpec ℚ exampleInDim exampleHidDim :=
   { weights := exampleHiddenWeight, bias := exampleHiddenBias }
 
 /-- The output layer, packaging its weight and bias. -/
-def exampleOutputLayer : Spec.LinearSpec ℚ exHidDim exOutDim :=
+def exampleOutputLayer : Spec.LinearSpec ℚ exampleHidDim exampleOutDim :=
   { weights := exampleOutputWeight, bias := exampleOutputBias }
 
 /-- The single input vector used by every example below. -/
-def exInput : TorchLean.Tensor ℚ [exInDim] :=
+def exampleInput : TorchLean.Tensor ℚ [exampleInDim] :=
   TorchLean.Tensor.ofFn (fun i =>
     match i.val with
     | 0 => 1 / 2
@@ -93,50 +93,50 @@ def exInput : TorchLean.Tensor ℚ [exInDim] :=
     | _ => 0)
 
 /-- The two-layer network as a `Chain`, built by the general `mlpSpec` constructor. -/
-def exNet : Spec.Module.Chain ℚ (.dim exInDim .scalar) (.dim exOutDim .scalar) :=
+def exampleNet : Spec.Module.Chain ℚ (.dim exampleInDim .scalar) (.dim exampleOutDim .scalar) :=
   Examples.mlpSpec (α := ℚ) exampleHiddenLayer exampleOutputLayer
 
 /-- Output obtained by running the chain, that is, by the generic module forward pass. -/
-def exOutput : TorchLean.Tensor ℚ [exOutDim] :=
-  Spec.Module.Chain.forward (α := ℚ) exNet exInput
+def exampleOutput : TorchLean.Tensor ℚ [exampleOutDim] :=
+  Spec.Module.Chain.forward (α := ℚ) exampleNet exampleInput
 
 /-- The same output written out by hand: linear, ReLU, linear.
 
 Stating both and proving them equal is the whole point. It checks that `Chain.forward` really does
 compose the layers in the order a reader would expect, rather than only that it type-checks. -/
-def exExpected : TorchLean.Tensor ℚ [exOutDim] :=
-  let z1 := Spec.linearSpec (α := ℚ) exampleHiddenLayer exInput
+def exampleExpected : TorchLean.Tensor ℚ [exampleOutDim] :=
+  let z1 := Spec.linearSpec (α := ℚ) exampleHiddenLayer exampleInput
   let a1 := Activation.reluSpec z1
   Spec.linearSpec (α := ℚ) exampleOutputLayer a1
 
 /-- Incoming cotangent, taken to be all ones so the backward pass reads off plain derivatives. -/
-def exDLdy : TorchLean.Tensor ℚ [exOutDim] :=
+def exampleDLdy : TorchLean.Tensor ℚ [exampleOutDim] :=
   TorchLean.Tensor.ofFn (fun _ => 1)
 
 /-- Gradients from the hand-written backward pass: weight, bias and input gradients per layer. -/
-def exGrad :=
-  Examples.mlpBackward (α := ℚ) exampleHiddenLayer exampleOutputLayer exInput exDLdy
+def exampleGrad :=
+  Examples.mlpBackward (α := ℚ) exampleHiddenLayer exampleOutputLayer exampleInput exampleDLdy
 
 /--
 Input gradient from the `OpSpec` backward pass, which composes per-operation adjoints instead.
 -/
-def exDXOpspec :=
-  Examples.mlpOpspecBackward (α := ℚ) exampleHiddenLayer exampleOutputLayer exInput exDLdy
+def exampleDXOpspec :=
+  Examples.mlpOpspecBackward (α := ℚ) exampleHiddenLayer exampleOutputLayer exampleInput exampleDLdy
 
-/-- Input gradient projected out of `exGrad`, so the two routes can be compared directly. -/
-def dXHand : TorchLean.Tensor ℚ [exInDim] :=
-  match exGrad with
+/-- Input gradient projected out of `exampleGrad`, so the two routes can be compared directly. -/
+def exampleDXHand : TorchLean.Tensor ℚ [exampleInDim] :=
+  match exampleGrad with
   | (_, _, _, _, dX) => dX
 
 example :
-    exOutput = exExpected := by
-  simpa [exOutput, exExpected, exNet] using
-    (Examples.mlp_spec_forward_eq (α := ℚ) exampleHiddenLayer exampleOutputLayer exInput)
+    exampleOutput = exampleExpected := by
+  simpa [exampleOutput, exampleExpected, exampleNet] using
+    (Examples.mlp_spec_forward_eq (α := ℚ) exampleHiddenLayer exampleOutputLayer exampleInput)
 
 example :
-    dXHand = exDXOpspec := by
-  simp [dXHand, exGrad, exDXOpspec, Examples.mlpBackward, Examples.mlpOpspecBackward,
-    Examples.mlpOpspec, Spec.OpSpec.compose, Spec.linearOp, Spec.reluOp,
-    Spec.liftElementwiseBackward, Spec.liftElementwise, Activation.reluDerivSpec]
+    exampleDXHand = exampleDXOpspec := by
+  simp [exampleDXHand, exampleGrad, exampleDXOpspec, Examples.mlpBackward,
+    Examples.mlpOpspecBackward, Examples.mlpOpspec, Spec.OpSpec.compose, Spec.linearOp,
+    Spec.reluOp, Spec.liftElementwiseBackward, Activation.reluDerivSpec]
 
 end NN.Proofs.Models.Mlp

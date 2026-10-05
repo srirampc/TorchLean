@@ -23,7 +23,7 @@ variable {α : Type} [TorchLean.Storage α] [Context α]
 /-!
 # Reductions
 
-Fold, sum/product/mean/variance, axis reductions, and last-axis reductions.
+Fold, sum, mean, variance, and axis reductions.
 -/
 
 /-- Left fold over all tensor elements. -/
@@ -79,11 +79,6 @@ end foldlSpec
     foldlSpec.go_zero_eq_fin_foldl]
   rfl
 
-/-- Right fold over all tensor elements. -/
-def foldrSpec {α β : Type} [TorchLean.Storage α]
-    (f : α → β → β) (init : β) {s : Shape} (tensor : Tensor α s) : β :=
-  tensor.data.toList.foldr f init
-
 -- Reductions that collapse a tensor to scalar values.
 /-- Sum all elements of a tensor. -/
 def sumSpec {α : Type} [TorchLean.Storage α] [Add α] [Zero α]
@@ -95,10 +90,6 @@ def sumSpec {α : Type} [TorchLean.Storage α] [Add α] [Zero α]
     [AddZeroClass α] (value : α) :
     sumSpec (Tensor.scalar value) = value := by
   simp [sumSpec]
-
-/-- Product of all elements of a tensor. -/
-def prodSpec {s : Shape} (t : Tensor α s) : α :=
-  foldlSpec (· * ·) 1 t
 
 /-- Flattened row-major index of the first maximal entry in a nonempty tensor.
 
@@ -118,36 +109,13 @@ def argmax {s : Shape} (h : 0 < Shape.size s) (x : Tensor α s) : Fin (Shape.siz
     simpa using Nat.sub_succ_lt_self (a := Shape.size s) (i := i) hi
   loop 1 ⟨0, h⟩
 
-/-- Count the number of scalar entries in a tensor by folding; see `countSpec_eq_size`. -/
-def countSpec {s : Shape} (t : Tensor α s) : Nat :=
-  foldlSpec (fun acc _ => acc + 1) 0 t
-
-omit [Context α] [DecidableRel ((· > ·) : α → α → Prop)] in
-/-- Counting the entries of a tensor returns its static size. -/
-@[simp] theorem countSpec_eq_size {s : Shape} (t : Tensor α s) : countSpec t = s.size := by
-  have hList : ∀ (values : List α) (start : Nat),
-      values.foldl (fun acc _ => acc + 1) start = start + values.length := by
-    intro values
-    induction values with
-    | nil => intro start; simp
-    | cons _ values ih =>
-        intro start
-        rw [List.foldl_cons, ih, List.length_cons]
-        grind
-  rw [countSpec, foldlSpec, TorchLean.Tensor.Internal.Rep.foldl_eq_data_foldl,
-    ← Array.foldl_toList, hList, Nat.zero_add, Array.length_toList,
-    TorchLean.Tensor.Internal.Rep.data_size, Shape.internalSize_eq]
-
-/-- `true` if any entry satisfies `p`. -/
-def anySpec {s : Shape} (p : α → Bool) (t : Tensor α s) : Bool :=
-  foldlSpec (fun acc x => acc || p x) false t
-
 /-- `true` if all entries satisfy `p`. -/
 def allSpec {s : Shape} (p : α → Bool) (t : Tensor α s) : Bool :=
   foldlSpec (fun acc x => acc && p x) true t
 
-/-- Dot product: $\sum_i a_i b_i$. -/
-def dotSpec {s : Shape} (a b : Tensor α s) : α :=
+/-- Dot product in row-major order, with a zero-seeded left fold. -/
+def dotSpec {α : Type} [TorchLean.Storage α] [Add α] [Mul α] [Zero α]
+    {s : Shape} (a b : Tensor α s) : α :=
   sumSpec (mulSpec a b)
 
 -- Statistics computed over all scalar leaves of a tensor.
@@ -203,46 +171,49 @@ def varianceSpec {s : Shape} (tensor : Tensor α s) : α :=
 
 -- Shape-level bookkeeping for reductions that drop one axis.
 /-- Output shape after summing along `axis` (drops that dimension). -/
-@[reducible] def shapeAfterSum : Shape → Nat → Shape
-  | .scalar, _ => .scalar
-  | .dim _ inner, 0 => inner
-  | .dim n inner, Nat.succ k => .dim n (shapeAfterSum inner k)
+@[reducible] def shapeAfterSum : Shape → Nat → Shape :=
+  Shape.eraseAxis
 
 /-- Shape obtained by replacing the selected axis with a singleton dimension. -/
-def shapeAfterSumKeepDim : Shape → Nat → Shape
-  | .scalar, _ => .scalar
-  | .dim _ inner, 0 => .dim 1 inner
-  | .dim n inner, Nat.succ k => .dim n (shapeAfterSumKeepDim inner k)
+def shapeAfterSumKeepDim (shape : Shape) (axis : Nat) : Shape :=
+  shape.replaceAxis axis 1
 
 /-- Keeping the reduced axis as a singleton does not change the element count. -/
 @[simp] theorem size_shapeAfterSumKeepDim (s : Shape) (axis : Nat) :
     Shape.size (shapeAfterSumKeepDim s axis) = Shape.size (shapeAfterSum s axis) := by
   induction s generalizing axis with
-  | scalar => simp [shapeAfterSumKeepDim, shapeAfterSum]
+  | scalar => rfl
   | dim n inner ih =>
       cases axis with
-      | zero => simp [shapeAfterSumKeepDim, shapeAfterSum, Shape.size]
-      | succ axis => simp [shapeAfterSumKeepDim, Shape.size, ih]
+      | zero =>
+          change 1 * inner.size = inner.size
+          exact Nat.one_mul _
+      | succ axis =>
+          change n * (shapeAfterSumKeepDim inner axis).size =
+            n * (shapeAfterSum inner axis).size
+          exact congrArg (n * ·) (ih axis)
 
 /-- Keeping the reduced axis as a singleton preserves the rank. -/
 @[simp] theorem rank_shapeAfterSumKeepDim (s : Shape) (axis : Nat) :
     Shape.rank (shapeAfterSumKeepDim s axis) = Shape.rank s := by
   induction s generalizing axis with
-  | scalar => simp [shapeAfterSumKeepDim, Shape.rank]
+  | scalar => rfl
   | dim n inner ih =>
       cases axis with
-      | zero => simp [shapeAfterSumKeepDim, Shape.rank]
-      | succ axis => simp [shapeAfterSumKeepDim, Shape.rank, ih]
+      | zero => rfl
+      | succ axis =>
+          change (shapeAfterSumKeepDim inner axis).rank + 1 = inner.rank + 1
+          exact congrArg (· + 1) (ih axis)
 
 /-- Dropping axis zero from `.dim n inner` yields `inner`, including when `n = 0`. -/
 @[simp] theorem shapeAfterSum_zero (n : Nat) (inner : Shape) :
     shapeAfterSum (.dim n inner) 0 = inner := by
-  simp [shapeAfterSum]
+  rfl
 
 /-- `simp` lemma: dropping axis `k+1` recurses into the tail shape. -/
 @[simp] theorem shapeAfterSum_succ {n s k} :
     shapeAfterSum (.dim n s) (k + 1) = .dim n (shapeAfterSum s k) := by
-  simp [shapeAfterSum]
+  rfl
 
 /-- A keep-dimension reduction shape broadcasts back to its input shape. -/
 theorem shapeAfterSumKeepDimBroadcast : (s : Shape) → (axis : Nat) →
@@ -250,7 +221,7 @@ theorem shapeAfterSumKeepDimBroadcast : (s : Shape) → (axis : Nat) →
   | .scalar, _ => .scalar
   | .dim _ inner, 0 => .dim_1_to_n (Shape.CanBroadcastTo.refl inner)
   | .dim _ inner, Nat.succ axis =>
-      letI : Shape.SameRank (shapeAfterSumKeepDim inner axis) inner :=
+      letI : Shape.SameRank (inner.replaceAxis axis 1) inner :=
         ⟨rank_shapeAfterSumKeepDim inner axis⟩
       .dim_eq (shapeAfterSumKeepDimBroadcast inner axis)
 
@@ -258,16 +229,13 @@ theorem shapeAfterSumKeepDimBroadcast : (s : Shape) → (axis : Nat) →
 
 This is deliberately separate from `broadcastTo`. Generic broadcasting aligns dimensions from the
 right, whereas a reduction backward pass must restore the exact axis that was removed. -/
-def broadcastAfterSum {α : Type} [TorchLean.Storage α] [Inhabited α] :
+def broadcastAfterSum {α : Type} [TorchLean.Storage α] :
     (s : Shape) → (axis : Nat) → Tensor α (shapeAfterSum s axis) → Tensor α s
   | .scalar, _, x => x
   | .dim n _, 0, x => Tensor.dim (fun _ : Fin n => x)
   | .dim _ inner, Nat.succ axis, tensor =>
       Tensor.dim (fun i =>
         broadcastAfterSum inner axis (Tensor.unstack tensor i))
-
--- The compact proof below uses the product-shape lemmas already established above.
-
 
 -- Reducers parameterized by the scalar aggregation operation.
 
@@ -388,8 +356,8 @@ end Reduction
 
 `reduceDim f axis x` applies `f` to the slices along `axis`, and returns a tensor whose shape is
 `shapeAfterSum s axis` (that axis is dropped). The axis may be empty: `f` then receives empty
-slices and returns whatever it does on them, such as zero for `sumSpec`. Only reductions that
-select an element, such as `reduceMin` and `reduceMean`, require a nonempty axis.
+slices and returns whatever it does on them, such as zero for `sumSpec`. The typed `reduceMax`
+requires an initial entry, and `reduceMean` divides by the axis extent; both require nonemptiness.
 -/
 def reduceDim
     {α : Type} [TorchLean.Storage α]
@@ -401,20 +369,13 @@ def reduceDim
 
 /-- Sum-reduction along a given axis.
 
-The computation does not need the axis to be nonempty (an empty axis sums to zero, see
-`reduceDim`). The evidence is kept so that `reduceSum` has the same calling convention as
-`reduceMean`, `reduceMin`, and `reduceMax`; dropping it would change the signature of every layer
-and model that threads nonemptiness evidence through its own arguments. Use `reduceDim sumSpec`
-to sum along an axis without evidence. -/
+The evidence matches `IR.OpContracts.checkReductionAxis`, which rejects invalid axes and
+in-bounds axes of extent zero during both inference and evaluation. The underlying computation
+also supports empty sums: use `reduceDim sumSpec` when that broader domain is intended. -/
 def reduceSum {α : Type} [TorchLean.Storage α] [Add α] [Zero α]
     {s : Shape} (axis : Nat) (t : Tensor α s) (_h : Shape.NonemptyAxis axis s) :
     Tensor α (shapeAfterSum s axis) :=
   reduceDim sumSpec axis t
-
-/-- Product-reduction along a given axis. An empty axis multiplies to one. -/
-def reduceProd {s : Shape} (axis : Nat) (t : Tensor α s) :
-    Tensor α (shapeAfterSum s axis) :=
-  reduceDim prodSpec axis t
 
 /-- Mean-reduction along a given axis. -/
 def reduceMean {s : Shape} (axis : Nat) (t : Tensor α s) (h : Shape.NonemptyAxis axis s) :
@@ -422,11 +383,6 @@ def reduceMean {s : Shape} (axis : Nat) (t : Tensor α s) (h : Shape.NonemptyAxi
   let summed := reduceSum axis t h
   letI : Shape.AxisInBounds axis s := h.toAxisInBounds
   mapSpec (fun x => x / (Shape.axisSize s axis : α)) summed
-
-/-- Sum of squares reduced along an axis (helper for variance). -/
-def reduceSumSquared {s : Shape} (axis : Nat) (t : Tensor α s) :
-    Tensor α (shapeAfterSum s axis) :=
-  reduceDim sumSpec axis (mapSpec (fun x => x * x) t)
 
 /-- Variance-reduction along a given axis (population variance, divides by `n`).
 
@@ -457,45 +413,6 @@ def reduceVar
         | succ inner => exact inner
       Tensor.dim fun i =>
         reduceVar k (Tensor.unstack t i) innerReducible
-
-/-- Min-reduction along a given axis. -/
-def reduceMin {s : Shape}
-  (axis : Nat) (t : Tensor α s) (h : Shape.NonemptyAxis axis s) :
-  Tensor α (shapeAfterSum s axis) :=
-  match s with
-  | .scalar =>
-    -- Min of a single value is the value itself
-    t
-
-  | .dim n inner =>
-    match axis with
-    | 0 =>
-      -- Reducing along the first axis - find min across the n slices
-      --
-      -- PyTorch analogy: `torch.amin(x, dim=0)` (or `torch.min` along a dim).
-      match n with
-      | 0 => nomatch h
-      | Nat.succ n' =>
-        -- We have at least one element, so we can safely reduce
-        let rec loop (i : Nat) (acc : Tensor α inner) (hi : i ≤ n') : Tensor α inner :=
-          if h_lt : i < n' then
-            let next_idx : Fin (Nat.succ n') := ⟨i + 1, Nat.succ_lt_succ h_lt⟩
-            loop (i + 1) (minSpec acc (Tensor.unstack t next_idx))
-              (Nat.le_of_succ_le_succ
-                (Nat.succ_le_of_lt (Nat.succ_lt_succ h_lt)))
-          else
-            acc
-        -- Start with first element (index 0) and loop through the rest
-        let first_idx : Fin (Nat.succ n') := ⟨0, Nat.succ_pos n'⟩
-        loop 0 (Tensor.unstack t first_idx) (Nat.zero_le n')
-
-    | Nat.succ k =>
-      -- Reducing along axis k+1 in the inner dimensions
-      let innerReducible : Shape.NonemptyAxis k inner := by
-        cases h with
-        | succ inner => exact inner
-      Tensor.dim fun i =>
-        reduceMin k (Tensor.unstack t i) innerReducible
 
 /-- Max-reduction along a given axis. -/
 def reduceMax {s : Shape}

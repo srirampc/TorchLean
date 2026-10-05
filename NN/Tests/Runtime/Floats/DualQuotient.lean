@@ -40,6 +40,51 @@ def checkScale {α : Type} [Context α] (label : String) (h : α)
   let identity : Array α := #[1, 0, 0, 0, 0, 0, 0, 0]
   expect (label ++ "/self quotient") ((leaves (x / x)).map bits == identity.map bits)
 
+/-- Compare cold encoders with exact dyadic values derived from IEEE significands and exponents.
+Both signs of zero encode as rational zero; infinities and both NaN classes have no encoding. -/
+def checkColdEncoders : IO Unit := do
+  let finite64 : Array (UInt64 × Rat) :=
+    #[(0, 0), (1, 1 / (2 : Rat)^1074),
+      (0x000fffffffffffff, ((2 : Rat)^52 - 1) / (2 : Rat)^1074),
+      (0x0010000000000000, 1 / (2 : Rat)^1022),
+      (0x0010000000000001, ((2 : Rat)^52 + 1) / (2 : Rat)^1074),
+      (0x3ff0000000000000, 1), (0x3ff0000000000001, 1 + 1 / (2 : Rat)^52),
+      (0x3ff8000000000000, 3 / 2),
+      (0x7fefffffffffffff, ((2 : Rat)^53 - 1) * (2 : Rat)^971)]
+  for (magnitude, value) in finite64 do
+    for negative in #[false, true] do
+      let bits := magnitude ||| (if negative then 0x8000000000000000 else 0)
+      let encoded := Numeric.QuotientArithmetic.encode (Float.ofBits bits)
+      expect s!"binary64/cold encoder/{bits}"
+        (encoded.map Numeric.QuotientCoefficients.primal ==
+          some (if negative then -value else value))
+  for magnitude in (#[0x7ff0000000000000, 0x7ff0000000000001,
+      0x7ff8000000000000] : Array UInt64) do
+    for sign in (#[0, 0x8000000000000000] : Array UInt64) do
+      let bits := magnitude ||| sign
+      expect s!"binary64/cold encoder rejects nonfinite/{bits}"
+        (Numeric.QuotientArithmetic.encode (Float.ofBits bits)).isNone
+  let finite32 : Array (UInt32 × Rat) :=
+    #[(0, 0), (1, 1 / (2 : Rat)^149),
+      (0x007fffff, ((2 : Rat)^23 - 1) / (2 : Rat)^149),
+      (0x00800000, 1 / (2 : Rat)^126),
+      (0x00800001, ((2 : Rat)^23 + 1) / (2 : Rat)^149),
+      (0x3f800000, 1), (0x3f800001, 1 + 1 / (2 : Rat)^23),
+      (0x3fc00000, 3 / 2),
+      (0x7f7fffff, ((2 : Rat)^24 - 1) * (2 : Rat)^104)]
+  for (magnitude, value) in finite32 do
+    for negative in #[false, true] do
+      let bits := magnitude ||| (if negative then 0x80000000 else 0)
+      let encoded := Numeric.QuotientArithmetic.encode (Float32.ofBits bits)
+      expect s!"binary32/cold encoder/{bits}"
+        (encoded.map Numeric.QuotientCoefficients.primal ==
+          some (if negative then -value else value))
+  for magnitude in (#[0x7f800000, 0x7f800001, 0x7fc00000] : Array UInt32) do
+    for sign in (#[0, 0x80000000] : Array UInt32) do
+      let bits := magnitude ||| sign
+      expect s!"binary32/cold encoder rejects nonfinite/{bits}"
+        (Numeric.QuotientArithmetic.encode (Float32.ofBits bits)).isNone
+
 /-- Compare all operation flags against an independent bit-encoding reference. -/
 def checkOperationFlags {α : Type} (label : String) (values : Array α)
     (bits : α → UInt64) (absMask infinity minNormal : UInt64)
@@ -75,7 +120,7 @@ def checkRangePredicates : IO Unit := do
       let expected := magnitude >= 0x7ff0000000000000 ||
         (magnitude != 0 && magnitude < 0x0010000000000000)
       expect "binary64/native range predicate"
-        (Numeric.QuotientArithmetic.exposed64 x == expected)
+        (Numeric.QuotientArithmetic.Native.rangeLoss x == expected)
   let values64 := boundaries64.flatMap fun magnitude =>
     #[Float.ofBits magnitude, Float.ofBits (magnitude ||| 0x8000000000000000)]
   checkOperationFlags "binary64" values64 Float.toBits
@@ -91,68 +136,53 @@ def checkRangePredicates : IO Unit := do
       let expected := magnitude >= 0x7f800000 ||
         (magnitude != 0 && magnitude < 0x00800000)
       expect "binary32/native range predicate"
-        (Numeric.QuotientArithmetic.exposed32 x == expected)
+        (Numeric.QuotientArithmetic.Native.rangeLoss x == expected)
 
   let values32 := boundaries32.flatMap fun magnitude =>
     #[Float32.ofBits magnitude, Float32.ofBits (magnitude ||| 0x80000000)]
   checkOperationFlags "binary32" values32 (fun x => x.toBits.toUInt64)
     0x7fffffff 0x7f800000 0x00800000 inferInstance
 
-def checkFloat : IO Unit := do
-  checkScale "binary64/large" (Float.ofBits 0x6bb0000000000000) Float.toBits
-  checkScale "binary64/small" (Float.ofBits 0x1430000000000000) Float.toBits
-  let a := Float.ofBits 0x1a70000000000000 -- 2^-600
-  let b := Float.ofBits 0x7e70000000000000 -- 2^1000
-  let x : Dual (Dual Float) := ⟨⟨a, 0⟩, ⟨0, 0⟩⟩
-  let y : Dual (Dual Float) := ⟨⟨1, a⟩, ⟨b, 0⟩⟩
+/-- Format-specific witnesses share the same nested quotient and exceptional-value checks. -/
+def checkNativeQuotient {α : Type} [Context α] (label : String) (bits : α → UInt64)
+    (a b negativeZero nan smallest : α) (expected : Array UInt64)
+    (infinityBits : UInt64) : IO Unit := do
+  let x : Dual (Dual α) := ⟨⟨a, 0⟩, ⟨0, 0⟩⟩
+  let y : Dual (Dual α) := ⟨⟨1, a⟩, ⟨b, 0⟩⟩
   let q := x / y
-  expect "binary64/rescued mixed coefficient"
-    (#[q.re.re.toBits, q.re.du.toBits, q.du.re.toBits, q.du.du.toBits] ==
-      #[0x1a70000000000000, 0x8000000000000000, 0xd8f0000000000000, 0x3380000000000000])
-  let z : Dual Float := ⟨Float.ofBits 0x8000000000000000, b⟩
-  let d : Dual Float := ⟨b, 0⟩
+  expect s!"{label}/rescued mixed coefficient"
+    (#[bits q.re.re, bits q.re.du, bits q.du.re, bits q.du.du] == expected)
+  let z : Dual α := ⟨negativeZero, b⟩
+  let d : Dual α := ⟨b, 0⟩
   let signed := z / d
-  expect "binary64/native negative zero" (signed.re.toBits == 0x8000000000000000)
-  expect "binary64/negative zero tangent" (signed.du == 1)
-  let hidden : Dual (Dual Float) := ⟨⟨1, 0⟩, ⟨0, Float.ofBits 0x7ff8000000000000⟩⟩
-  let unit : Dual (Dual Float) := ⟨⟨1, 0⟩, ⟨0, 0⟩⟩
+  expect s!"{label}/native negative zero" (bits signed.re == bits negativeZero)
+  expect s!"{label}/negative zero tangent" (signed.du == 1)
+  let hidden : Dual (Dual α) := ⟨⟨1, 0⟩, ⟨0, nan⟩⟩
+  let unit : Dual (Dual α) := ⟨⟨1, 0⟩, ⟨0, 0⟩⟩
   let invalid := hidden / unit
-  expect "binary64/hidden NaN remains" (invalid.du.du != invalid.du.du)
-  let unbounded : Dual Float := ⟨0, 1⟩
-  let smallest : Dual Float := ⟨Float.ofBits 1, 0⟩
-  let infinite := unbounded / smallest
-  expect "binary64/unrepresentable tangent" (infinite.du.toBits == 0x7ff0000000000000)
-
-def checkFloat32 : IO Unit := do
-  let bits := fun x : Float32 => x.toBits.toUInt64
-  checkScale "binary32/large" (Float32.ofBits 0x71800000) bits
-  checkScale "binary32/small" (Float32.ofBits 0x0d800000) bits
-  let a := Float32.ofBits 0x17800000 -- 2^-80
-  let b := Float32.ofBits 0x7b800000 -- 2^120
-  let x : Dual (Dual Float32) := ⟨⟨a, 0⟩, ⟨0, 0⟩⟩
-  let y : Dual (Dual Float32) := ⟨⟨1, a⟩, ⟨b, 0⟩⟩
-  let q := x / y
-  expect "binary32/rescued mixed coefficient"
-    (#[q.re.re.toBits, q.re.du.toBits, q.du.re.toBits, q.du.du.toBits] ==
-      #[0x17800000, 0x80000000, 0xd3800000, 0x2c000000])
-  let z : Dual Float32 := ⟨Float32.ofBits 0x80000000, b⟩
-  let d : Dual Float32 := ⟨b, 0⟩
-  let signed := z / d
-  expect "binary32/native negative zero" (signed.re.toBits == 0x80000000)
-  expect "binary32/negative zero tangent" (signed.du == 1)
-  let hidden : Dual (Dual Float32) := ⟨⟨1, 0⟩, ⟨0, Float32.ofBits 0x7fc00000⟩⟩
-  let unit : Dual (Dual Float32) := ⟨⟨1, 0⟩, ⟨0, 0⟩⟩
-  let invalid := hidden / unit
-  expect "binary32/hidden NaN remains" (invalid.du.du != invalid.du.du)
-  let unbounded : Dual Float32 := ⟨0, 1⟩
-  let smallest : Dual Float32 := ⟨Float32.ofBits 1, 0⟩
-  let infinite := unbounded / smallest
-  expect "binary32/unrepresentable tangent" (infinite.du.toBits == 0x7f800000)
+  expect s!"{label}/hidden NaN remains" (invalid.du.du != invalid.du.du)
+  let unbounded : Dual α := ⟨0, 1⟩
+  let denominator : Dual α := ⟨smallest, 0⟩
+  let infinite := unbounded / denominator
+  expect s!"{label}/unrepresentable tangent" (bits infinite.du == infinityBits)
 
 /-- Run exact dyadic witnesses for nested native quotient rules. -/
 def run : IO Unit := do
+  checkColdEncoders
   checkRangePredicates
-  checkFloat
-  checkFloat32
+  checkScale "binary64/large" (Float.ofBits 0x6bb0000000000000) Float.toBits
+  checkScale "binary64/small" (Float.ofBits 0x1430000000000000) Float.toBits
+  checkNativeQuotient "binary64" Float.toBits
+    (Float.ofBits 0x1a70000000000000) (Float.ofBits 0x7e70000000000000)
+    (Float.ofBits 0x8000000000000000) (Float.ofBits 0x7ff8000000000000) (Float.ofBits 1)
+    #[0x1a70000000000000, 0x8000000000000000, 0xd8f0000000000000, 0x3380000000000000]
+    0x7ff0000000000000
+  let bits := fun x : Float32 => x.toBits.toUInt64
+  checkScale "binary32/large" (Float32.ofBits 0x71800000) bits
+  checkScale "binary32/small" (Float32.ofBits 0x0d800000) bits
+  checkNativeQuotient "binary32" bits
+    (Float32.ofBits 0x17800000) (Float32.ofBits 0x7b800000)
+    (Float32.ofBits 0x80000000) (Float32.ofBits 0x7fc00000) (Float32.ofBits 1)
+    #[0x17800000, 0x80000000, 0xd3800000, 0x2c000000] 0x7f800000
 
 end Tests.Floats.DualQuotient

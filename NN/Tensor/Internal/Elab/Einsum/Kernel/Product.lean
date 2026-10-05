@@ -331,7 +331,6 @@ def compileEinsumInputProduct
                       semanticCoordinate]
                   let inputShape ← shapeExpr operandDimensions
                   let inputSize ← mkAppM ``Shape.size #[inputShape]
-                  let inputIndexType ← mkAppM ``Fin #[inputSize]
                   let inputPlan ←
                     mkAppM ``Lowering.inputFlatIndexPlan #[
                       Lean.toExpr outputAxes,

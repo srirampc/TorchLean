@@ -16,9 +16,9 @@ public import NN.Data.IO.Npy
 
 The loader surface has three parts:
 
-- `IO.Parsing` contains parser primitives and shared safety limits.
-- `IO.Csv` reads compact numeric CSV tables.
-- `IO.Npy` reads the supported NumPy `.npy` subset.
+- `NN.Data.IO.Parsing` contains parser primitives and shared safety limits.
+- `NN.Data.IO.Csv` reads compact numeric CSV tables.
+- `NN.Data.IO.Npy` reads the supported NumPy `.npy` subset.
 
 The API data-source layer turns these untyped file payloads into shape-checked tensors.
 -/

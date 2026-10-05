@@ -5,7 +5,7 @@ Authors: TorchLean Team
 
 Real-data CUDA example:
   python3 scripts/datasets/download_example_data.py --cifar10
-  lake -R -K cuda=true exe torchlean cnn --device cuda --n-total 1 --steps 1
+  scripts/lake.sh -Kcuda=true exe torchlean cnn --device cuda --n-total 1 --steps 1
 -/
 
 module
@@ -24,7 +24,7 @@ TrainLog artifact writing.
 
 ```bash
 python3 scripts/datasets/download_example_data.py --cifar10
-lake -R -K cuda=true exe torchlean cnn --device cuda --n-total 1 --steps 1
+scripts/lake.sh -Kcuda=true exe torchlean cnn --device cuda --n-total 1 --steps 1
 ```
 -/
 
@@ -64,14 +64,13 @@ def classCount : Nat := RealData.cifarClasses
 abbrev modelConfig : nn.models.CNN.Config 2 :=
   { inputChannels := inputChannels
     spatial := [cropHeight, cropWidth]
-    convolution :=
-      { outChannels := 4
-        kernelSize := [3, 3]
-        stride := [2, 2]
-        padding := [1, 1] }
-    pooling :=
-      { kernelSize := [2, 2]
-        stride := [2, 2] }
+    stages :=
+      [{ block := { convolution :=
+           { outChannels := 4
+             kernelSize := [3, 3]
+             stride := [2, 2]
+             padding := [1, 1] } }
+         pooling := { kernelSize := [2, 2], stride := [2, 2] } }]
     classCount := classCount }
 
 /-- Input shape: a minibatch of CIFAR images in channel-first layout. -/
@@ -90,33 +89,17 @@ def model : nn.Builder (nn.Sequential input output) :=
   nn.models.cnn modelConfig [batchSize]
 
 /-- Train the CIFAR CNN with the public `Trainer` surface. -/
-def train (runtime : Runtime.Config) (flags : RealData.CifarModelTrainFlags) :
-    IO Trainer.Report := do
-  let batches ←
-    RealData.loadCifarBatches exeName batchSize flags.data.nRows flags.data.seed
-      flags.data.xPath flags.data.yPath
-  let batches ← batches.mapM fun sample =>
-    CLI.orThrow exeName <|
-      RealData.cropCifarBatch batchSize cropHeight cropWidth sample
-  let trainer :=
-    Trainer.new model <|
-      Trainer.RunConfig.forObjective
-        (Trainer.RunConfig.fromRuntime runtime
-          { optimizer := optim.adam { learningRate := flags.training.learningRate } })
-        (.oneHotCrossEntropy 1)
-        (seed := flags.data.seed)
-  let trained ← trainer.train
-    (Data.fromSamples batches)
-    (flags.training.trainOptions
-      (logTitle := "CNN training")
-      (logNotes := RealData.cifarClassifierNotes batchSize flags))
-  pure trained.report
+def train (runtime : Runtime.Config) (flags : Support.Training.Options Support.Npy.Options) :
+    IO Trainer.Report :=
+  RealData.trainCifarClassifier batchSize cropHeight cropWidth exeName
+    "CNN training" model runtime flags
 
 /-- CLI entrypoint for CIFAR CNN training on the selected runtime device. -/
 def main (args : List String) : IO UInt32 :=
-  TrainCommand.classificationNpy exeName args
-    (fun rest => RealData.CifarModelTrainFlags.parse exeName rest defaultLogPath 1 1e-3)
-    (Support.bannerWithDevice exeName "CNN training")
-    train
+  TrainCommand.npy exeName args
+    (fun rest => Support.Training.Options.parse exeName rest defaultLogPath 1 1e-3
+      (parseData := RealData.NpyDatasets.parseCifar))
+    (Support.banner exeName "CNN training")
+    train (fun result => result.printSummary) (target := "class-label")
 
 end NN.Examples.Models.Vision.Cnn

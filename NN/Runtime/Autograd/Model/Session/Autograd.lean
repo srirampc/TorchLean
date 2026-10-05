@@ -23,6 +23,7 @@ namespace Autograd
 namespace Model
 
 open Spec TorchLean
+open Runtime.Autograd.Torch.Internal (EagerSession)
 open TorchLean TorchLean.Tensor
 
 namespace Session
@@ -38,7 +39,7 @@ def backwardDenseAll {α : Type} [TorchLean.Storage α] (s : Session α) [Add α
   IO (Array (Spec.SomeTensor α)) := do
   match s.state with
   | .eager sess =>
-      sess.inner.validateTensorRef out
+      sess.validateTensorRef out
       EagerSession.backwardDenseAll (α := α) sess (sh := sh) out seed
   | .typedGraph sess =>
       sess.validateTensorRef out
@@ -56,18 +57,15 @@ changes.
 def applyGradHook {α : Type} [TorchLean.Storage α]
     (grads : Array (Spec.SomeTensor α))
     (hook : Nat → Spec.SomeTensor α → IO (Spec.SomeTensor α)) :
-    IO (Array (Spec.SomeTensor α)) := do
-  let mut out : Array (Spec.SomeTensor α) := #[]
-  for i in List.finRange grads.size do
-    let g := grads[i]
-    let g' ← hook i.1 g
+    IO (Array (Spec.SomeTensor α)) :=
+  grads.mapIdxM fun i g => do
+    let g' ← hook i g
     if h : g'.shape = g.shape then
-      out := out.push ⟨g.shape, g'.cast h⟩
+      pure ⟨g.shape, g'.cast h⟩
     else
       throw <| IO.userError <|
-        s!"torchlean: grad hook changed shape at id={i.1} (expected {Shape.pretty g.shape}, got "
+        s!"torchlean: grad hook changed shape at id={i} (expected {Shape.pretty g.shape}, got "
           ++ s!"{Shape.pretty g'.shape})"
-  pure out
 
 end Internal
 
@@ -100,7 +98,7 @@ def grad {α : Type} [TorchLean.Storage α] (s : Session α) {sh : Shape}
   (grads : Array (Spec.SomeTensor α)) (x : Runtime.Autograd.Torch.TensorRef α sh) :
   IO (Tensor α sh) := do
   match s.state with
-  | .eager sess => sess.inner.validateTensorRef x
+  | .eager sess => sess.validateTensorRef x
   | .typedGraph sess => sess.validateTensorRef x
   let gAny ← match grads[x.id]? with
     | some g => pure g

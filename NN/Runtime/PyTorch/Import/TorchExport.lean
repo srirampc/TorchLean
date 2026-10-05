@@ -169,10 +169,6 @@ def field (ctx key : String) (o : StateDict) : Except String Json :=
   | some j => .ok j
   | none => .error s!"PyTorch graph import: {ctx}: missing field `{key}`"
 
-/-- Read an optional object field. -/
-def field? (key : String) (o : StateDict) : Option Json :=
-  o.get? key
-
 /-- Parse a JSON array of natural numbers. -/
 def parseNatArray (ctx : String) (j : Json) : Except String (Array Nat) := do
   let xs ← jsonArray ctx j
@@ -188,10 +184,6 @@ Examples:
 -/
 def parseShape (ctx : String) (j : Json) : Except String Shape := do
   pure (Shape.ofArray (← parseNatArray ctx j))
-
-/-- Parse a node's parent ids. -/
-def parseParents (ctx : String) (j : Json) : Except String (Array Nat) :=
-  parseNatArray ctx j
 
 /-- Read a natural-number field from a parsed Torch export JSON object. -/
 def natField (ctx key : String) (o : StateDict) : Except String Nat := do
@@ -255,7 +247,7 @@ required `shape` field. The explicit form uses `value_kind = "tensor"` or
 `value_kind = "tuple"` explicitly.
 -/
 def parseValueShape (ctx : String) (o : StateDict) : Except String ValueShape := do
-  match field? "value_kind" o with
+  match o.get? "value_kind" with
   | none => pure (.tensor (← shapeField ctx "shape" o))
   | some (.str "tensor") => pure (.tensor (← shapeField ctx "shape" o))
   | some (.str "tuple") =>
@@ -280,7 +272,7 @@ def parseOpKind (ctx : String) (outShape : Shape) (o : StateDict) : Except Strin
   match tag with
   | .const =>
       let valueShape ←
-        match field? "value_shape" o with
+        match o.get? "value_shape" with
         | some j => parseShape s!"{ctx}.value_shape" j
         | none => pure outShape
       pure (.const valueShape)
@@ -328,7 +320,7 @@ def parseValueNode (j : Json) : Except String CapturedValueNode := do
   let o ← jsonObject "node" j
   let id ← natField "node" "id" o
   let ctx := s!"node[{id}]"
-  let parents ← parseParents s!"{ctx}.parents" (← field ctx "parents" o)
+  let parents ← parseNatArray s!"{ctx}.parents" (← field ctx "parents" o)
   let kind ← jsonString s!"{ctx}.kind" (← field ctx "kind" o)
   let valueShape ← parseValueShape ctx o
   pure { id := id, parents := parents, kind := kind, valueShape := valueShape, raw := o }
@@ -336,7 +328,7 @@ def parseValueNode (j : Json) : Except String CapturedValueNode := do
 /-- Parse the graph object into the PyTorch/FX value-level graph, before tensor lowering. -/
 def parseValueGraph (j : Json) : Except String CapturedValueGraph := do
   let o ← jsonObject "root" j
-  match field? "format" o with
+  match o.get? "format" with
   | some (.str format) =>
       if format != Wire.format then
         throw s!"PyTorch graph import: unsupported format `{format}` (expected `{Wire.format}`)"
@@ -642,6 +634,18 @@ def lowerValueGraph (vg : CapturedValueGraph) : Except String CapturedGraph := d
 def parseGraph (j : Json) : Except String CapturedGraph := do
   lowerValueGraph (← parseValueGraph j)
 
+/-- Validate a lowered graph and its designated interface, preserving check order. -/
+def checkLoweredGraph (cg : CapturedGraph) : Except String CapturedGraph := do
+  match cg.graph.checkShapes with
+  | .error e => .error e
+  | .ok _ =>
+      match cg.graph.getNode cg.inputId with
+      | .error e => .error e
+      | .ok _ =>
+          match cg.outputIds.mapM cg.graph.getNode with
+          | .error e => .error e
+          | .ok _ => .ok cg
+
 end Internal
 
 /--
@@ -655,23 +659,12 @@ Success means:
 - declared output shapes match `NN.IR.Infer`.
 -/
 def parseGraph (j : Json) : Except String CapturedGraph := do
-  match Internal.parseGraph j with
-  | .error e => .error e
-  | .ok cg =>
-      match cg.graph.checkShapes with
-      | .error e => .error e
-      | .ok _ =>
-          match cg.graph.getNode cg.inputId with
-          | .error e => .error e
-          | .ok _ =>
-              match cg.outputIds.mapM cg.graph.getNode with
-              | .error e => .error e
-              | .ok _ => .ok cg
+  Internal.checkLoweredGraph (← Internal.parseGraph j)
 
 /-- Parse serialized parameters into the node-keyed Float payload. -/
 def parsePayload (j : Json) : Except String (Payload Float) := do
   let valueGraph ← Internal.parseValueGraph j
-  let captured ← parseGraph j
+  let captured ← Internal.checkLoweredGraph (← Internal.lowerValueGraph valueGraph)
   let mut constParams : Array (Option (ConstFlat Float)) :=
     Array.replicate captured.graph.nodes.size none
   let mut linearParams : Array (Option (LinearWB Float)) :=
@@ -738,6 +731,15 @@ def parsePayload (j : Json) : Except String (Payload Float) := do
               throw s!"PyTorch graph import: {ctx}: convolution kernel extents must be nonzero"
           else
             throw s!"PyTorch graph import: {ctx}: convolution input channels must be nonzero"
+        else if raw.kind = Wire.opTag .const then
+          -- Constants carry their values inline only when the producer wrote them (the ONNX
+          -- adapter does for initializers); otherwise the payload is supplied separately.
+          if (raw.raw.get? "values").isSome then
+            let some node := captured.graph.nodes[tensorId]?
+              | throw s!"PyTorch graph import: {ctx}: const node is missing from the graph"
+            let n := node.outShape.size
+            constParams := constParams.set! tensorId
+              (some { n := n, v := ← Internal.tensorField ctx "values" [n] raw.raw })
         else if raw.kind = Wire.opTag .layernorm then
           let outShape ←
             match raw.valueShape with
@@ -808,32 +810,22 @@ quote when it receives a graph artifact through this importer.
 -/
 theorem parseGraph_wellShaped {j : Json} {cg : CapturedGraph}
     (h : parseGraph j = .ok cg) : cg.graph.WellShaped := by
+  simp only [parseGraph, Bind.bind, Except.bind] at h
   cases hparse : Internal.parseGraph j with
-  | error e =>
-      have hbad : Except.error e = Except.ok cg := by
-        simp [parseGraph, hparse] at h
-      cases hbad
+  | error e => simp [hparse] at h
   | ok cg0 =>
+      simp only [hparse] at h
       cases hshape : cg0.graph.checkShapes with
-      | error e =>
-          have hbad : Except.error e = Except.ok cg := by
-            simp [parseGraph, hparse, hshape] at h
-          cases hbad
+      | error e => simp [Internal.checkLoweredGraph, hshape] at h
       | ok u =>
           cases hin : cg0.graph.getNode cg0.inputId with
-          | error e =>
-              have hbad : Except.error e = Except.ok cg := by
-                simp [parseGraph, hparse, hshape, hin] at h
-              cases hbad
+          | error e => simp [Internal.checkLoweredGraph, hshape, hin] at h
           | ok inNode =>
               cases hout : cg0.outputIds.mapM cg0.graph.getNode with
-              | error e =>
-                  have hbad : Except.error e = Except.ok cg := by
-                    simp [parseGraph, hparse, hshape, hin, hout] at h
-                  cases hbad
+              | error e => simp [Internal.checkLoweredGraph, hshape, hin, hout] at h
               | ok outNode =>
                   have hok : cg0 = cg := by
-                    simpa [parseGraph, hparse, hshape, hin, hout] using h
+                    simpa [Internal.checkLoweredGraph, hshape, hin, hout] using h
                   cases hok
                   unfold Graph.WellShaped Graph.checkShapes
                   exact hshape

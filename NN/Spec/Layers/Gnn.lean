@@ -70,7 +70,7 @@ namespace Spec
 open TorchLean TorchLean.Tensor
 open Shape
 
-variable {α : Type} [TorchLean.Storage α] [Context α]
+variable {α : Type} [TorchLean.Storage α] [Add α] [Mul α] [Zero α]
 
 /-- Neighbor aggregation / message passing via a graph matrix: `Agg(A, X) = A · X`.
 
@@ -177,7 +177,7 @@ def gcnLayerBackwardSpec {n inDim outDim : Nat}
   (h_n : n ≠ 0) :
   GCNLayerGradients n inDim outDim α :=
 
-  let ax : Tensor α [n, inDim] := matMulSpec layer.A x
+  let ax : Tensor α [n, inDim] := messagePassingSpec layer.A x
 
   -- Backprop through the second matmul: (A·X) · W
   let (dAx, dW) :=
@@ -189,9 +189,7 @@ def gcnLayerBackwardSpec {n inDim outDim : Nat}
     gradOutput (Shape.hasNonemptyAxisZeroOfNe h_n).proof
 
   -- Backprop through the first matmul: A · X
-  let (dA, dX) :=
-    matmulBackwardSpec (Shape.CanBroadcastTo.refl .scalar)
-      (Shape.CanBroadcastTo.refl .scalar) layer.A x dAx
+  let (dA, dX) := messagePassingBackwardSpec layer.A x dAx
   { parameters :=
       { adjacencyGradient := dA, weightGradient := dW, biasGradient := db }
     inputGradient := dX }

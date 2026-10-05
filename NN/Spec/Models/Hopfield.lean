@@ -8,6 +8,7 @@ module
 
 public import NN.Spec.Core.Context
 public import NN.Spec.Core.Tensor -- shake: keep
+public import Mathlib.Data.Matrix.Mul
 
 /-!
 # Hopfield networks (spec-level)
@@ -22,8 +23,8 @@ Intended use: mathematical scalars (`ℚ`, `ℝ`, etc.) and theorem statements/p
 For computation, instantiate `α := ℚ` (or `Rat`) and evaluate `seqStates` / `energy` via `#eval`
 in an example file.
 
-Note: we also provide Tensor-shaped wrappers (`TensorState`, `TensorParams`) so users can work with
-`Tensor _ [n]` instead of raw `Fin n → _`.
+`TensorState` and `TensorParams` supply the tensor representation used by the executable definitions
+in `Exec` below.
 
 ## References
 
@@ -117,17 +118,10 @@ so an energy argument written over `Fin n → Bool` transfers to the executable 
 def actVec {α : Type} [One α] [Neg α] {n : Nat} (s : State n) : Fin n → α :=
   fun i => act (α := α) (s i)
 
-/-- Dot product on vectors indexed by `Fin n`.
-
-This is a `Fin`-indexed sum, independent from any concrete matrix representation.
--/
-def dot {α : Type} [AddCommMonoid α] [Mul α] {n : Nat} (x y : Fin n → α) : α :=
-  ∑ i : Fin n, x i * y i
-
-/-- Matrix-vector product (as a function, not an array-backed matrix). -/
-def mulVec {α : Type} [AddCommMonoid α] [Mul α] {n : Nat} (W : Fin n → Fin n → α) (x : Fin n → α) :
-    Fin n → α :=
-  fun i => ∑ j : Fin n, W i j * x j
+/-- Matrix-vector product using mathlib's dot product, with no distributivity assumption. -/
+def mulVec {α : Type} [AddCommMonoid α] [Mul α] {m n : Nat}
+    (W : Fin m → Fin n → α) (x : Fin n → α) : Fin m → α :=
+  fun i => dotProduct (W i) x
 
 /-- Hopfield parameters:
 
@@ -150,24 +144,12 @@ structure TensorParams (α : Type) [TorchLean.Storage α] (n : Nat) where
   /-- Rank-one tensor of per-unit activation thresholds. -/
   θ : Tensor α [n]
 
-/-- Convert tensor-shaped parameters to the function representation. -/
-def TensorParams.toFun {α : Type} [TorchLean.Storage α] {n : Nat}
-    (p : TensorParams α n) : Params α n where
-  W := fun i j => Spec.get2 p.W i j
-  θ := fun i => Tensor.getScalar p.θ i
-
 /-! ## Hopfield update dynamics -/
 
 /-- Net input to unit `u`: `(W * x)_u`, where `x = actVec s` is the `±1` encoding of the state. -/
 def net {α : Type} [AddCommMonoid α] [Mul α] [One α] [Neg α] {n : Nat}
     (p : Params α n) (s : State n) (u : Fin n) : α :=
   mulVec p.W (actVec (α := α) s) u
-
-/-- Tensor-shaped wrapper for `net` (useful for interop with TorchLean tensor APIs). -/
-def netTensor {α : Type} [TorchLean.Storage α] [AddCommMonoid α] [Mul α] [One α] [Neg α]
-    {n : Nat}
-    (p : TensorParams α n) (s : TensorState n) (u : Fin n) : α :=
-  net (α := α) (p := p.toFun) (s := s.toFun) u
 
 /-- Asynchronous update at a single coordinate `u`.
 
@@ -187,12 +169,6 @@ def updateAt {α : Type} [AddCommMonoid α] [Mul α] [One α] [Neg α]
     (p : Params α n) (s : State n) (u : Fin n) : State n :=
   let x := net (α := α) p s u
   Function.update s u (decide (p.θ u ≤ x))
-
-/-- Tensor-shaped wrapper for `updateAt`. -/
-def updateAtTensor {α : Type} [TorchLean.Storage α] [AddCommMonoid α] [Mul α] [One α] [Neg α]
-    [LE α] [DecidableRel ((· ≤ ·) : α → α → Prop)] {n : Nat}
-    (p : TensorParams α n) (s : TensorState n) (u : Fin n) : TensorState n :=
-  TensorState.ofFun (n := n) (updateAt (α := α) (p := p.toFun) (s := s.toFun) u)
 
 /-- A state is stable (a fixed point) if updating any single coordinate does nothing. -/
 def IsStable {α : Type} [AddCommMonoid α] [Mul α] [One α] [Neg α]
@@ -221,11 +197,6 @@ def energy {α : Type} [Field α] {n : Nat}
   (-(1 / (2 : α))) * (∑ i : Fin n, ∑ j : Fin n, p.W i j * x i * x j) +
     ∑ i : Fin n, p.θ i * x i
 
-/-- Tensor-shaped wrapper for `energy`. -/
-def energyTensor {α : Type} [TorchLean.Storage α] [Field α] {n : Nat}
-    (p : TensorParams α n) (s : TensorState n) : α :=
-  energy (α := α) (p := p.toFun) (s := s.toFun)
-
 /-- State sequence induced by an asynchronous update schedule `useq`.
 
 `useq : Nat → Fin n` picks which coordinate to update at each discrete time step.
@@ -238,13 +209,6 @@ def seqStates {α : Type} [AddCommMonoid α] [Mul α] [One α] [Neg α]
     (p : Params α n) (useq : Nat → Fin n) (s0 : State n) : Nat → State n
   | 0 => s0
   | k + 1 => updateAt (α := α) p (seqStates p useq s0 k) (useq k)
-
-/-- Tensor-shaped wrapper for `seqStates`. -/
-def seqStatesTensor {α : Type} [TorchLean.Storage α] [AddCommMonoid α] [Mul α] [One α] [Neg α]
-    [LE α] [DecidableRel ((· ≤ ·) : α → α → Prop)] {n : Nat}
-    (p : TensorParams α n) (useq : Nat → Fin n) (s0 : TensorState n) : Nat → TensorState n
-  | 0 => s0
-  | k + 1 => updateAtTensor (α := α) p (seqStatesTensor p useq s0 k) (useq k)
 
 /-- A cyclic update schedule (0,1,2,...,n-1,0,1,...) for `n > 0`. -/
 def cyclicUseq (n : Nat) (hn : 0 < n) : Nat → Fin n :=
@@ -279,26 +243,15 @@ open TorchLean TorchLean.Tensor
 
 variable {α : Type} [TorchLean.Storage α] [Context α] [DecidableRel ((· ≤ ·) : α → α → Prop)]
 
-/-- Bipolar activation, re-exported here so the tensor-facing API needs no namespace prefix. -/
-@[inline] def act : Bool → α := Hopfield.act (α := α)
-
-/-- Threshold of unit `i`. -/
-@[inline] def theta {n : Nat} (p : TensorParams α n) (i : Fin n) : α :=
-  Tensor.getScalar p.θ i
-
-/-- Coupling weight between units `i` and `j`. -/
-@[inline] def weight {n : Nat} (p : TensorParams α n) (i j : Fin n) : α :=
-  Spec.get2 p.W i j
-
 /--
 Net input to unit `u` computed by explicit iteration.
 
-This matches `Hopfield.netTensor`, but avoids `Finset` sums so it can execute over IEEE-like
-scalars.
+This uses the formula of `Hopfield.net` with an ascending, zero-seeded left fold, so it can execute
+over IEEE-like scalars without assuming associative addition.
 -/
 def net {n : Nat} (p : TensorParams α n) (s : TensorState n) (u : Fin n) : α :=
   let sf := Hopfield.TensorState.toFun s
-  (List.finRange n).foldl (fun acc j => acc + weight p u j * act (sf j)) 0
+  (List.finRange n).foldl (fun acc j => acc + Spec.get2 p.W u j * Hopfield.act (sf j)) 0
 
 /--
 Asynchronous update of a single coordinate `u`, using the same “ties go to +1” convention as the
@@ -307,7 +260,7 @@ spec definition (`θ_u ≤ net_u`).
 def updateAt {n : Nat} (p : TensorParams α n) (s : TensorState n) (u : Fin n) : TensorState n :=
   let sf := Hopfield.TensorState.toFun s
   let x := net p s u
-  let b := decide (theta p u ≤ x)
+  let b := decide (Tensor.getScalar p.θ u ≤ x)
   Hopfield.TensorState.ofFun (n := n) (Function.update sf u b)
 
 /-- State sequence induced by an update schedule `useq : Nat → Fin n` (loop-based). -/
@@ -329,11 +282,11 @@ def energy {n : Nat} (p : TensorParams α n) (s : TensorState n) : α :=
   let q :=
     (List.finRange n).foldl (fun acc i =>
       acc + (List.finRange n).foldl (fun acc2 j =>
-        acc2 + weight p i j * act (sf i) * act (sf j)
+        acc2 + Spec.get2 p.W i j * Hopfield.act (sf i) * Hopfield.act (sf j)
       ) 0
     ) 0
   let lin :=
-    (List.finRange n).foldl (fun acc i => acc + theta p i * act (sf i)) 0
+    (List.finRange n).foldl (fun acc i => acc + Tensor.getScalar p.θ i * Hopfield.act (sf i)) 0
   (-half) * q + lin
 
 end Exec

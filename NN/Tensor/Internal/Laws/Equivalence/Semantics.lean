@@ -164,30 +164,8 @@ theorem denoteRearrange_comp
   rw [cast_tensor_eq_reindex hMiddleShape
     (Rep.reindex
       (first.rearrangeCoordinateEquiv hFirstKind) inputTensor)]
-  calc
-    Rep.reindex (second.rearrangeCoordinateEquiv hSecondKind)
-        (Rep.reindex
-          (Equiv.cast (congrArg Coord hMiddleShape.symm))
-          (Rep.reindex
-            (first.rearrangeCoordinateEquiv hFirstKind) inputTensor)) =
-      Rep.reindex (second.rearrangeCoordinateEquiv hSecondKind)
-        (Rep.reindex
-          ((Equiv.cast (congrArg Coord hMiddleShape.symm)).trans
-            (first.rearrangeCoordinateEquiv hFirstKind))
-          inputTensor) := by
-            exact congrArg
-              (Rep.reindex
-                (second.rearrangeCoordinateEquiv hSecondKind))
-              (Rep.reindex_trans
-                (first.rearrangeCoordinateEquiv hFirstKind)
-                (Equiv.cast (congrArg Coord hMiddleShape.symm))
-                inputTensor)
-    _ = _ :=
-      Rep.reindex_trans
-        ((Equiv.cast (congrArg Coord hMiddleShape.symm)).trans
-          (first.rearrangeCoordinateEquiv hFirstKind))
-        (second.rearrangeCoordinateEquiv hSecondKind)
-        inputTensor
+  rw [Rep.reindex_trans (first.rearrangeCoordinateEquiv hFirstKind),
+    Rep.reindex_trans]
 
 end Semantics
 

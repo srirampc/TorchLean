@@ -38,7 +38,7 @@ def usage : String :=
     [ "TorchLean factorization checks"
     , ""
     , "Usage:"
-    , "  lake exe torchlean factorizations"
+    , "  scripts/lake.sh exe torchlean factorizations"
     , ""
     , "Checks A = L Lᵀ for Cholesky and A = Q R, Qᵀ Q = I for reduced QR."
     , "Also checks that indefinite and rank-deficient inputs fail the relevant property."

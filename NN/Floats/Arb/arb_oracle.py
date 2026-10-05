@@ -76,6 +76,16 @@ def _mid_rad_10exp_str(x, digits: int) -> MidRad10Exp:
     mid, rad, exp = x.mid_rad_10exp(digits)
     return MidRad10Exp(mid=str(mid), rad=str(rad), exp=str(exp))
 
+
+def _encode_ball(x, digits: int) -> dict[str, Any]:
+    """Serialize the ball and displayed endpoints in the Lean parser's output schema."""
+    return {
+        "ball": _mid_rad_10exp_str(x, digits).__dict__,
+        "lo": x.lower().str(digits, radius=False),
+        "hi": x.upper().str(digits, radius=False),
+    }
+
+
 def _unary_ops() -> dict[str, Callable[[Any], Any]]:
     """
     Operation table for supported unary functions.
@@ -86,8 +96,7 @@ def _unary_ops() -> dict[str, Callable[[Any], Any]]:
 
     def sigmoid(x):
         # 1 / (1 + exp(-x)) implemented using Arb primitives.
-        one = (x - x) + 1
-        return one / (one + (-x).exp())
+        return 1 / (1 + (-x).exp())
 
     return {
         "tanh": lambda x: x.tanh(),
@@ -118,7 +127,7 @@ def _binary_ops() -> dict[str, Callable[[Any, Any], Any]]:
 
 
 def _ball_interval(lo, hi):
-    """Return the symmetric Arb ball equal to the convex hull of the endpoints."""
+    """Return an Arb ball enclosing the convex hull of the endpoints."""
     if hi < lo:
         lo, hi = hi, lo
     return lo.union(hi)
@@ -179,7 +188,7 @@ def _eval_expr(node: Any, env: dict[str, Any]) -> Any:
         return env[name]
 
     if "const" in node:
-        # Constants are passed in as exact decimal strings and converted to exact balls by Arb.
+        # Arb encloses the decimal value at the working precision.
         return env["__arb__"](str(node["const"]))
 
     op = node.get("op")
@@ -246,7 +255,7 @@ def _eval_mlp(request: dict[str, Any], arb_ctor) -> list[Any]:
         if name == "relu":
             # ReLU isn't a built-in Arb primitive; define via max(0,z) approximately using balls.
             # This is a *very* coarse enclosure; for ReLU networks use your native CROWN backend.
-            zero = (x[0] - x[0])  # 0 as an arb
+            zero = arb_ctor(0)
             return lambda z: z.union(zero)  # hull of {z,0} is a safe enclosure
         if name in unary:
             return unary[name]
@@ -328,7 +337,6 @@ def main(argv: list[str]) -> int:
 
             x = _ball_interval(lo, hi)
             x_mre = _mid_rad_10exp_str(x, digits)
-            y_mre = _mid_rad_10exp_str(y, digits)
 
             # Keep this exact output shape stable: Lean wrappers parse these keys.
             out = {
@@ -337,11 +345,7 @@ def main(argv: list[str]) -> int:
                 "func": str(func),
                 "ctx": {"prec_bits": int(args.prec_bits), "digits": digits},
                 "input": {"lo": str(lo_s), "hi": str(hi_s), "ball": x_mre.__dict__},
-                "output": {
-                    "ball": y_mre.__dict__,
-                    "lo": y.lower().str(digits, radius=False),
-                    "hi": y.upper().str(digits, radius=False),
-                },
+                "output": _encode_ball(y, digits),
             }
             print(json.dumps(out, indent=2, sort_keys=True))
             return 0
@@ -359,33 +363,19 @@ def main(argv: list[str]) -> int:
                 env[str(name)] = _ball_interval(arb(str(iv["lo"])), arb(str(iv["hi"])))
 
             y = _eval_expr(expr, env)
-            y_mre = _mid_rad_10exp_str(y, digits)
             out = {
                 "status": "ok",
                 "tool": "arb_oracle",
                 "kind": "expr",
                 "ctx": {"prec_bits": int(args.prec_bits), "digits": digits},
-                "output": {
-                    "ball": y_mre.__dict__,
-                    "lo": y.lower().str(digits, radius=False),
-                    "hi": y.upper().str(digits, radius=False),
-                },
+                "output": _encode_ball(y, digits),
             }
             print(json.dumps(out, indent=2, sort_keys=True))
             return 0
 
         if kind == "mlp":
             outs = _eval_mlp(req, arb)
-            out_vec = []
-            for y in outs:
-                y_mre = _mid_rad_10exp_str(y, digits)
-                out_vec.append(
-                    {
-                        "ball": y_mre.__dict__,
-                        "lo": y.lower().str(digits, radius=False),
-                        "hi": y.upper().str(digits, radius=False),
-                    }
-                )
+            out_vec = [_encode_ball(y, digits) for y in outs]
             out = {
                 "status": "ok",
                 "tool": "arb_oracle",
@@ -397,9 +387,6 @@ def main(argv: list[str]) -> int:
             return 0
 
         raise SystemExit(f"unsupported request kind: {kind}")
-
-    return 0
-
 
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(main(sys.argv[1:]))

@@ -256,12 +256,11 @@ lengths.
 /--
 Fiber aggregation is the adjoint of repeat under the finite tensor pairing.
 
-Commutativity of scalar multiplication is needed because `Rep.dot` records
-the left operand first, whereas the general push/pull adjunction is stated
-with the pushed tensor on the left.
+Distributing the input value over each output fiber preserves the order of
+the two scalar factors, so multiplication need not commute.
 -/
 @[grind =] theorem dot_denoteRepeat {R : Type u} [Storage R]
-    [CommSemiring R]
+    [Semiring R]
     (checked : CheckedTransform)
     (hKind : checked.value.normalized.kind = .repeat)
     (inputTensor : checked.InputTensor R)
@@ -272,33 +271,28 @@ with the pushed tensor on the left.
           (checked.inputCoordinateOfOutput <|
             checked.valid.normalization.input_axes_subset_output_of_repeat hKind)
           outputTensor) := by
-  have dot_comm {shape : Shape} (leftTensor rightTensor : Rep R shape) :
-      Rep.dot leftTensor rightTensor =
-        Rep.dot rightTensor leftTensor := by
-    simp only [Rep.dot, mul_comm]
+  classical
+  let repeatProjection :=
+    checked.inputCoordinateOfOutput <|
+      checked.valid.normalization.input_axes_subset_output_of_repeat hKind
+  simp only [Rep.dot, denoteRepeat_apply, Rep.push_apply, Finset.mul_sum]
+  symm
   calc
-    Rep.dot (denoteRepeat checked hKind inputTensor) outputTensor =
-        Rep.dot outputTensor (denoteRepeat checked hKind inputTensor) :=
-      dot_comm _ _
-    _ =
-        Rep.dot
-          (Rep.push
-            (checked.inputCoordinateOfOutput <|
-              checked.valid.normalization.input_axes_subset_output_of_repeat hKind)
-            outputTensor)
-          inputTensor := by
-      simpa only [denoteRepeat] using
-        (Rep.dot_push_eq_dot_pull
-          (checked.inputCoordinateOfOutput <|
-            checked.valid.normalization.input_axes_subset_output_of_repeat hKind)
-          outputTensor inputTensor).symm
-    _ =
-        Rep.dot inputTensor
-          (Rep.push
-            (checked.inputCoordinateOfOutput <|
-              checked.valid.normalization.input_axes_subset_output_of_repeat hKind)
-            outputTensor) :=
-      dot_comm _ _
+    (∑ inputCoordinate, ∑ outputCoordinate : Fiber repeatProjection inputCoordinate,
+        inputTensor inputCoordinate * outputTensor outputCoordinate.1) =
+        ∑ inputCoordinate, ∑ outputCoordinate : Fiber repeatProjection inputCoordinate,
+          inputTensor (repeatProjection outputCoordinate.1) *
+            outputTensor outputCoordinate.1 := by
+      apply Finset.sum_congr rfl
+      intro inputCoordinate _
+      apply Finset.sum_congr rfl
+      intro outputCoordinate _
+      rw [outputCoordinate.property]
+    _ = ∑ outputCoordinate,
+        inputTensor (repeatProjection outputCoordinate) * outputTensor outputCoordinate :=
+      Fintype.sum_fiberwise repeatProjection
+        (fun outputCoordinate =>
+          inputTensor (repeatProjection outputCoordinate) * outputTensor outputCoordinate)
 
 end Semantics
 

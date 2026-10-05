@@ -164,10 +164,7 @@ def spawn {obsShape : Shape} {nActions : Nat}
     let nActionsJ ← Internal.requireField o "n_actions"
     let obsShapeJ ← Internal.requireField o "obs_shape"
 
-    let nActions' ←
-      match Boundary.parseNatStrict nActionsJ with
-      | .ok n => pure n
-      | .error e => throw <| IO.userError e
+    let nActions' ← IO.ofExcept (Boundary.parseNatStrict nActionsJ)
     unless nActions' == nActions do
       throw <| IO.userError
         s!"Gymnasium: server reports n_actions={nActions'}, expected nActions={nActions}"
@@ -175,9 +172,7 @@ def spawn {obsShape : Shape} {nActions : Nat}
     let obsShapeList ←
       match obsShapeJ with
       | .arr xs =>
-          match xs.toList.mapM (fun j => Boundary.parseNatStrict j) with
-          | .ok ns => pure ns
-          | .error e => throw <| IO.userError e
+          IO.ofExcept (xs.toList.mapM Boundary.parseNatStrict)
       | _ =>
           throw <| IO.userError "Gymnasium: expected `obs_shape` to be an array of integers"
 
@@ -205,14 +200,10 @@ def reset {obsShape : Shape} {nActions : Nat}
     | some s => [("cmd", "reset"), ("seed", (s : Json))]
   let o ← Internal.requestObj g (Json.mkObj fields)
   let obsJ ← Internal.requireField o "obs"
-  let obs ←
-    match Boundary.parseTensorE (field := "obs") obsShape obsJ with
-    | .ok t => pure t
-    | .error e => throw <| IO.userError e
-  match Boundary.checkObservation (obsShape := obsShape) (nActions := nActions) g.contract
-      (obs := obs) with
-  | .ok () => pure obs
-  | .error e => throw <| IO.userError e
+  let obs ← IO.ofExcept (Boundary.parseTensorE (field := "obs") obsShape obsJ)
+  IO.ofExcept (Boundary.checkObservation (obsShape := obsShape) (nActions := nActions) g.contract
+    (obs := obs))
+  pure obs
 
 namespace Internal
 
@@ -226,22 +217,10 @@ def step {obsShape : Shape} {nActions : Nat}
   let terminatedJ ← Internal.requireField o "terminated"
   let truncatedJ ← Internal.requireField o "truncated"
 
-  let obs ←
-    match Boundary.parseTensorE (field := "obs") obsShape obsJ with
-    | .ok t => pure t
-    | .error e => throw <| IO.userError e
-  let reward ←
-    match Boundary.parseFloat (field := "reward") rewardJ with
-    | .ok r => pure r
-    | .error e => throw <| IO.userError e
-  let terminated ←
-    match Boundary.parseBool (field := "terminated") terminatedJ with
-    | .ok b => pure b
-    | .error e => throw <| IO.userError e
-  let truncated ←
-    match Boundary.parseBool (field := "truncated") truncatedJ with
-    | .ok b => pure b
-    | .error e => throw <| IO.userError e
+  let obs ← IO.ofExcept (Boundary.parseTensorE (field := "obs") obsShape obsJ)
+  let reward ← IO.ofExcept (Boundary.parseFloat (field := "reward") rewardJ)
+  let terminated ← IO.ofExcept (Boundary.parseBool (field := "terminated") terminatedJ)
+  let truncated ← IO.ofExcept (Boundary.parseBool (field := "truncated") truncatedJ)
   pure (obs, reward, terminated, truncated)
 
 end Internal

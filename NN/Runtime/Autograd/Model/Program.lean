@@ -32,7 +32,7 @@ open TorchLean TorchLean.Tensor
 export Runtime.Autograd.Torch (ExecutionMode Config Ops Ref RefList CurriedRef)
 
 namespace Curried
-export Runtime.Autograd.Torch.Curried (Fn curry uncurry)
+export Runtime.Autograd.Torch.Curried (Function curry uncurry)
 end Curried
 
 namespace CurriedRef
@@ -49,11 +49,11 @@ export Runtime.Autograd.Torch
    broadcastTo reshape swapAdjacentAtDepth
    reduceSum reduceMean
    select indexSelect scatterAdd
-   matmul concatLeadingAxis sliceLeadingAxisRange
+   matmul concat slice
    relu silu gelu sigmoid tanh softmaxLast softplus
    exp sin cos log inv detach safeLog logSoftmaxLast
    sum flatten
-   mseLoss batchNorm batchedMultiHeadAttention
+    mseLoss batchNorm
    randUniform bernoulliMask)
 
 /-! ## Operation-reference notation -/
@@ -63,21 +63,6 @@ abbrev RefTy (m : Type → Type) (α : Type)
     [TorchLean.Storage α] [Context α] [Ops (m := m) (α := α)]
     (s : Shape) : Type :=
   Runtime.Autograd.Torch.Ops.Ref (m := m) (α := α) s
-
-namespace LeadingAxis
-namespace Internal
-
-/-- Apply a single-sample operation independently along a leading axis. -/
-def mapOuterAxis {α : Type} [TorchLean.Storage α] [Context α]
-    {m : Type → Type} [Monad m] [Ops (m := m) (α := α)]
-    {batch : Nat} {s t : Shape}
-    (x : RefTy (m := m) (α := α) (s.prependDim batch))
-    (f : RefTy (m := m) (α := α) s → m (RefTy (m := m) (α := α) t)) :
-    m (RefTy (m := m) (α := α) (t.prependDim batch)) :=
-  Runtime.Autograd.Torch.mapOuterAxis (m := m) (α := α) f x
-
-end Internal
-end LeadingAxis
 
 /-! ## Prefix-polymorphic derived operations -/
 
@@ -91,7 +76,7 @@ def mapLeading {α : Type} [TorchLean.Storage α] [Context α]
   let xFlat ← Runtime.Autograd.Torch.reshape (m := m) (α := α)
     (s₁ := leadingShape.concat s) (s₂ := s.prependDim leadingShape.size) x (by
       simp [Shape.size_concat, Shape.size])
-  let yFlat ← LeadingAxis.Internal.mapOuterAxis (m := m) (α := α) xFlat f
+  let yFlat ← Runtime.Autograd.Torch.mapBatch (m := m) (α := α) f xFlat
   Runtime.Autograd.Torch.reshape (m := m) (α := α)
     (s₁ := t.prependDim leadingShape.size) (s₂ := leadingShape.concat t) yFlat (by
       simp [Shape.size_concat, Shape.size])
@@ -220,45 +205,41 @@ def layerNorm {α : Type} [TorchLean.Storage α] [Context α]
         (s₁ := matrixShape) (s₂ := leading.appendDim width) yMatrix (by
           simp [matrixShape, Shape.size_appendDim, Shape.size, hRows])
 
-/-- Multi-head self-attention over any prefix shape. -/
-def multiHeadAttention {α : Type} [TorchLean.Storage α] [Context α]
+/-- Self-attention over any prefix shape, with an optional output-feature bias. -/
+def attention {α : Type} [TorchLean.Storage α] [Context α]
     {m : Type → Type} [Monad m] [Ops (m := m) (α := α)]
     {leadingShape : Shape} {n numHeads dModel headDim : Nat} (hN : n ≠ 0)
     (wq wk wv : RefTy (m := m) (α := α) [dModel, numHeads * headDim])
     (wo : RefTy (m := m) (α := α) [numHeads * headDim, dModel])
     (x : RefTy (m := m) (α := α) (leadingShape.concat [n, dModel]))
-    (mask : Option (Tensor Bool [n, n]) := none) :
-    m (RefTy (m := m) (α := α) (leadingShape.concat [n, dModel])) :=
-  match batchEq : leadingShape.size with
-  | 0 => Runtime.Autograd.Torch.const (m := m) (α := α)
-      (s := leadingShape.concat [n, dModel])
-      (Tensor.full (leadingShape.concat [n, dModel]) (0 : α))
-  | batch + 1 => do
-      let xFlat ← Runtime.Autograd.Torch.reshape (m := m) (α := α)
-        (s₁ := leadingShape.concat [n, dModel]) (s₂ := [batch + 1, n, dModel]) x (by
-          simp [Shape.size_concat, Shape.size, batchEq])
-      let yFlat ← Runtime.Autograd.Torch.batchedMultiHeadAttention
-        (m := m) (α := α) (batch := batch + 1) (n := n) (numHeads := numHeads)
-        (dModel := dModel) (headDim := headDim) (by simp) hN wq wk wv wo xFlat (mask := mask)
-      Runtime.Autograd.Torch.reshape (m := m) (α := α)
-        (s₁ := [batch + 1, n, dModel]) (s₂ := leadingShape.concat [n, dModel]) yFlat (by
-          simp [Shape.size_concat, Shape.size, batchEq])
-
-/-- Multi-head attention followed by a trainable output-feature bias. -/
-def multiHeadAttentionOutputBias {α : Type} [TorchLean.Storage α] [Context α]
-    {m : Type → Type} [Monad m] [Ops (m := m) (α := α)]
-    {leadingShape : Shape} {n numHeads dModel headDim : Nat} (hN : n ≠ 0)
-    (wq wk wv : RefTy (m := m) (α := α) [dModel, numHeads * headDim])
-    (wo : RefTy (m := m) (α := α) [numHeads * headDim, dModel])
-    (bo : RefTy (m := m) (α := α) [dModel])
-    (x : RefTy (m := m) (α := α) (leadingShape.concat [n, dModel]))
-    (mask : Option (Tensor Bool [n, n]) := none) :
+    (mask : Option (Tensor Bool [n, n]) := none)
+    (outputBias : Option (RefTy (m := m) (α := α) [dModel]) := none) :
     m (RefTy (m := m) (α := α) (leadingShape.concat [n, dModel])) := do
-  let y ← multiHeadAttention (m := m) (α := α) hN wq wk wv wo x mask
-  mapLeading (m := m) (α := α) leadingShape y fun yi => do
-    let boFull ← Runtime.Autograd.Torch.broadcastTo (m := m) (α := α)
-      (s₁ := [dModel]) (s₂ := [n, dModel]) Shape.BroadcastTo.proof bo
-    Runtime.Autograd.Torch.add (m := m) (α := α) (s := [n, dModel]) yi boFull
+  let output ← do
+    match batchEq : leadingShape.size with
+    | 0 =>
+        Runtime.Autograd.Torch.const (m := m) (α := α)
+          (s := leadingShape.concat [n, dModel])
+          (Tensor.full (leadingShape.concat [n, dModel]) (0 : α))
+    | batch + 1 => do
+        let xFlat ← Runtime.Autograd.Torch.reshape (m := m) (α := α)
+          (s₁ := leadingShape.concat [n, dModel]) (s₂ := [batch + 1, n, dModel]) x (by
+            simp [Shape.size_concat, Shape.size, batchEq])
+        let yFlat ← Runtime.Autograd.Torch.attention
+          (m := m) (α := α) (batch := some (batch + 1)) (n := n) (numHeads := numHeads)
+          (dModel := dModel) (headDim := headDim) hN wq wk wv wo xFlat (mask := mask)
+          (hBatch := by simp)
+        Runtime.Autograd.Torch.reshape (m := m) (α := α)
+          (s₁ := [batch + 1, n, dModel]) (s₂ := leadingShape.concat [n, dModel]) yFlat (by
+            simp [Shape.size_concat, Shape.size, batchEq])
+  match outputBias with
+  | none => pure output
+  | some bias => do
+      let biasFull ← Runtime.Autograd.Torch.broadcastTo (m := m) (α := α)
+        (s₁ := [dModel]) (s₂ := leadingShape.concat [n, dModel]) (by
+          simpa only [Shape.concat_assoc, Shape.concat] using
+            Shape.CanBroadcastTo.prependTarget (leadingShape.concat [n]) [dModel]) bias
+      Runtime.Autograd.Torch.add (m := m) (α := α) output biasFull
 
 /-- An execution-polymorphic differentiable tensor program. -/
 abbrev Program (α : Type) [TorchLean.Storage α] [Context α] (ss : List Shape) (τ : Shape) :

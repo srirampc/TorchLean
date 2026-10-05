@@ -52,8 +52,7 @@ theorem step_reward_ge_neg_one
   · -- In the non-goal case the reward is `0` (if we reach the goal) or `-1` (otherwise).
     by_cases hNextGoal :
         Spec.RL.Envs.GridWorld.nextState (width := width) (height := height) state action = gw.goal
-    · simp [Spec.RL.Envs.GridWorld.step, hGoal, hNextGoal]
-    · simp [Spec.RL.Envs.GridWorld.step, hGoal, hNextGoal]
+    all_goals simp [Spec.RL.Envs.GridWorld.step, hGoal, hNextGoal]
 
 /-- GridWorld rewards are bounded above by `0`. -/
 theorem step_reward_le_zero
@@ -66,8 +65,7 @@ theorem step_reward_le_zero
   · -- In the non-goal case the reward is `0` (if we reach the goal) or `-1` (otherwise).
     by_cases hNextGoal :
         Spec.RL.Envs.GridWorld.nextState (width := width) (height := height) state action = gw.goal
-    · simp [Spec.RL.Envs.GridWorld.step, hGoal, hNextGoal]
-    · simp [Spec.RL.Envs.GridWorld.step, hGoal, hNextGoal]
+    all_goals simp [Spec.RL.Envs.GridWorld.step, hGoal, hNextGoal]
 
 /-- Combined reward bound for convenience (`reward ∈ [-1, 0]`). -/
 theorem step_reward_bounds
@@ -102,14 +100,12 @@ theorem toFiniteStochasticMDP_valid
       discount_lt_one := hγ₁ }
   · intro state action nextState
     -- Entries are `0` or `1` by construction.
-    by_cases hx : nextState = (gw.toFiniteMDP.step state action).state
-    · simp [Spec.RL.Envs.GridWorld.toFiniteStochasticMDP, Spec.RL.Envs.GridWorld.oneHot,
-        TorchLean.Tensor.getScalar, Spec.get, TorchLean.Tensor.item, hx]
-    · simp [Spec.RL.Envs.GridWorld.toFiniteStochasticMDP, Spec.RL.Envs.GridWorld.oneHot,
+    by_cases hx : nextState = (gw.toFiniteMDP.step state action).state <;>
+      simp [Spec.RL.Envs.GridWorld.toFiniteStochasticMDP, TorchLean.Tensor.oneHot,
         TorchLean.Tensor.getScalar, Spec.get, TorchLean.Tensor.item, hx]
   · intro state action
     -- A one-hot row sums to `1`.
-    simp [Spec.RL.Envs.GridWorld.toFiniteStochasticMDP, Spec.RL.Envs.GridWorld.oneHot,
+    simp [Spec.RL.Envs.GridWorld.toFiniteStochasticMDP, TorchLean.Tensor.oneHot,
       TorchLean.Tensor.getScalar, Spec.get, TorchLean.Tensor.item,
       Finset.sum_ite_eq', Finset.mem_univ]
 
@@ -140,7 +136,7 @@ theorem toFiniteStochasticMDP_expectedNextValue_eq_toFiniteMDP_successor
   classical
   simp [Spec.RL.FiniteStochastic.expectedNextValue,
     Spec.RL.Envs.GridWorld.toFiniteStochasticMDP,
-    Spec.RL.Envs.GridWorld.oneHot,
+    TorchLean.Tensor.oneHot,
     TorchLean.Tensor.getScalar, Spec.get, TorchLean.Tensor.item,
     Finset.sum_ite_eq', Finset.mem_univ]
 

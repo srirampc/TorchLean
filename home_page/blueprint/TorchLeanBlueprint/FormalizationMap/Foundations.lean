@@ -165,7 +165,7 @@ The {uses "graphspec_syntax"}[sequential GraphSpec] MLP composes two linear maps
 ReLU. Its type fixes the order and shapes of both weights and biases.
 :::
 
-:::theorem "graphspec_mlp_spec_alignment" (parent := "graph_representations") (lean := "NN.GraphSpec.Models.mlp_interp_eq_spec_mlp_forward")
+:::theorem "graphspec_mlp_spec_alignment" (parent := "graph_representations") (lean := "NN.GraphSpec.Models.mlp_interp")
 Interpreting the {uses "graphspec_mlp_model"}[GraphSpec MLP] gives the same tensor as the
 hand-written two-layer MLP specification.
 
@@ -182,14 +182,15 @@ The proof unpacks the four-tensor parameter list, unfolds
 intervening ReLU.
 :::
 
-:::theorem "graphspec_mlp_initialization_alignment" (parent := "graph_representations") (lean := "NN.GraphSpec.Models.mlp_detInitParams_eq_torchlean_linear_inits")
+:::theorem "graphspec_mlp_initialization_alignment" (parent := "graph_representations") (lean := "NN.GraphSpec.Models.mlp_detInitParams")
 Deterministic initialization for the {uses "graphspec_mlp_model"}[GraphSpec MLP] produces the same
 typed parameter list, in the same order, as the two TorchLean linear-layer initializers.
 :::
 
 :::proof "graphspec_mlp_initialization_alignment"
 For {uses "graphspec_mlp_model"}[the two-layer graph], the occurrence-indexed seed calculation
-reduces to seeds `0, 1` for the first layer and `2, 3` for the second.
+assigns weight seed `0` to the first linear layer and weight seed `1` to the second.
+Both biases are initialized exactly to zero.
 :::
 
 :::definition "ir_structural_predicate" (parent := "graph_representations") (lean := "NN.IR.Graph.wellFormed")

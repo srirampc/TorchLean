@@ -5,7 +5,7 @@ Authors: TorchLean Team
 
 Real-data CUDA example:
   python3 scripts/datasets/download_example_data.py --tiny-shakespeare
-  lake -R -K cuda=true exe torchlean transformer --device cuda --tiny-shakespeare --steps 1
+  scripts/lake.sh -Kcuda=true exe torchlean transformer --device cuda --tiny-shakespeare --steps 1
 -/
 
 module
@@ -23,7 +23,7 @@ so a position cannot read the byte it is being trained to predict.
 
 ```bash
 python3 scripts/datasets/download_example_data.py --tiny-shakespeare
-lake -R -K cuda=true exe torchlean transformer --device cuda --tiny-shakespeare --steps 1
+scripts/lake.sh -Kcuda=true exe torchlean transformer --device cuda --tiny-shakespeare --steps 1
 ```
 -/
 
@@ -39,7 +39,7 @@ def exeName : String := "transformer"
 /-- Default JSON loss-curve path for this command. -/
 def defaultLogPath : System.FilePath := Support.trainLogPath "transformer"
 
-/-- Short multi-token window for the quick encoder training run. -/
+/-- Short multi-token window for the causal next-byte training run. -/
 def contextLength : Nat := 4
 /-- Transformer feature width. -/
 def modelWidth : Nat := 4
@@ -67,7 +67,7 @@ abbrev modelConfig : nn.models.CausalTransformer.Config :=
     feedForwardWidth := feedForwardWidth
     layerCount := 1 }
 
-/-- Input shape: batched one-hot byte buckets. -/
+/-- Input shape: one sequence of one-hot byte buckets. -/
 abbrev input : Shape :=
   modelConfig.vocabularyShape
 
@@ -86,9 +86,9 @@ def samples (corpus : String) (windows : Nat) :
     (α := Float) contextLength modelWidth byteBucket windows corpus
 
 /-- Train the causal Transformer with the public `Trainer` surface. -/
-def train (runtime : Runtime.Config) (data : RealData.TextWindowFlags)
+def train (runtime : Runtime.Config) (data : RealData.Corpus.Options)
     (flags : CLI.Training.OptimizerOptions) : IO Unit := do
-  let corpus ← RealData.TextWindowFlags.read exeName data
+  let corpus ← RealData.Corpus.Options.read exeName data
   let trainer :=
     Trainer.new model <|
       Trainer.RunConfig.forObjective
@@ -100,7 +100,7 @@ def train (runtime : Runtime.Config) (data : RealData.TextWindowFlags)
     trainData
     (flags.trainOptions
       (logTitle := "Transformer next-byte training")
-      (logNotes := #[s!"corpus={data.corpus.path}", s!"windows={data.windows}"]))
+      (logNotes := #[s!"corpus={data.corpus}", s!"windows={data.windows}"]))
   trained.printSummary
 
 /-- CLI entrypoint for the causal Transformer text command. -/
@@ -111,8 +111,8 @@ def main (args : List String) : IO UInt32 := do
       defaultSteps := 1
       defaultLearningRate := 1e-4
       description := "Causal Transformer next-byte model"
-      dataOptions := RealData.TextWindowFlags.help defaultWindows
-      parseData := RealData.TextWindowFlags.parse exeName defaultWindows
+      dataOptions := RealData.Corpus.Options.help defaultWindows
+      parseData := RealData.Corpus.Options.parse exeName defaultWindows
       train := train }
     args
 

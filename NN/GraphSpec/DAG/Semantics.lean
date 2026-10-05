@@ -490,41 +490,6 @@ theorem evalArgs_append
       simp only [Args.append, evalArgs, TorchLean.TensorPack.append]
       rw [evalArgs_append env rest rightArgs]
 
-/-- Evaluating a statically split argument list agrees with splitting its evaluated values. -/
-theorem evalArgs_splitAppend
-    {Γ left right : List Shape} {α : Type 0} [TorchLean.Storage α] [Context α]
-    (env : TorchLean.TensorPack α Γ) (args : Args Γ (left ++ right)) :
-    let argumentParts := Args.splitAppend args
-    let valueParts := TorchLean.TensorPack.split (evalArgs env args)
-    (evalArgs env argumentParts.1, evalArgs env argumentParts.2) = valueParts := by
-  induction left with
-  | nil => rfl
-  | cons shape left ih =>
-      cases args with
-      | cons term rest =>
-          simpa only [Args.splitAppend, evalArgs,
-            TorchLean.TensorPack.split] using
-            congrArg
-              (fun parts =>
-                (TorchLean.TensorPack.cons (eval env term) parts.1, parts.2))
-              (ih rest)
-
-/-- Evaluating the left part of a typed argument split returns the corresponding value prefix. -/
-theorem evalArgs_splitAppend_fst
-    {Γ left right : List Shape} {α : Type 0} [TorchLean.Storage α] [Context α]
-    (env : TorchLean.TensorPack α Γ) (args : Args Γ (left ++ right)) :
-    evalArgs env (Args.splitAppend args).1 =
-      (TorchLean.TensorPack.split (evalArgs env args)).1 := by
-  exact congrArg Prod.fst (evalArgs_splitAppend env args)
-
-/-- Evaluating the right part of a typed argument split returns the corresponding value suffix. -/
-theorem evalArgs_splitAppend_snd
-    {Γ left right : List Shape} {α : Type 0} [TorchLean.Storage α] [Context α]
-    (env : TorchLean.TensorPack α Γ) (args : Args Γ (left ++ right)) :
-    evalArgs env (Args.splitAppend args).2 =
-      (TorchLean.TensorPack.split (evalArgs env args)).2 := by
-  exact congrArg Prod.snd (evalArgs_splitAppend env args)
-
 /-- Prepending an unrelated value does not change a term's pure meaning. -/
 @[simp] theorem eval_weakenLeft
     {Γ : List Shape} {s t : Shape} {α : Type 0} [TorchLean.Storage α] [Context α]
@@ -568,11 +533,6 @@ namespace Block
 
 open Runtime.Autograd.Torch
 
-/-- Reinterpret a block's result list along an equality of output shapes. -/
-def castOutputs {Γ outputs outputs' : List Shape} (h : outputs = outputs') :
-    Block Γ outputs → Block Γ outputs'
-  | block => h ▸ block
-
 /-- Evaluate a multi-output block, preserving sharing introduced by `let1`. -/
 def eval {Γ outs : List Shape} {α : Type 0} [TorchLean.Storage α] [Context α]
     (env : TorchLean.TensorPack α Γ) : Block Γ outs → TorchLean.TensorPack α outs
@@ -585,10 +545,10 @@ def eval {Γ outs : List Shape} {α : Type 0} [TorchLean.Storage α] [Context α
       eval (Γ := Γ ++ [σ]) (α := α) env' body
 
 /-- Casting a block's output shapes casts its evaluated typed result by the same equality. -/
-@[simp] theorem eval_castOutputs
+@[simp] theorem eval_cast
     {Γ outputs outputs' : List Shape} {α : Type 0} [TorchLean.Storage α] [Context α]
     (env : TorchLean.TensorPack α Γ) (h : outputs = outputs') (block : Block Γ outputs) :
-    eval env (castOutputs h block) = h ▸ eval env block := by
+    eval env (h ▸ block) = h ▸ eval env block := by
   subst outputs'
   rfl
 
@@ -644,7 +604,7 @@ theorem eval_andThenWithRenaming
         eval_andThenWithRenaming envΓ second body envΔ'
           (fun v => Var.weakenRight (ρ v)) hρ'
 
-/-- Composing two blocks evaluates the first once and appends its typed outputs for the second. -/
+/-- Pure evaluation of block composition supplies the first block's typed outputs to the second. -/
 theorem eval_andThen {Γ middle outputs : List Shape} {α : Type 0} [TorchLean.Storage α] [Context α]
     (env : TorchLean.TensorPack α Γ) (first : Block Γ middle)
     (second : Block (Γ ++ middle) outputs) :

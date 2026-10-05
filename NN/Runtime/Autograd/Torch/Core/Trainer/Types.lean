@@ -64,13 +64,9 @@ inductive OptimizerUpdatePath where
 /--
 Bundle a scalar-loss training loop for fixed module state and an input signature.
 
-This is the low-level trainer object used by module-backed execution:
-- `loss` computes the scalar objective,
-- `diff` computes that loss and its state-shaped gradients from one tape,
-- `grad` exposes just the gradients when the loss is not needed,
-- `stepWithLoss` applies an SGD update and returns the loss from the same tape,
-- `step` applies the update without requiring callers to read the loss,
-- `getState` reads the current parameters and persistent buffers.
+Backend constructors supply curried operations. The packed `ScalarTrainer.loss`, `grad`, and
+`step` methods expose them to callers; `value := true` and `loss := true` request the objective
+value with a gradient or update. `getState` reads the current parameters and persistent buffers.
 -/
 structure ScalarTrainer (α δ : Type) [TorchLean.Storage α] [TorchLean.Storage δ]
     (paramShapes inputShapes : List Shape)
@@ -78,24 +74,24 @@ structure ScalarTrainer (α δ : Type) [TorchLean.Storage α] [TorchLean.Storage
   /-- Mutable module state. Entries marked `requiresGrad = false` are persistent buffers. -/
   state : ParamList α paramShapes
   /-- Compute the scalar loss for a curried input pack. -/
-  loss :
-    Curried.Fn α inputShapes
-      (Curried.Fn δ dataInputShapes (IO (Tensor α [])))
-  /-- Compute the scalar loss and parameter gradients from one forward tape. -/
-  diff :
-    Curried.Fn α inputShapes
-      (Curried.Fn δ dataInputShapes
+  lossFn :
+    Curried.Function α inputShapes
+      (Curried.Function δ dataInputShapes (IO (Tensor α [])))
+  /-- Curried backend operation returning `(loss, gradients)` from one forward tape. -/
+  diffFn :
+    Curried.Function α inputShapes
+      (Curried.Function δ dataInputShapes
         (IO (Tensor α [] × TorchLean.TensorPack α paramShapes)))
   /-- Compute gradients aligned with `paramShapes` for a curried input pack. -/
-  grad :
-    Curried.Fn α inputShapes
-      (Curried.Fn δ dataInputShapes (IO (TorchLean.TensorPack α paramShapes)))
+  gradFn :
+    Curried.Function α inputShapes
+      (Curried.Function δ dataInputShapes (IO (TorchLean.TensorPack α paramShapes)))
   /-- Apply one SGD-style update and return the loss used to compute that update. -/
-  stepWithLoss : α →
-    Curried.Fn α inputShapes
-      (Curried.Fn δ dataInputShapes (IO (Tensor α [])))
+  stepWithLossFn : α →
+    Curried.Function α inputShapes
+      (Curried.Function δ dataInputShapes (IO (Tensor α [])))
   /-- Apply one SGD-style update for a curried input pack. -/
-  step : α → Curried.Fn α inputShapes (Curried.Fn δ dataInputShapes (IO Unit))
+  stepFn : α → Curried.Function α inputShapes (Curried.Function δ dataInputShapes (IO Unit))
   /--
   Optional Adam update path.
 
@@ -103,12 +99,12 @@ structure ScalarTrainer (α δ : Type) [TorchLean.Storage α] [TorchLean.Storage
   `none` and should use the generic optimizer wrappers.
   -/
   adamStep? : Option (α → α → α → α →
-    Curried.Fn α inputShapes (Curried.Fn δ dataInputShapes (IO Unit))) := none
+    Curried.Function α inputShapes (Curried.Function δ dataInputShapes (IO Unit))) := none
   /-- CUDA-native Adam update that also returns the loss from its forward tape. -/
   adamStepWithLoss? :
     Option (α → α → α → α →
-      Curried.Fn α inputShapes
-        (Curried.Fn δ dataInputShapes (IO (Tensor α [])))) := none
+      Curried.Function α inputShapes
+        (Curried.Function δ dataInputShapes (IO (Tensor α [])))) := none
   /--
   Optional AdamW update path.
 
@@ -116,12 +112,12 @@ structure ScalarTrainer (α δ : Type) [TorchLean.Storage α] [TorchLean.Storage
   decay. Other backends expose `none` and should use the generic optimizer wrappers.
   -/
   adamWStep? : Option (α → α → α → α → α →
-    Curried.Fn α inputShapes (Curried.Fn δ dataInputShapes (IO Unit))) := none
+    Curried.Function α inputShapes (Curried.Function δ dataInputShapes (IO Unit))) := none
   /-- CUDA-native AdamW update that also returns the loss from its forward tape. -/
   adamWStepWithLoss? :
     Option (α → α → α → α → α →
-      Curried.Fn α inputShapes
-        (Curried.Fn δ dataInputShapes (IO (Tensor α [])))) := none
+      Curried.Function α inputShapes
+        (Curried.Function δ dataInputShapes (IO (Tensor α [])))) := none
   /-- Save and restore optimizer state retained inside the selected runtime backend. -/
   optimizerStateCheckpoint? : Option OptimizerStateCheckpoint := none
   /--

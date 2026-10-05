@@ -23,7 +23,6 @@ gradients/cotangents from both an eps error bound and a propagated magnitude bou
 
 @[expose] public section
 
-
 namespace Proofs
 namespace RuntimeApprox
 
@@ -172,12 +171,10 @@ theorem eval_scale {Γ : List Shape} {ss : List Shape} (g : RevGraphScale (α :=
   FwdGraphScale.eval_scale (α := α) (toSpec := toSpec) (Γ := Γ) (ss := ss) (toFwdGraphScale (α := α)
     g)
 
--- ---------------------------------------------------------------------------
--- Backprop scale bounds (analogous to `backpropBounds`)
--- ---------------------------------------------------------------------------
+/-! ## Backprop scale bounds (analogous to `backpropBounds`) -/
 
-/-- Backpropagate scale bounds through a `RevGraphScale`, analogous to `RevGraph.backpropRuntime`.
-  -/
+/-- Backpropagate scale bounds through a `RevGraphScale`, analogous to
+`RevGraph.backpropRuntime`. -/
 def backpropScales {Γ : List Shape} {ss : List Shape} (g : RevGraphScale (α := α) toSpec Γ ss)
     [Add α]
     (bIn : BList Γ) (xR : TorchLean.TensorPack α Γ) (bSeed : BList (Γ ++ ss))
@@ -212,9 +209,8 @@ def backpropScales {Γ : List Shape} {ss : List Shape} (g : RevGraphScale (α :=
 scale bounds.
 
 The `addBound` combiner is a parameter rather than a fixed choice, because how two accumulated
-gradients' bounds combine depends on the carrier: adding bounds is always sound, but a carrier with
-a
-sharper triangle inequality can do better. `addSound` is what pins down the requirement. -/
+gradients' bounds combine depends on the carrier: adding bounds is always sound, but a carrier
+with a sharper triangle inequality can do better. `addSound` is what pins down the requirement. -/
 theorem backprop_scale {Γ : List Shape} {ss : List Shape} (g : RevGraphScale (α := α) toSpec Γ ss)
     [Add α]
     (addBound : {Δ : List Shape} → BList Δ → BList Δ →

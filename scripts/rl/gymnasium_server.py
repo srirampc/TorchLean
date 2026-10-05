@@ -27,6 +27,7 @@ Protocol (one JSON object per line):
 
 Notes:
   - Discrete action spaces (`gymnasium.spaces.Discrete`) in this bridge.
+  - Protocol and rollout actions are zero-based indices; the bridge adds the space's `start`.
   - Observations are converted via `.tolist()` when available (NumPy arrays), else recursively
     converted for lists/tuples.
 
@@ -64,7 +65,7 @@ def _to_jsonable_obs(obs: Any) -> Any:
 
 def _write(obj: JsonObject) -> None:
     """Write one compact JSON response and flush so Lean can read it immediately."""
-    sys.stdout.write(json.dumps(obj, separators=(",", ":")) + "\n")
+    sys.stdout.write(json.dumps(obj, separators=(",", ":"), allow_nan=False) + "\n")
     sys.stdout.flush()
 
 
@@ -105,7 +106,8 @@ def export_rollout(env: Any, env_id: str, steps: int, seed: int, output: Path) -
         action = int(env.action_space.sample())
         next_obs, reward, terminated, truncated, _ = env.step(action)
         transitions.append({
-            "obs": _to_jsonable_obs(obs), "action": action, "reward": float(reward),
+            "obs": _to_jsonable_obs(obs), "action": action - int(env.action_space.start),
+            "reward": float(reward),
             "terminated": bool(terminated), "truncated": bool(truncated),
             "next_obs": _to_jsonable_obs(next_obs),
         })
@@ -152,7 +154,7 @@ def main() -> int:
 
     env = gym.make(args.env_id, **make_kwargs)
     try:
-        if env.action_space.__class__.__name__ != "Discrete":
+        if not isinstance(env.action_space, gym.spaces.Discrete):
             _fail(f"Only Discrete action spaces are supported, got {env.action_space}")
 
         if args.out is not None:
@@ -194,8 +196,14 @@ def main() -> int:
                     obs, _info = env.reset(seed=seed)
                     _write({"ok": True, "obs": _to_jsonable_obs(obs)})
                 elif cmd == "step":
-                    action = int(req["action"])
-                    obs, reward, terminated, truncated, _info = env.step(action)
+                    action = req["action"]
+                    if isinstance(action, bool) or not isinstance(action, int):
+                        raise TypeError("action must be an integer index")
+                    if not 0 <= action < n_actions:
+                        raise ValueError(f"action must lie in [0, {n_actions})")
+                    obs, reward, terminated, truncated, _info = env.step(
+                        action + int(env.action_space.start)
+                    )
                     _write(
                         {
                             "ok": True,

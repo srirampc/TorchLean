@@ -108,9 +108,8 @@ pass:
 
 ```leanOutput psLower (whitespace := lax)
 @lowerToForwardGraph : {α : Type} →
-  [inst : Storage α] →
-    [inst_1 : Context α] →
-      Graph → Payload α → Except String (ForwardGraph α)
+  [inst : Storage α] → [Context α] →
+    Graph → Payload α → Except String (ForwardGraph α)
 ```
 
 The `Except String` result distinguishes a successfully lowered graph from an error. The input
@@ -212,7 +211,8 @@ for parameter lookup, output shape, and any failure behavior before the recursiv
 extend the equivalence to the new node.
 
 The proof is large because it recursively mirrors lowering. The workhorse lemma is
-`buildFrom_preserves_denotation`: as lowering walks node ids and extends the forward graph, the
+the private `buildFrom_preserves_denotation`: as lowering walks node ids and extends the forward
+graph, the
 IR value table and typed context stay aligned. Each operator branch proves one local
 preservation fact, then the recursive theorem stitches the branch into the whole graph.
 
@@ -226,9 +226,11 @@ The current proof is split for auditability:
   common API] contains helper lemmas used by the recursive proof.
 - The
   {src "NN/Runtime/Autograd/IRExec/Correctness/SemanticEquivalenceOpCases.lean"}[semantic
-  equivalence op cases API] contains the larger named cases such as `.linear` and `.conv`.
-- `Correctness/Ops/*` contains smaller branches by op family: activations, constants, elementwise,
-  linear algebra, normalization, pooling, permutation, random, reductions, structural ops, and unary
+  equivalence op cases API] contains the larger named cases such as `.linear`, `.reshape`, and
+  `.flatten`.
+- `Correctness/Ops/*` contains smaller branches by op family: activations, concatenation, constants,
+  convolution, elementwise, linear algebra, loss, normalization, pooling, permutation, random,
+  reductions, structural ops, and unary
   ops.
 - The
   {src "NN/Runtime/Autograd/IRExec/Correctness/SemanticEquivalence.lean"}[semantic equivalence
@@ -321,8 +323,9 @@ def psExecOut (b : Tensor Float [2]) :
   Graph.expectShape (α := Float) (expected := [2]) out
 ```
 
-The shared `evaluate` entry point checks the graph and input shape, lowers it, and selects the
-requested output. `Graph.expectShape` recovers the `[2]` result needed by this caller. The table
+The shared `evaluate` entry point lowers the graph (checking well-formedness), checks declared
+shapes and the input shape, and selects the requested output. `Graph.expectShape` recovers the
+`[2]` result needed by this caller. The table
 example below exposes the lower-level shape equality when we need every intermediate value.
 
 Run both paths, with the bias and then with the bias dropped:
@@ -425,7 +428,7 @@ so an output comparison here would miss the difference. The table comparison ret
 example concerns one input; it does not show that the two altered programs agree on all inputs,
 as a universal output-equivalence theorem would require.
 
-PyTorch computes the same four numbers {Informal.citep pytorch2019}[]:
+The recorded PyTorch comparison computes the same four numbers {Informal.citep pytorch2019}[]:
 
 ```
 # Compare eager and compiled evaluation with the same
@@ -449,7 +452,8 @@ torch.compile       [3.0, 0.0]
 eager == compiled   True
 ```
 
-`torch.compile` and eager execution agree on this input. The theorem below compares the two
+In that recorded comparison, `torch.compile` and eager execution agree on this input. The theorem
+below compares the two
 TorchLean evaluators for every input, conditional on successful lowering and `NoRawLog`.
 
 Instantiate the theorem for this graph. The side condition comes first, and it is a `decide`:
@@ -565,8 +569,8 @@ Feed in a negative coordinate and they part company:
 
 ```leanOutput psLogNeg (whitespace := lax)
 Except.error "IR eval: log: input contains values <= 0
-  (or NaN); use `safe_log` if you want epsilon
-  protection"
+  (or NaN); use `safe_log`, which is
+  log(softplus(x) + eps)"
 ```
 
 ```leanOutput psLogNeg
@@ -594,8 +598,10 @@ print(torch.log(torch.tensor([-1., 2.])))
 tensor([nan, 0.6931])
 ```
 
-This compares two internal evaluators. Public `IO` autograd transforms now validate raw-log
-preconditions before evaluating nodes. Mathlib's real logarithm is itself totalized, so neither
+This compares two internal evaluators. The checked typed-graph autograd entry points
+`TypedGraph.compileChecked` and `jvpChecked` validate raw-log preconditions before evaluating nodes;
+that check is separate from these IR evaluators. Mathlib's real logarithm is itself totalized,
+so neither
 internal runtime policy is simply "the mathematical one". The protected `safeLogSpec` computes
 `log(softplus(x) + ε)`; with positive epsilon it has a different, domain-protected meaning.
 
@@ -608,8 +614,9 @@ needs either a suitable domain premise or agreement on how domain failures are r
 
 ## NoRawLog Fragment Restriction
 
-The IR has no separate safe-log node kind. The following example protects a logarithm by clamping
-its input against a positive constant. It computes `log(max(x, ε))`, which is a different function
+The IR has a `.safeLog` node kind with an input and scalar epsilon parent, and the theorem covers
+it. The following example instead keeps a raw `.log` node and protects its input by clamping
+against a positive constant. It computes `log(max(x, ε))`, which is a different function
 from `safeLogSpec`'s softplus-based formula.
 
 ```lean
@@ -678,8 +685,9 @@ example : ¬ NoRawLog psClampedGraph :=
 `NoRawLog` looks at node kinds, not at the values that can reach them, so a `.log` node is excluded
 whether or not its parent is clamped. This gives a simple condition with a concrete limitation. A
 value-level hypothesis, saying every input reaching a logarithm node is positive, would cover the
-clamped graph, but it is a statement about the whole evaluation and a caller could not discharge it
-with `by decide`; the syntactic version is decidable for any concrete graph, which is what makes
+clamped graph, but it is a statement about values throughout evaluation and needs an argument
+valid for every
+allowed input. The syntactic node-kind check is decidable for a concrete graph, which makes
 `psNoRawLog` a one-liner above. The cost is exactly the case seen here: graphs that agree for a
 reason the syntax cannot see fall outside the fragment and need their own argument.
 
@@ -695,10 +703,10 @@ reports the object that crossed each layer:
 ```terminal
 # Run the maintained example that builds, lowers, and trains
 # the GraphSpec model.
-lake exe torchlean graphspec
+./scripts/lake.sh exe torchlean graphspec
 ```
 
-A seeded run includes:
+An abridged summary of the seeded example is shown below; this is not a verbatim runtime log:
 
 ```
 Sequential: [2] -> [1], layers=3, params=13
@@ -710,7 +718,7 @@ mean_loss(after) = 0.247518
 forward: GraphSpec MLP lowered to TorchLean and executed
 ```
 
-The output establishes that this execution completed and that the loss decreased on this run. The
+The recorded summary reports a completed execution and a loss decrease on that run. The
 lowering theorem supplies the stronger statement: for every input, if lowering succeeds and the
 graph has no raw logarithm, the forward-graph denotation equals the IR denotation. The training
 log and lowering theorem answer different questions, and both are useful.
@@ -729,7 +737,7 @@ The axis-operator tutorial uses the shared checked forward-graph evaluator:
 ```terminal
 # Exercise the checked evaluator on the axis-operation
 # examples.
-lake exe torchlean ir_axis_ops
+./scripts/lake.sh exe torchlean ir_axis_ops
 ```
 
 For concatenation on the middle axis, it prints the output shape and leading values:
@@ -745,10 +753,10 @@ programs than a particular lowering theorem or runtime path currently covers. Re
 of the expected shape would not establish correctness for an unsupported operation; the lowering
 path must either justify that operation or reject it.
 
-The executable negative cases in
+The decidable regression checks in
 {src "NN/Tests/IR/ShapeContracts.lean"}[`IR.ShapeContracts`]
-exercise this boundary for incompatible shapes and unsupported contracts. They are regression
-checks that rejection remains fail-closed, not semantic lowering theorems. The whole-graph
+check `Infer.nodeOutShape` on malformed convolution, broadcast, and layer-normalization nodes.
+They concern shape inference rather than execution of the lowering path. The whole-graph
 meaning-preservation result is still
 `denoteAll_eq_of_lowerToForwardGraph` with its explicit `NoRawLog` hypothesis.
 

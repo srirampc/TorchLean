@@ -69,28 +69,9 @@ namespace Logger
 
 /-- A simple `IO` logger that prints to stdout. -/
 def stdout : Logger IO :=
-  { log := fun lvl msg => IO.println s!"[{LogLevel.render lvl}] {msg}" }
-
-/-- Emit an informational log message. -/
-def info {m : Type -> Type} (logger : Logger m) (msg : String) : m Unit :=
-  logger.log .info msg
-
-/-- Emit a warning log message. -/
-def warn {m : Type -> Type} (logger : Logger m) (msg : String) : m Unit :=
-  logger.log .warn msg
-
-/-- Emit an error log message. -/
-def error {m : Type -> Type} (logger : Logger m) (msg : String) : m Unit :=
-  logger.log .error msg
+  { log := fun lvl msg => IO.println (LogEntry.render { level := lvl, message := msg }) }
 
 end Logger
-
-/-!
-## Trainer integration
--/
-namespace Trainer
-
-end Trainer
 
 end Train
 end Autograd

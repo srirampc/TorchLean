@@ -60,8 +60,7 @@ def cast {shape : Shape} (value : SomeTensor α) (h : value.shape = shape) :
 /-- Casting to the shape already recorded returns the stored tensor. -/
 @[simp] theorem cast_self (value : SomeTensor α) (h : value.shape = value.shape) :
     value.cast h = value.tensor := by
-  rw [Subsingleton.elim h rfl]
-  rfl
+  exact Tensor.cast_shape_self value.tensor h
 
 /-- Repacking a tensor after a successful shape cast recovers the original value. -/
 @[simp] theorem ofTensor_cast (value : SomeTensor α) {shape : Shape}

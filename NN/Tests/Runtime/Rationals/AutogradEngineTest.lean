@@ -120,10 +120,10 @@ def checkMlpGrads :
   let db2_dyn ← Train.requireGradTensor (tag := tag)
     (s := [outDim]) grads ids.outputBiasId
 
-  let ok1 := decide (pretty dW1_dyn = pretty dW1_exp)
-  let ok2 := decide (pretty db1_dyn = pretty db1_exp)
-  let ok3 := decide (pretty dW2_dyn = pretty dW2_exp)
-  let ok4 := decide (pretty db2_dyn = pretty db2_exp)
+  let ok1 := Tensor.to dW1_dyn (Array ℚ) == Tensor.to dW1_exp (Array ℚ)
+  let ok2 := Tensor.to db1_dyn (Array ℚ) == Tensor.to db1_exp (Array ℚ)
+  let ok3 := Tensor.to dW2_dyn (Array ℚ) == Tensor.to dW2_exp (Array ℚ)
+  let ok4 := Tensor.to db2_dyn (Array ℚ) == Tensor.to db2_exp (Array ℚ)
   pure (ok1 && ok2 && ok3 && ok4)
 
 def run : IO Unit := do

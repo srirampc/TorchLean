@@ -115,36 +115,20 @@ def minElem {Γ : List Shape} {s : Shape} (a b : Idx Γ s) : Node Γ s :=
 theorem hasFDerivAt_max_of_lt {Γ : List Shape} {f g : CtxVec Γ → ℝ} {f' g' : CtxVec Γ →L[ℝ] ℝ}
     {xV : CtxVec Γ} (hf : HasFDerivAt f f' xV) (hg : HasFDerivAt g g' xV) (hfg : f xV > g xV) :
     HasFDerivAt (fun x => max (f x) (g x)) f' xV := by
-  have hcont : ContinuousAt (fun x : CtxVec Γ => f x - g x) xV := hf.continuousAt.sub
-    hg.continuousAt
-  have hmem : Set.Ioi (0 : ℝ) ∈ nhds (f xV - g xV) := isOpen_Ioi.mem_nhds (sub_pos.mpr hfg)
-  have hpos : ∀ᶠ x in nhds xV, f x > g x := by
-    have := (hcont.preimage_mem_nhds hmem)
-    filter_upwards [this] with x hx
-    have : f x - g x > 0 := hx
-    exact sub_pos.mp this
-  have heq :
-      (fun x => max (f x) (g x)) =ᶠ[nhds xV] fun x => f x := by
-    filter_upwards [hpos] with x hx
-    simp [max_eq_left (le_of_lt hx)]
+  -- The strict inequality persists on a neighbourhood, where `max` coincides with `f`.
+  have hpos : ∀ᶠ x in nhds xV, g x < f x := hg.continuousAt.eventually_lt hf.continuousAt hfg
+  have heq : (fun x => max (f x) (g x)) =ᶠ[nhds xV] f :=
+    hpos.mono fun x hx => max_eq_left hx.le
   exact hf.congr_of_eventuallyEq heq
 
 /-- Derivative of `min` at points where the `f` branch strictly dominates (`f xV < g xV`). -/
 theorem hasFDerivAt_min_of_lt {Γ : List Shape} {f g : CtxVec Γ → ℝ} {f' g' : CtxVec Γ →L[ℝ] ℝ}
     {xV : CtxVec Γ} (hf : HasFDerivAt f f' xV) (hg : HasFDerivAt g g' xV) (hfg : f xV < g xV) :
     HasFDerivAt (fun x => min (f x) (g x)) f' xV := by
-  have hcont : ContinuousAt (fun x : CtxVec Γ => g x - f x) xV := hg.continuousAt.sub
-    hf.continuousAt
-  have hmem : Set.Ioi (0 : ℝ) ∈ nhds (g xV - f xV) := isOpen_Ioi.mem_nhds (sub_pos.mpr hfg)
-  have hpos : ∀ᶠ x in nhds xV, f x < g x := by
-    have := (hcont.preimage_mem_nhds hmem)
-    filter_upwards [this] with x hx
-    have : g x - f x > 0 := hx
-    exact sub_pos.mp this
-  have heq :
-      (fun x => min (f x) (g x)) =ᶠ[nhds xV] fun x => f x := by
-    filter_upwards [hpos] with x hx
-    simp [min_eq_left (le_of_lt hx)]
+  -- The strict inequality persists on a neighbourhood, where `min` coincides with `f`.
+  have hpos : ∀ᶠ x in nhds xV, f x < g x := hf.continuousAt.eventually_lt hg.continuousAt hfg
+  have heq : (fun x => min (f x) (g x)) =ᶠ[nhds xV] f :=
+    hpos.mono fun x hx => min_eq_left hx.le
   exact hf.congr_of_eventuallyEq heq
 
 /-- Pointwise `NodeFDerivCorrectAt` for `maxElem`, assuming there are no ties. -/
@@ -175,8 +159,7 @@ def maxElemFderivAt {Γ : List Shape} {s : Shape} (a b : Idx Γ s) (xV : CtxVec 
             (evalCLM (n := Spec.Shape.size s) i)
             (aCLM xV) :=
         (evalCLM (n := Spec.Shape.size s) i).hasFDerivAt (x := aCLM xV)
-      have hcomp := houter.comp xV ha0
-      exact hcomp.congr_of_eventuallyEq (Filter.Eventually.of_forall fun _ => rfl)
+      exact houter.comp xV ha0
     have hb_i :
         HasFDerivAt (fun x : CtxVec Γ => bCLM x i)
           ((evalCLM (n := Spec.Shape.size s) i).comp bCLM) xV := by
@@ -185,8 +168,7 @@ def maxElemFderivAt {Γ : List Shape} {s : Shape} (a b : Idx Γ s) (xV : CtxVec 
             (evalCLM (n := Spec.Shape.size s) i)
             (bCLM xV) :=
         (evalCLM (n := Spec.Shape.size s) i).hasFDerivAt (x := bCLM xV)
-      have hcomp := houter.comp xV hb0
-      exact hcomp.congr_of_eventuallyEq (Filter.Eventually.of_forall fun _ => rfl)
+      exact houter.comp xV hb0
     have hlt : aCLM xV i < bCLM xV i ∨ aCLM xV i > bCLM xV i := lt_or_gt_of_ne hne
     cases hlt with
     | inr hgt =>
@@ -287,15 +269,13 @@ def minElemFderivAt {Γ : List Shape} {s : Shape} (a b : Idx Γ s) (xV : CtxVec 
       have houter : HasFDerivAt (fun v : Vec n => (evalCLM (n := n) i) v) (evalCLM (n := n) i) (aCLM
         xV) :=
         (evalCLM (n := n) i).hasFDerivAt (x := aCLM xV)
-      have hcomp := houter.comp xV ha0
-      exact hcomp.congr_of_eventuallyEq (Filter.Eventually.of_forall fun _ => rfl)
+      exact houter.comp xV ha0
     have hb_i :
         HasFDerivAt (fun x : CtxVec Γ => bCLM x i) ((evalCLM (n := n) i).comp bCLM) xV := by
       have houter : HasFDerivAt (fun v : Vec n => (evalCLM (n := n) i) v) (evalCLM (n := n) i) (bCLM
         xV) :=
         (evalCLM (n := n) i).hasFDerivAt (x := bCLM xV)
-      have hcomp := houter.comp xV hb0
-      exact hcomp.congr_of_eventuallyEq (Filter.Eventually.of_forall fun _ => rfl)
+      exact houter.comp xV hb0
     have hcmp :
         CtxVec.get (Γ := Γ) (s := s) a xV i < CtxVec.get (Γ := Γ) (s := s) b xV i ∨
           CtxVec.get (Γ := Γ) (s := s) a xV i > CtxVec.get (Γ := Γ) (s := s) b xV i :=

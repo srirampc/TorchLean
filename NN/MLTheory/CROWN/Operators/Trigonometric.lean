@@ -6,6 +6,7 @@ Authors: TorchLean Team
 
 module
 
+public import NN.MLTheory.CROWN.Operators.Activations
 public import NN.MLTheory.CROWN.Runtime.Ops
 
 /-!
@@ -44,7 +45,6 @@ The transfer rules in this file are **optional** and have different proof status
 -/
 
 @[expose] public section
-
 
 namespace NN.MLTheory.CROWN.Operators.Trigonometric
 
@@ -105,22 +105,14 @@ def ibpAtanAssumingMonotone {n : Nat} [TanAtan α]
     Tensor.scalar (TanAtan.atan (Tensor.unstack xB.hi i).item)
   { lo := outLo, hi := outHi }
 
-/-- Minimum of two scalar endpoints using the executable order from `Context`. -/
-def scalarMin (x y : α) : α :=
-  if x < y then x else y
-
-/-- Maximum of two scalar endpoints using the executable order from `Context`. -/
-def scalarMax (x y : α) : α :=
-  if x > y then x else y
-
 /-- Multiply two scalar intervals using all four endpoint products. -/
 def scalarIntervalMul (aLo aHi bLo bHi : α) : α × α :=
   let p1 := aLo * bLo
   let p2 := aLo * bHi
   let p3 := aHi * bLo
   let p4 := aHi * bHi
-  (scalarMin (scalarMin p1 p2) (scalarMin p3 p4),
-    scalarMax (scalarMax p1 p2) (scalarMax p3 p4))
+  (Activations.min2 (Activations.min2 p1 p2) (Activations.min2 p3 p4),
+    Activations.max2 (Activations.max2 p1 p2) (Activations.max2 p3 p4))
 
 /-- Square a scalar interval. -/
 def scalarIntervalSquare (lo hi : α) : α × α :=
@@ -128,7 +120,7 @@ def scalarIntervalSquare (lo hi : α) : α × α :=
   let hi2 := hi * hi
   if lo < 0 then
     if hi > 0 then
-      (0, scalarMax lo2 hi2)
+      (0, Activations.max2 lo2 hi2)
     else
       (hi2, lo2)
   else
@@ -164,12 +156,8 @@ Derivative propagation for `sin` using the global enclosure `cos(x) ∈ [-1, 1]`
 This deliberately avoids endpoint-only trigonometric bounds, which are unsound whenever an interval
 contains an interior extremum.
 
-A note on why this shares its body with `derivCos`, since the two look copy-pasted and are not.
-The chain rule multiplies the incoming derivative by `f'(x)`. For `f = sin` that factor is `cos`,
-for `f = cos` it is `-sin`, and at this precision both are enclosed by exactly `[-1, 1]`, so the two
-rules compute the same interval. They used to say so through two identical copies of the loop, which
-meant any future tightening had to be remembered twice. Both names survive because they pair with
-`ibpSin` and `ibpCos` and because a caller bounding `sin` should not have to know this coincidence.
+The chain-rule factors `cos(x)` and `-sin(x)` both lie in `[-1, 1]`. Consequently, `derivSin` and
+`derivCos` share the interval multiplication implemented by `unitFactorDeriv`.
 -/
 def derivSin {n : Nat} (_xB : Box α (.dim n .scalar))
     (dB : Box α (.dim n .scalar)) : Box α (.dim n .scalar) :=
@@ -187,52 +175,16 @@ assumption is kept in the declaration name.
 -/
 def derivAtanAssumingStandardLaws {n : Nat} (xB : Box α (.dim n .scalar))
     (dB : Box α (.dim n .scalar)) : Box α (.dim n .scalar) :=
-  let outLo := Tensor.dim fun i =>
-        let xl := (Tensor.unstack xB.lo i).item
-        let xu := (Tensor.unstack xB.hi i).item
-        let dl := (Tensor.unstack dB.lo i).item
-        let dh := (Tensor.unstack dB.hi i).item
-        -- d(atan)/dx = 1/(1+x²), decreasing in |x|
-        -- For interval [xl, xu], max derivative at x closest to 0
-        let x_abs_max := if MathFunctions.abs xl > MathFunctions.abs xu
-                         then MathFunctions.abs xl
-                         else MathFunctions.abs xu
-        let x_abs_min := if xl < 0 then
-                           if xu > 0 then 0
-                           else MathFunctions.abs xu
-                         else xl
-        let d_lo := 1 / (1 + x_abs_max * x_abs_max)
-        let d_hi := 1 / (1 + x_abs_min * x_abs_min)
-        -- Multiply by input derivatives
-        let p1 := d_lo * dl
-        let p2 := d_lo * dh
-        let p3 := d_hi * dl
-        let p4 := d_hi * dh
-        let m1 := if p1 < p2 then p1 else p2
-        let m2 := if p3 < p4 then p3 else p4
-        Tensor.scalar (if m1 < m2 then m1 else m2)
-  let outHi := Tensor.dim fun i =>
-        let xl := (Tensor.unstack xB.lo i).item
-        let xu := (Tensor.unstack xB.hi i).item
-        let dl := (Tensor.unstack dB.lo i).item
-        let dh := (Tensor.unstack dB.hi i).item
-        let x_abs_max := if MathFunctions.abs xl > MathFunctions.abs xu
-                         then MathFunctions.abs xl
-                         else MathFunctions.abs xu
-        let x_abs_min := if xl < 0 then
-                           if xu > 0 then 0
-                           else MathFunctions.abs xu
-                         else xl
-        let d_lo := 1 / (1 + x_abs_max * x_abs_max)
-        let d_hi := 1 / (1 + x_abs_min * x_abs_min)
-        let p1 := d_lo * dl
-        let p2 := d_lo * dh
-        let p3 := d_hi * dl
-        let p4 := d_hi * dh
-        let M1 := if p1 > p2 then p1 else p2
-        let M2 := if p3 > p4 then p3 else p4
-        Tensor.scalar (if M1 > M2 then M1 else M2)
-  { lo := outLo, hi := outHi }
+  let interval := fun i : Fin n =>
+    let xl := (Tensor.unstack xB.lo i).item
+    let xu := (Tensor.unstack xB.hi i).item
+    let absMax := Activations.max2 (MathFunctions.abs xl) (MathFunctions.abs xu)
+    let absMin := if xl < 0 then if xu > 0 then 0 else MathFunctions.abs xu else xl
+    let slopeLo := 1 / (1 + absMax * absMax)
+    let slopeHi := 1 / (1 + absMin * absMin)
+    scalarIntervalMul slopeLo slopeHi (Tensor.unstack dB.lo i).item (Tensor.unstack dB.hi i).item
+  { lo := Tensor.dim fun i => Tensor.scalar (interval i).1
+    hi := Tensor.dim fun i => Tensor.scalar (interval i).2 }
 
 /--
 Second-derivative propagation for `sin` using global `[-1,1]` enclosures for both `cos` and
@@ -240,26 +192,14 @@ Second-derivative propagation for `sin` using global `[-1,1]` enclosures for bot
 -/
 def secondDerivSin {n : Nat} (_xB : Box α (.dim n .scalar))
     (dB d2B : Box α (.dim n .scalar)) : Box α (.dim n .scalar) :=
-  -- y'' = f''(x) * (dx)² + f'(x) * d²x
-  -- where f'(x) = cos(x) and f''(x) = -sin(x)
-  let outLo := Tensor.dim fun i =>
-    let dl := (Tensor.unstack dB.lo i).item
-    let dh := (Tensor.unstack dB.hi i).item
-    let d2l := (Tensor.unstack d2B.lo i).item
-    let d2h := (Tensor.unstack d2B.hi i).item
-    let dxSq := scalarIntervalSquare dl dh
+  -- y'' = f''(x) * (dx)² + f'(x) * d²x, where f'(x) = cos(x) and f''(x) = -sin(x)
+  let interval := fun i : Fin n =>
+    let dxSq := scalarIntervalSquare (Tensor.unstack dB.lo i).item (Tensor.unstack dB.hi i).item
     let first := unitIntervalMul dxSq.1 dxSq.2
-    let second := unitIntervalMul d2l d2h
-    Tensor.scalar (first.1 + second.1)
-  let outHi := Tensor.dim fun i =>
-    let dl := (Tensor.unstack dB.lo i).item
-    let dh := (Tensor.unstack dB.hi i).item
-    let d2l := (Tensor.unstack d2B.lo i).item
-    let d2h := (Tensor.unstack d2B.hi i).item
-    let dxSq := scalarIntervalSquare dl dh
-    let first := unitIntervalMul dxSq.1 dxSq.2
-    let second := unitIntervalMul d2l d2h
-    Tensor.scalar (first.2 + second.2)
-  { lo := outLo, hi := outHi }
+    let second :=
+      unitIntervalMul (Tensor.unstack d2B.lo i).item (Tensor.unstack d2B.hi i).item
+    (first.1 + second.1, first.2 + second.2)
+  { lo := Tensor.dim fun i => Tensor.scalar (interval i).1
+    hi := Tensor.dim fun i => Tensor.scalar (interval i).2 }
 
 end NN.MLTheory.CROWN.Operators.Trigonometric

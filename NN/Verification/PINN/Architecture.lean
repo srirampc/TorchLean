@@ -91,8 +91,8 @@ def buildNodes
   let mut previous := prevId
   let mut fresh := nextId
   let mut nodes := acc
-  for i in [:remaining.size] do
-    let (_, outDim) := remaining[i]!
+  for h : i in [0:remaining.size] do
+    let (_, outDim) := remaining[i]'h.2.1
     nodes := nodes.push
       { id := fresh
         parents := #[previous]

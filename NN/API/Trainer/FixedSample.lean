@@ -27,7 +27,7 @@ This module provides that loop without tying it to a particular model family.
 Scope:
 - it trains against one fixed sample supplied by the caller;
 - it is model-agnostic: callers supply the loss wrapper and optimizer constructor;
-- it is backend-agnostic: callers can use it on CPU or CUDA via `API.Runtime.Options`.
+- it uses the caller's runtime configuration and scalar arithmetic.
 
 For dataset-backed training, use the `TorchLean.Trainer` API exported by `NN` or the shared model
 loader helpers.
@@ -76,8 +76,9 @@ def train
       TorchLean.Module.Internal.bindOptimizer (α := α) runtimeObjective optimizer
     let watchEvery := TorchLean.Trainer.Memory.cadence options steps cudaMemorySampleEvery
     let mut memorySample? ← TorchLean.Trainer.Memory.sample options watchEvery steps 0 none
+    let inputs := Arguments.Internal.toTensorPack arguments
     for step in [0:steps] do
-      boundOptimizer.step (Arguments.Internal.toTensorPack arguments) TensorPack.empty
+      boundOptimizer.step inputs TensorPack.empty
       memorySample? ←
         TorchLean.Trainer.Memory.sample
           options watchEvery steps (step + 1) memorySample?

@@ -26,13 +26,6 @@ open Spec TorchLean
 
 namespace LowerToDAG
 
-/--
-Initialize a parameter list by filling every tensor with zeros, for proofs and shape-only examples.
--/
-def zeroInitParams : (ps : List Shape) → TorchLean.TensorPack Float ps
-  | .nil => .nil
-  | .cons s ss => .cons (Tensor.zeros (α := Float) s) (zeroInitParams ss)
-
 /-!
 ### Deterministic initialization for chains
 
@@ -102,7 +95,7 @@ see `NN.GraphSpec.ToSequential` (sequential-model conversion) and/or provide you
  -/
 def Chain.toDAGModelZeroInit {ps : List Shape} {σ τ : Shape} (g : Chain ps σ τ) :
     DAG.Model ps [σ] τ :=
-  { initParams := zeroInitParams ps
+  { initParams := TorchLean.TensorPack.zero
     body := Chain.toDAGTerm (ps := ps) (σ := σ) (τ := τ) g
   }
 

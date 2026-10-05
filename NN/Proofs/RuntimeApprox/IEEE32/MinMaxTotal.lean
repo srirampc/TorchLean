@@ -27,10 +27,6 @@ namespace TorchLean.Floats.IEEE754.IEEE32Exec
 
 open FloatLib.Floats.Formats.BinaryInterchange
 
-private theorem eq_of_model_eq {x y : ExecFloat.Binary 8 23}
-    (h : toModel x = toModel y) : x = y :=
-  ExecFloat.Binary.toModel_inj.mp h
-
 private theorem nan_observation (x : ExecFloat.Binary 8 23) (hx : isNaN x = true) :
     toReal? x = none ∧ isInfinite x = false := by
   constructor
@@ -87,7 +83,7 @@ private theorem minmax_infinity_right (x y : ExecFloat.Binary 8 23)
   have hyInf : Model.isInf (toModel y) = true := hy
   have hc := Model.chooseNaN2_none_of_not_isNaN (toModel x) (toModel y) hxNaN hyNaN
   constructor
-  · apply eq_of_model_eq
+  · apply ExecFloat.Binary.toModel_inj.mp
     rw [FloatLib.Floats.ExecFloat.Binary.toModel_min]
     rw [apply_ite toModel]
     change Model.minimum (toModel x) (toModel y) =
@@ -95,7 +91,7 @@ private theorem minmax_infinity_right (x y : ExecFloat.Binary 8 23)
     simp only [Model.minimum, Model.withNaNSelection_of_none _ _ hc]
     cases hs : Model.signBit (toModel y) <;>
       simp [Model.compareNonNaN, hxInf, hyInf, hs]
-  · apply eq_of_model_eq
+  · apply ExecFloat.Binary.toModel_inj.mp
     rw [FloatLib.Floats.ExecFloat.Binary.toModel_max]
     rw [apply_ite toModel]
     change Model.maximum (toModel x) (toModel y) =
@@ -114,7 +110,7 @@ private theorem minmax_infinity_left (x y : ExecFloat.Binary 8 23)
   have hyInf := Model.isInf_eq_false_of_isFinite_eq_true (toModel y) hy
   have hc := Model.chooseNaN2_none_of_not_isNaN (toModel x) (toModel y) hxNaN hyNaN
   constructor
-  · apply eq_of_model_eq
+  · apply ExecFloat.Binary.toModel_inj.mp
     rw [FloatLib.Floats.ExecFloat.Binary.toModel_min]
     rw [apply_ite toModel]
     change Model.minimum (toModel x) (toModel y) =
@@ -122,7 +118,7 @@ private theorem minmax_infinity_left (x y : ExecFloat.Binary 8 23)
     simp only [Model.minimum, Model.withNaNSelection_of_none _ _ hc]
     cases hs : Model.signBit (toModel x) <;>
       simp [Model.compareNonNaN, hxInf, hyInf, hs]
-  · apply eq_of_model_eq
+  · apply ExecFloat.Binary.toModel_inj.mp
     rw [FloatLib.Floats.ExecFloat.Binary.toModel_max]
     rw [apply_ite toModel]
     change Model.maximum (toModel x) (toModel y) =

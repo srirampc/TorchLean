@@ -28,11 +28,6 @@ open FloatLib.Floats
 def expect (label : String) (condition : Bool) : IO Unit := do
   unless condition do throw <| IO.userError s!"typed training: {label}"
 
-def unwrap {α : Type} (result : Except String α) : IO α :=
-  match result with
-  | .ok value => pure value
-  | .error message => throw <| IO.userError s!"typed training: {message}"
-
 abbrev Binary128 := ExecFloat.Binary (exponentBits := 15) (fractionBits := 112)
 abbrev Binary256 := ExecFloat.Binary (exponentBits := 19) (fractionBits := 236)
 
@@ -84,7 +79,7 @@ def checkSmallUpdates {α : Type} [Storage α] [Context α]
       (((gradient.get ⟨0, by decide⟩).to (Array α)).map decode == #[some 2])
     expect (label ++ "/bias VJP")
       (((gradient.get ⟨1, by decide⟩).to (Array α)).map decode == #[some 1])
-    state ← unwrap (nn.sgdStep affine learningRate state gradient)
+    state ← CLI.orThrow "typed training" (nn.sgdStep affine learningRate state gradient)
     let count : Rat := step
     expect s!"{label}/weight after step {step}"
       (((state.get ⟨0, by decide⟩).to (Array α)).map decode ==
@@ -122,7 +117,8 @@ def checkMasks {α : Type} [Storage α] [Context α]
   expect (label ++ "/original model flags") (nn.requiresGrad maskedAffine == #[true, false, false])
   -- Deliberately nonzero gradients in frozen slots must not update either frozen entry.
   let gradient : nn.State α (nn.stateShapes maskedAffine) := nn.State.full 1
-  let result ← unwrap (nn.sgdStep maskedAffine (Rat.cast (1 / 8 : Rat)) state gradient)
+  let result ← CLI.orThrow "typed training" <|
+    nn.sgdStep maskedAffine (Rat.cast (1 / 8 : Rat)) state gradient
   expect (label ++ "/trainable weight updated")
     (((result.get ⟨0, by decide⟩).to (Array α)).map decode == #[some (source - 1 / 8)])
   expect (label ++ "/frozen bias preserved")

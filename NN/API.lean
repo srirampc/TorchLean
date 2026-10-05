@@ -24,9 +24,6 @@ public import NN.API.Precision
 public import NN.API.RL
 public import NN.API.Runtime
 public import NN.API.SelfSupervised
--- `NN.Tensor` re-exports the tensor constructors and operations under their short names, and
--- readers of this umbrella expect `Tensor.zeros`-style spellings to be in scope. Nothing in
--- this file needs it, so shake removes it: keep it for the consumers.
 public import NN.API.Sample
 public import NN.API.Text
 public import NN.API.Trainer

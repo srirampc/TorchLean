@@ -12,7 +12,7 @@ public import NN.Runtime.Autograd.Model.Layers.Activations
 /-!
 # GraphSpec Spatial Primitives
 
-This file extends the **sequential** GraphSpec core (`NN.GraphSpec.Core`) with
+This file extends the **sequential** GraphSpec core (`NN.GraphSpec.Chain.Primitives`) with
 single-input/single-output spatial operations used by convolutional pipelines.
 
 These are not model definitions. They are reusable nodes in the GraphSpec vocabulary:
@@ -40,8 +40,8 @@ GraphSpec only exposes an operation once we have both sides of the contract in p
 2. an executable TorchLean program meaning.
 
 The general always-available primitives (`linear`, `relu`, `softmax`) live in
-`NN.GraphSpec.Core`; this file is the current spatial extension pack. More packs can be added as
-we decide which runtime/spec operations should become architecture-level GraphSpec nodes.
+`NN.GraphSpec.Chain.Primitives`; this file is the current spatial extension pack. More packs can be
+added as we decide which runtime/spec operations should become architecture-level GraphSpec nodes.
 
 ## Parameter convention (sequential GraphSpec)
 
@@ -60,7 +60,6 @@ interface for model parameters.
 - Convolutional networks: LeCun et al. (1998), “Gradient-based learning applied to document
   recognition”.
 - BatchNorm: Ioffe & Szegedy (2015), “Batch Normalization: Accelerating Deep Network Training…”.
-- Global average pooling: Lin et al. (2013), “Network In Network”.
 -/
 
 @[expose] public section
@@ -105,7 +104,7 @@ def conv
     program := fun {α} _storage _ctx =>
       fun {m} _ _ =>
         fun k b x =>
-          _root_.Runtime.Autograd.Torch.conv (m := m) (α := α)
+          _root_.Runtime.Autograd.Torch.Ops.conv (m := m) (α := α)
             (d := d) (inC := inC) (outC := outC)
             (kernel := kernel) (stride := stride) (padding := padding) (inSpatial := spatial)
             k b x
@@ -114,24 +113,32 @@ def conv
       let biasShape : Shape := [outC]
       let kernelInit : Tensor Float kernelShape :=
         Runtime.Autograd.Torch.Init.tensor (s := kernelShape)
-          (sch := .uniform (-0.1) 0.1) (seed := 2 * i)
+          (sch := .uniform (-0.1) 0.1) (seed := i)
       let biasInit : Tensor Float biasShape :=
-        Runtime.Autograd.Torch.Init.tensor (s := biasShape) (sch := .zeros) (seed := 2 * i + 1)
+        Runtime.Autograd.Torch.Init.tensor (s := biasShape) (sch := .zeros) (seed := i)
       ⟨ { kind := s!"Conv(rank={d},in={inC},out={outC})"
           stateShapes := [kernelShape, biasShape]
           initState := .cons kernelInit (.cons biasInit .nil)
           runtimeInit := some
             (.cons (Runtime.Autograd.Model.Module.RuntimeInit.FloatInit.ofScheme
-              (.uniform (-0.1) 0.1) (2 * i)) (.cons .zeros .nil))
+              (.uniform (-0.1) 0.1) i) (.cons .zeros .nil))
           requiresGrad := #[true, true]
           validateConfig := do
             if inC = 0 then
-              throw "Conv: in_channels must be positive"
+              throw "Conv: input channel count must be positive"
             if outC = 0 then
-              throw "Conv: out_channels must be positive"
+              throw "Conv: output channel count must be positive"
+            if spatial.prod = 0 then
+              throw "Conv: input spatial dimensions must be positive"
+            if !decide (∀ axis : Fin d, kernel.getScalar axis ≠ 0) then
+              throw "Conv: kernel size entries must be positive"
+            if !decide (∀ axis : Fin d, stride.getScalar axis ≠ 0) then
+              throw "Conv: stride entries must be positive"
+            if (Spec.convOutSpatial spatial kernel stride padding).prod = 0 then
+              throw "Conv: geometry produced an empty spatial grid"
           forward := fun _ {α} _ _ =>
             fun {m} _ _ => fun k b x =>
-              _root_.Runtime.Autograd.Torch.conv (m := m) (α := α)
+              _root_.Runtime.Autograd.Torch.Ops.conv (m := m) (α := α)
                 (d := d) (inC := inC) (outC := outC)
                 (kernel := kernel) (stride := stride) (padding := padding) (inSpatial := spatial)
                 k b x }
@@ -162,7 +169,7 @@ def maxPool
     program := fun {α} _storage _ctx =>
       fun {m} _ _ =>
         fun x =>
-          _root_.Runtime.Autograd.Torch.maxPool (m := m) (α := α)
+          _root_.Runtime.Autograd.Torch.Ops.maxPool (m := m) (α := α)
             (d := d) (C := channels) (inSpatial := spatial)
             (kernel := kernel) (stride := stride) (padding := padding)
             x
@@ -173,7 +180,7 @@ def maxPool
           requiresGrad := #[]
           forward := fun _ {α} _ _ =>
             fun {m} _ _ => fun x =>
-              _root_.Runtime.Autograd.Torch.maxPool (m := m) (α := α)
+              _root_.Runtime.Autograd.Torch.Ops.maxPool (m := m) (α := α)
                 (d := d) (C := channels) (inSpatial := spatial)
                 (kernel := kernel) (stride := stride) (padding := padding)
                 x }
@@ -222,14 +229,14 @@ def batchNorm (channels : Nat) (spatial : Shape)
     program := fun {α} _storage _ctx =>
       fun {m} _ _ =>
         fun gamma beta x =>
-          _root_.Runtime.Autograd.Torch.batchNorm (m := m) (α := α)
+          _root_.Runtime.Autograd.Torch.Ops.batchNorm (m := m) (α := α)
             (channels := channels) (sSpatial := spatial) hWellFormed x gamma beta
     toLayerM? := some (fun i =>
       let channelShape : Shape := [channels]
       let gamma : Tensor Float channelShape :=
-        Runtime.Autograd.Torch.Init.tensor (s := channelShape) (sch := .ones) (seed := 2 * i)
+        Runtime.Autograd.Torch.Init.tensor (s := channelShape) (sch := .ones) (seed := i)
       let beta : Tensor Float channelShape :=
-        Runtime.Autograd.Torch.Init.tensor (s := channelShape) (sch := .zeros) (seed := 2 * i + 1)
+        Runtime.Autograd.Torch.Init.tensor (s := channelShape) (sch := .zeros) (seed := i)
       ⟨ { kind := s!"BatchNorm(channels={channels},rank={Shape.rank spatial})"
           stateShapes := [channelShape, channelShape]
           initState := .cons gamma (.cons beta .nil)
@@ -237,7 +244,7 @@ def batchNorm (channels : Nat) (spatial : Shape)
           requiresGrad := #[true, true]
           forward := fun _ {α} _ _ =>
             fun {m} _ _ => fun gamma beta x =>
-              _root_.Runtime.Autograd.Torch.batchNorm (m := m) (α := α)
+              _root_.Runtime.Autograd.Torch.Ops.batchNorm (m := m) (α := α)
                 (channels := channels) (sSpatial := spatial) hWellFormed x gamma beta }
       , by rfl ⟩)
     countsAsLayer := true

@@ -7,7 +7,7 @@ Authors: TorchLean Team
 module
 
 public import NN.Spec.Models.Mlp
-public import NN.Tests.Runtime.Floats.Utils
+public import NN.Tests.Utils
 public import NN.API.Seeded
 
 /-!
@@ -30,7 +30,6 @@ This is not a performance test; it is a regression guard for:
 open Spec TorchLean
 open TorchLean TorchLean.Tensor
 open Tests.Utils
-open Tests.Floats.Utils
 
 namespace Tests
 namespace Floats
@@ -78,11 +77,9 @@ def run : IO Unit := do
   let yTorch : Tensor Float yShape :=
     Runtime.Autograd.Torch.TypedGraph.forward graph args
 
-  -- Since `outputWidth = 1`, check the single coordinate. (Kept structured so it scales to
-  -- `outputWidth >
-  -- 1`.)
   for i in List.finRange outputWidth do
-    assertApprox s!"mlp forward[{i.val}] spec/torchlean" (vecVal ySpec i) (vecVal yTorch i) 1e-6
+    assertApprox s!"mlp forward[{i.val}] spec/torchlean"
+      (Tensor.getScalar ySpec i) (Tensor.getScalar yTorch i) 1e-6
 
   IO.println "torchlean_spec_mlp_equiv_check: ok"
 

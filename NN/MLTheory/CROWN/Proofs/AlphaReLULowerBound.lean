@@ -32,9 +32,8 @@ theorem scaledInput_le_relu (alpha input : Real)
       mul_nonpos_of_nonneg_of_nonpos alphaNonnegative inputNonpositive
     simpa [Activation.Math.reluSpec_eq_max, max_eq_right inputNonpositive] using this
   · have inputNonnegative : 0 ≤ input := le_of_not_ge inputNonpositive
-    have : alpha * input ≤ (1 : Real) * input :=
-      mul_le_mul_of_nonneg_right alphaAtMostOne inputNonnegative
-    simpa [Activation.Math.reluSpec_eq_max, max_eq_left inputNonnegative, one_mul] using this
+    simpa [Activation.Math.reluSpec_eq_max, max_eq_left inputNonnegative] using
+      mul_le_of_le_one_left inputNonnegative alphaAtMostOne
 
 /-- The alpha-CROWN scalar lower relaxation under-approximates ReLU throughout `[lower, upper]`. -/
 theorem alphaRelaxLowerScalar_sound

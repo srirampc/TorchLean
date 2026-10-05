@@ -42,10 +42,8 @@ local notation "R" => NF β fexp rnd
 /-- Two context indices pointing at the same position must have the same shape.
 
 An `Idx Γ s` bundles a position with a proof that `Γ` holds shape `s` there, so equal positions
-force
-equal shapes. This is what makes the disjointness lemmas below usable: a proof that two indices
-differ
-can be given by comparing positions only, with no shape reasoning. -/
+force equal shapes. This is what makes the disjointness lemmas below usable: a proof that two
+indices differ can be given by comparing positions only, with no shape reasoning. -/
 theorem idx_shape_eq_of_i_eq {Γ : List Shape} {s₁ s₂ : Shape} (a : Idx Γ s₁) (b : Idx Γ s₂)
     (h : a.i = b.i) : s₁ = s₂ := by
   have : Γ.get a.i = Γ.get b.i := by simp [h]
@@ -83,20 +81,19 @@ This is the base case of every backward-pass bound: gradient accumulation starts
 the spec and the runtime side, and zero is exactly representable, so nothing is lost yet. -/
 theorem approxCtx_zeros {Γ : List Shape} :
     approxCtx (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd))
-      (SparseContext.zeros (α := SpecScalar) (ss := Γ))
-      (SparseContext.zeros (α := R) (ss := Γ))
+      (TorchLean.TensorPack.zero (α := SpecScalar) (ss := Γ))
+      (TorchLean.TensorPack.zero (α := R) (ss := Γ))
       (EList.zeros (ss := Γ)) := by
   induction Γ with
   | nil =>
-      simp [SparseContext.zeros, EList.zeros, approxCtx]
+      simp [TorchLean.TensorPack.zero, EList.zeros, approxCtx]
   | cons s Γ ih =>
       refine And.intro ?_ ih
-      simpa [SparseContext.zeros, EList.zeros] using
+      simpa [TorchLean.TensorPack.zero, EList.zeros] using
         (approxTensor_full_zero (β := β) (fexp := fexp) (rnd := rnd) (s := s))
 
 /-- Writing one approximate tensor into an otherwise-zero context keeps the context approximate,
-with
-the error recorded at that slot alone. -/
+with the error recorded at that slot alone. -/
 theorem approxCtx_setIdx {Γ : List Shape} {s : Shape} (idx : Idx Γ s)
     {tS : SpecTensor s} {tR : Tensor R s} {eps : ℝ}
     (ht : approxTensor (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd)) tS tR eps) :
@@ -104,7 +101,6 @@ theorem approxCtx_setIdx {Γ : List Shape} {s : Shape} (idx : Idx Γ s)
       (SparseContext.setIdx (α := SpecScalar) (Γ := Γ) (s := s) idx tS)
       (SparseContext.setIdx (α := R) (Γ := Γ) (s := s) idx tR)
       (EList.setIdx (Γ := Γ) (s := s) idx eps) := by
-  classical
   cases idx with
   | mk i hshape =>
       induction Γ with
@@ -135,8 +131,7 @@ theorem approxCtx_setIdx {Γ : List Shape} {s : Shape} (idx : Idx Γ s)
 /-- Two writes at distinct positions do not interfere: each slot carries its own error bound.
 
 Distinctness is essential. If the indices coincided the two contributions would have to be added,
-and
-the sum would carry the sum of the errors rather than either one. -/
+and the sum would carry the sum of the errors rather than either one. -/
 theorem approxCtx_set2Idx_ne {Γ : List Shape} {s₁ s₂ : Shape} (a : Idx Γ s₁) (b : Idx Γ s₂)
     {t₁S : SpecTensor s₁} {t₁R : Tensor R s₁} {eps₁ : ℝ}
     {t₂S : SpecTensor s₂} {t₂R : Tensor R s₂} {eps₂ : ℝ}
@@ -149,7 +144,6 @@ theorem approxCtx_set2Idx_ne {Γ : List Shape} {s₁ s₂ : Shape} (a : Idx Γ s
       (SparseContext.set2Idx (α := SpecScalar) (Γ := Γ) (s₁ := s₁) (s₂ := s₂) a t₁S b t₂S)
       (SparseContext.set2Idx (α := R) (Γ := Γ) (s₁ := s₁) (s₂ := s₂) a t₁R b t₂R)
       (EList.set2Idx (Γ := Γ) (s₁ := s₁) (s₂ := s₂) a eps₁ b eps₂ 0) := by
-  classical
   induction Γ with
   | nil =>
       cases a with
@@ -198,13 +192,8 @@ theorem approxCtx_set2Idx_ne {Γ : List Shape} {s₁ s₂ : Shape} (a : Idx Γ s
                                 ⟨⟨i, Nat.lt_of_succ_lt_succ iaLt⟩, by simpa using haShape⟩
                               let bTail : Idx Γ s₂ :=
                                 ⟨⟨j, Nat.lt_of_succ_lt_succ ibLt⟩, by simpa using hbShape⟩
-                              have hneTail : aTail.i ≠ bTail.i := by
-                                intro hij
-                                apply hne
-                                apply Fin.ext
-                                have : i = j := by
-                                  simpa [aTail, bTail] using congrArg Fin.val hij
-                                simp [this]
+                              have hneTail : aTail.i ≠ bTail.i :=
+                                fun hij => hne (congrArg Fin.succ hij)
                               refine And.intro ?_ ?_
                               · simpa [SparseContext.set2Idx, EList.set2Idx] using
                                   (approxTensor_full_zero (β := β) (fexp := fexp) (rnd := rnd)
@@ -215,10 +204,9 @@ theorem approxCtx_set2Idx_ne {Γ : List Shape} {s₁ s₂ : Shape} (a : Idx Γ s
                                   using this
 
 /-- Same again for three pairwise-distinct writes, which is what a ternary node's backward pass
-needs.
--/
-theorem approxCtx_set3Idx_ne {Γ : List Shape} {s₁ s₂ s₃ : Shape} (a : Idx Γ s₁) (b : Idx Γ s₂) (c :
-  Idx Γ s₃)
+needs. -/
+theorem approxCtx_set3Idx_ne {Γ : List Shape} {s₁ s₂ s₃ : Shape}
+    (a : Idx Γ s₁) (b : Idx Γ s₂) (c : Idx Γ s₃)
     {t₁S : SpecTensor s₁} {t₁R : Tensor R s₁} {eps₁ : ℝ}
     {t₂S : SpecTensor s₂} {t₂R : Tensor R s₂} {eps₂ : ℝ}
     {t₃S : SpecTensor s₃} {t₃R : Tensor R s₃} {eps₃ : ℝ}
@@ -234,9 +222,8 @@ theorem approxCtx_set3Idx_ne {Γ : List Shape} {s₁ s₂ s₃ : Shape} (a : Idx
         a t₁S b t₂S c t₃S hab hac hbc)
       (SparseContext.set3IdxNe (α := R) (Γ := Γ) (s₁ := s₁) (s₂ := s₂) (s₃ := s₃)
         a t₁R b t₂R c t₃R hab hac hbc)
-      (EList.set3IdxNe (Γ := Γ) (s₁ := s₁) (s₂ := s₂) (s₃ := s₃) a eps₁ b eps₂ c eps₃ hab hac hbc)
-        := by
-  classical
+      (EList.set3IdxNe (Γ := Γ) (s₁ := s₁) (s₂ := s₂) (s₃ := s₃)
+        a eps₁ b eps₂ c eps₃ hab hac hbc) := by
   induction Γ with
   | nil =>
       cases a with
@@ -276,13 +263,8 @@ theorem approxCtx_set3Idx_ne {Γ : List Shape} {s₁ s₂ s₃ : Shape} (a : Idx
                                               ibLt⟩, by simpa using hbShape⟩
                                             let cTail : Idx Γ s₃ := ⟨⟨k, Nat.lt_of_succ_lt_succ
                                               icLt⟩, by simpa using hcShape⟩
-                                            have hbcTail : bTail.i ≠ cTail.i := by
-                                              intro hij
-                                              apply hbc
-                                              apply Fin.ext
-                                              have : j = k := by
-                                                simpa [bTail, cTail] using congrArg Fin.val hij
-                                              simp [this]
+                                            have hbcTail : bTail.i ≠ cTail.i :=
+                                              fun hij => hbc (congrArg Fin.succ hij)
                                             have :=
                                               approxCtx_set2Idx_ne (β := β) (fexp := fexp) (rnd :=
                                                 rnd)
@@ -308,13 +290,8 @@ theorem approxCtx_set3Idx_ne {Γ : List Shape} {s₁ s₂ s₃ : Shape} (a : Idx
                                               iaLt⟩, by simpa using haShape⟩
                                             let cTail : Idx Γ s₃ := ⟨⟨k, Nat.lt_of_succ_lt_succ
                                               icLt⟩, by simpa using hcShape⟩
-                                            have hacTail : aTail.i ≠ cTail.i := by
-                                              intro hij
-                                              apply hac
-                                              apply Fin.ext
-                                              have : i = k := by
-                                                simpa [aTail, cTail] using congrArg Fin.val hij
-                                              simp [this]
+                                            have hacTail : aTail.i ≠ cTail.i :=
+                                              fun hij => hac (congrArg Fin.succ hij)
                                             have :=
                                               approxCtx_set2Idx_ne (β := β) (fexp := fexp) (rnd :=
                                                 rnd)
@@ -336,13 +313,8 @@ theorem approxCtx_set3Idx_ne {Γ : List Shape} {s₁ s₂ s₃ : Shape} (a : Idx
                                               iaLt⟩, by simpa using haShape⟩
                                             let bTail : Idx Γ s₂ := ⟨⟨j, Nat.lt_of_succ_lt_succ
                                               ibLt⟩, by simpa using hbShape⟩
-                                            have habTail : aTail.i ≠ bTail.i := by
-                                              intro hij
-                                              apply hab
-                                              apply Fin.ext
-                                              have : i = j := by
-                                                simpa [aTail, bTail] using congrArg Fin.val hij
-                                              simp [this]
+                                            have habTail : aTail.i ≠ bTail.i :=
+                                              fun hij => hab (congrArg Fin.succ hij)
                                             have :=
                                               approxCtx_set2Idx_ne (β := β) (fexp := fexp) (rnd :=
                                                 rnd)
@@ -359,27 +331,12 @@ theorem approxCtx_set3Idx_ne {Γ : List Shape} {s₁ s₂ s₃ : Shape} (a : Idx
                                             by simpa using hbShape⟩
                                           let cTail : Idx Γ s₃ := ⟨⟨k, Nat.lt_of_succ_lt_succ icLt⟩,
                                             by simpa using hcShape⟩
-                                          have habTail : aTail.i ≠ bTail.i := by
-                                            intro hij
-                                            apply hab
-                                            apply Fin.ext
-                                            have : i = j := by
-                                              simpa [aTail, bTail] using congrArg Fin.val hij
-                                            simp [this]
-                                          have hacTail : aTail.i ≠ cTail.i := by
-                                            intro hij
-                                            apply hac
-                                            apply Fin.ext
-                                            have : i = k := by
-                                              simpa [aTail, cTail] using congrArg Fin.val hij
-                                            simp [this]
-                                          have hbcTail : bTail.i ≠ cTail.i := by
-                                            intro hij
-                                            apply hbc
-                                            apply Fin.ext
-                                            have : j = k := by
-                                              simpa [bTail, cTail] using congrArg Fin.val hij
-                                            simp [this]
+                                          have habTail : aTail.i ≠ bTail.i :=
+                                            fun hij => hab (congrArg Fin.succ hij)
+                                          have hacTail : aTail.i ≠ cTail.i :=
+                                            fun hij => hac (congrArg Fin.succ hij)
+                                          have hbcTail : bTail.i ≠ cTail.i :=
+                                            fun hij => hbc (congrArg Fin.succ hij)
                                           have iht := ih (a := aTail) (b := bTail) (c := cTail)
                                             habTail hacTail hbcTail
                                           refine And.intro ?_ ?_
@@ -389,9 +346,7 @@ theorem approxCtx_set3Idx_ne {Γ : List Shape} {s₁ s₂ s₃ : Shape} (a : Idx
                                           · simpa [SparseContext.set3IdxNe, EList.set3IdxNe,
                                               aTail, bTail, cTail] using iht
 
--- ---------------------------------------------------------------------------
--- Context-wise addition bound (used by global backprop accumulation)
--- ---------------------------------------------------------------------------
+/-! ## Context-wise addition bound, used by global backprop accumulation -/
 
 /--
 Context-wise addition bound (NF runtime vs spec).
@@ -445,8 +400,7 @@ theorem approxCtx_add {Δ : List Shape} :
                           cases epsy with
                           | cons ey eys =>
                               refine And.intro ?_ ?_
-                              · -- head uses `approxTensor_add_spec`
-                                have hx0 : approxTensor (α := R) (toSpec := toSpec (β := β) (fexp :=
+                              · have hx0 : approxTensor (α := R) (toSpec := toSpec (β := β) (fexp :=
                                   fexp) (rnd := rnd)) xSh xRh ex :=
                                   hx.1
                                 have hy0 : approxTensor (α := R) (toSpec := toSpec (β := β) (fexp :=
@@ -456,8 +410,7 @@ theorem approxCtx_add {Δ : List Shape} :
                                   (approxTensor_add_spec (β := β) (fexp := fexp) (rnd := rnd)
                                     (s := s) (xS := xSh) (yS := ySh) (xR := xRh) (yR := yRh)
                                     (epsx := ex) (epsy := ey) hx0 hy0)
-                              · -- tail by IH
-                                have hxT : approxCtx (α := R) (toSpec := toSpec (β := β) (fexp :=
+                              · have hxT : approxCtx (α := R) (toSpec := toSpec (β := β) (fexp :=
                                   fexp) (rnd := rnd)) xSt xRt exs :=
                                   hx.2
                                 have hyT : approxCtx (α := R) (toSpec := toSpec (β := β) (fexp :=

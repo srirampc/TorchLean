@@ -55,8 +55,7 @@ theorem push_size_of_room
     (b : Buffer α obsShape nActions) (t : Transition α obsShape nActions)
     (hroom : b.items.size + 1 ≤ b.capacity) :
     (b.push t).items.size = b.items.size + 1 := by
-  have hcap : b.capacity ≠ 0 := by
-    exact Nat.ne_of_gt (lt_of_lt_of_le (Nat.succ_pos b.items.size) hroom)
+  have hcap : b.capacity ≠ 0 := by omega
   simp [Buffer.push, hcap, hroom, Array.size_push]
 
 /--
@@ -67,7 +66,7 @@ theorem push_size_of_full
     (b : Buffer α obsShape nActions) (t : Transition α obsShape nActions)
     (hcap : 0 < b.capacity) (hfull : b.items.size = b.capacity) :
     (b.push t).items.size = b.capacity := by
-  have hcapNe : b.capacity ≠ 0 := Nat.ne_of_gt hcap
+  have hcapNe : b.capacity ≠ 0 := hcap.ne'
   simp [Buffer.push, hcapNe, hfull, Array.size_extract, Array.size_push]
 
 end Replay

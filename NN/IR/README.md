@@ -34,7 +34,7 @@ smallest `NN.IR.*` dependency they need.
   including arbitrary-leading linear and matrix multiplication, checked arbitrary-axis concat, and
   the scoped `IR` notation for graph denotation. `Graph.evalNodeRaw` is the operator dispatch and
   `Graph.evalNode` adds the declared-shape normalization.
-- `Payload.lean`: the external payload stores (constants, weights, input boxes) keyed by node id.
+- `Payload.lean`: external constants, weights, and normalization parameters keyed by node id.
 - `HardMask.lean`: conversions between typed Boolean tensors and the row-major masks stored in
   `OpKind`, shared by graph builders, evaluators, and verifier passes.
 - `ShapeSoundness.lean`: the theorems relating `Infer` and `Semantics` (see below).
@@ -148,8 +148,9 @@ used for verified claims.
 ## Payload Discipline
 
 The graph syntax stores operation structure. It does not smuggle learned tensors into node fields.
-Weights, constants, and input boxes live in payload stores keyed by node id. This is slightly more
-ceremonial than embedding everything in the node, but it is much easier to audit:
+Weights, constants, and normalization parameters live in `NN.IR.Payload` stores keyed by node id.
+Verifier input boxes belong to the verifier's separate payload boundary. This separation makes the
+data ownership explicit:
 
 - graph topology can be checked independently of parameter values,
 - payload shape mismatches are explicit errors,

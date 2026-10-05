@@ -60,9 +60,7 @@ def denoteReduceNonempty {α : Type u} {β : Type v}
   Rep.reduceNonempty aggregate
     (checked.outputCoordinateOfInput <|
       checked.valid.normalization.output_axes_subset_input_of_reduce hKind)
-    (fun outputCoordinate => by
-      rw [checked.reduce_fiber_card hKind outputCoordinate]
-      exact hNonempty)
+    (checked.reduce_fiber_card_pos hKind hNonempty)
     inputTensor
 
 /--
@@ -403,9 +401,7 @@ theorem dot_denoteMeanReduce {R : Type u} [Storage R]
   let fiberNonempty :
       ∀ outputCoordinate,
         0 < Fintype.card (Fiber reductionProjection outputCoordinate) :=
-    fun outputCoordinate => by
-      rw [checked.reduce_fiber_card hKind outputCoordinate]
-      exact hNonempty
+    checked.reduce_fiber_card_pos hKind hNonempty
   rw [show
     denoteReduceNonempty Reduction.mean checked hKind hNonempty inputTangent =
       Rep.reduceNonempty Reduction.mean reductionProjection

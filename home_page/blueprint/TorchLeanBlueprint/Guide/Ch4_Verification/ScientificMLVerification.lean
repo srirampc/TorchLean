@@ -60,7 +60,7 @@ The registered verification tools can be listed with:
 ```terminal
 # List the registered tools before selecting a scientific
 # certificate checker.
-lake exe verify -- list
+scripts/lake.sh exe verify -- list
 ```
 
 Three entries cover the scientific workflows described here, shown without the default artifact
@@ -68,7 +68,7 @@ paths that the real listing prints after each description:
 
 ```
 pinn-cert [<path>]    -- PINN certificate recomputation check
-spline-cert [<path>]  -- piecewise-polynomial certificate checker
+spline-cert [<path>]  -- piecewise-polynomial certificate checker (optional Julia regen)
 ode                   -- ODE enclosure verification (sub/super NN bounds)
 ```
 
@@ -77,36 +77,21 @@ Start with the bundled PINN artifact:
 ```terminal
 # Replay the bundled PINN value and residual bounds at its
 # declared sample boxes.
-lake exe verify -- pinn-cert
+scripts/lake.sh exe verify -- pinn-cert
 ```
 
-The certificate declares three sample points, so the command prints one block per point. This is
-the whole output:
-
-```terminal +output
-Residual R(x) from PDE 'uxx': [-25.647900,25.647900]
-u'(x-h)∈[-0.000000,4.488000], u'(x)∈[-0.000000,4.488000], u'(x+h)∈[-0.000000,4.488000]
-u''(x-h)∈[-25.647900,25.647900], u''(x)∈[-25.647900,25.647900], u''(x+h)∈[-25.647900,25.647900]
-Residual R(x) from PDE 'uxx': [-25.647900,25.647900]
-u'(x-h)∈[-0.000000,4.488000], u'(x)∈[-0.000000,4.488000], u'(x+h)∈[-0.000000,4.488000]
-u''(x-h)∈[-25.647900,25.647900], u''(x)∈[-25.647900,25.647900], u''(x+h)∈[-25.647900,25.647900]
-Residual R(x) from PDE 'uxx': [-25.647900,25.647900]
-u'(x-h)∈[-0.000000,4.488000], u'(x)∈[-0.000000,4.488000], u'(x+h)∈[-0.000000,4.488000]
-u''(x-h)∈[-25.647900,25.647900], u''(x)∈[-25.647900,25.647900], u''(x+h)∈[-25.647900,25.647900]
-PINN artifact replay matched Lean's recomputed residual bounds.
-```
-
-Every block is identical because the bound propagation gives the same intervals at these sample
-boxes. A residual interval this wide does not establish a small PDE error; later we trace its width
+The certificate declares three sample points, so the command prints one block per point. Its
+`residual_bounds_deriv` field stores intervals of approximately $`[-25.6479,25.6479]` at all three
+points. An interval this wide does not establish a small PDE error; later we trace its width
 through the value and derivative calculations. The checker reconstructs the bounds from the
 in-source graph and compares them with the JSON using the fixed absolute tolerance
 `certTol = 1e-5`. This replay does not say that a small residual implies closeness to the true
 PDE solution; that requires a separate stability or a posteriori error theorem for the PDE.
 
-There are two numerical scales in this report. The residual half-width, about $`25.6`, describes
-the candidate enclosure being replayed. The tolerance $`10^{-5}` describes how closely two stored
-endpoint numbers must match the recomputation. A small replay tolerance does not make the residual
-small: it can faithfully reproduce a very wide interval. If a later theorem required
+There are two numerical scales in this check. The stored residual half-width, about $`25.6`,
+describes the candidate enclosure being replayed. The tolerance $`10^{-5}` describes how closely
+two stored endpoint numbers must match the recomputation. A small replay tolerance does not make
+the residual small: it can faithfully reproduce a very wide interval. If a later theorem required
 $`|R(x)|\le0.01`, a sound enclosure would have to fit inside $`[-0.01,0.01]`. Containing zero
 would only mean that the interval does not exclude a zero residual; it would not bound every
 possible residual near zero.
@@ -116,16 +101,10 @@ The spline sample is shorter:
 ```terminal
 # Check exact rational interpolation of the bundled
 # polynomial pieces.
-lake exe verify -- spline-cert
+scripts/lake.sh exe verify -- spline-cert
 ```
 
-and prints:
-
-```terminal +output
-Piecewise polynomial certificate verified.
-```
-
-Here "verified" means that the knot coordinates are strictly increasing, each piece names the
+Acceptance means that the knot coordinates are strictly increasing, each piece names the
 matching adjacent knots, every coefficient array has the declared length, and Horner evaluation at
 both endpoints equals the declared knot values over exact rationals. Change one coefficient and
 rerun the checker; an endpoint mismatch should be reported. Later in this chapter we build a
@@ -136,39 +115,32 @@ Two flags expose useful neighboring checks:
 ```terminal
 # Request binary32 endpoint replay or regenerate the
 # artifact before checking it.
-lake exe verify -- spline-cert --arithmetic ieee
-lake exe verify -- spline-cert --regen
+scripts/lake.sh exe verify -- spline-cert --arithmetic ieee
+scripts/lake.sh exe verify -- spline-cert --regen
 ```
 
 `--arithmetic ieee` additionally requires every rational value to be exactly representable as finite
-binary32 and replays the endpoint equalities with FloatLib's binary32 arithmetic, adding one
-line:
-
-The following transcript predates the FloatLib migration and retains its recorded scalar labels
-and numerical results. Current `.ieee` execution uses FloatLib binary32.
-
-```terminal +output
-Piecewise polynomial certificate verified.
-IEEE32Exec semantics check verified (exact representability + endpoint equalities).
-```
+binary32 and replays the endpoint equalities with FloatLib's binary32 arithmetic. Exact storage of
+the inputs alone does not guarantee exact intermediate arithmetic, so the checker evaluates the
+polynomial at both endpoints in that format and compares the results with the declared values.
 
 `--regen` asks the Julia producer to write a fresh JSON document before Lean checks it. Neither flag
 proves an interior range bound for a polynomial piece.
 
 Without an equation or certificate, the ODE tool prints its two accepted modes (the certificate
-placeholder is spelled out here for readability):
+placeholder is spelled out and the trailing option list omitted here):
 
 ```terminal
 # With no equation or certificate, the ODE command displays
 # its accepted modes.
-lake exe verify -- ode
+scripts/lake.sh exe verify -- ode
 ```
 
 ```
 Usage:
-  lake exe verify -- ode [--model=direct|torchlean]
+  scripts/lake.sh exe verify -- ode [--model=direct|torchlean]
     [--arithmetic=native|ieee] --cert=<certificate JSON>
-  lake exe verify -- ode [--model=direct|torchlean]
+  scripts/lake.sh exe verify -- ode [--model=direct|torchlean]
     [--arithmetic=native|ieee] --rhs="<expr>" --t0=<float>
     --t1=<float> --init=<float> --lower=<wL.json> --upper=<wU.json>
 ```
@@ -183,7 +155,7 @@ Passing one of those alongside `--cert` is rejected rather than ignored:
 ```terminal
 # Certificate mode rejects an inline search-setting
 # override.
-lake exe verify -- ode \
+scripts/lake.sh exe verify -- ode \
   --cert=NN/Examples/Verification/ODE/sample_ode_cert.json \
   --verbose=true
 ```
@@ -200,7 +172,7 @@ overrides.
 The `--model` choice controls how the lower and upper corridor networks are evaluated: directly from
 the imported graph, or after lowering through TorchLean. The `--arithmetic` choice controls the
 arithmetic used by the direct evaluator. When the command omits either switch, the certificate's
-declared setting is used; an inline verification defaults to direct and native. Today the
+declared setting is used; an inline verification defaults to direct and native. The
 TorchLean-lowered route supports only `--arithmetic=native`, and pairing it with `ieee` is rejected
 rather than silently changing the requested semantics.
 
@@ -460,51 +432,43 @@ final checker result.
 
 The bundled sample lets us check the corridor by hand: it is the constant
 zero function on $`[0,1]`, the right-hand side is the constant `0`, and both the lower and the upper
-corridor network are a single tanh layer with zero weight and zero bias.
+corridor network are a single linear layer with zero weight and zero bias. The metadata says
+`tanh`, but this one-layer architecture inserts no hidden activation.
 
 ```terminal
 # Check the constant zero corridor using the certificate’s
 # declared arithmetic.
-lake exe verify -- ode \
+scripts/lake.sh exe verify -- ode \
   --cert=NN/Examples/Verification/ODE/sample_ode_cert.json
-```
-
-```terminal +output
-[ODE] initial OK at t0=0.000000
-[ODE] certificate verified: all segments succeeded.
 ```
 
 Even for this constant example, the tube has to contain the initial interval, the lower
 corridor's derivative has to stay below $`f`, the upper corridor's derivative has to stay above it,
-and the two corridors have to stay ordered. All four conditions hold with zero slack. This makes
-it possible to isolate the effect of changing arithmetic in the next run.
+and the two corridors have to stay ordered. Mathematically, all four conditions hold with zero
+slack. This makes it possible to isolate the effect of changing arithmetic in the next run.
 
-The certificate declares `"arithmetic": "ieee"`. Override that one field and the same file is
-rejected:
+The certificate declares `"arithmetic": "ieee"`. Override that one field to compare the executable
+checks:
 
 ```terminal
 # Changing arithmetic exposes the strict initial endpoint
 # comparison.
-lake exe verify -- ode --arithmetic=native \
+scripts/lake.sh exe verify -- ode --arithmetic=native \
   --cert=NN/Examples/Verification/ODE/sample_ode_cert.json
 ```
 
-```terminal +output
-[ODE] FAIL initial: uL(t0)∈(-0.000000, 0.000000) not ≤ init.lo=0.000000
-error: [ODE] certificate verification failed.
-```
-
-The corridor really is the zero function, so the tube is valid and this rejection is a false
-negative rather than an unsound acceptance. Read the printed interval carefully: the lower
-corridor's value at $`t_0` was returned as a narrow box straddling zero, and the initial check
-asks for its upper endpoint to be at most `init.lo = 0`. Under the coarser binary32 reference the
-same quantity lands exactly on zero and the check passes. Under host double precision it does not.
+Read the initial interval carefully. The check asks for the upper endpoint of the lower corridor's
+value at $`t_0` to be at most `init.lo = 0`. A narrow enclosure straddling zero would fail that
+comparison, even though the mathematical corridor is valid. Such a rejection would be a false
+negative. Changing arithmetic can change these endpoint calculations; compare the reported
+endpoints before attributing a different result to the ODE itself.
 
 The initial comparison uses the conservative endpoint for each wall. To establish that every
 possible lower-wall value is below the initial lower bound, its *upper* endpoint must be below
 that bound. Dually, the *lower* endpoint of the upper-wall enclosure must exceed the initial
 upper bound. This is stronger than merely asking whether the wall intervals overlap the initial
-interval. In the rejected example, six-decimal printing hides the positive amount in the lower
+interval. In the recorded native rejection, six-decimal printing hid the positive amount in the
+lower
 wall's upper endpoint. The failed comparison is therefore compatible with the displayed zeros;
 the diagnostic needs to be read as an endpoint test, not as exact equality of the rendered text.
 
@@ -523,7 +487,8 @@ an initial-time failure is a point check that later subdivision cannot repair.
 The `slack` setting does change the segment inequalities: `checkSub`, `checkSuper`, and
 `checkOrder` each add it to the right-hand side of a comparison. The real enclosure theorem has
 no such tolerance. A positive-slack success therefore needs an additional argument recovering
-the exact inequalities required by the theorem. The initial containment checks use no slack.
+the exact inequalities required by the theorem. The two initial containment checks use no slack;
+the initial ordering test between the walls does.
 
 The theorem side is the real mathematical statement. In the
 {src "NN/Proofs/Verification/ODE/Enclosure.lean"}[ODE enclosure API], a corridor theorem says, in
@@ -571,7 +536,8 @@ records and graph construction. The
 {src "NN/Verification/PINN/PyTorch/ParamStore.lean"}[PyTorch parameter store API] names imported
 parameters instead of letting a raw tensor dictionary float around unchecked. The
 {src "NN/Verification/PINN/ResidualAffine.lean"}[residual affine API] contains the bound helpers,
-including McCormick style pieces and branch and bound support.
+including McCormick style pieces. The box splitters used by the command live in
+{src "NN/Verification/PINN/CLI.lean"}[the PINN CLI].
 
 The architecture record and graph builder expose the bundled network's shape:
 
@@ -645,12 +611,14 @@ which of its input derivatives enter the residual.
 
 ## Residual Interval Width
 
-The transcript at the start of this chapter printed a residual enclosure of
+The bundled certificate stores a derivative-based residual enclosure of approximately
 $`[-25.6,25.6]` for a network with tanh hidden activations. Each hidden activation lies in
 $`[-1,1]`;
 the final affine layer has positive weights summing to $`2.8`, matching the certificate's `u`
 bounds $`[-2.8,2.8]`. Starting from those value intervals lets us follow the width through two
-different residual calculations.
+different residual calculations. On this Float path, the tanh rule returns the whole range
+`[-1,1]` regardless of its input interval, and its derivative rules also use global bounds.
+Shrinking this input box alone therefore does not tighten these particular enclosures.
 
 The certificate carries *two* residual fields. The one named `residual_bounds` comes from the
 three-point second difference
@@ -674,8 +642,8 @@ $`4\times2.8=11.2`, and then the division by $`h^2=10^{-4}` multiplies the width
 { lower := -112000.000000, upper := 112000.000000 }
 ```
 
-That is exactly the `residual_bounds` field stored in the bundled JSON, and the arithmetic behind it
-is one line over the reals:
+That agrees to the printed digits and within `certTol` with the bundled JSON's `residual_bounds`
+(±112000.00000000017). The arithmetic behind it is one line over the reals:
 
 ```lean
 -- Check the half-width amplification using exact real
@@ -703,7 +671,8 @@ therefore compare different computations, not two interchangeable estimates of t
 
 Propagating derivative bounds through the graph avoids this difference quotient. That is what the
 `residual_bounds_deriv` field records and what the printed `u''` lines report. For the same network
-whose value bounds are $`\pm2.8`, propagation reports $`\pm25.6479` for the second derivative,
+whose value bounds are approximately $`\pm2.8`, the artifact stores approximately $`\pm25.6479`
+for the second derivative,
 compared with $`\pm112000` for the difference quotient, a factor of about four thousand.
 The printed residual is the derivative-based number because the bundled PDE
 string is `uxx`. The signature of that helper says where the two fields differ:
@@ -766,8 +735,8 @@ def artifactPrims : Prims where
   d2uY := none
 ```
 
-Those are the numbers from the bundled artifact. Evaluating the PDE string `uxx` against them
-reproduces the residual the command printed:
+Here the value and second-derivative bounds are the artifact's endpoints rounded to the displayed
+decimals. Evaluating the PDE string `uxx` selects the supplied second-derivative interval:
 
 ```lean (name := pdeX)
 -- The uxx residual directly selects the available second X
@@ -880,7 +849,7 @@ default: it prints `ok` and `bad` counts but exits successfully even when misses
 ```terminal
 # Make dataset misses fail the command instead of appearing
 # only in its report.
-lake exe verify -- pinn-dataset-check --strict
+scripts/lake.sh exe verify -- pinn-dataset-check --strict
 ```
 
 when a nonzero `bad` count should fail an automated run. Even strict success is still a checker

@@ -57,6 +57,25 @@ This avoids needing a separate `log` approximation lemma while remaining extensi
 def oneEps : ℝ :=
   ulp β fexp (1 : ℝ) / 2
 
+/-- `oneEps` is a half ulp, hence nonnegative. -/
+theorem oneEps_nonneg : 0 ≤ oneEps (β := β) (fexp := fexp) := by
+  unfold oneEps
+  have := ulp.nonneg β fexp (1 : ℝ)
+  linarith
+
+/-- The rounded constant `1 : NF` is within `oneEps` of the real `1`. -/
+theorem abs_toSpec_one_sub_one_le :
+    abs (toSpec (β := β) (fexp := fexp) (rnd := rnd) (1 : R) - (1 : ℝ)) ≤
+      oneEps (β := β) (fexp := fexp) := by
+  change
+    abs ((NF.ofReal (β := β) (fexp := fexp) (rnd := rnd)
+      (1 : ℝ)).val - (1 : ℝ)) ≤ oneEps (β := β) (fexp := fexp)
+  simpa [oneEps, NFBackend.toSpec, NF.toReal,
+    Proofs.RuntimeRoundingApprox.roundR, NF.roundR,
+    NF.ofReal] using
+    (Proofs.RuntimeRoundingApprox.roundR_abs_error
+      (β := β) (fexp := fexp) (rnd := rnd) (1 : ℝ))
+
 /-- Rounded representation of the scalar constant `1` at the `NF` backend. -/
 def oneHat : ℝ :=
   Proofs.RuntimeRoundingApprox.roundR (β := β) (fexp := fexp) (rnd := rnd) (1 : ℝ)
@@ -88,22 +107,17 @@ def softplusR (xR : R) : R :=
   let yR : R := (1 : R) + Numerics.MathFunctions.exp xR
   safeLogR (β := β) (fexp := fexp) (rnd := rnd) (ε := (1 : ℝ)) yR
 
-/-!
-`softplus_spec_eq_log_one_add_exp` lives in `Proofs.Gradients.Activation`, which this file imports.
-This namespace is nested inside `Proofs`, so the uses below resolve to it without qualification and
-without an `open`. The private copy that used to sit here proved the same statement.
--/
 /--
 Forward approximation bound for `softplus` in `NF`.
 
 We treat `softplus(x) = log(1 + exp x)` as `safeLog 1 (1 + exp x)` (since `1 + exp x ≥ 1`) and then
 compose the scalar bounds for `exp`, `+`, and `safeLog`.
 -/
-  theorem approx_softplus_nf {x : ℝ} {xR : R} {eps : ℝ}
+theorem approx_softplus_nf {x : ℝ} {xR : R} {eps : ℝ}
     (hx : abs (toSpec (β := β) (fexp := fexp) (rnd := rnd) xR - x) ≤ eps) :
-    abs (toSpec (β := β) (fexp := fexp) (rnd := rnd) (softplusR (β := β) (fexp := fexp) (rnd := rnd)
-      xR) -
-          Activation.Math.softplusSpec (α := ℝ) x) ≤
+    abs (toSpec (β := β) (fexp := fexp) (rnd := rnd)
+          (softplusR (β := β) (fexp := fexp) (rnd := rnd) xR) -
+        Activation.Math.softplusSpec (α := ℝ) x) ≤
       softplusBoundScalar (β := β) (fexp := fexp) (rnd := rnd)
         (toSpec (β := β) (fexp := fexp) (rnd := rnd) xR) eps := by
   -- Step 1: exp approximation.
@@ -111,9 +125,8 @@ compose the scalar bounds for `exp`, `+`, and `safeLog`.
       abs (toSpec (β := β) (fexp := fexp) (rnd := rnd)
         (Numerics.MathFunctions.exp xR) - Real.exp x) ≤
         expErrorBound (β := β) (fexp := fexp) (toSpec (β := β) (fexp := fexp) (rnd := rnd) xR)
-          eps := by
-    simpa using (approx_exp_nf (β := β) (fexp := fexp) (rnd := rnd) (x := x) (xR
-      := xR) (eps := eps) hx)
+          eps :=
+    approx_exp_nf (β := β) (fexp := fexp) (rnd := rnd) hx
 
   -- Step 2: `1 + exp x` approximation.
   let oneR : R := (1 : R)
@@ -125,12 +138,8 @@ compose the scalar bounds for `exp`, `+`, and `safeLog`.
     rfl
   have hone :
       abs (toSpec (β := β) (fexp := fexp) (rnd := rnd) oneR - (1 : ℝ)) ≤
-        oneEps (β := β) (fexp := fexp) := by
-    change abs (oneR.val - (1 : ℝ)) ≤ oneEps (β := β) (fexp := fexp)
-    rw [hOneVal]
-    simpa [oneEps, oneHat, NFBackend.toSpec, NF.toReal,
-      Proofs.RuntimeRoundingApprox.roundR] using
-      (Proofs.RuntimeRoundingApprox.roundR_abs_error (β := β) (fexp := fexp) (rnd := rnd) (1 : ℝ))
+        oneEps (β := β) (fexp := fexp) :=
+    abs_toSpec_one_sub_one_le (β := β) (fexp := fexp) (rnd := rnd)
 
   let yR : R := oneR + Numerics.MathFunctions.exp xR
   let y : ℝ := (1 : ℝ) + Real.exp x
@@ -162,8 +171,8 @@ compose the scalar bounds for `exp`, `+`, and `safeLog`.
         (x := (1 : ℝ)) (y := Real.exp x)
         (xR := oneR) (yR := Numerics.MathFunctions.exp xR)
         (epsx := oneEps (β := β) (fexp := fexp))
-        (epsy := expErrorBound (β := β) (fexp := fexp) (toSpec (β := β) (fexp := fexp) (rnd :=
-          rnd) xR) eps)
+        (epsy := expErrorBound (β := β) (fexp := fexp)
+          (toSpec (β := β) (fexp := fexp) (rnd := rnd) xR) eps)
         hone hexp
     -- Rewrite to match the local definitions.
     simpa [oneR, yR, y, addBoundSoftplus, expErrorBound, oneHat, expHat,
@@ -176,8 +185,9 @@ compose the scalar bounds for `exp`, `+`, and `safeLog`.
   -- Step 3: `safeLog 1` turns this into `softplus`.
   have hlog :=
     approx_safeLog_nf (β := β) (fexp := fexp) (rnd := rnd)
-      (x := y) (xR := yR) (eps := addBoundSoftplus (β := β) (fexp := fexp) (rnd := rnd) (toSpec (β
-        := β) (fexp := fexp) (rnd := rnd) xR) eps)
+      (x := y) (xR := yR)
+      (eps := addBoundSoftplus (β := β) (fexp := fexp) (rnd := rnd)
+        (toSpec (β := β) (fexp := fexp) (rnd := rnd) xR) eps)
       (ε := (1 : ℝ)) (hε := by norm_num) hy
   have hlog' :
       abs (toSpec (β := β) (fexp := fexp) (rnd := rnd)
@@ -226,7 +236,7 @@ def softplusBoundTensor {s : Shape} (eps : ℝ) (xR : Tensor R s) : SpecTensor s
 `approxTensor` bound for `softplus` lifted to arbitrary tensor shapes.
 
 This is the tensor-level wrapper around `approx_softplus_nf`, built via
-  `approxTensor_map_spec_of_scalar_bound`.
+`approxTensor_map_spec_of_scalar_bound`.
 -/
 theorem approxTensor_softplus_spec {s : Shape} :
     ∀ {xS : SpecTensor s} {xR : Tensor R s} {eps : ℝ},
@@ -234,12 +244,12 @@ theorem approxTensor_softplus_spec {s : Shape} :
         approxTensor (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd))
           (mapSpec (s := s) (Activation.Math.softplusSpec (α := ℝ)) xS)
           (mapSpec (s := s) (softplusR (β := β) (fexp := fexp) (rnd := rnd)) xR)
-          (linfNorm (softplusBoundTensor (β := β) (fexp := fexp) (rnd := rnd) (s := s) eps xR))
-            := by
+          (linfNorm
+            (softplusBoundTensor (β := β) (fexp := fexp) (rnd := rnd) (s := s) eps xR)) := by
   intro xS xR eps hx
   have h :=
-    approxTensor_map_spec_of_scalar_bound (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd :=
-      rnd))
+    approxTensor_map_spec_of_scalar_bound (α := R)
+      (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd))
       (s := s)
       (fS := Activation.Math.softplusSpec (α := ℝ))
       (fR := softplusR (β := β) (fexp := fexp) (rnd := rnd))
@@ -254,29 +264,12 @@ theorem approxTensor_softplus_spec {s : Shape} :
 -- safe_log (smooth activation): `log(softplus(x) + ε)`
 -- ---------------------------------------------------------------------------
 
-/-- Runtime implementation of `safeLog` as a single rounded primitive. -/
+/-- Runtime implementation of the smooth `Activation.Math.safeLogSpec`
+(`log (softplus x + ε)`) as a single rounded primitive. -/
 def safeLogSoftplusR (ε : ℝ) (xR : R) : R :=
   NF.ofReal (β := β) (fexp := fexp) (rnd := rnd)
     (Activation.Math.safeLogSpec (α := ℝ)
       (toSpec (β := β) (fexp := fexp) (rnd := rnd) xR) ε)
-
-private theorem sigmoid_spec_nonneg (x : ℝ) :
-    0 ≤ Activation.Math.sigmoidSpec (α := ℝ) x := by
-  rw [Proofs.sigmoid_eq_inv_exp, ← one_div]
-  have hden : 0 < (1 : ℝ) + Real.exp (-x) := by
-    linarith [Real.exp_pos (-x)]
-  have : 0 < (1 : ℝ) / ((1 : ℝ) + Real.exp (-x)) :=
-    div_pos (by norm_num) hden
-  simpa using le_of_lt this
-
-private theorem sigmoid_spec_le_one (x : ℝ) :
-    Activation.Math.sigmoidSpec (α := ℝ) x ≤ 1 := by
-  rw [Proofs.sigmoid_eq_inv_exp, ← one_div]
-  have hden : (1 : ℝ) ≤ (1 : ℝ) + Real.exp (-x) := by
-    have : 0 ≤ Real.exp (-x) := le_of_lt (Real.exp_pos (-x))
-    linarith
-  have := one_div_le_one_div_of_le (by norm_num : (0 : ℝ) < (1 : ℝ)) hden
-  simpa using this
 
 private theorem softplus_spec_nonneg (x : ℝ) :
     0 ≤ Activation.Math.softplusSpec (α := ℝ) x := by
@@ -289,11 +282,10 @@ private theorem softplus_spec_nonneg (x : ℝ) :
 /--
 `safeLogSpec` is `(1/ε)`-Lipschitz for `ε > 0`.
 
-This is the analytic heart of `approx_safe_log_nf`: it bounds how much the spec `safeLog` output
-  can
-change when the input changes by `|u - v|`.
+This is the analytic heart of `approx_safeLogSoftplus_nf`: it bounds how much the spec output
+can change when the input changes by `|u - v|`.
 -/
-private theorem abs_safe_log_sub_safe_log_le_one_div_mul_abs_sub {ε u v : ℝ}
+private theorem abs_safeLogSpec_sub_safeLogSpec_le_one_div_mul_abs_sub {ε u v : ℝ}
     (hε : 0 < ε) :
     abs (Activation.Math.safeLogSpec (α := ℝ) u ε - Activation.Math.safeLogSpec (α := ℝ) v ε) ≤
       (1 / ε) * abs (u - v) := by
@@ -380,10 +372,10 @@ Forward approximation bound for the smooth `safeLog` activation in `NF`.
 
 `safeLog` is defined as `log(softplus(x) + ε)`, which is globally well-defined for `ε > 0`. The
 proof combines:
-- one rounding step for `safeLogR` (defined as `NF.ofReal (safe_log_spec ...)`);
+- one rounding step for `safeLogSoftplusR` (defined as `NF.ofReal (safeLogSpec ...)`);
 - a `(1/ε)` Lipschitz bound for the spec function (via mean value theorem + derivative bound).
 -/
-theorem approx_safe_log_nf {x : ℝ} {xR : R} {eps ε : ℝ}
+theorem approx_safeLogSoftplus_nf {x : ℝ} {xR : R} {eps ε : ℝ}
     (hε : 0 < ε)
     (hx : abs (toSpec (β := β) (fexp := fexp) (rnd := rnd) xR - x) ≤ eps) :
     abs
@@ -395,17 +387,15 @@ theorem approx_safe_log_nf {x : ℝ} {xR : R} {eps ε : ℝ}
             (Activation.Math.safeLogSpec (α := ℝ)
               (toSpec (β := β) (fexp := fexp) (rnd := rnd) xR) ε) / 2 := by
   set xhat : ℝ := toSpec (β := β) (fexp := fexp) (rnd := rnd) xR
-  have hx' : abs (xhat - x) ≤ eps := by
-    simpa [xhat, abs_sub_comm] using hx
+  have hx' : abs (xhat - x) ≤ eps := hx
 
   have hround :
       abs
           (toSpec (β := β) (fexp := fexp) (rnd := rnd)
               (safeLogSoftplusR (β := β) (fexp := fexp) (rnd := rnd) ε xR) -
             Activation.Math.safeLogSpec (α := ℝ) xhat ε) ≤
-        ulp β fexp (Activation.Math.safeLogSpec (α := ℝ) xhat ε) / 2
-          := by
-    -- `safe_logR` rounds the real `safe_log_spec`.
+        ulp β fexp (Activation.Math.safeLogSpec (α := ℝ) xhat ε) / 2 := by
+    -- `safeLogSoftplusR` rounds the real `safeLogSpec`.
     simpa [safeLogSoftplusR, xhat, toSpec, NF.toReal, NF.ofReal,
       NF.roundR, Proofs.RuntimeRoundingApprox.roundR] using
         (Proofs.RuntimeRoundingApprox.roundR_abs_error (β := β) (fexp := fexp) (rnd := rnd)
@@ -416,7 +406,7 @@ theorem approx_safe_log_nf {x : ℝ} {xR : R} {eps ε : ℝ}
         ε) ≤
         (1 / ε) * eps := by
     have hL :=
-      abs_safe_log_sub_safe_log_le_one_div_mul_abs_sub (ε := ε) (u := xhat) (v := x) hε
+      abs_safeLogSpec_sub_safeLogSpec_le_one_div_mul_abs_sub (ε := ε) (u := xhat) (v := x) hε
     have hcoef : 0 ≤ (1 / ε) := by
       exact le_of_lt (one_div_pos.2 hε)
     have hscale : (1 / ε) * abs (xhat - x) ≤ (1 / ε) * eps :=
@@ -437,28 +427,19 @@ theorem approx_safe_log_nf {x : ℝ} {xR : R} {eps ε : ℝ}
               Activation.Math.safeLogSpec (α := ℝ) xhat ε) +
           abs
               (Activation.Math.safeLogSpec (α := ℝ) xhat ε -
-                Activation.Math.safeLogSpec (α := ℝ) x ε) := by
-            simpa [sub_eq_add_neg, add_assoc] using
-              abs_sub_le
-                (toSpec (β := β) (fexp := fexp) (rnd := rnd)
-                    (safeLogSoftplusR (β := β) (fexp := fexp) (rnd := rnd) ε xR))
-                (Activation.Math.safeLogSpec (α := ℝ) xhat ε)
-                (Activation.Math.safeLogSpec (α := ℝ) x ε)
+                Activation.Math.safeLogSpec (α := ℝ) x ε) := abs_sub_le _ _ _
       _ ≤
-        ulp β fexp (Activation.Math.safeLogSpec (α := ℝ) xhat ε) / 2
-          +
-          (1 / ε) * eps := by
-            exact add_le_add hround hdiff
+        ulp β fexp (Activation.Math.safeLogSpec (α := ℝ) xhat ε) / 2 +
+          (1 / ε) * eps := add_le_add hround hdiff
       _ = (1 / ε) * eps +
-        ulp β fexp (Activation.Math.safeLogSpec (α := ℝ) xhat ε) / 2
-          := by
+        ulp β fexp (Activation.Math.safeLogSpec (α := ℝ) xhat ε) / 2 := by
             ring
   simpa [xhat] using this
 
 /--
-Per-entry bound tensor for `safeLog`.
+Per-entry bound tensor for `safeLogSoftplusR`.
 
-This is the elementwise lifting of `approx_safe_log_nf`'s bound.
+This is the elementwise lifting of `approx_safeLogSoftplus_nf`'s bound.
 -/
 def safeLogSoftplusBoundTensor {s : Shape} (ε eps : ℝ) (xR : Tensor R s) : SpecTensor s :=
   mapSpec
@@ -468,12 +449,12 @@ def safeLogSoftplusBoundTensor {s : Shape} (ε eps : ℝ) (xR : Tensor R s) : Sp
     (tensorToSpec (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd)) xR)
 
 /--
-`approxTensor` bound for `safeLog` lifted to arbitrary tensor shapes.
+`approxTensor` bound for the smooth `safeLogSpec` lifted to arbitrary tensor shapes.
 
-This is the tensor-level wrapper around `approx_safe_log_nf`, built via
-  `approxTensor_map_spec_of_scalar_bound`.
+This is the tensor-level wrapper around `approx_safeLogSoftplus_nf`, built via
+`approxTensor_map_spec_of_scalar_bound`.
 -/
-theorem approxTensor_safe_log_spec {s : Shape} (ε : ℝ) (hε : 0 < ε) :
+theorem approxTensor_safeLogSoftplus_spec {s : Shape} (ε : ℝ) (hε : 0 < ε) :
     ∀ {xS : SpecTensor s} {xR : Tensor R s} {eps : ℝ},
       approxTensor (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd)) xS xR eps →
         approxTensor (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd))
@@ -484,8 +465,8 @@ theorem approxTensor_safe_log_spec {s : Shape} (ε : ℝ) (hε : 0 < ε) :
               ε eps xR)) := by
   intro xS xR eps hx
   have h :=
-    approxTensor_map_spec_of_scalar_bound (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd :=
-      rnd))
+    approxTensor_map_spec_of_scalar_bound (α := R)
+      (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd))
       (s := s)
       (fS := fun x => Activation.Math.safeLogSpec (α := ℝ) x ε)
       (fR := safeLogSoftplusR (β := β) (fexp := fexp) (rnd := rnd) ε)
@@ -495,9 +476,10 @@ theorem approxTensor_safe_log_spec {s : Shape} (ε : ℝ) (hε : 0 < ε) :
       (xS := xS) (xR := xR) (eps := eps) hx (by
         intro x xR hx
         simpa using
-          (approx_safe_log_nf (β := β) (fexp := fexp) (rnd := rnd)
+          (approx_safeLogSoftplus_nf (β := β) (fexp := fexp) (rnd := rnd)
             (x := x) (xR := xR) (eps := eps) (ε := ε) hε hx))
   simpa [safeLogSoftplusBoundTensor] using h
+
 end NFBackend
 
 end

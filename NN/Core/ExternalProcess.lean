@@ -121,7 +121,7 @@ On nonzero exit code, raises `IO.userError` including `stderr`. An exception thr
 runner (e.g. executable not found) is wrapped in `IO.userError` with the context, command, and
 arguments.
 -/
-def runStdoutChecked (ctx : String)
+def run (ctx : String)
     (cmd : String) (args : Array String) (cwd : Option String := some ".") : IO String := do
   let out ←
     try
@@ -144,9 +144,9 @@ Run a subprocess, treat its `stdout` as a single JSON payload, and parse it.
 On nonzero exit code, raises `IO.userError`. If JSON parsing fails, raises `IO.userError` including
 the raw stdout (which is usually the most helpful debug output).
 -/
-def runJsonStdoutChecked (ctx : String)
+def runJson (ctx : String)
     (cmd : String) (args : Array String) (cwd : Option String := some ".") : IO Json := do
-  let out ← runStdoutChecked (ctx := ctx) (cmd := cmd) (args := args) (cwd := cwd)
+  let out ← run (ctx := ctx) (cmd := cmd) (args := args) (cwd := cwd)
   match Json.parse out with
   | .ok j => pure j
   | .error msg =>

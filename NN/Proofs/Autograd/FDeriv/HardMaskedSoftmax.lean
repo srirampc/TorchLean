@@ -42,7 +42,7 @@ def denominator {n : Nat} (mask : Tensor Bool [n]) (x : Vec n) : ℝ :=
 
 /-- The real formula for the weights, including the zero row when every key is blocked. -/
 def weights {n : Nat} (mask : Tensor Bool [n]) (x : Vec n) : Vec n :=
-  softmaxVecOfFun fun i => numerator mask x i / denominator mask x
+  vecOfFun fun i => numerator mask x i / denominator mask x
 
 /-- The maximum scan returns `none` precisely when it has never encountered an allowed entry.
 
@@ -130,7 +130,7 @@ private theorem hasFDerivAt_numerator {n : Nat} (mask : Tensor Bool [n]) (x : Ve
     HasFDerivAt (fun y => numerator mask y i) (numerator mask x i • evalCLM i) x := by
   cases hi : mask.getScalar i
   · simpa [numerator, hi] using (hasFDerivAt_const (𝕜 := ℝ) (0 : ℝ) x)
-  · simpa [numerator, hi] using ((evalCLM i).hasFDerivAt (x := x)).exp
+  · simpa [numerator, hi] using hasFDerivAt_exp_apply x i
 
 /-- Hard-masked softmax is differentiable for every score vector and every fixed Boolean mask.
 
@@ -163,7 +163,7 @@ theorem hasFDerivAt_weights {n : Nat} (mask : Tensor Bool [n]) (x : Vec n) :
         simp only [_root_.add_apply, smul_apply,
           ContinuousLinearMap.comp_apply, ContinuousLinearMap.smulRight_apply,
           one_apply_eq_self, sub_apply, evalCLM_apply,
-          dotCLM_apply, smul_eq_mul, weights, softmaxVecOfFun_apply, sumDerivative,
+          dotCLM_apply, smul_eq_mul, weights, vecOfFun_apply, sumDerivative,
           sum_apply, div_mul_eq_mul_div]
         rw [← Finset.sum_div]
         field_simp [hdenom]; ring
@@ -171,7 +171,7 @@ theorem hasFDerivAt_weights {n : Nat} (mask : Tensor Bool [n]) (x : Vec n) :
           (fun y => weights mask y i) =
             (fun y => numerator mask y i) * ((fun y => y⁻¹) ∘ denominator mask) := by
         funext y
-        simp only [weights, softmaxVecOfFun_apply, div_eq_mul_inv,
+        simp only [weights, vecOfFun_apply, div_eq_mul_inv,
           Pi.mul_apply, Function.comp_apply]
       exact (hmul.congr_of_eventuallyEq hfun.eventuallyEq).congr_fderiv hmap
     have hpi := (hasFDerivAt_pi (𝕜 := ℝ)

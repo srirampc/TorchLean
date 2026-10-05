@@ -36,8 +36,8 @@ This is enough to checkpoint any TorchLean runtime model implemented as a
 `TorchLean.Module.Objective` over native `Float32` or binary64 `Float`, independent of
 architecture.
 
-Results of `Trainer.train` use `Checkpoint.State`: `trained.save path` writes the trained state as
-`Float` tensors and `trainer.load path data` restores it.
+Results of `Trainer.train` use `Checkpoint.State`: `trained.save path` preserves the trained
+state's scalar encoding. `Session.load` restores a checkpoint into a compatible training session.
 
 Explicit immutable `nn.State α` checkpoints use `Checkpoint.Encoding α`. Instances preserve exact
 bits for `Float`, `Float32`, and configured binary formats, including arbitrary supported widths.
@@ -77,10 +77,9 @@ instance : Checkpointable Float where
         Float32.toFloat path useCuda (shapes := shapes) state
     else
       let result ← Runtime.Autograd.Model.StateIO.readStateBits (ss := shapes) path
-      match result with
-      | .error message => throw <| IO.userError s!"Checkpoint: load failed for {path}: {message}"
-      | .ok values =>
-          Runtime.Autograd.Torch.ParamList.setValues (α := Float) (ss := shapes) state values
+      let values ← IO.ofExcept <| result.mapError
+        fun message => s!"Checkpoint: load failed for {path}: {message}"
+      Runtime.Autograd.Torch.ParamList.setValues (α := Float) (ss := shapes) state values
 
 /-- Native `Float32` checkpoints preserve exact binary32 payloads on both CPU and CUDA. -/
 instance : Checkpointable Float32 where
@@ -190,11 +189,9 @@ def load {σ τ : Shape} {α : Type} [Storage α] [Encoding α]
     IO (nn.State α (nn.stateShapes model)) := do
   let stateResult ← Runtime.Autograd.Model.StateIO.readStateBits
     (ss := nn.stateShapes model) path
-  match stateResult with
-  | Except.error message =>
-      throw <| IO.userError s!"Checkpoint: load failed for {path}: {message}"
-  | Except.ok state =>
-      pure (nn.State.Internal.fromTensorPack state)
+  let state ← IO.ofExcept <| stateResult.mapError
+    fun message => s!"Checkpoint: load failed for {path}: {message}"
+  pure (nn.State.Internal.fromTensorPack state)
 
 end State
 

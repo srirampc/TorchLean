@@ -62,7 +62,7 @@ def indefiniteReconstructionError : Float :=
 /-- Run the positive reconstruction check and its indefinite-matrix negative control. -/
 def check : IO Unit := do
   assertBelow "Cholesky A = L·Lᵀ" reconstructionError
-  assertNotBelow "Cholesky on indefinite A correctly fails (no SPD ⇒ no factor)"
+  assertNotBelow "Cholesky on indefinite A correctly fails"
     indefiniteReconstructionError
 
 end NN.Examples.Factorization.Cholesky

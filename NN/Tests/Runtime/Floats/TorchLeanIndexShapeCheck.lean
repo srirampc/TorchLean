@@ -6,7 +6,7 @@ Authors: TorchLean Team
 
 module
 
-public import NN.Tests.Runtime.Floats.Utils
+public import NN.Tests.Utils
 public import NN.API.Seeded
 public import NN.Runtime.Autograd.Model.Session.Autograd
 public import NN.Runtime.Autograd.Model.Session.ShapeIndex
@@ -25,7 +25,6 @@ refactoring tensor APIs.
 open Spec TorchLean
 open TorchLean TorchLean.Tensor
 open Tests.Utils
-open Tests.Floats.Utils
 
 namespace Tests
 namespace Floats
@@ -51,7 +50,7 @@ def checkFlattenThenTake : IO Unit := do
       let row := Spec.get (Spec.get y i) j
       for k in List.finRange 3 do
         assertApprox s!"flattenThenTake[{i.val},{j.val},{k.val}]"
-          (vecVal row k) (Float.ofNat (100 * i.val + 10 * j.val + k.val))
+          (Tensor.getScalar row k) (Float.ofNat (100 * i.val + 10 * j.val + k.val))
 
 def gradSelect (execution : Runtime.Autograd.Torch.ExecutionMode) :
     IO (Tensor Float [3]) := do
@@ -117,7 +116,7 @@ def gradBroadcastScalar (execution : Runtime.Autograd.Torch.ExecutionMode) : IO 
   let grads ← Runtime.Autograd.Model.Session.backwardScalarDenseAll sess total
   let dsT : Tensor Float Shape.scalar ← Runtime.Autograd.Model.Session.grad
     sess (sh := Shape.scalar) grads sRef
-  pure (scalarVal dsT)
+  pure (Tensor.item dsT)
 
 def gradReshapeMat (execution : Runtime.Autograd.Torch.ExecutionMode) :
     IO (Tensor Float [2, 3]) := do
@@ -188,7 +187,7 @@ def gradScatterAddVec (execution : Runtime.Autograd.Torch.ExecutionMode) :
   let dx ← Runtime.Autograd.Model.Session.grad sess grads x
   let dvT : Tensor Float [1] ← Runtime.Autograd.Model.Session.grad
     sess (sh := [1]) grads v
-  pure (dx, vecVal dvT ⟨0, by decide⟩)
+  pure (dx, Tensor.getScalar dvT ⟨0, by decide⟩)
 
 /-- A scalar objective whose labels are bounded by the class count in their element type. -/
 def boundedLabelObjective :
@@ -249,29 +248,31 @@ def run : IO Unit := do
   let gE ← gradSelect .eager
   let gC ← gradSelect .typedGraph
   for i in List.finRange 3 do
-    assertApprox s!"gather grad[{i.val}] eager/typed-graph" (vecVal gE i) (vecVal gC i)
+    assertApprox s!"gather grad[{i.val}] eager/typed-graph"
+      (Tensor.getScalar gE i) (Tensor.getScalar gC i)
   for i in List.finRange 3 do
-    assertApprox s!"gather grad[{i.val}] expected" (vecVal gE i) (if i.val = 1 then 1.0 else 0.0)
+    assertApprox s!"gather grad[{i.val}] expected"
+      (Tensor.getScalar gE i) (if i.val = 1 then 1.0 else 0.0)
 
   let gvE ← gradIndexSelectVector .eager
   let gvC ← gradIndexSelectVector .typedGraph
   for i in List.finRange 3 do
     assertApprox s!"indexSelect vector dx[{i.val}] eager/typed-graph"
-      (vecVal gvE i) (vecVal gvC i)
-  assertApprox "indexSelect vector dx[0] expected" (vecVal gvE ⟨0, by decide⟩) 1.0
-  assertApprox "indexSelect vector dx[1] expected" (vecVal gvE ⟨1, by decide⟩) 0.0
-  assertApprox "indexSelect vector dx[2] expected" (vecVal gvE ⟨2, by decide⟩) 2.0
+      (Tensor.getScalar gvE i) (Tensor.getScalar gvC i)
+  assertApprox "indexSelect vector dx[0] expected" (Tensor.getScalar gvE ⟨0, by decide⟩) 1.0
+  assertApprox "indexSelect vector dx[1] expected" (Tensor.getScalar gvE ⟨1, by decide⟩) 0.0
+  assertApprox "indexSelect vector dx[2] expected" (Tensor.getScalar gvE ⟨2, by decide⟩) 2.0
 
   let grE ← gradIndexSelectRows .eager
   let grC ← gradIndexSelectRows .typedGraph
   for i in List.finRange 3 do
     for j in List.finRange 2 do
       assertApprox s!"indexSelect rows dx[{i.val},{j.val}] eager/typed-graph"
-        (matVal grE i j) (matVal grC i j)
+        (Tensor.get2 grE i j) (Tensor.get2 grC i j)
   for j in List.finRange 2 do
-    assertApprox s!"indexSelect rows dx[0,{j.val}] expected" (matVal grE ⟨0, by decide⟩ j) 0.0
-    assertApprox s!"indexSelect rows dx[1,{j.val}] expected" (matVal grE ⟨1, by decide⟩ j) 0.0
-    assertApprox s!"indexSelect rows dx[2,{j.val}] expected" (matVal grE ⟨2, by decide⟩ j) 2.0
+    assertApprox s!"indexSelect rows dx[0,{j.val}] expected" (Tensor.get2 grE ⟨0, by decide⟩ j) 0.0
+    assertApprox s!"indexSelect rows dx[1,{j.val}] expected" (Tensor.get2 grE ⟨1, by decide⟩ j) 0.0
+    assertApprox s!"indexSelect rows dx[2,{j.val}] expected" (Tensor.get2 grE ⟨2, by decide⟩ j) 2.0
 
   let bsE ← gradBroadcastScalar .eager
   let bsC ← gradBroadcastScalar .typedGraph
@@ -282,29 +283,31 @@ def run : IO Unit := do
   let rC ← gradReshapeMat .typedGraph
   for i in List.finRange 2 do
     for j in List.finRange 3 do
-      assertApprox s!"reshape grad[{i.val},{j.val}] eager/typed-graph" (matVal rE i j)
-        (matVal rC i j)
-      assertApprox s!"reshape grad[{i.val},{j.val}] expected" (matVal rE i j) 1.0
+      assertApprox s!"reshape grad[{i.val},{j.val}] eager/typed-graph" (Tensor.get2 rE i j)
+        (Tensor.get2 rC i j)
+      assertApprox s!"reshape grad[{i.val},{j.val}] expected" (Tensor.get2 rE i j) 1.0
 
   let tE ← gradTransposeMat .eager
   let tC ← gradTransposeMat .typedGraph
   for i in List.finRange 2 do
     for j in List.finRange 3 do
-      assertApprox s!"transpose grad[{i.val},{j.val}] eager/typed-graph" (matVal tE i j)
-        (matVal tC i j)
-      assertApprox s!"transpose grad[{i.val},{j.val}] expected" (matVal tE i j) 1.0
+      assertApprox s!"transpose grad[{i.val},{j.val}] eager/typed-graph" (Tensor.get2 tE i j)
+        (Tensor.get2 tC i j)
+      assertApprox s!"transpose grad[{i.val},{j.val}] expected" (Tensor.get2 tE i j) 1.0
 
   let mE ← gradReduceMeanVec .eager
   let mC ← gradReduceMeanVec .typedGraph
   for i in List.finRange 3 do
-    assertApprox s!"reduce_mean grad[{i.val}] eager/typed-graph" (vecVal mE i) (vecVal mC i)
-    assertApprox s!"reduce_mean grad[{i.val}] expected" (vecVal mE i) (1.0 / 3.0) 1e-6
+    assertApprox s!"reduce_mean grad[{i.val}] eager/typed-graph"
+      (Tensor.getScalar mE i) (Tensor.getScalar mC i)
+    assertApprox s!"reduce_mean grad[{i.val}] expected" (Tensor.getScalar mE i) (1.0 / 3.0) 1e-6
 
   let (sxE, svE) ← gradScatterAddVec .eager
   let (sxC, svC) ← gradScatterAddVec .typedGraph
   for i in List.finRange 3 do
-    assertApprox s!"scatter_add_vec dx[{i.val}] eager/typed-graph" (vecVal sxE i) (vecVal sxC i)
-    assertApprox s!"scatter_add_vec dx[{i.val}] expected" (vecVal sxE i) 1.0
+    assertApprox s!"scatter_add_vec dx[{i.val}] eager/typed-graph"
+      (Tensor.getScalar sxE i) (Tensor.getScalar sxC i)
+    assertApprox s!"scatter_add_vec dx[{i.val}] expected" (Tensor.getScalar sxE i) 1.0
   assertApprox "scatter_add_vec dv eager/typed-graph" svE svC
   assertApprox "scatter_add_vec dv expected" svE 1.0
 

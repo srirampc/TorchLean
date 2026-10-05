@@ -80,7 +80,7 @@ The pure semantics applies `Spec.MultiHeadAttention.forward` independently at ev
 The executable path uses the prefix-polymorphic TorchLean operation and may flatten those axes for
 backend execution without changing the mathematical operation.
 -/
-def multiHeadAttention (leading : Shape) (n numHeads dModel headDim : Nat) (hN : 0 < n) :
+def attention (leading : Shape) (n numHeads dModel headDim : Nat) (hN : 0 < n) :
     PrimOp
       [ [dModel, numHeads * headDim],
         [dModel, numHeads * headDim],
@@ -88,7 +88,7 @@ def multiHeadAttention (leading : Shape) (n numHeads dModel headDim : Nat) (hN :
         [numHeads * headDim, dModel],
         leading.concat [n, dModel] ]
       (leading.concat [n, dModel]) :=
-  { name := s!"multiHeadAttention({n},{numHeads},{dModel},{headDim})"
+  { name := s!"attention({n},{numHeads},{dModel},{headDim})"
     specFwd := fun {α} _ _ xs =>
       match xs with
       | .cons wq (.cons wk (.cons wv (.cons wo (.cons input .nil)))) =>
@@ -98,18 +98,18 @@ def multiHeadAttention (leading : Shape) (n numHeads dModel headDim : Nat) (hN :
             (fun inputs => attention.forward n (Nat.ne_of_gt hN) inputs none) input
     program := fun {α} _ _ =>
       fun {m} _ _ => fun wq wk wv wo input =>
-        Runtime.Autograd.Model.multiHeadAttention (m := m) (α := α)
+        Runtime.Autograd.Model.attention (m := m) (α := α)
           (leadingShape := leading)
           (Nat.ne_of_gt hN) wq wk wv wo input none }
 
 /-- Pure evaluation of prefix-polymorphic multi-head attention. -/
-@[simp] theorem multiHeadAttention_specFwd
+@[simp] theorem attention_specFwd
     {leading : Shape} {n numHeads dModel headDim : Nat} (hN : 0 < n)
     {α : Type} [TorchLean.Storage α] [Context α]
     (wq wk wv : TorchLean.Tensor α [dModel, numHeads * headDim])
     (wo : TorchLean.Tensor α [numHeads * headDim, dModel])
     (input : TorchLean.Tensor α (leading.concat [n, dModel])) :
-    (multiHeadAttention leading n numHeads dModel headDim hN).specFwd
+    (attention leading n numHeads dModel headDim hN).specFwd
         (.cons wq (.cons wk (.cons wv (.cons wo (.cons input .nil))))) =
       TorchLean.Tensor.mapLeading leading (fun inputs =>
         ({ queryWeight := wq, keyWeight := wk, valueWeight := wv, outputWeight := wo } :
@@ -133,7 +133,7 @@ def inv (s : Shape) : PrimOp [s] s :=
   { name := "inv"
     specFwd := fun {_α} _storage _ctx xs =>
       match xs with
-      | .cons input .nil => TorchLean.Tensor.mapSpec (fun value => 1 / value) input
+      | .cons input .nil => TorchLean.Tensor.invSpec input
     program := fun {α} _ _ =>
       fun {m} _ _ => fun input =>
         Runtime.Autograd.Model.inv (m := m) (α := α) input }

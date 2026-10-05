@@ -4,18 +4,6 @@ Released under MIT license as described in the file LICENSE.
 Authors: TorchLean Team
 -/
 
-/-
-Arithmetic operators for CROWN bound propagation.
-
-This file implements IBP and affine bounds for:
-- Power: f(x) = x^n
-- Sqrt: f(x) = √x
-- Neg: f(x) = -x
-- Reciprocal: f(x) = 1/x
-- Abs: f(x) = |x|
-- Min/Max: f(x,y) = min(x,y) / max(x,y)
--/
-
 module
 
 public import NN.MLTheory.CROWN.Core
@@ -24,7 +12,7 @@ public import NN.MLTheory.CROWN.Core
 # `NN.MLTheory.CROWN.Operators.Arithmetic`
 
 IBP and affine transfer rules for arithmetic primitives (negation, absolute value, reciprocal,
-square root, powers, min/max) used by the CROWN bound propagation engine.
+squaring, min/max, clamp) used by the CROWN bound propagation engine.
 -/
 
 @[expose] public section
@@ -38,9 +26,6 @@ open NN.MLTheory.CROWN
 variable {α : Type} [TorchLean.Storage α] [Context α]
 
 /-! ### Negation -/
-
-/-- Negation, $f(x)=-x$, is the simplest linear operation. -/
-def neg (x : α) : α := -x
 
 /-- IBP for negation. Just swaps and negates bounds. -/
 def ibpNegScalar (l u : α) : α × α :=
@@ -60,10 +45,6 @@ def affNeg : α × α × α × α :=
 def derivNeg : α × α := (-1, -1)
 
 /-! ### Absolute Value -/
-
-/-- Absolute value: $f(x)=|x|$. -/
-def abs (x : α) : α :=
-  if x > 0 then x else -x
 
 /-- Interval propagation rule for scalar absolute value over `[l,u]`. -/
 def ibpAbsScalar (l u : α) : α × α :=
@@ -107,9 +88,6 @@ def affAbs (l u : α) : α × α × α × α :=
 
 /-! ### Reciprocal -/
 
-/-- Reciprocal: $f(x)=1/x$. -/
-def reciprocal (x : α) : α := 1 / x
-
 /-- IBP for reciprocal on boxes, defined only when every coordinate interval excludes zero. -/
 def ibpReciprocal? (n : Nat) (B : Box α (.dim n .scalar)) :
     Option (Box α (.dim n .scalar)) :=
@@ -123,22 +101,7 @@ def ibpReciprocal? (n : Nat) (B : Box α (.dim n .scalar)) :
   else
     none
 
-/-! ### Power -/
-
-/-- Helper for positive integer power. -/
-def posPow (base : α) (exp : Nat) : α :=
-  match exp with
-  | 0 => 1
-  | k + 1 => base * posPow base k
-
-/-- Integer power: $f(x)=x^n$. -/
-def powerInt (x : α) (n : Int) : α :=
-  if n == 0 then 1
-  else if n > 0 then
-    posPow x n.toNat
-  else
-    -- Negative power: 1/x^|n|
-    1 / posPow x (-n).toNat
+/-! ### Square -/
 
 /-- IBP for x². -/
 def ibpSquareScalar (l u : α) : α × α :=
@@ -213,8 +176,8 @@ def ibpClampScalar (xLo xHi clampLo clampHi : α) : α × α :=
   (clampScalar xLo clampLo clampHi, clampScalar xHi clampLo clampHi)
 
 /-- Interval propagation for `clamp`, applied coordinatewise to a vector box. -/
-def ibpClamp (n : Nat) (B : Box α (.dim n .scalar)) (clampLo clampHi : α) : Box α (.dim n
-  .scalar) :=
+def ibpClamp (n : Nat) (B : Box α (.dim n .scalar)) (clampLo clampHi : α) :
+    Box α (.dim n .scalar) :=
   let outLo := Tensor.dim (fun i =>
     Tensor.scalar (clampScalar (B.lo.getScalar i) clampLo clampHi))
   let outHi := Tensor.dim (fun i =>

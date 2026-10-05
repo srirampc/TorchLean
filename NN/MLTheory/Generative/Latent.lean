@@ -17,8 +17,8 @@ public import NN.MLTheory.Generative.Latent.Objective
 This entrypoint collects the proved theory facts for TorchLean's latent generative model specs:
 
 - VAE reparameterization and β-VAE objective decomposition;
-- VQ-VAE codebook lookup and loss decomposition; and
-- LSGAN generator/discriminator composition facts.
+- VQ-VAE codebook lookup and loss decomposition;
+- LSGAN generator/discriminator composition facts; and
 - shared weighted-objective algebra connecting continuous-latent, discrete-latent, and adversarial
   objectives.
 

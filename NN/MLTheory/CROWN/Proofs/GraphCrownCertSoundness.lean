@@ -85,22 +85,9 @@ def boundsEvalAt {α : Type} [TorchLean.Storage α] [Context α]
     lo := affineEvalAt (α := α) (inDim := b.inDim) (outDim := b.outDim) b.loAff x
     hi := affineEvalAt (α := α) (inDim := b.inDim) (outDim := b.outDim) b.hiAff x }
 
-/-!
-## Enclosure predicate
-
-We reuse `Semantics.encloses` from `NN.MLTheory.CROWN.Graph` for componentwise enclosure.
--/
-
-/-- A flat box encloses a flat vector, once their lengths are known to agree. -/
-def EnclosesVec {α : Type} [TorchLean.Storage α] [Context α]
-    (B : FlatBox α) (v : FlatTensor α) : Prop :=
-  ∃ h : B.dim = v.n,
-    Theorems.Semantics.encloses (α := α) B (castDimScalar (α := α) (n := v.n) (n' := B.dim) h.symm
-      v.v)
-
 /-- Enclosure of a node value `v` under an affine bound `b`, evaluated at the designated input `x`.
 
-This is a *well-typed* variant of `EnclosesVec (boundsEvalAt b x) v` that guards the dependent
+This is a *well-typed* variant of `EnclosesBox (boundsEvalAt b x) v` that guards the dependent
 dimension `b.inDim`.
 
 In a well-formed CROWN certificate, every bound satisfies `b.inDim = ctx.inputDim`, so the guard
@@ -112,14 +99,15 @@ def EnclosesAtInput {α : Type} [TorchLean.Storage α] [Context α]
   ∃ h : b.inDim = ctx.inputDim,
     let x' : Tensor α [b.inDim] :=
       castDimScalar (α := α) (n := ctx.inputDim) (n' := b.inDim) h.symm x
-    EnclosesVec (α := α) (boundsEvalAt (α := α) b x') v
+    EnclosesBox (α := α) (boundsEvalAt (α := α) b x') v
 
 /-!
 ## Local semantic consistency
 
-We reuse the real-valued graph dialect evaluator from `graph_cert_soundness.lean`, but we keep the
-definition abstract: the CROWN enclosure theorem below holds for **any** locally-consistent
-semantic interpretation `vals` (provided the graph is topologically sorted).
+We reuse the real-valued graph dialect evaluator from
+`NN.MLTheory.CROWN.Proofs.GraphCertSoundness.Semantics`, but we keep the definition abstract:
+the CROWN enclosure theorem below holds for **any** locally-consistent semantic interpretation
+`vals` (provided the graph is topologically sorted).
 
 For IEEE32Exec, a separate evaluator can be plugged in later; the theorem below is stated for any
 `vals` satisfying `SemLocalOK`.
@@ -138,11 +126,6 @@ This file separates the generic checker theorem from per-operator transfer proof
 transcendental operators are represented by explicit transfer-soundness assumptions supplied by the
 backend or checker workflow.
 -/
-
-/-- Safe lookup of a certificate entry, returning `none` out of bounds. -/
-def getAff? {α : Type} [TorchLean.Storage α] [Context α]
-    (cert : Array (Option (FlatAffineBounds α))) (pid : Nat) : Option (FlatAffineBounds α) :=
-  if _h : pid < cert.size then cert[pid]! else none
 
 /-!
 `crownStepNode?` is a *parameter* to the checker theorem:
@@ -206,6 +189,58 @@ This theorem does not pick a certificate producer or a nonlinear backend. Those 
 through `step` and `CrownTransferSound`.
 -/
 
+/-- Topological induction shared by the checker theorems below: once every certificate entry is
+a fixed point of the step rule, transfer soundness at the parents lifts to every node. No order on
+`α` is used, so the same argument serves `ℝ` and the binary32 executable semantics. -/
+private theorem crown_checker_encloses_match {α : Type} [TorchLean.Storage α] [Context α]
+    (g : Graph)
+    (step : Array (Option (FlatAffineBounds α)) → Nat → Option (FlatAffineBounds α))
+    (cert : Array (Option (FlatAffineBounds α)))
+    (vals : Array (Option (FlatTensor α)))
+    (ctx : AffineCtx) (x : Tensor α [ctx.inputDim])
+    (htopo : TopoSorted g)
+    (hcert : CrownCertLocalOK (g := g) (step := step) cert)
+    (hsound :
+      ∀ id : Nat, id < g.nodes.size →
+        (∀ p : Nat, p ∈ (g.nodes[id]!).parents →
+          match cert[p]!, vals[p]! with
+          | some bp, some vp => EnclosesAtInput (α := α) ctx x bp vp
+          | _, _ => True) →
+        match step cert id, vals[id]! with
+        | some b, some v => EnclosesAtInput (α := α) ctx x b v
+        | _, _ => True) :
+    ∀ id : Nat, id < g.nodes.size →
+      match cert[id]!, vals[id]! with
+      | some b, some v => EnclosesAtInput (α := α) ctx x b v
+      | _, _ => True := by
+  intro id hid
+  refine Nat.strong_induction_on id
+      (p := fun k =>
+        k < g.nodes.size →
+          match cert[k]!, vals[k]! with
+          | some b, some v => EnclosesAtInput (α := α) ctx x b v
+          | _, _ => True) ?_ hid
+  intro k ih hk
+  obtain ⟨_, hstep⟩ := hcert
+  have hck : cert[k]! = step cert k := hstep k hk
+  have hparents :
+      ∀ p : Nat, p ∈ (g.nodes[k]!).parents →
+        match cert[p]!, vals[p]! with
+        | some bp, some vp => EnclosesAtInput (α := α) ctx x bp vp
+        | _, _ => True := by
+    intro p hp
+    have hpLt : p < k := htopo k hk p hp
+    simpa using ih p hpLt (lt_trans hpLt hk)
+  cases hcertk : cert[k]! with
+  | none =>
+      cases hvalk : vals[k]! <;> simp
+  | some b =>
+      cases hvalk : vals[k]! with
+      | none => simp
+      | some v =>
+          have hstepk : step cert k = some b := hck.symm.trans hcertk
+          simpa [hcertk, hvalk, hstepk] using hsound k hk hparents
+
 theorem crown_checker_encloses_semantics_match
     (g : Graph) (ps : ParamStore ℝ)
     (step : Array (Option (FlatAffineBounds ℝ)) → Nat → Option (FlatAffineBounds ℝ))
@@ -223,41 +258,16 @@ theorem crown_checker_encloses_semantics_match
       match cert[id]!, vals[id]! with
       | some b, some v => EnclosesAtInput (α := ℝ) ctx x b v
       | _, _ => True := by
-  classical
-  intro id hid
-  refine Nat.strong_induction_on id
-      (p := fun k =>
-        k < g.nodes.size →
-          match cert[k]!, vals[k]! with
-          | some b, some v => EnclosesAtInput (α := ℝ) ctx x b v
-          | _, _ => True) ?_ hid
-  intro k ih hk
-  cases hcert with
-  | intro hsz hstep =>
-    have hck : cert[k]! = step cert k := hstep k hk
-    have hparents :
-        (∀ p : Nat, p ∈ (g.nodes[k]!).parents →
-          match cert[p]!, vals[p]! with
-          | some bp, some vp => EnclosesAtInput (α := ℝ) ctx x bp vp
-          | _, _ => True) := by
+  have hencloses := crown_checker_encloses_match g step cert vals ctx x htopo hcert (by
+    intro id hid hparents
+    have h := hsound id hid (by
       intro p hp
-      have hpLt : p < k := htopo k hk p hp
-      have hIH := ih p hpLt (lt_trans hpLt hk)
-      simpa using hIH
-    cases hcertk : cert[k]! with
-    | none =>
-        cases hvalk : vals[k]! <;> simp []
-    | some b =>
-        cases hvalk : vals[k]! with
-        | none =>
-            simp []
-        | some v =>
-            have hstepk : step cert k = some b := by
-              have : some b = step cert k := by
-                simpa [hcertk] using hck
-              simpa using this.symm
-            have h := hsound k hk hparents
-            simpa [hcertk, hvalk, hstepk] using h
+      have hparent := hparents p hp
+      cases hc : cert[p]! <;> cases hv : vals[p]! <;> simp_all only)
+    cases hs : step cert id <;> cases hv : vals[id]! <;> simp_all only)
+  intro id hid
+  have h := hencloses id hid
+  cases hc : cert[id]! <;> cases hv : vals[id]! <;> simp_all only
 
 /-- Wherever both a certificate entry and a semantic value are present, the entry encloses the
 value.
@@ -325,39 +335,41 @@ proves that `vals` is its trace, and proves that evaluating node `id` does not r
 The floating-point refinement theorem itself lives outside this checker lemma.
 -/
 
+namespace IEEE32
+
 /-- A flat node value in the binary32 executable semantics. -/
-abbrev IEEE32Val := FlatTensor (ExecFloat.Binary 8 23)
+abbrev Val := FlatTensor (ExecFloat.Binary 8 23)
 
 /-- Type of a caller-supplied binary32 node evaluator: nodes, parameters, inputs, partial trace,
 node id, and an optional result. -/
-abbrev IEEE32EvalNode? :=
+abbrev EvalNode :=
   Array Node →
     ParamStore (ExecFloat.Binary 8 23) →
-    Std.HashMap Nat IEEE32Val →
-    Array (Option IEEE32Val) →
+    Std.HashMap Nat Val →
+    Array (Option Val) →
     Nat →
-    Option IEEE32Val
+    Option Val
 
 /--
 The IEEE32 node evaluator may inspect already-computed values, but not the slot it is supposed to
 compute.
 -/
-def IEEE32EvalNoSelfDependency (evalNode? : IEEE32EvalNode?) : Prop :=
+def EvalNoSelfDependency (evalNode? : EvalNode) : Prop :=
   ∀ (nodes : Array Node) (ps : ParamStore (ExecFloat.Binary 8 23))
-    (inputs : Std.HashMap Nat IEEE32Val)
-    (vals vals' : Array (Option IEEE32Val)) (id : Nat),
+    (inputs : Std.HashMap Nat Val)
+    (vals vals' : Array (Option Val)) (id : Nat),
       vals.size = vals'.size →
       (∀ j : Nat, j ≠ id → vals[j]! = vals'[j]!) →
       evalNode? nodes ps inputs vals id = evalNode? nodes ps inputs vals' id
 
 /-- The binary32 counterpart of `SemLocalOK`: `vals` is a full-length trace of `evalNode?`, and the
 evaluator does not read the slot it writes. -/
-def IEEE32SemLocalOK
-    (evalNode? : IEEE32EvalNode?)
+def SemLocalOK
+    (evalNode? : EvalNode)
     (g : Graph) (ps : ParamStore (ExecFloat.Binary 8 23))
-    (inputs : Std.HashMap Nat IEEE32Val)
-    (vals : Array (Option IEEE32Val)) : Prop :=
-  IEEE32EvalNoSelfDependency evalNode? ∧
+    (inputs : Std.HashMap Nat Val)
+    (vals : Array (Option Val)) : Prop :=
+  EvalNoSelfDependency evalNode? ∧
     vals.size = g.nodes.size ∧
     ∀ id : Nat, id < g.nodes.size →
       vals[id]! = evalNode? g.nodes ps inputs vals id
@@ -372,18 +384,18 @@ enclosure predicate
 itself uses the `LE` supplied by the `Context IEEE32Exec` instance, which is not a lawful order
 because of NaN. Any order reasoning belongs in the transfer proofs discharging `hsound`.
 -/
-theorem crown_checker_encloses_semantics_ieee32exec_match
+theorem crown_checker_encloses_semantics_match
     (g : Graph) (_ps : ParamStore (ExecFloat.Binary 8 23))
     (step : Array (Option (FlatAffineBounds (ExecFloat.Binary 8 23))) → Nat →
         Option (FlatAffineBounds (ExecFloat.Binary 8 23)))
     (cert : Array (Option (FlatAffineBounds (ExecFloat.Binary 8 23))))
-    (evalNode? : IEEE32EvalNode?)
-    (inputs : Std.HashMap Nat IEEE32Val)
-    (vals : Array (Option IEEE32Val))
+    (evalNode? : EvalNode)
+    (inputs : Std.HashMap Nat Val)
+    (vals : Array (Option Val))
     (ctx : AffineCtx)
     (x : Tensor (ExecFloat.Binary 8 23) [ctx.inputDim])
     (htopo : TopoSorted g)
-    (_hsem : IEEE32SemLocalOK (evalNode? := evalNode?) (g := g) (ps := _ps) (inputs := inputs)
+    (_hsem : SemLocalOK (evalNode? := evalNode?) (g := g) (ps := _ps) (inputs := inputs)
       (vals := vals))
     (hcert : CrownCertLocalOK (g := g) (step := step) cert)
     (hsound :
@@ -402,62 +414,36 @@ theorem crown_checker_encloses_semantics_ieee32exec_match
       | some b, some v =>
           EnclosesAtInput (α := (ExecFloat.Binary 8 23)) ctx x b v
       | _, _ => True := by
-  classical
-  intro id hid
-  refine Nat.strong_induction_on id
-      (p := fun k =>
-        k < g.nodes.size →
-          match cert[k]!, vals[k]! with
-          | some b, some v =>
-              EnclosesAtInput (α := (ExecFloat.Binary 8 23)) ctx x b v
-          | _, _ => True) ?_ hid
-  intro k ih hk
-  cases hcert with
-  | intro hsz hstep =>
-    have hck : cert[k]! = step cert k := hstep k hk
-    have hparents :
-        (∀ p : Nat, p ∈ (g.nodes[k]!).parents →
-          match cert[p]!, vals[p]! with
-          | some bp, some vp =>
-              EnclosesAtInput (α := (ExecFloat.Binary 8 23)) ctx x bp vp
-          | _, _ => True) := by
+  have hencloses := crown_checker_encloses_match g step cert vals ctx x htopo hcert (by
+    intro id hid hparents
+    have h := hsound id hid (by
       intro p hp
-      have hpLt : p < k := htopo k hk p hp
-      have hIH := ih p hpLt (lt_trans hpLt hk)
-      simpa using hIH
-    cases hcertk : cert[k]! with
-    | none =>
-        cases hvalk : vals[k]! <;> simp []
-    | some b =>
-        cases hvalk : vals[k]! with
-        | none => simp []
-        | some v =>
-            have hstepk : step cert k = some b := by
-              have : some b = step cert k := by
-                simpa [hcertk] using hck
-              simpa using this.symm
-            have h := hsound k hk hparents
-            simpa [hcertk, hvalk, hstepk] using h
+      have hparent := hparents p hp
+      cases hc : cert[p]! <;> cases hv : vals[p]! <;> simp_all only)
+    cases hs : step cert id <;> cases hv : vals[id]! <;> simp_all only)
+  intro id hid
+  have h := hencloses id hid
+  cases hc : cert[id]! <;> cases hv : vals[id]! <;> simp_all only
 
 /--
 Checker-implies-enclosure for `ExecFloat.Binary 8 23` certificates, quantified over the node ids at
 which
 both a certificate entry and a semantic value are present. See
-`crown_checker_encloses_semantics_ieee32exec_match` for why no order on `ExecFloat.Binary 8 23` is
+`crown_checker_encloses_semantics_match` for why no order on `ExecFloat.Binary 8 23` is
 assumed.
 -/
-theorem crown_checker_encloses_semantics_ieee32exec
+theorem crown_checker_encloses_semantics
     (g : Graph) (ps : ParamStore (ExecFloat.Binary 8 23))
     (step : Array (Option (FlatAffineBounds (ExecFloat.Binary 8 23))) → Nat →
         Option (FlatAffineBounds (ExecFloat.Binary 8 23)))
     (cert : Array (Option (FlatAffineBounds (ExecFloat.Binary 8 23))))
-    (evalNode? : IEEE32EvalNode?)
-    (inputs : Std.HashMap Nat IEEE32Val)
-    (vals : Array (Option IEEE32Val))
+    (evalNode? : EvalNode)
+    (inputs : Std.HashMap Nat Val)
+    (vals : Array (Option Val))
     (ctx : AffineCtx)
     (x : Tensor (ExecFloat.Binary 8 23) [ctx.inputDim])
     (htopo : TopoSorted g)
-    (hsem : IEEE32SemLocalOK (evalNode? := evalNode?) (g := g) (ps := ps) (inputs := inputs)
+    (hsem : SemLocalOK (evalNode? := evalNode?) (g := g) (ps := ps) (inputs := inputs)
       (vals := vals))
     (hcert : CrownCertLocalOK (g := g) (step := step) cert)
     (hsound :
@@ -472,17 +458,19 @@ theorem crown_checker_encloses_semantics_ieee32exec
             EnclosesAtInput (α := (ExecFloat.Binary 8 23)) ctx x b v
         | _, _ => True) :
     ∀ id : Nat, id < g.nodes.size →
-      ∀ (b : FlatAffineBounds (ExecFloat.Binary 8 23)) (v : IEEE32Val),
+      ∀ (b : FlatAffineBounds (ExecFloat.Binary 8 23)) (v : Val),
         cert[id]! = some b →
         vals[id]! = some v →
         EnclosesAtInput (α := (ExecFloat.Binary 8 23)) ctx x b v := by
   intro id hid b v hcertId hvalId
   have hmatch :=
-    crown_checker_encloses_semantics_ieee32exec_match
+    crown_checker_encloses_semantics_match
       (g := g) (_ps := ps) (step := step) (cert := cert) (evalNode? := evalNode?)
       (inputs := inputs) (vals := vals) (ctx := ctx) (x := x) htopo hsem hcert hsound id hid
   simpa [hcertId, hvalId] using hmatch
 
+
+end IEEE32
 end
 
 end CrownCertSoundness

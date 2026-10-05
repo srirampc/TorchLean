@@ -99,7 +99,7 @@ The loss itself does not take a mask. It takes an explicit array of the selected
 The element type `Fin n` carries a proof that the index lies within the grid. This rules out an
 out-of-range value at the loss interface, but a caller can still construct the wrong in-range
 index. In particular, bounds safety does not prove mask polarity or patch identity. The runtime
-mask materializer returns the same `Array (Fin n)` type, as the last section demonstrates.
+mask materializer returns the same `Array (Fin n)` type, as the block-mask section demonstrates.
 
 A Boolean mask can select an index only once, whereas an index array can contain several
 occurrences of it. Moving from the former representation to the latter therefore introduces a
@@ -406,7 +406,8 @@ p(z^{\mathrm{context}},i)\right).`
 `jepaAsPredictiveViewContract` takes the supplied target as its own representation, while
 `encodedTargetPredictiveViewContract` exposes a separate encoder for the general case, and
 `jepa_is_predictive_view_loss` and `jepa_is_predictive_view_objective` identify the JEPA sum with
-the common contract. Those are the same `rfl`-shaped bridges as on the MAE side.
+the common contract. As on the MAE side, the loss bridge is `rfl`; the objective bridge also
+simplifies the zero geometry guard.
 
 The target extensionality theorem makes the dependence on selected indices explicit:
 
@@ -591,6 +592,8 @@ over those edges:
 
 $$`E_{\mathrm{align}}(z)
 =\sum_{(i,k)\in E_+}\|z_i-z_k\|_2^2.`
+
+The sum counts occurrences in the stored edge array, so a repeated edge contributes again.
 
 Every term is nonnegative, which `graphAlignmentEnergy_nonneg` proves. To see why this objective
 permits collapse, consider a representation that assigns the same vector to every view:
@@ -777,7 +780,8 @@ to identify the quantity.
 
 For a fixed batch, dividing by $`2n^2` would leave the zero-spread condition unchanged. It would
 change which nonzero spreads meet a fixed floor, so the floor must be rescaled when comparing
-objectives. The Lean guard also uses squared spread directly, without a square root.
+objectives. The Lean guard applies its hinge to the spread itself, a sum of squares,
+without taking a square root.
 $`\sqrt{\cdot}` is not differentiable at zero; the VICReg-style formula below
 {Informal.citep vicreg2022}[] adds a positive constant before taking that root:
 
@@ -992,7 +996,8 @@ objective adds that penalty to the unchanged predictive term.
 
 The executable block masker supplies the index arrays used by the finite loss:
 {src "NN/API/SelfSupervised/BlockMask.lean"}[`NN/API/SelfSupervised/BlockMask.lean`]
-describes a mask by a rank-indexed policy tensor, applies it to a `Tensor Float`, and hands the
+describes a mask by a rank-indexed policy tensor, applies it to a tensor with scalar storage and a
+zero value, and hands the
 hidden positions back as the exact `Array (Fin n)` the theory expects.
 
 The policy is one entry per axis. `none` means the axis does not participate in the block index,
@@ -1024,8 +1029,10 @@ Hiding the even congruence class zeroes the first block and leaves the second al
 #[0.000000, 0.000000, 3.000000, 4.000000]
 ```
 
-That is an executable tensor operation using the block-mask definition. The mask
-predicate is separately callable, so a single coordinate can be interrogated. Position `1` is
+The current `BlockMask.apply_scalar_at` theorem identifies every coordinate of the masked tensor:
+a hidden entry becomes zero and a visible entry is preserved. Its two corollaries,
+`hidden_scalar_eq_zero` and `visible_scalar_eq_input`, expose those cases. The example instantiates
+the scalar-generic operation at `Float`. The mask predicate is separately callable. Position `1` is
 hidden:
 
 ```lean (name := hiddenOne)
@@ -1094,12 +1101,14 @@ Shifting the offset selects the complementary block:
 ```
 
 `#[0, 1]` has type `Array (Fin 4)`, exactly the index type `maskedLoss` takes. The materializer
-computes it by running the mask on a tensor of ones and filtering for zeros, reusing
-the same mask definition. Matching policy arguments are still essential:
+computes it by filtering `Array.finRange` with the shared block-hidden predicate,
+evaluated at each flattened position's unlinearized coordinate. Matching policy arguments
+are still essential:
 the index type cannot prevent masking with one policy and scoring with another.
 
 `BlockMAE.Proof.rowPredictiveContract` builds a `PredictiveViewContract` for one batch row out of
-the masked sample, the materialized hidden indices, and a `Float → Float → ℕ` loss, and
+the sample's unmasked target prefix, the materialized hidden indices, and a
+scalar-generic `α → α → ℕ` loss, and
 `row_predictive_objective_eq_mae_loss` proves that its objective is the finite `maeLoss`. It
 requires
 the reconstruction width to be at most the flattened data size; the selected indices and target

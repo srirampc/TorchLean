@@ -44,14 +44,13 @@ PyTorch comparison: this is the standard eager autograd mechanism (a dynamic tap
 /--
 Dispatch an eager operation through its selected CPU or CUDA capsule.
 
-`cudaProviders` names the providers implemented by the supplied CUDA handler. The selected capsule
-is bound to the matching handler before any implementation runs. Returning `none` still means that
-the operation has no implementation in this CUDA runtime; there is no per-operation CPU fallback.
+The selected capsule is bound to the matching handler before any implementation runs.
+Returning `none` means the operation has no implementation in this CUDA runtime;
+there is no per-operation CPU fallback.
 -/
-def dispatchCudaCapsuleOpt {α : Type} [TorchLean.Storage α] {sh : Shape} (s : EagerSession α)
+def execute {α : Type} [TorchLean.Storage α] {sh : Shape} (s : EagerSession α)
     (op : NN.Backend.BackendOp) (refs : Array (Option RefIdentity))
-    (cudaProviders : Array NN.Backend.Provider) (cpu : IO (TensorRef α sh))
-    (cuda : NN.Backend.KernelCapsule → IO (Option (TensorRef α sh))) : IO (TensorRef α sh) := do
+    (cpu : IO (TensorRef α sh)) (cuda : IO (Option (TensorRef α sh))) : IO (TensorRef α sh) := do
   s.validateRefIdentities refs
   let cpuHandler : NN.Backend.KernelHandler (TensorRef α sh) :=
     { name := "TorchLean reference CPU"
@@ -60,28 +59,31 @@ def dispatchCudaCapsuleOpt {α : Type} [TorchLean.Storage α] {sh : Shape} (s : 
       device := .cpu
       execute := fun _ => cpu }
   let cudaHandlers : Array (NN.Backend.KernelHandler (TensorRef α sh)) :=
-    cudaProviders.map fun provider =>
-      { name := s!"CUDA executor for {reprStr provider}"
+    #[{ name := "LibTorch CUDA executor"
         op
-        provider
+        provider := .libTorch
         device := .cuda
-        execute := fun capsule => do
-          match ← cuda capsule with
+        execute := fun _ => do
+          match ← cuda with
           | some result => pure result
           | none =>
               throw <| IO.userError <|
-                s!"torch: cuda: `{op.name}` is unsupported by `{reprStr provider}`" }
+                s!"torch: cuda: `{op.name}` is unsupported by LibTorch" }]
   let result ← s.executeSelected op (#[cpuHandler] ++ cudaHandlers)
   pure { result with identity? := some (← s.currentRefIdentity) }
 
 /--
-Dispatch an eager operation implemented by the reference CPU and TorchLean native CUDA runtimes.
+Dispatch two recording actions that return node ids.
+
+Both actions remain delayed until `execute` validates the references and selects a handler,
+including any scalar transfers performed by the CUDA action.
 -/
-def dispatchCudaOpt {α : Type} [TorchLean.Storage α] {sh : Shape} (s : EagerSession α)
-    (op : NN.Backend.BackendOp)
-    (refs : Array (Option RefIdentity)) (cpu : IO (TensorRef α sh))
-    (cuda : IO (Option (TensorRef α sh))) : IO (TensorRef α sh) :=
-  dispatchCudaCapsuleOpt s op refs #[.nativeCuda] cpu (fun _ => cuda)
+def executeRecorded {α : Type} [TorchLean.Storage α] {sh : Shape} (s : EagerSession α)
+    (op : NN.Backend.BackendOp) (refs : Array (Option RefIdentity))
+    (cpu cuda : IO Nat) : IO (TensorRef α sh) :=
+  execute s op refs
+    (do pure { id := ← cpu })
+    (do pure (some { id := ← cuda }))
 
 end EagerSession
 

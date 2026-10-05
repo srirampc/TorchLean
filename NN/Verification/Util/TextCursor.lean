@@ -6,9 +6,6 @@ Authors: TorchLean Team
 
 module
 
-public import Aesop.BuiltinRules
-import Mathlib.Tactic.Finiteness.Attr
-
 /-!
 # Text cursor primitives for verification parsers
 
@@ -71,13 +68,21 @@ def takeWhileFuel (fuel : Nat) (predicate : Char → Bool) (accumulator : String
             (accumulator, cursor)
       | none => (accumulator, cursor)
 
+/--
+Fold a string of decimal digits into a natural number; callers guarantee digit-only input.
+
+This is deliberately not `String.toNat?`, whose grammar also accepts `_` digit separators, which the
+ODE/PDE literal languages do not.
+-/
+def digitsToNat (digits : String) : Nat :=
+  digits.foldl (fun accumulator char => accumulator * 10 + (char.toNat - '0'.toNat)) 0
+
 /-- Convert decimal digits to a natural number, rejecting empty or nondigit input. -/
 def decimalNat (text : String) : Except String Nat :=
-  if text.isEmpty || !text.toList.all Char.isDigit then
+  if text.isEmpty || !text.all Char.isDigit then
     .error "expected natural number"
   else
-    .ok <| text.toList.foldl
-      (fun accumulator char => accumulator * 10 + (char.toNat - '0'.toNat)) 0
+    .ok (digitsToNat text)
 
 /-- Parse a whitespace-prefixed unsigned decimal natural using a caller-supplied scan budget. -/
 def parseNat (fuel : Nat) (cursor : Cursor) : Except String (Nat × Cursor) := do
@@ -96,8 +101,7 @@ def parseFloat (fuel : Nat) (cursor : Cursor) : Except String (Float × Cursor) 
   let (integerText, cursor) := takeWhileFuel fuel (fun char => char.isDigit) "" cursor
   if integerText = "" then
     .error "expected number"
-  let integerValue := Float.ofNat <| integerText.toList.foldl
-    (fun accumulator char => accumulator * 10 + (char.toNat - '0'.toNat)) 0
+  let integerValue := Float.ofNat (digitsToNat integerText)
   let (fractionValue, cursor) :=
     match peek cursor with
     | some '.' =>
@@ -106,8 +110,7 @@ def parseFloat (fuel : Nat) (cursor : Cursor) : Except String (Float × Cursor) 
         if fractionText = "" then
           (0.0, cursor)
         else
-          let numerator := fractionText.toList.foldl
-            (fun accumulator char => accumulator * 10 + (char.toNat - '0'.toNat)) 0
+          let numerator := digitsToNat fractionText
           let denominator := Nat.pow 10 fractionText.length
           (Float.ofNat numerator / Float.ofNat denominator, cursor)
     | _ => (0.0, cursor)

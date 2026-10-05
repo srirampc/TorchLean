@@ -36,15 +36,15 @@ noncomputable section
 theorem unstack_hardMaskedSoftmaxSpec {nQ nK : Nat}
     (scores : Tensor ℝ [nQ, nK]) (mask : Tensor Bool [nQ, nK]) (i : Fin nQ) :
     (Spec.hardMaskedSoftmaxSpec scores mask).unstack i =
-      Spec.hardMaskedSoftmaxVecSpec (scores.unstack i) (mask.unstack i) := by
-  exact Tensor.unstack_dim _ i
+      Spec.hardMaskedSoftmaxVecSpec (scores.unstack i) (mask.unstack i) :=
+  Tensor.unstack_dim _ i
 
 /-- The weighted-centering helper acts independently on each query row. -/
 theorem unstack_softmaxBackwardFromWeightsSpec {nQ nK : Nat}
     (weights gradient : Tensor ℝ [nQ, nK]) (i : Fin nQ) :
     (Spec.softmaxBackwardFromWeightsSpec weights gradient).unstack i =
-      Spec.softmaxBackwardFromWeightsSpec (weights.unstack i) (gradient.unstack i) := by
-  exact Tensor.unstack_dim _ i
+      Spec.softmaxBackwardFromWeightsSpec (weights.unstack i) (gradient.unstack i) :=
+  Tensor.unstack_dim _ i
 
 /-- The concrete masked row helper is symmetric for rectangular score matrices.
 

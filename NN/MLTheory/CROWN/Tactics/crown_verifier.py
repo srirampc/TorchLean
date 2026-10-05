@@ -19,7 +19,7 @@ import json
 import math
 import sys
 from pathlib import Path
-from typing import List, Tuple, Dict, Any, Optional, Callable
+from typing import List, Tuple, Dict, Any
 
 # ============================================================================
 # Optional Dependencies
@@ -77,11 +77,14 @@ def ibp_tanh(lo: List[float], hi: List[float]) -> Tuple[List[float], List[float]
     return [math.tanh(x) for x in lo], [math.tanh(x) for x in hi]
 
 
+def sigmoid(x: float) -> float:
+    """Logistic sigmoid with the argument clamped so exp cannot overflow."""
+    return 1.0 / (1.0 + math.exp(-max(-500.0, min(500.0, x))))
+
+
 def ibp_sigmoid(lo: List[float], hi: List[float]) -> Tuple[List[float], List[float]]:
     """IBP for sigmoid (monotone)"""
-    def sig(x): 
-        return 1.0 / (1.0 + math.exp(-max(-500, min(500, x))))
-    return [sig(x) for x in lo], [sig(x) for x in hi]
+    return [sigmoid(x) for x in lo], [sigmoid(x) for x in hi]
 
 
 # ============================================================================
@@ -159,7 +162,7 @@ class IBPNetwork:
             elif act == "tanh":
                 z = [math.tanh(v) for v in z]
             elif act == "sigmoid":
-                z = [1/(1+math.exp(-max(-500, min(500, v)))) for v in z]
+                z = [sigmoid(v) for v in z]
         return z
     
     def ibp_forward(self, lo: List[float], hi: List[float]) -> Tuple[List[float], List[float]]:
@@ -241,8 +244,7 @@ class IBPNetwork:
                 
             elif act == "sigmoid":
                 for i in range(m):
-                    def sig(v): return 1/(1+math.exp(-max(-500, min(500, v))))
-                    sl, sh = sig(new_z_lo[i]), sig(new_z_hi[i])
+                    sl, sh = sigmoid(new_z_lo[i]), sigmoid(new_z_hi[i])
                     d_lo = min(sl*(1-sl), sh*(1-sh))
                     d_hi = 0.25  # max at x=0
                     for k in range(n_in):
@@ -329,15 +331,14 @@ def pendulum_ibp(lo: List[float], hi: List[float], g: float = 9.81, L: float = 1
     
     f1_lo, f1_hi = omega_lo, omega_hi
     
-    # sin is monotone on [-π/2, π/2], need to handle other cases
-    sin_lo = math.sin(theta_lo)
-    sin_hi = math.sin(theta_hi)
-    if theta_lo < 0 < theta_hi:
-        sin_min = min(sin_lo, sin_hi, 0)
-        sin_max = max(sin_lo, sin_hi, 0)
+    # Endpoint bounds apply on the central monotone branch. Elsewhere use the
+    # global range: interior extrema and large-angle argument reduction must
+    # not be missed. These host-float claims still require certificate replay.
+    if -math.pi / 2 <= theta_lo <= theta_hi <= math.pi / 2:
+        sin_min = math.sin(theta_lo)
+        sin_max = math.sin(theta_hi)
     else:
-        sin_min = min(sin_lo, sin_hi)
-        sin_max = max(sin_lo, sin_hi)
+        sin_min, sin_max = -1.0, 1.0
     
     term1_lo = -(g/L) * sin_max
     term1_hi = -(g/L) * sin_min
@@ -452,8 +453,7 @@ def _verify_with_crown(net: IBPNetwork, lo: List[float], hi: List[float],
     
     # Setup bounds
     center = torch.tensor([[(l + h) / 2 for l, h in zip(lo, hi)]], dtype=torch.float32)
-    eps = max((h - l) / 2 for l, h in zip(lo, hi))
-    
+
     x_L = torch.tensor([lo], dtype=torch.float32)
     x_U = torch.tensor([hi], dtype=torch.float32)
     
@@ -564,7 +564,7 @@ Dynamics: {cert['dynamics']}
 Producer status: {'PASSED NUMERIC MARGINS' if verified else 'FAILED NUMERIC MARGINS'}
 
 DO NOT EDIT - Regenerate with:
-  python crown_verifier.py verify --model {model_name} --region "{region['lo'][0]},{region['hi'][0]}]x..." --dynamics {cert['dynamics']} --format lean-full
+  python crown_verifier.py verify --model {model_name} --region "[{region['lo'][0]},{region['hi'][0]}]x..." --dynamics {cert['dynamics']} --format lean-full
 -/
 import NN.MLTheory.CROWN.Lyapunov.Verification
 import Mathlib.Tactic.NormNum

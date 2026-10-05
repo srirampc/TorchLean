@@ -26,119 +26,6 @@ namespace TorchLean.Tensor.Internal.Elab.Impl
 universe u
 
 /--
-Combine branch-local equality proofs for a generated runtime decision.
-
-Native segmented kernels use this theorem to assemble arbitrary-length
-decision trees while keeping each leaf's semantic certificate local.
--/
-theorem ite_eq_of_branch_eq {α : Type u} (condition : Prop)
-    [Decidable condition] (thenValue elseValue expected : α)
-    (hThen : condition → thenValue = expected)
-    (hElse : ¬ condition → elseValue = expected) :
-    (if condition then thenValue else elseValue) = expected := by
-  by_cases h : condition
-  · simpa [h] using hThen h
-  · simpa [h] using hElse h
-
-/--
-Combine proof-dependent branches that both compute the same semantic value.
-
-The branch evidence erases in generated native code, while each branch may
-use it to certify subtraction, bounds, or direct buffer reads.
--/
-theorem dite_eq_of_branch_eq {α : Type u} (condition : Prop)
-    [Decidable condition]
-    (thenValue : condition → α) (elseValue : ¬ condition → α)
-    (expected : α)
-    (hThen : ∀ proof, thenValue proof = expected)
-    (hElse : ∀ proof, elseValue proof = expected) :
-    (if proof : condition then thenValue proof else elseValue proof) =
-      expected := by
-  by_cases h : condition
-  · simpa [h] using hThen h
-  · simpa [h] using hElse h
-
-/-!
-`fin_foldl_push_eq_array_ofFn` is not restated here. It is proved once in
-`NN.Tensor.Internal.Representation.Storage`, which this file imports, and it used to have an exact
-second copy at this spot. The uses below spell out the `Storage.` prefix rather than opening the
-namespace, so a reader can see at a glance that the lemma comes from the storage layer.
--/
-
-/--
-Fill one array in increasing native-index order.
-
-The callback's bound proof is erased, so the executable builder contains one
-allocation and one `USize` loop.
--/
-@[inline] def nativeArrayOfFn
-    {α : Type u} (length : Nat) (bound : USize)
-    (hBound : bound.toNat = length)
-    (values : (index : USize) → index.toNat < length → α) : Array α :=
-  nativeFinFoldl length bound hBound
-    (fun output index hIndex => output.push (values index hIndex))
-    (Array.emptyWithCapacity length)
-
-/--
-The native array builder equals `Array.ofFn` whenever its native callback
-agrees pointwise with the semantic finite-index function.
--/
-theorem nativeArrayOfFn_eq_array_ofFn
-    {α : Type u} (length : Nat) (bound : USize)
-    (hBound : bound.toNat = length)
-    (nativeValues : (index : USize) → index.toNat < length → α)
-    (values : Fin length → α)
-    (hValues :
-      ∀ (index : USize) (hIndex : index.toNat < length),
-        nativeValues index hIndex = values ⟨index.toNat, hIndex⟩) :
-    nativeArrayOfFn length bound hBound nativeValues =
-      Array.ofFn values := by
-  rw [nativeArrayOfFn]
-  rw [nativeFinFoldl_eq_fin_foldl_of_eq length bound hBound
-    (fun output index hIndex =>
-      output.push (nativeValues index hIndex))
-    (fun output index => output.push (values index))
-    (Array.emptyWithCapacity length) (by
-      intro output index hIndex
-      rw [hValues index hIndex])]
-  exact Storage.fin_foldl_push_eq_array_ofFn length values
-
-/-- The native builder produces the statically requested number of entries. -/
-theorem nativeArrayOfFn_size
-    {α : Type u} (length : Nat) (bound : USize)
-    (hBound : bound.toNat = length)
-    (values : (index : USize) → index.toNat < length → α) :
-    (nativeArrayOfFn length bound hBound values).size = length := by
-  let semanticValues : Fin length → α := fun index =>
-    values
-      (USize.ofNatLT index.val
-        (Nat.lt_trans index.isLt (by
-          rw [← hBound]
-          exact USize.toNat_lt_size bound)))
-      (by simp)
-  rw [nativeArrayOfFn_eq_array_ofFn length bound hBound
-    values semanticValues]
-  · exact Array.size_ofFn
-  · intro index hIndex
-    have hNativeIndex :
-        USize.ofNatLT index.toNat
-            (Nat.lt_trans hIndex (by
-              rw [← hBound]
-              exact USize.toNat_lt_size bound)) =
-          index := by
-      apply USize.toNat.inj
-      simp
-    change values index hIndex =
-      values
-        (USize.ofNatLT index.toNat
-          (Nat.lt_trans hIndex (by
-            rw [← hBound]
-            exact USize.toNat_lt_size bound)))
-        _
-    cases hNativeIndex
-    rfl
-
-/--
 Fill the physical buffer selected for `α` in increasing native-index order.
 
 The storage dictionary is specialized at each scalar type. For `Float`, this
@@ -198,50 +85,13 @@ theorem nativeBufferOfFn_size
     nativeBufferOfFn_toArray length bound hBound values semanticValues]
   · exact Array.size_ofFn
   · intro index hIndex
-    have hNativeIndex :
-        USize.ofNatLT index.toNat
-            (Nat.lt_trans hIndex (by
-              rw [← hBound]
-              exact USize.toNat_lt_size bound)) =
-          index := by
-      apply USize.toNat.inj
-      simp
-    change values index hIndex =
-      values
-        (USize.ofNatLT index.toNat
-          (Nat.lt_trans hIndex (by
-            rw [← hBound]
-            exact USize.toNat_lt_size bound)))
-        _
-    cases hNativeIndex
-    rfl
+    simp only [semanticValues, USize.ofNatLT_toNat]
 
 /--
-Fill a physical buffer by copying entries from another buffer.
-
-The source-index callback never exposes `α`. Generic arrays can therefore
-retain and transfer existing boxed values, while specialized scalar arrays
-perform direct unboxed reads and writes.
--/
-@[inline] def nativeBufferGather
-    {α : Type u} [storage : Storage α]
-    (source : storage.Buffer)
-    (length : Nat) (bound : USize)
-    (hBound : bound.toNat = length)
-    (sourceIndices :
-      (index : USize) → index.toNat < length → USize)
-    (hSourceIndices :
-      ∀ (index : USize) (hIndex : index.toNat < length),
-        (sourceIndices index hIndex).toNat < storage.size source) :
-    storage.Buffer :=
-  storage.gather source length bound hBound
-    sourceIndices hSourceIndices
-
-/--
-The native gather observes as `Array.ofFn` when every copied source entry
+The storage gather observes as `Array.ofFn` when every copied source entry
 agrees with the semantic finite-index function.
 -/
-theorem nativeBufferGather_toArray
+theorem _root_.TorchLean.Storage.toArray_gather
     {α : Type u} [storage : Storage α]
     (source : storage.Buffer)
     (length : Nat) (bound : USize)
@@ -258,10 +108,10 @@ theorem nativeBufferGather_toArray
             (hSourceIndices index hIndex) =
           values ⟨index.toNat, hIndex⟩) :
     storage.toArray
-        (nativeBufferGather source length bound hBound
+        (storage.gather source length bound hBound
           sourceIndices hSourceIndices) =
       Array.ofFn values := by
-  rw [nativeBufferGather, storage.gather_eq_nativeFinFoldl]
+  rw [storage.gather_eq_nativeFinFoldl]
   rw [nativeFinFoldl_eq_fin_foldl_of_eq length bound hBound
     (fun output index hIndex =>
       storage.copyAt source (sourceIndices index hIndex)
@@ -281,8 +131,8 @@ theorem nativeBufferGather_toArray
     rw [storage.toArray_uget source _ _ hArray]
     exact hValues index hIndex
 
-/-- The native gather creates the requested scalar count. -/
-theorem nativeBufferGather_size
+/-- The storage gather creates the requested scalar count. -/
+theorem _root_.TorchLean.Storage.size_gather
     {α : Type u} [storage : Storage α]
     (source : storage.Buffer)
     (length : Nat) (bound : USize)
@@ -293,7 +143,7 @@ theorem nativeBufferGather_size
       ∀ (index : USize) (hIndex : index.toNat < length),
         (sourceIndices index hIndex).toNat < storage.size source) :
     storage.size
-        (nativeBufferGather source length bound hBound
+        (storage.gather source length bound hBound
           sourceIndices hSourceIndices) =
       length := by
   let values : Fin length → α := fun index =>
@@ -306,28 +156,11 @@ theorem nativeBufferGather_size
         (by simp))
       (hSourceIndices _ _)
   rw [← storage.toArray_size,
-    nativeBufferGather_toArray source length bound hBound
+    Storage.toArray_gather source length bound hBound
       sourceIndices hSourceIndices values]
   · exact Array.size_ofFn
   · intro index hIndex
-    have hNativeIndex :
-        USize.ofNatLT index.toNat
-            (Nat.lt_trans hIndex (by
-              rw [← hBound]
-              exact USize.toNat_lt_size bound)) =
-          index := by
-      apply USize.toNat.inj
-      simp
-    change storage.uget source (sourceIndices index hIndex) _ =
-      storage.uget source
-        (sourceIndices
-          (USize.ofNatLT index.toNat
-            (Nat.lt_trans hIndex (by
-              rw [← hBound]
-              exact USize.toNat_lt_size bound)))
-          _) _
-    cases hNativeIndex
-    rfl
+    simp only [values, USize.ofNatLT_toNat]
 
 /--
 Fill a physical buffer with an executable update callback.

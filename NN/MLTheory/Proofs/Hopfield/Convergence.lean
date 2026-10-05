@@ -11,15 +11,16 @@ public import NN.MLTheory.Proofs.Hopfield.Progress
 /-!
 # Hopfield cyclic-sweep convergence (finite-state argument)
 
-This file uses the tie-handling progress lemma from `progress.lean` to prove the classical
+This file uses the tie-handling progress lemma from `Progress.lean` to prove the classical
 finite-state global dynamics facts for cyclic sweeps:
 
 * **No nontrivial cycles** for the full-sweep update `cycleUpdate` (hence convergence).
 * A coarse **convergence bound** of at most `2^n` sweeps (and therefore `n * 2^n` single-coordinate
   updates) from any initial state, by a pigeonhole argument on the finite state space `Bool^n`.
 
-We keep the statement at the “sweep level” (one full pass over coordinates). Connecting this to
-`seqStates` with `cyclicUseq` is routine and can be layered on top.
+The statements are at the “sweep level” (one full pass over coordinates), written with Mathlib's
+iterate notation `(cycleUpdate p)^[k]`. Connecting this to `seqStates` with `cyclicUseq` is routine
+and can be layered on top.
 -/
 
 @[expose] public section
@@ -34,114 +35,61 @@ open Spec.Hopfield
 
 variable {n : Nat}
 
-private theorem pluses_le_dim (s : State n) : pluses (n := n) s ≤ n := by
-  classical
-  -- `pluses` is the cardinality of a filtered subset of `Finset.univ`.
-  unfold Spec.Hopfield.pluses
-  simpa using
-    (le_trans (Finset.card_filter_le (s := (Finset.univ : Finset (Fin n)))
-      (p := fun i : Fin n => s i = true)) (by simp))
-
 section
 
 variable (p : Params ℝ n)
 
-/-- The full-sweep update map whose iterates define Hopfield cyclic dynamics. -/
-noncomputable def f : State n → State n := cycleUpdate (n := n) p
-
-private theorem energy_iterate_le
-    (hsym : SymmetricW (n := n) p) (hdiag : DiagonalZero (n := n) p)
-    (k : Nat) (s : State n) :
-    energy (α := ℝ) p ((f (n := n) p)^[k] s) ≤ energy (α := ℝ) p s := by
-  classical
-  induction k with
-  | zero =>
-      simp
-  | succ k IH =>
-      have hstep :
-          energy (α := ℝ) p ((f (n := n) p) ((f (n := n) p)^[k] s))
-            ≤
-          energy (α := ℝ) p ((f (n := n) p)^[k] s) :=
-        energy_cycleUpdate_le (n := n) (p := p) hsym hdiag ((f (n := n) p)^[k] s)
-      simpa [Function.iterate_succ_apply'] using le_trans hstep IH
-
+/-- Energy is antitone along the sweep iterates, by composing the one-sweep bound. -/
 private theorem energy_iterate_antitone
-    (hsym : SymmetricW (n := n) p) (hdiag : DiagonalZero (n := n) p)
-    {i j : Nat} (hij : i ≤ j) (s : State n) :
-    energy (α := ℝ) p ((f (n := n) p)^[j] s) ≤ energy (α := ℝ) p ((f (n := n) p)^[i] s) := by
-  classical
-  obtain ⟨d, rfl⟩ := Nat.exists_eq_add_of_le hij
-  -- Apply the `d`-step bound from the state `f^[i] s`, then rewrite the iterate as `f^[i+d] s`.
-  have h0 :
-      energy (α := ℝ) p ((f (n := n) p)^[d] ((f (n := n) p)^[i] s)) ≤
-        energy (α := ℝ) p ((f (n := n) p)^[i] s) :=
-    energy_iterate_le (n := n) (p := p) hsym hdiag d ((f (n := n) p)^[i] s)
-  have e :
-      (f (n := n) p)^[d + i] s = (f (n := n) p)^[d] ((f (n := n) p)^[i] s) := by
-    simpa using (Function.iterate_add_apply (f := f (n := n) p) d i s)
-  have h1 :
-      energy (α := ℝ) p ((f (n := n) p)^[d + i] s) ≤
-        energy (α := ℝ) p ((f (n := n) p)^[i] s) := by
-    -- Rewrite the left-hand side of `h0` via `e` (in the reverse direction).
-    have h0' := h0
-    -- `h0' : energy p (f^[d] (f^[i] s)) ≤ ...`
-    -- Replace `f^[d] (f^[i] s)` with `f^[d+i] s`.
-    rw [← e] at h0'
-    exact h0'
-  -- Commute the addition in the iterate index.
-  simpa [Nat.add_comm] using h1
+    (hsym : SymmetricW (n := n) p) (hdiag : DiagonalZero (n := n) p) (s : State n) :
+    Antitone fun k => energy (α := ℝ) p ((cycleUpdate (n := n) p)^[k] s) :=
+  antitone_nat_of_succ_le fun k => by
+    simpa [Function.iterate_succ_apply'] using
+      energy_cycleUpdate_le (n := n) (p := p) hsym hdiag ((cycleUpdate (n := n) p)^[k] s)
 
+/-- Along a cycle of the sweep, the energy is constant. -/
 private theorem energy_iterate_eq_of_iterate_eq
     (hsym : SymmetricW (n := n) p) (hdiag : DiagonalZero (n := n) p)
     {k i : Nat} (hi : i ≤ k) {s : State n}
-    (hcyc : (f (n := n) p)^[k] s = s) :
-    energy (α := ℝ) p ((f (n := n) p)^[i] s) = energy (α := ℝ) p s := by
-  have hle : energy (α := ℝ) p ((f (n := n) p)^[i] s) ≤ energy (α := ℝ) p s :=
-    energy_iterate_le (n := n) (p := p) hsym hdiag i s
-  have hle' : energy (α := ℝ) p s ≤ energy (α := ℝ) p ((f (n := n) p)^[i] s) := by
-    have hk_le :
-        energy (α := ℝ) p ((f (n := n) p)^[k] s) ≤ energy (α := ℝ) p ((f (n := n) p)^[i] s) :=
-      energy_iterate_antitone (n := n) (p := p) hsym hdiag hi s
-    simpa [hcyc] using hk_le
-  exact le_antisymm hle hle'
+    (hcyc : (cycleUpdate (n := n) p)^[k] s = s) :
+    energy (α := ℝ) p ((cycleUpdate (n := n) p)^[i] s) = energy (α := ℝ) p s := by
+  have hanti := energy_iterate_antitone (n := n) (p := p) hsym hdiag s
+  refine le_antisymm (by simpa using hanti (Nat.zero_le i)) ?_
+  simpa [hcyc] using hanti hi
 
+/-- A sweep that keeps the energy fixed cannot lower the number of active units. -/
 private theorem pluses_cycleUpdate_ge_of_energy_eq
     (hsym : SymmetricW (n := n) p) (hdiag : DiagonalZero (n := n) p)
     (s : State n)
-    (hE : energy (α := ℝ) p ((f (n := n) p) s) = energy (α := ℝ) p s) :
-    pluses (n := n) ((f (n := n) p) s) ≥ pluses (n := n) s := by
-  classical
-  by_cases hfix : (f (n := n) p) s = s
-  · exact ge_of_eq (by simpa using congrArg (pluses (n := n)) hfix)
-  · have hprog := cycleUpdate_progress (n := n) (p := p) hsym hdiag s hfix
-    rcases hprog with hlt | ⟨heq, hpl⟩
-    · exact False.elim (hlt.ne hE)
-    · exact le_of_lt hpl
+    (hE : energy (α := ℝ) p (cycleUpdate (n := n) p s) = energy (α := ℝ) p s) :
+    pluses (n := n) (cycleUpdate (n := n) p s) ≥ pluses (n := n) s := by
+  by_cases hfix : cycleUpdate (n := n) p s = s
+  · exact (congrArg (pluses (n := n)) hfix).ge
+  · rcases cycleUpdate_progress (n := n) (p := p) hsym hdiag s hfix with hlt | ⟨_, hpl⟩
+    · exact absurd hE hlt.ne
+    · exact hpl.le
 
 private theorem pluses_iterate_step_mono_of_iterate_eq
     (hsym : SymmetricW (n := n) p) (hdiag : DiagonalZero (n := n) p)
     {k i : Nat} (hi : i < k) {s : State n}
-    (hcyc : (f (n := n) p)^[k] s = s) :
-    pluses (n := n) ((f (n := n) p)^[i] s) ≤ pluses (n := n) ((f (n := n) p)^[i + 1] s) := by
-  have hEi :
-      energy (α := ℝ) p ((f (n := n) p)^[i] s) = energy (α := ℝ) p s :=
-    energy_iterate_eq_of_iterate_eq (n := n) (p := p) hsym hdiag (Nat.le_of_lt hi) hcyc
-  have hEi1 :
-      energy (α := ℝ) p ((f (n := n) p)^[i + 1] s) = energy (α := ℝ) p s :=
-    energy_iterate_eq_of_iterate_eq (n := n) (p := p) hsym hdiag (Nat.succ_le_of_lt hi) hcyc
+    (hcyc : (cycleUpdate (n := n) p)^[k] s = s) :
+    pluses (n := n) ((cycleUpdate (n := n) p)^[i] s) ≤
+      pluses (n := n) ((cycleUpdate (n := n) p)^[i + 1] s) := by
+  -- Along the cycle the energy is constant, so the sweep from `f^[i] s` keeps it fixed.
   have hE_step :
-      energy (α := ℝ) p ((f (n := n) p) ((f (n := n) p)^[i] s)) =
-        energy (α := ℝ) p ((f (n := n) p)^[i] s) := by
-    -- Both sides equal `energy p s` along the cycle.
+      energy (α := ℝ) p (cycleUpdate (n := n) p ((cycleUpdate (n := n) p)^[i] s)) =
+        energy (α := ℝ) p ((cycleUpdate (n := n) p)^[i] s) := by
     calc
-      energy (α := ℝ) p ((f (n := n) p) ((f (n := n) p)^[i] s))
-          = energy (α := ℝ) p ((f (n := n) p)^[i + 1] s) := by
-              simp [Function.iterate_succ_apply']
-      _ = energy (α := ℝ) p s := hEi1
-      _ = energy (α := ℝ) p ((f (n := n) p)^[i] s) := hEi.symm
-  have hpl :=
-    pluses_cycleUpdate_ge_of_energy_eq (n := n) (p := p) hsym hdiag ((f (n := n) p)^[i] s) hE_step
-  simpa [Function.iterate_succ_apply'] using hpl
+      energy (α := ℝ) p (cycleUpdate (n := n) p ((cycleUpdate (n := n) p)^[i] s))
+          = energy (α := ℝ) p ((cycleUpdate (n := n) p)^[i + 1] s) := by
+              simp only [Function.iterate_succ_apply']
+      _ = energy (α := ℝ) p s :=
+              energy_iterate_eq_of_iterate_eq (n := n) (p := p) hsym hdiag
+                (Nat.succ_le_of_lt hi) hcyc
+      _ = energy (α := ℝ) p ((cycleUpdate (n := n) p)^[i] s) :=
+              (energy_iterate_eq_of_iterate_eq (n := n) (p := p) hsym hdiag hi.le hcyc).symm
+  rw [Function.iterate_succ_apply']
+  exact pluses_cycleUpdate_ge_of_energy_eq (n := n) (p := p) hsym hdiag _ hE_step
 
 /-- With symmetric weights and zero diagonal, a periodic orbit of the sweep is a fixed point.
 
@@ -151,41 +99,39 @@ the cycle and return to its starting value, which is impossible. -/
 theorem cycleUpdate_no_nontrivial_cycles
     (hsym : SymmetricW (n := n) p) (hdiag : DiagonalZero (n := n) p)
     {k : Nat} (hk : 0 < k) (s : State n)
-    (hcyc : (f (n := n) p)^[k] s = s) :
-    (f (n := n) p) s = s := by
+    (hcyc : (cycleUpdate (n := n) p)^[k] s = s) :
+    cycleUpdate (n := n) p s = s := by
   classical
   by_contra hne
   -- Energy is constant along the cycle.
   have hE1 :
-      energy (α := ℝ) p ((f (n := n) p) s) = energy (α := ℝ) p s := by
+      energy (α := ℝ) p (cycleUpdate (n := n) p s) = energy (α := ℝ) p s := by
     simpa using
       energy_iterate_eq_of_iterate_eq (n := n) (p := p) hsym hdiag (Nat.succ_le_of_lt hk) hcyc
   -- So by the progress lemma, pluses strictly increases on the first step.
-  have hprog := cycleUpdate_progress (n := n) (p := p) hsym hdiag s hne
   have hpl1 :
-      pluses (n := n) ((f (n := n) p) s) > pluses (n := n) s := by
-    rcases hprog with hlt | ⟨heq, hpl⟩
-    · exact False.elim (hlt.ne hE1)
+      pluses (n := n) (cycleUpdate (n := n) p s) > pluses (n := n) s := by
+    rcases cycleUpdate_progress (n := n) (p := p) hsym hdiag s hne with hlt | ⟨_, hpl⟩
+    · exact absurd hE1 hlt.ne
     · exact hpl
   -- Along a cycle, pluses is stepwise non-decreasing (since energy is constant).
   have hpl_mono : ∀ i, i < k →
-      pluses (n := n) ((f (n := n) p)^[i] s) ≤ pluses (n := n) ((f (n := n) p)^[i + 1] s) := by
-    intro i hi
-    exact pluses_iterate_step_mono_of_iterate_eq (n := n) (p := p) hsym hdiag (k := k) (i := i) hi
-      hcyc
+      pluses (n := n) ((cycleUpdate (n := n) p)^[i] s) ≤
+        pluses (n := n) ((cycleUpdate (n := n) p)^[i + 1] s) :=
+    fun i hi => pluses_iterate_step_mono_of_iterate_eq (n := n) (p := p) hsym hdiag hi hcyc
   -- Hence `pluses (f s) ≤ pluses (f^[k] s)` by monotonicity on the initial segment.
-  have hpl1k : pluses (n := n) ((f (n := n) p) s) ≤ pluses (n := n) ((f (n := n) p)^[k] s) := by
+  have hpl1k :
+      pluses (n := n) (cycleUpdate (n := n) p s) ≤
+        pluses (n := n) ((cycleUpdate (n := n) p)^[k] s) := by
     have hk1 : 1 ≤ k := Nat.succ_le_of_lt hk
-    -- Truncate the sequence at `k` so we can use `monotone_nat_of_le_succ`.
-    let g : Nat → Nat := fun i => pluses (n := n) ((f (n := n) p)^[Nat.min i k] s)
+    -- Truncate the sequence at `k` so that `monotone_nat_of_le_succ` applies; monotonicity only
+    -- holds on the initial segment `[0, k]`.
+    let g : Nat → Nat := fun i => pluses (n := n) ((cycleUpdate (n := n) p)^[Nat.min i k] s)
     have hg_step : ∀ i, g i ≤ g (i + 1) := by
       intro i
       by_cases hi : i < k
       · have hi' : Nat.min i k = i := Nat.min_eq_left (Nat.le_of_lt hi)
-        have hi1' : Nat.min (i + 1) k = i + 1 := by
-          apply Nat.min_eq_left
-          exact Nat.succ_le_of_lt hi
-        -- Use the stepwise monotonicity from the cycle hypothesis.
+        have hi1' : Nat.min (i + 1) k = i + 1 := Nat.min_eq_left (Nat.succ_le_of_lt hi)
         simpa [g, hi', hi1', Nat.add_assoc] using hpl_mono i hi
       · have hk_le : k ≤ i := Nat.le_of_not_gt hi
         have hi' : Nat.min i k = k := Nat.min_eq_right hk_le
@@ -198,14 +144,29 @@ theorem cycleUpdate_no_nontrivial_cycles
     have hkmin : Nat.min k k = k := Nat.min_self k
     simpa [g, h1min, hkmin, Function.iterate_one] using hg1k
   -- But `f^[k] s = s`, so pluses returns to its original value, contradiction.
-  have hkPl : pluses (n := n) ((f (n := n) p)^[k] s) = pluses (n := n) s := by
-    simp [hcyc]
-  have : pluses (n := n) s < pluses (n := n) s := by
-    have hlt : pluses (n := n) s < pluses (n := n) ((f (n := n) p)^[k] s) :=
-      lt_of_lt_of_le hpl1 hpl1k
-    rw [hkPl] at hlt
-    exact hlt
-  exact (lt_irrefl _ this)
+  have hkPl : pluses (n := n) ((cycleUpdate (n := n) p)^[k] s) = pluses (n := n) s := by
+    rw [hcyc]
+  have hlt : pluses (n := n) s < pluses (n := n) s := by
+    have h := lt_of_lt_of_le hpl1 hpl1k
+    rwa [hkPl] at h
+  exact lt_irrefl _ hlt
+
+/-- If two iterates of the sweep coincide, the earlier one is already a fixed point.
+
+The repetition closes a cycle of positive length through the earlier iterate, and
+`cycleUpdate_no_nontrivial_cycles` forbids nontrivial cycles. -/
+private theorem iterate_succ_eq_of_iterate_eq
+    (hsym : SymmetricW (n := n) p) (hdiag : DiagonalZero (n := n) p)
+    (s0 : State n) {i j : Nat} (hij : i < j)
+    (h : (cycleUpdate (n := n) p)^[i] s0 = (cycleUpdate (n := n) p)^[j] s0) :
+    (cycleUpdate (n := n) p)^[i + 1] s0 = (cycleUpdate (n := n) p)^[i] s0 := by
+  have hcycle :
+      (cycleUpdate (n := n) p)^[j - i] ((cycleUpdate (n := n) p)^[i] s0) =
+        (cycleUpdate (n := n) p)^[i] s0 := by
+    rw [← Function.iterate_add_apply, Nat.sub_add_cancel hij.le, ← h]
+  rw [Function.iterate_succ_apply']
+  exact cycleUpdate_no_nontrivial_cycles (n := n) (p := p) hsym hdiag (Nat.sub_pos_of_lt hij) _
+    hcycle
 
 /-- A fixed point is reached within `Fintype.card (State n)` sweeps.
 
@@ -214,90 +175,34 @@ one, not a claim about how fast the network actually settles. -/
 theorem cycleUpdate_exists_fixedpoint_le_card
     (hsym : SymmetricW (n := n) p) (hdiag : DiagonalZero (n := n) p)
     (s0 : State n) :
-    ∃ m ≤ Fintype.card (State n), (f (n := n) p)^[m + 1] s0 = (f (n := n) p)^[m] s0 := by
+    ∃ m ≤ Fintype.card (State n),
+      (cycleUpdate (n := n) p)^[m + 1] s0 = (cycleUpdate (n := n) p)^[m] s0 := by
   classical
-  let N : Nat := Fintype.card (State n)
-  let g : Fin (N + 1) → State n := fun t => (f (n := n) p)^[t.1] s0
-  have hlt : Fintype.card (State n) < Fintype.card (Fin (N + 1)) := by
-    simp [N, Fintype.card_fin]
-  rcases Fintype.exists_ne_map_eq_of_card_lt g hlt with ⟨i, j, hij, hijEq⟩
-  have hijNat : i.1 ≠ j.1 := by
-    intro h
-    apply hij
-    exact Fin.ext h
-  have hijLt : i.1 < j.1 ∨ j.1 < i.1 := lt_or_gt_of_ne hijNat
-  -- Reduce to the ordered case by swapping if necessary.
-  refine (hijLt.elim (fun hijLt => ?_) (fun hjiLt => ?_))
-  · -- Case `i < j`.
-    let m : Nat := i.1
-    let d : Nat := j.1 - i.1
-    have hdpos : 0 < d := Nat.sub_pos_of_lt hijLt
-    have hm_le : m ≤ N := Nat.lt_succ_iff.mp i.2
-    let t : State n := (f (n := n) p)^[m] s0
-    -- Turn the repetition into a cycle at `t`.
-    have hcycle : (f (n := n) p)^[d] t = t := by
-      have hj : j.1 = m + d := by
-        simp [m, d, Nat.add_sub_of_le (Nat.le_of_lt hijLt)]
-      have hijEqNat :
-          (f (n := n) p)^[m] s0 = (f (n := n) p)^[m + d] s0 := by
-        simpa [g, m, hj] using hijEq
-      -- `f^[m+d] s0 = f^[d] (f^[m] s0)`.
-      have : (f (n := n) p)^[d] ((f (n := n) p)^[m] s0) = (f (n := n) p)^[m] s0 := by
-        -- Rewrite the RHS using `iterate_add_apply` and `hijEqNat`.
-        calc
-          (f (n := n) p)^[d] ((f (n := n) p)^[m] s0)
-              = (f (n := n) p)^[d + m] s0 := by
-                  simp [Function.iterate_add_apply]
-          _ = (f (n := n) p)^[m + d] s0 := by simp [Nat.add_comm]
-          _ = (f (n := n) p)^[m] s0 := hijEqNat.symm
-      simpa [t] using this
-    have hfix : (f (n := n) p) t = t :=
-      cycleUpdate_no_nontrivial_cycles (n := n) (p := p) hsym hdiag (k := d) hdpos t hcycle
-    refine ⟨m, hm_le, ?_⟩
-    -- Translate the fixed-point equation back to iterates from `s0`.
-    simpa [t, Function.iterate_succ_apply'] using hfix
-  · -- Case `j < i` (swap).
-    have hijEq' : g j = g i := by simpa [g] using hijEq.symm
-    -- Apply the previous case with swapped indices.
-    have : ∃ m ≤ Fintype.card (State n), (f (n := n) p)^[m + 1] s0 = (f (n := n) p)^[m] s0 := by
-      -- reuse the same proof by recursion on the left branch
-      let m' : Nat := j.1
-      let d' : Nat := i.1 - j.1
-      have hdpos : 0 < d' := Nat.sub_pos_of_lt hjiLt
-      have hm_le : m' ≤ N := Nat.lt_succ_iff.mp j.2
-      let t : State n := (f (n := n) p)^[m'] s0
-      have hj : i.1 = m' + d' := by
-        simp [m', d', Nat.add_sub_of_le (Nat.le_of_lt hjiLt)]
-      have hijEqNat :
-          (f (n := n) p)^[m'] s0 = (f (n := n) p)^[m' + d'] s0 := by
-        simpa [g, m', hj] using hijEq'
-      have hcycle : (f (n := n) p)^[d'] t = t := by
-        have : (f (n := n) p)^[d'] ((f (n := n) p)^[m'] s0) = (f (n := n) p)^[m'] s0 := by
-          calc
-            (f (n := n) p)^[d'] ((f (n := n) p)^[m'] s0)
-                = (f (n := n) p)^[d' + m'] s0 := by
-                    simp [Function.iterate_add_apply]
-            _ = (f (n := n) p)^[m' + d'] s0 := by simp [Nat.add_comm]
-            _ = (f (n := n) p)^[m'] s0 := hijEqNat.symm
-        simpa [t] using this
-      have hfix : (f (n := n) p) t = t :=
-        cycleUpdate_no_nontrivial_cycles (n := n) (p := p) hsym hdiag (k := d') hdpos t hcycle
-      refine ⟨m', hm_le, ?_⟩
-      simpa [t, Function.iterate_succ_apply'] using hfix
-    exact this
+  -- Pigeonhole: among the first `card + 1` iterates, two coincide.
+  obtain ⟨i, j, hij, hijEq⟩ : ∃ i j : Fin (Fintype.card (State n) + 1), i ≠ j ∧
+      (cycleUpdate (n := n) p)^[i.1] s0 = (cycleUpdate (n := n) p)^[j.1] s0 :=
+    Fintype.exists_ne_map_eq_of_card_lt
+      (fun t : Fin (Fintype.card (State n) + 1) => (cycleUpdate (n := n) p)^[t.1] s0) (by simp)
+  have hijNat : i.1 ≠ j.1 := fun h => hij (Fin.ext h)
+  -- The earlier of the two repeated indices is the fixed point.
+  rcases lt_or_gt_of_ne hijNat with hlt | hlt
+  · exact ⟨i.1, Nat.le_of_lt_succ i.2,
+      iterate_succ_eq_of_iterate_eq (n := n) (p := p) hsym hdiag s0 hlt hijEq⟩
+  · exact ⟨j.1, Nat.le_of_lt_succ j.2,
+      iterate_succ_eq_of_iterate_eq (n := n) (p := p) hsym hdiag s0 hlt hijEq.symm⟩
 
 /-- The same bound written as `2 ^ n`, since a state is one bit per unit. -/
 theorem cycleUpdate_exists_fixedpoint_le_pow
     (hsym : SymmetricW (n := n) p) (hdiag : DiagonalZero (n := n) p)
     (s0 : State n) :
-    ∃ m ≤ (2 : Nat) ^ n, (f (n := n) p)^[m + 1] s0 = (f (n := n) p)^[m] s0 := by
+    ∃ m ≤ (2 : Nat) ^ n,
+      (cycleUpdate (n := n) p)^[m + 1] s0 = (cycleUpdate (n := n) p)^[m] s0 := by
   classical
+  -- `State n = Fin n → Bool`, so there are `2 ^ n` states.
   have hcard : Fintype.card (State n) = (2 : Nat) ^ n := by
-    -- `State n = Fin n → Bool`, so `#State n = 2^n`.
     simp [Spec.Hopfield.State]
-  rcases cycleUpdate_exists_fixedpoint_le_card (n := n) (p := p) hsym hdiag s0 with ⟨m, hm, hfix⟩
-  refine ⟨m, ?_, hfix⟩
-  simpa [hcard] using hm
+  obtain ⟨m, hm, hfix⟩ := cycleUpdate_exists_fixedpoint_le_card (n := n) (p := p) hsym hdiag s0
+  exact ⟨m, by rw [← hcard]; exact hm, hfix⟩
 
 end
 

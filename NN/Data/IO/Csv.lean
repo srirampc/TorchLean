@@ -38,7 +38,10 @@ structure CsvOptions where
   delimiter : Char := ','
   /-- If true, drop the first line before parsing rows. -/
   skipHeader : Bool := false
-  /-- If true, trim ASCII whitespace around cells and around each row. -/
+  /--
+  Trim rows before empty-line detection and cells before empty-cell detection.
+  Numeric conversion accepts surrounding ASCII whitespace even when this option is false.
+  -/
   trimCells : Bool := true
   /-- If true, ignore empty lines (otherwise treat them as an error). -/
   allowEmptyLines : Bool := true
@@ -72,6 +75,7 @@ Supported grammar:
 - optional fractional part `.digits`
 - optional scientific exponent `e±digits`
 
+Surrounding ASCII whitespace is accepted independently of `CsvOptions.trimCells`.
 This parser rejects `NaN`, `inf`, locale separators, and quoted CSV cells.
 -/
 def parseFloatString (tag : String) (s : String) : Except String Float := do

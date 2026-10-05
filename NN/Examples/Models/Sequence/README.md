@@ -7,22 +7,23 @@ generation options enter the model examples.
 
 ## Main Entry Points
 
-- `Rnn.lean` (`lake exe torchlean rnn ...`): a small recurrent text-window example.
-- `Lstm.lean` (`lake exe torchlean lstm ...`): LSTM text-window training with a time-distributed
-  head.
-- `Transformer.lean` (`lake exe torchlean transformer ...`): a compact causal Transformer trained
-  on shifted, bucketed byte windows.
-- `CharGpt.lean` (`lake exe torchlean chargpt ...`): character-level GPT training with a two-update
-  smoke preset and a full Tiny Shakespeare lecture preset.
-- `Gpt2.lean` (`lake exe torchlean gpt2 ...`): a compact byte-level GPT-2-style causal Transformer
-  with save/reload support.
-- `Gpt2Saved.lean` (`lake exe torchlean gpt2_saved ...`): load weights saved by `gpt2` and sample.
-- `TextGpt2.lean` (`lake exe torchlean text_gpt2 ...`): CUDA corpus trainer with byte-level tokens
-  or GPT-2 BPE.
-- `GptAdder.lean` (`lake exe torchlean gpt_adder ...`): a synthetic addition curriculum for
-  next-token models.
-- `Mamba.lean` (`lake exe torchlean mamba ...`): compact text training for the Mamba-style state
-  model.
+- `Rnn.lean` (`scripts/lake.sh exe torchlean rnn ...`): a small recurrent text-window example.
+- `Lstm.lean` (`scripts/lake.sh exe torchlean lstm ...`): LSTM text-window training with a
+  time-distributed head.
+- `Transformer.lean` (`scripts/lake.sh exe torchlean transformer ...`): a compact causal Transformer
+  trained on shifted, bucketed byte windows.
+- `CharGpt.lean` (`scripts/lake.sh exe torchlean chargpt ...`): character-level GPT training with a
+  two-update smoke preset and a full Tiny Shakespeare lecture preset.
+- `Gpt2.lean` (`scripts/lake.sh exe torchlean gpt2 ...`): a compact byte-level GPT-2-style causal
+  Transformer with save/reload support.
+- `Gpt2Saved.lean` (`scripts/lake.sh exe torchlean gpt2_saved ...`): load weights saved by `gpt2`
+  and sample.
+- `TextGpt2.lean` (`scripts/lake.sh exe torchlean text_gpt2 ...`): CUDA corpus trainer with
+  byte-level tokens or GPT-2 BPE.
+- `GptAdder.lean` (`scripts/lake.sh exe torchlean gpt_adder ...`): a synthetic addition curriculum
+  for next-token models.
+- `Mamba.lean` (`scripts/lake.sh exe torchlean mamba ...`): compact text training for the
+  Mamba-style state model.
 
 ## Why There Are Several GPT Paths
 
@@ -53,9 +54,9 @@ The generating byte models (`gpt2`, `text_gpt2`, and `mamba`) retain all 256 UTF
 The BPE path reads explicit `vocab.json` and `merges.txt` files, then uses the shared
 `text.VocabularyProjection` to retain the first observed ids in its 512-entry output vocabulary.
 Local id zero is the unknown-token slot. Saved parameters are shape checked before sampling;
-checkpoints from the former smaller byte vocabulary require retraining.
+their tensor dimensions must agree with the model's vocabulary and configuration.
 
-`chargpt` uses `CausalTransformer.Indexed`. Its batches contain
+`chargpt` uses `nn.models.CausalTransformer.indexed`. Its batches contain
 bounded `Tensor (Fin vocab) [batch, seqLen]` token IDs. Tokenizers may first produce
 `Tensor Nat [batch, seqLen]`; `Tensor.checkIndices` validates that boundary before the model runs.
 The embedding layer gathers table rows directly, and
@@ -78,23 +79,30 @@ cropping, padding, repetition penalties, and token selection; tokenizer arrays o
 text serialization boundary. Corpus schedules are indexed streams, so training does not allocate
 one-hot tensors for every future update in advance.
 
+`Gpt2.samplesFromCorpus` encodes the corpus once and retains its token tensor in the sample
+stream. Each request selects a window from that tensor and constructs its one-hot input and
+shifted target. The stream reuses tokenization; window selection, padding, and target construction
+still happen for the requested sample. Token reuse lasts for that sample stream.
+
 Useful commands:
 
 ```bash
-lake exe torchlean rnn --device cpu --steps 1
-lake -R -K cuda=true exe torchlean transformer --device cuda --tiny-shakespeare --steps 1
-lake -R -K cuda=true exe torchlean gpt2 --device cuda --steps 10 --generate 0
-lake -R -K cuda=true exe torchlean text_gpt2 --device cuda --data-file data/real/text/tinystories_valid.txt --allow-small-data --steps 1 --generate 0
-lake -R -K cuda=true exe torchlean mamba --device cuda --tiny-shakespeare --steps 1 --windows 1 --generate 0
+scripts/lake.sh exe torchlean rnn --device cpu --steps 1
+scripts/lake.sh -Kcuda=true exe torchlean transformer --device cuda --tiny-shakespeare --steps 1
+scripts/lake.sh -Kcuda=true exe torchlean gpt2 --device cuda --steps 10 --generate 0
+scripts/lake.sh -Kcuda=true exe torchlean text_gpt2 --device cuda \
+  --data-file data/real/text/tinystories_valid.txt --allow-small-data --steps 1 --generate 0
+scripts/lake.sh -Kcuda=true exe torchlean mamba --device cuda \
+  --tiny-shakespeare --steps 1 --windows 1 --generate 0
 ```
 
 For a save/reload check:
 
 ```bash
-lake -R -K cuda=true exe torchlean gpt2 --device cuda --tiny-shakespeare \
+scripts/lake.sh -Kcuda=true exe torchlean gpt2 --device cuda --tiny-shakespeare \
   --steps 1 --windows 1 --generate 0 --save-checkpoint /tmp/gpt2.state.json
 
-lake -R -K cuda=true exe torchlean gpt2_saved --device cuda \
+scripts/lake.sh -Kcuda=true exe torchlean gpt2_saved --device cuda \
   --checkpoint /tmp/gpt2.state.json --prompt "ROMEO:" --generate 16
 ```
 

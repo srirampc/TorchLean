@@ -92,7 +92,7 @@ def usage {δ : Type} (config : Config δ) : String :=
     , "  --log PATH|false   write a TrainLog JSON, or disable logging"
     , ""
     , "Runtime:"
-    , "  --device auto|cpu|cuda|rocm|metal|wasm|tpu|trainium|custom|external"
+    , "  --device auto|cpu|gpu|cuda|rocm|metal|wasm|tpu|trainium|custom|external"
     , "  --execution eager|typed-graph"
     , "  --arithmetic native"
     , "  --show-backend     print backend capsules as they execute"
@@ -100,7 +100,7 @@ def usage {δ : Type} (config : Config δ) : String :=
 
 /-- Run a public native-arithmetic training command. -/
 def run {δ : Type} (config : Config δ) (args : List String) : IO UInt32 := do
-  if args.contains "--help" || args.contains "-h" then
+  if CLI.hasHelp args then
     IO.println (usage config)
     return 0
   Module.Command.run

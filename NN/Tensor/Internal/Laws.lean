@@ -14,6 +14,6 @@ public import NN.Tensor.Internal.Laws.RowMajor
 /-!
 # Tensor-pattern laws
 
-Equivalence, row-major indexing, mixed-radix, pack, reduction, and matrix
+Equivalence, row-major indexing, mixed-radix, pack, and reduction
 theorems for checked and lowered operations.
 -/

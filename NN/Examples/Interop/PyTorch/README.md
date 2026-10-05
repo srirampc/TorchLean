@@ -6,10 +6,10 @@ forward pass. The reusable model-family adapters live under `NN/Runtime/PyTorch/
 From the repository root:
 
 ```bash
-lake exe torchlean pytorch_roundtrip --model mlp --action import
-lake exe torchlean pytorch_roundtrip --model cnn --action import
-lake exe torchlean pytorch_roundtrip --model transformer --action import
-lake exe torchlean pytorch_roundtrip --model mlp --action export
+scripts/lake.sh exe torchlean pytorch_roundtrip --model mlp --action import
+scripts/lake.sh exe torchlean pytorch_roundtrip --model cnn --action import
+scripts/lake.sh exe torchlean pytorch_roundtrip --model transformer --action import
+scripts/lake.sh exe torchlean pytorch_roundtrip --model mlp --action export
 ```
 
 Import uses the checked-in weights. MLP evaluates tensor operations; CNN and Transformer load an
@@ -32,7 +32,7 @@ For model-agnostic graph capture, use `NN.Runtime.PyTorch.Export.TorchExport` an
 unsupported operators, malformed artifacts, and numerical parity:
 
 ```bash
-lake exe pytorch_export_check
+scripts/lake.sh exe pytorch_export_check
 ```
 
 That suite lives in `NN/Tests/Interop/PyTorch.lean`. It compares every captured output against

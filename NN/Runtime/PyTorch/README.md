@@ -29,9 +29,8 @@ execution provider described in the
   same `torchlean.ir.v1` JSON artifact used by the graph importer. It includes static-shape
   lowerings for common tensor ops plus Conv/Gemm/BatchNorm graph structure where the current IR can
   represent it.
-- `Export/StateDict.lean` emits a Python adapter that converts a PyTorch checkpoint
-  (`torch.save(model.state_dict(), ...)`, or common checkpoint wrappers) into TorchLean's
-  shape checkable JSON format.
+- `Export/Core.lean` emits Python `state_dict` save/load helpers. Callers supply the script
+  that serializes tensor values as nested-list JSON; `Export.lean` documents this boundary.
 - `Export/TorchExport.lean` emits a Python adapter that captures a PyTorch `nn.Module` with
   `torch.export`/FX and writes TorchLean IR JSON for the supported op subset. The script is
   assembled from one Lean definition per Python section (imports, shape helpers, payload
@@ -58,7 +57,7 @@ theorem Wire.parse_op_kind (kind : OpKind) (h : kind.opTag.hasAttributes = false
 
 Operators with axes, shapes, or convolution geometry parse their tag first and then read those
 attributes. Tensor parameters, including the weights of `.linear`, come from the payload store.
-Value-graph markers (`tuple_getitem`, `multihead_attention`, the legacy `py_tuple`) and the format
+Value-graph markers (`tuple_getitem`, `multihead_attention`) and the format
 marker also live in `Wire`.
 
 The PyTorch adapter matches complete ATen overload names and explicit FX callables or methods.
@@ -94,7 +93,7 @@ Runnable examples and small reference artifacts live under `NN/Examples/Interop/
 
 ## What Users Can Do Today
 
-- Export PyTorch weights to TorchLean readable JSON through the generated state dict adapter.
+- Supply PyTorch weights as nested-list JSON, optionally wrapped in a `"params"` object.
 - Parse those JSON tensors in Lean with exact shape checks.
 - Capture supported PyTorch `nn.Module` graphs as TorchLean IR JSON and validate them in Lean.
 - Lower a conservative ONNX static graph fragment into the same TorchLean IR JSON path. Graph

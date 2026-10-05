@@ -12,10 +12,17 @@ public import NN.Proofs.Autograd.Tape.Ops.Transformer.PostNorm
 /-!
 # GPT-Style Decoder Block
 
-This module packages the post-norm decoder-block composition theorem.  The attention front half is
-supplied as a differentiable residual-pack map; the concrete additive-bias attention core and its
-projection/merge composition theorem live in
-`NN.Proofs.Autograd.Tape.Ops.Attention.MaskedMultiHeadSelfAttention`.
+This module builds the concrete finite-mask decoder-core SSA graph, proves its end-to-end VJP
+theorem (`decoderCore_backpropVec_eq_adjoint_fderiv_at`), and names the post-norm decoder-block
+composition theorem (`postNormGptDecoderBlock_hasFDerivAt`).
+
+The map-level composition theorem takes the attention front half as a differentiable residual-pack
+map.  The concrete additive-bias attention core and its projection/merge composition theorem live in
+`NN.Proofs.Autograd.Tape.Ops.Attention.MaskedMultiHeadSelfAttention`.  To feed the decoder-core
+graph from a full token/parameter context, instantiate
+`DirectReshapeAttention.projectedMaskedAttention_hasFDerivAt` with
+`F := CtxVec (ΓPostNorm seqLen dModel)`; combined with `postNormGptDecoderBlock_hasFDerivAt` this
+gives the projected finite-mask decoder-block differentiability statement.
 -/
 
 @[expose] public section
@@ -27,8 +34,6 @@ namespace Transformer
 open Spec TorchLean
 open TapeNodes
 open DGraph
-
-universe u
 
 noncomputable section
 
@@ -47,7 +52,7 @@ theorem can feed this graph from a full token/parameter context.
 /-- Concrete decoder-core context: masked attention core inputs, residual stream, and two LayerNorm
 parameter pairs. -/
 abbrev ΓDecoderCore (seqLen dModel numHeads headDim : Nat) : List Shape :=
-  MultiHeadAttention.ΓMaskedCore seqLen numHeads headDim ++
+  DirectReshapeAttention.ΓMaskedCore seqLen numHeads headDim ++
     [ LayerNorm.MatShape seqLen dModel
     , LayerNorm.VecShape dModel, LayerNorm.VecShape dModel
     , LayerNorm.VecShape dModel, LayerNorm.VecShape dModel
@@ -55,7 +60,7 @@ abbrev ΓDecoderCore (seqLen dModel numHeads headDim : Nat) : List Shape :=
 
 /-- Saved tensors for the concrete finite-mask decoder-core block. -/
 abbrev ssDecoderCore (seqLen dModel numHeads headDim dFF : Nat) : List Shape :=
-  MultiHeadAttention.ssMaskedCore seqLen numHeads headDim ++
+  DirectReshapeAttention.ssMaskedCore seqLen numHeads headDim ++
     [LayerNorm.MatShape seqLen dModel, LayerNorm.MatShape seqLen dModel,
       LayerNorm.MatShape seqLen dModel] ++
     ssSeqFFNResidual seqLen dModel dFF ++
@@ -88,11 +93,12 @@ def idxDecoderNorm2Beta {seqLen dModel numHeads headDim : Nat} {ss : List Shape}
 
 /-- Masked attention core while carrying residual and LayerNorm parameters. -/
 def decoderMaskedCoreDGraph {seqLen dModel numHeads headDim : Nat}
-    (c : ℝ) (bias : Vec (Spec.Shape.size (MultiHeadAttention.ScoresShape seqLen numHeads)) := 0) :
+    (c : ℝ)
+    (bias : Vec (Spec.Shape.size (DirectReshapeAttention.ScoresShape seqLen numHeads)) := 0) :
     DGraph (ΓDecoderCore seqLen dModel numHeads headDim)
-      (MultiHeadAttention.ssMaskedCore seqLen numHeads headDim) :=
+      (DirectReshapeAttention.ssMaskedCore seqLen numHeads headDim) :=
   DGraph.weakenContext
-    (MultiHeadAttention.maskedCoreDGraph
+    (DirectReshapeAttention.maskedCoreDGraph
       (n := seqLen) (numHeads := numHeads) (headDim := headDim) c bias)
     [ LayerNorm.MatShape seqLen dModel
     , LayerNorm.VecShape dModel, LayerNorm.VecShape dModel
@@ -103,48 +109,48 @@ def decoderMaskedCoreDGraph {seqLen dModel numHeads headDim : Nat}
 def idxDecoderHeadOut {seqLen dModel numHeads headDim : Nat} :
     Idx
       (ΓDecoderCore seqLen dModel numHeads headDim ++
-        MultiHeadAttention.ssMaskedCore seqLen numHeads headDim)
-      (MultiHeadAttention.HeadsShape seqLen numHeads headDim) :=
+        DirectReshapeAttention.ssMaskedCore seqLen numHeads headDim)
+      (DirectReshapeAttention.HeadsShape seqLen numHeads headDim) :=
   Idx.last (Γ := ΓDecoderCore seqLen dModel numHeads headDim)
-    (ss := [MultiHeadAttention.ScoresShape seqLen numHeads,
-      MultiHeadAttention.ScoresShape seqLen numHeads,
-      MultiHeadAttention.ScoresShape seqLen numHeads,
-      MultiHeadAttention.ScoresShape seqLen numHeads])
-    (τ := MultiHeadAttention.HeadsShape seqLen numHeads headDim)
+    (ss := [DirectReshapeAttention.ScoresShape seqLen numHeads,
+      DirectReshapeAttention.ScoresShape seqLen numHeads,
+      DirectReshapeAttention.ScoresShape seqLen numHeads,
+      DirectReshapeAttention.ScoresShape seqLen numHeads])
+    (τ := DirectReshapeAttention.HeadsShape seqLen numHeads headDim)
 
 /-- Merged attention output after the supplied output projection. -/
 def idxDecoderMergedAttention {seqLen dModel numHeads headDim : Nat} :
     Idx
       (ΓDecoderCore seqLen dModel numHeads headDim ++
-        MultiHeadAttention.ssMaskedCore seqLen numHeads headDim ++
+        DirectReshapeAttention.ssMaskedCore seqLen numHeads headDim ++
         [LayerNorm.MatShape seqLen dModel])
       (LayerNorm.MatShape seqLen dModel) :=
   Idx.last (Γ := ΓDecoderCore seqLen dModel numHeads headDim)
-    (ss := MultiHeadAttention.ssMaskedCore seqLen numHeads headDim)
+    (ss := DirectReshapeAttention.ssMaskedCore seqLen numHeads headDim)
     (τ := LayerNorm.MatShape seqLen dModel)
 
 /-- Residual input weakened past the merged attention output. -/
 def idxDecoderResidualInputAfterMerge {seqLen dModel numHeads headDim : Nat} :
     Idx
       (ΓDecoderCore seqLen dModel numHeads headDim ++
-        MultiHeadAttention.ssMaskedCore seqLen numHeads headDim ++
+        DirectReshapeAttention.ssMaskedCore seqLen numHeads headDim ++
         [LayerNorm.MatShape seqLen dModel])
       (LayerNorm.MatShape seqLen dModel) :=
   Proofs.Idx.weaken
     (idxDecoderResidualInput (seqLen := seqLen) (dModel := dModel)
       (numHeads := numHeads) (headDim := headDim)
-      (ss := MultiHeadAttention.ssMaskedCore seqLen numHeads headDim))
+      (ss := DirectReshapeAttention.ssMaskedCore seqLen numHeads headDim))
     [LayerNorm.MatShape seqLen dModel]
 
 /-- Residual attention stream `x + masked_attention(x)` before the first LayerNorm. -/
 def idxDecoderAttentionResidual {seqLen dModel numHeads headDim : Nat} :
     Idx
       (ΓDecoderCore seqLen dModel numHeads headDim ++
-        MultiHeadAttention.ssMaskedCore seqLen numHeads headDim ++
+        DirectReshapeAttention.ssMaskedCore seqLen numHeads headDim ++
         [LayerNorm.MatShape seqLen dModel, LayerNorm.MatShape seqLen dModel])
       (LayerNorm.MatShape seqLen dModel) :=
   Idx.last (Γ := ΓDecoderCore seqLen dModel numHeads headDim)
-    (ss := MultiHeadAttention.ssMaskedCore seqLen numHeads headDim ++
+    (ss := DirectReshapeAttention.ssMaskedCore seqLen numHeads headDim ++
       [LayerNorm.MatShape seqLen dModel])
     (τ := LayerNorm.MatShape seqLen dModel)
 
@@ -152,30 +158,30 @@ def idxDecoderAttentionResidual {seqLen dModel numHeads headDim : Nat} :
 def decoderNorm1Inputs {seqLen dModel numHeads headDim : Nat} :
     LayerNorm.Inputs
       (ΓDecoderCore seqLen dModel numHeads headDim ++
-        MultiHeadAttention.ssMaskedCore seqLen numHeads headDim ++
+        DirectReshapeAttention.ssMaskedCore seqLen numHeads headDim ++
         [LayerNorm.MatShape seqLen dModel, LayerNorm.MatShape seqLen dModel])
       seqLen dModel :=
   { x := idxDecoderAttentionResidual (seqLen := seqLen) (dModel := dModel)
       (numHeads := numHeads) (headDim := headDim)
     gamma := idxDecoderNorm1Gamma (seqLen := seqLen) (dModel := dModel)
       (numHeads := numHeads) (headDim := headDim)
-      (ss := MultiHeadAttention.ssMaskedCore seqLen numHeads headDim ++
+      (ss := DirectReshapeAttention.ssMaskedCore seqLen numHeads headDim ++
         [LayerNorm.MatShape seqLen dModel, LayerNorm.MatShape seqLen dModel])
     beta := idxDecoderNorm1Beta (seqLen := seqLen) (dModel := dModel)
       (numHeads := numHeads) (headDim := headDim)
-      (ss := MultiHeadAttention.ssMaskedCore seqLen numHeads headDim ++
+      (ss := DirectReshapeAttention.ssMaskedCore seqLen numHeads headDim ++
         [LayerNorm.MatShape seqLen dModel, LayerNorm.MatShape seqLen dModel]) }
 
 /-- Decoder graph through the first post-norm masked-attention sublayer. -/
 def decoderAfterNorm1Graph {seqLen dModel numHeads headDim : Nat}
     (merge :
-      Vec (Spec.Shape.size (MultiHeadAttention.HeadsShape seqLen numHeads headDim)) →L[ℝ]
+      Vec (Spec.Shape.size (DirectReshapeAttention.HeadsShape seqLen numHeads headDim)) →L[ℝ]
         Vec (Spec.Shape.size (LayerNorm.MatShape seqLen dModel)))
     (mergeBias : Vec (Spec.Shape.size (LayerNorm.MatShape seqLen dModel)))
     (c ε₁ : ℝ)
-    (bias : Vec (Spec.Shape.size (MultiHeadAttention.ScoresShape seqLen numHeads)) := 0) :
+    (bias : Vec (Spec.Shape.size (DirectReshapeAttention.ScoresShape seqLen numHeads)) := 0) :
     Graph (ΓDecoderCore seqLen dModel numHeads headDim)
-      (MultiHeadAttention.ssMaskedCore seqLen numHeads headDim ++
+      (DirectReshapeAttention.ssMaskedCore seqLen numHeads headDim ++
         [LayerNorm.MatShape seqLen dModel, LayerNorm.MatShape seqLen dModel,
           LayerNorm.MatShape seqLen dModel]) :=
   let g0 := (decoderMaskedCoreDGraph (seqLen := seqLen) (dModel := dModel)
@@ -183,8 +189,8 @@ def decoderAfterNorm1Graph {seqLen dModel numHeads headDim : Nat}
   let g1 := Graph.snoc g0
     (TapeNodes.affine
       (Γ := ΓDecoderCore seqLen dModel numHeads headDim ++
-        MultiHeadAttention.ssMaskedCore seqLen numHeads headDim)
-      (sIn := MultiHeadAttention.HeadsShape seqLen numHeads headDim)
+        DirectReshapeAttention.ssMaskedCore seqLen numHeads headDim)
+      (sIn := DirectReshapeAttention.HeadsShape seqLen numHeads headDim)
       (sOut := LayerNorm.MatShape seqLen dModel)
       (idxDecoderHeadOut (seqLen := seqLen) (dModel := dModel)
         (numHeads := numHeads) (headDim := headDim))
@@ -192,7 +198,7 @@ def decoderAfterNorm1Graph {seqLen dModel numHeads headDim : Nat}
   let g2 := Graph.snoc g1
     (add
       (Γ := ΓDecoderCore seqLen dModel numHeads headDim ++
-        MultiHeadAttention.ssMaskedCore seqLen numHeads headDim ++
+        DirectReshapeAttention.ssMaskedCore seqLen numHeads headDim ++
         [LayerNorm.MatShape seqLen dModel])
       (s := LayerNorm.MatShape seqLen dModel)
       (idxDecoderResidualInputAfterMerge (seqLen := seqLen) (dModel := dModel)
@@ -202,7 +208,7 @@ def decoderAfterNorm1Graph {seqLen dModel numHeads headDim : Nat}
   Graph.snoc g2
     (LayerNorm.wholeNode
       (Γ := ΓDecoderCore seqLen dModel numHeads headDim ++
-        MultiHeadAttention.ssMaskedCore seqLen numHeads headDim ++
+        DirectReshapeAttention.ssMaskedCore seqLen numHeads headDim ++
         [LayerNorm.MatShape seqLen dModel, LayerNorm.MatShape seqLen dModel])
       (m := seqLen) (n := dModel)
       (decoderNorm1Inputs (seqLen := seqLen) (dModel := dModel)
@@ -213,12 +219,12 @@ def decoderAfterNorm1Graph {seqLen dModel numHeads headDim : Nat}
 def idxDecoderNorm1Out {seqLen dModel numHeads headDim : Nat} :
     Idx
       (ΓDecoderCore seqLen dModel numHeads headDim ++
-        MultiHeadAttention.ssMaskedCore seqLen numHeads headDim ++
+        DirectReshapeAttention.ssMaskedCore seqLen numHeads headDim ++
         [LayerNorm.MatShape seqLen dModel, LayerNorm.MatShape seqLen dModel,
           LayerNorm.MatShape seqLen dModel])
       (SeqFFNModelShape seqLen dModel) :=
   Idx.last (Γ := ΓDecoderCore seqLen dModel numHeads headDim)
-    (ss := MultiHeadAttention.ssMaskedCore seqLen numHeads headDim ++
+    (ss := DirectReshapeAttention.ssMaskedCore seqLen numHeads headDim ++
       [LayerNorm.MatShape seqLen dModel, LayerNorm.MatShape seqLen dModel])
     (τ := LayerNorm.MatShape seqLen dModel)
 
@@ -226,7 +232,7 @@ def idxDecoderNorm1Out {seqLen dModel numHeads headDim : Nat} :
 def idxDecoderNorm1OutAfterFfn {seqLen dModel numHeads headDim dFF : Nat} :
     Idx
       (ΓDecoderCore seqLen dModel numHeads headDim ++
-        MultiHeadAttention.ssMaskedCore seqLen numHeads headDim ++
+        DirectReshapeAttention.ssMaskedCore seqLen numHeads headDim ++
         [LayerNorm.MatShape seqLen dModel, LayerNorm.MatShape seqLen dModel,
           LayerNorm.MatShape seqLen dModel] ++
         [SeqFFNHiddenShape seqLen dFF, SeqFFNHiddenShape seqLen dFF,
@@ -242,13 +248,13 @@ def idxDecoderNorm1OutAfterFfn {seqLen dModel numHeads headDim dFF : Nat} :
 def idxDecoderFfnHiddenPre {seqLen dModel numHeads headDim dFF : Nat} :
     Idx
       (ΓDecoderCore seqLen dModel numHeads headDim ++
-        MultiHeadAttention.ssMaskedCore seqLen numHeads headDim ++
+        DirectReshapeAttention.ssMaskedCore seqLen numHeads headDim ++
         [LayerNorm.MatShape seqLen dModel, LayerNorm.MatShape seqLen dModel,
           LayerNorm.MatShape seqLen dModel] ++
         [SeqFFNHiddenShape seqLen dFF])
       (SeqFFNHiddenShape seqLen dFF) :=
   Idx.last (Γ := ΓDecoderCore seqLen dModel numHeads headDim)
-    (ss := MultiHeadAttention.ssMaskedCore seqLen numHeads headDim ++
+    (ss := DirectReshapeAttention.ssMaskedCore seqLen numHeads headDim ++
       [LayerNorm.MatShape seqLen dModel, LayerNorm.MatShape seqLen dModel,
         LayerNorm.MatShape seqLen dModel])
     (τ := SeqFFNHiddenShape seqLen dFF)
@@ -257,13 +263,13 @@ def idxDecoderFfnHiddenPre {seqLen dModel numHeads headDim dFF : Nat} :
 def idxDecoderFfnHiddenAct {seqLen dModel numHeads headDim dFF : Nat} :
     Idx
       (ΓDecoderCore seqLen dModel numHeads headDim ++
-        MultiHeadAttention.ssMaskedCore seqLen numHeads headDim ++
+        DirectReshapeAttention.ssMaskedCore seqLen numHeads headDim ++
         [LayerNorm.MatShape seqLen dModel, LayerNorm.MatShape seqLen dModel,
           LayerNorm.MatShape seqLen dModel] ++
         [SeqFFNHiddenShape seqLen dFF, SeqFFNHiddenShape seqLen dFF])
       (SeqFFNHiddenShape seqLen dFF) :=
   Idx.last (Γ := ΓDecoderCore seqLen dModel numHeads headDim)
-    (ss := MultiHeadAttention.ssMaskedCore seqLen numHeads headDim ++
+    (ss := DirectReshapeAttention.ssMaskedCore seqLen numHeads headDim ++
       [LayerNorm.MatShape seqLen dModel, LayerNorm.MatShape seqLen dModel,
         LayerNorm.MatShape seqLen dModel, SeqFFNHiddenShape seqLen dFF])
     (τ := SeqFFNHiddenShape seqLen dFF)
@@ -272,14 +278,14 @@ def idxDecoderFfnHiddenAct {seqLen dModel numHeads headDim dFF : Nat} :
 def idxDecoderFfnProjected {seqLen dModel numHeads headDim dFF : Nat} :
     Idx
       (ΓDecoderCore seqLen dModel numHeads headDim ++
-        MultiHeadAttention.ssMaskedCore seqLen numHeads headDim ++
+        DirectReshapeAttention.ssMaskedCore seqLen numHeads headDim ++
         [LayerNorm.MatShape seqLen dModel, LayerNorm.MatShape seqLen dModel,
           LayerNorm.MatShape seqLen dModel] ++
         [SeqFFNHiddenShape seqLen dFF, SeqFFNHiddenShape seqLen dFF,
           SeqFFNModelShape seqLen dModel])
       (SeqFFNModelShape seqLen dModel) :=
   Idx.last (Γ := ΓDecoderCore seqLen dModel numHeads headDim)
-    (ss := MultiHeadAttention.ssMaskedCore seqLen numHeads headDim ++
+    (ss := DirectReshapeAttention.ssMaskedCore seqLen numHeads headDim ++
       [LayerNorm.MatShape seqLen dModel, LayerNorm.MatShape seqLen dModel,
         LayerNorm.MatShape seqLen dModel, SeqFFNHiddenShape seqLen dFF,
         SeqFFNHiddenShape seqLen dFF])
@@ -289,13 +295,13 @@ def idxDecoderFfnProjected {seqLen dModel numHeads headDim dFF : Nat} :
 def idxDecoderFfnResidual {seqLen dModel numHeads headDim dFF : Nat} :
     Idx
       (ΓDecoderCore seqLen dModel numHeads headDim ++
-        MultiHeadAttention.ssMaskedCore seqLen numHeads headDim ++
+        DirectReshapeAttention.ssMaskedCore seqLen numHeads headDim ++
         [LayerNorm.MatShape seqLen dModel, LayerNorm.MatShape seqLen dModel,
           LayerNorm.MatShape seqLen dModel] ++
         ssSeqFFNResidual seqLen dModel dFF)
       (SeqFFNModelShape seqLen dModel) :=
   Idx.last (Γ := ΓDecoderCore seqLen dModel numHeads headDim)
-    (ss := MultiHeadAttention.ssMaskedCore seqLen numHeads headDim ++
+    (ss := DirectReshapeAttention.ssMaskedCore seqLen numHeads headDim ++
       [LayerNorm.MatShape seqLen dModel, LayerNorm.MatShape seqLen dModel,
         LayerNorm.MatShape seqLen dModel, SeqFFNHiddenShape seqLen dFF,
         SeqFFNHiddenShape seqLen dFF, SeqFFNModelShape seqLen dModel])
@@ -304,7 +310,7 @@ def idxDecoderFfnResidual {seqLen dModel numHeads headDim dFF : Nat} :
 /-- Decoder graph through the FFN residual. -/
 def decoderFfnResidualGraph {seqLen dModel numHeads headDim dFF : Nat}
     (merge :
-      Vec (Spec.Shape.size (MultiHeadAttention.HeadsShape seqLen numHeads headDim)) →L[ℝ]
+      Vec (Spec.Shape.size (DirectReshapeAttention.HeadsShape seqLen numHeads headDim)) →L[ℝ]
         Vec (Spec.Shape.size (LayerNorm.MatShape seqLen dModel)))
     (mergeBias : Vec (Spec.Shape.size (LayerNorm.MatShape seqLen dModel)))
     (fc1 :
@@ -316,9 +322,9 @@ def decoderFfnResidualGraph {seqLen dModel numHeads headDim dFF : Nat}
         Vec (Spec.Shape.size (SeqFFNModelShape seqLen dModel)))
     (b2 : Vec (Spec.Shape.size (SeqFFNModelShape seqLen dModel)))
     (c ε₁ : ℝ)
-    (bias : Vec (Spec.Shape.size (MultiHeadAttention.ScoresShape seqLen numHeads)) := 0) :
+    (bias : Vec (Spec.Shape.size (DirectReshapeAttention.ScoresShape seqLen numHeads)) := 0) :
     Graph (ΓDecoderCore seqLen dModel numHeads headDim)
-      (MultiHeadAttention.ssMaskedCore seqLen numHeads headDim ++
+      (DirectReshapeAttention.ssMaskedCore seqLen numHeads headDim ++
         [LayerNorm.MatShape seqLen dModel, LayerNorm.MatShape seqLen dModel,
           LayerNorm.MatShape seqLen dModel] ++ ssSeqFFNResidual seqLen dModel dFF) :=
   let g1 := decoderAfterNorm1Graph (seqLen := seqLen) (dModel := dModel)
@@ -326,7 +332,7 @@ def decoderFfnResidualGraph {seqLen dModel numHeads headDim dFF : Nat}
   let g2 := Graph.snoc g1
     (TapeNodes.affine
       (Γ := ΓDecoderCore seqLen dModel numHeads headDim ++
-        MultiHeadAttention.ssMaskedCore seqLen numHeads headDim ++
+        DirectReshapeAttention.ssMaskedCore seqLen numHeads headDim ++
         [LayerNorm.MatShape seqLen dModel, LayerNorm.MatShape seqLen dModel,
           LayerNorm.MatShape seqLen dModel])
       (sIn := SeqFFNModelShape seqLen dModel) (sOut := SeqFFNHiddenShape seqLen dFF)
@@ -336,7 +342,7 @@ def decoderFfnResidualGraph {seqLen dModel numHeads headDim dFF : Nat}
   let g3 := Graph.snoc g2
     (gelu
       (Γ := ΓDecoderCore seqLen dModel numHeads headDim ++
-        MultiHeadAttention.ssMaskedCore seqLen numHeads headDim ++
+        DirectReshapeAttention.ssMaskedCore seqLen numHeads headDim ++
         [LayerNorm.MatShape seqLen dModel, LayerNorm.MatShape seqLen dModel,
           LayerNorm.MatShape seqLen dModel] ++ [SeqFFNHiddenShape seqLen dFF])
       (s := SeqFFNHiddenShape seqLen dFF)
@@ -345,7 +351,7 @@ def decoderFfnResidualGraph {seqLen dModel numHeads headDim dFF : Nat}
   let g4 := Graph.snoc g3
     (TapeNodes.affine
       (Γ := ΓDecoderCore seqLen dModel numHeads headDim ++
-        MultiHeadAttention.ssMaskedCore seqLen numHeads headDim ++
+        DirectReshapeAttention.ssMaskedCore seqLen numHeads headDim ++
         [LayerNorm.MatShape seqLen dModel, LayerNorm.MatShape seqLen dModel,
           LayerNorm.MatShape seqLen dModel] ++
         [SeqFFNHiddenShape seqLen dFF, SeqFFNHiddenShape seqLen dFF])
@@ -356,7 +362,7 @@ def decoderFfnResidualGraph {seqLen dModel numHeads headDim dFF : Nat}
   Graph.snoc g4
     (add
       (Γ := ΓDecoderCore seqLen dModel numHeads headDim ++
-        MultiHeadAttention.ssMaskedCore seqLen numHeads headDim ++
+        DirectReshapeAttention.ssMaskedCore seqLen numHeads headDim ++
         [LayerNorm.MatShape seqLen dModel, LayerNorm.MatShape seqLen dModel,
           LayerNorm.MatShape seqLen dModel] ++
         [SeqFFNHiddenShape seqLen dFF, SeqFFNHiddenShape seqLen dFF,
@@ -371,7 +377,7 @@ def decoderFfnResidualGraph {seqLen dModel numHeads headDim dFF : Nat}
 def decoderNorm2Inputs {seqLen dModel numHeads headDim dFF : Nat} :
     LayerNorm.Inputs
       (ΓDecoderCore seqLen dModel numHeads headDim ++
-        MultiHeadAttention.ssMaskedCore seqLen numHeads headDim ++
+        DirectReshapeAttention.ssMaskedCore seqLen numHeads headDim ++
         [LayerNorm.MatShape seqLen dModel, LayerNorm.MatShape seqLen dModel,
           LayerNorm.MatShape seqLen dModel] ++
         ssSeqFFNResidual seqLen dModel dFF)
@@ -380,19 +386,19 @@ def decoderNorm2Inputs {seqLen dModel numHeads headDim dFF : Nat} :
       (numHeads := numHeads) (headDim := headDim) (dFF := dFF)
     gamma := idxDecoderNorm2Gamma (seqLen := seqLen) (dModel := dModel)
       (numHeads := numHeads) (headDim := headDim)
-      (ss := MultiHeadAttention.ssMaskedCore seqLen numHeads headDim ++
+      (ss := DirectReshapeAttention.ssMaskedCore seqLen numHeads headDim ++
         [LayerNorm.MatShape seqLen dModel, LayerNorm.MatShape seqLen dModel,
           LayerNorm.MatShape seqLen dModel] ++ ssSeqFFNResidual seqLen dModel dFF)
     beta := idxDecoderNorm2Beta (seqLen := seqLen) (dModel := dModel)
       (numHeads := numHeads) (headDim := headDim)
-      (ss := MultiHeadAttention.ssMaskedCore seqLen numHeads headDim ++
+      (ss := DirectReshapeAttention.ssMaskedCore seqLen numHeads headDim ++
         [LayerNorm.MatShape seqLen dModel, LayerNorm.MatShape seqLen dModel,
           LayerNorm.MatShape seqLen dModel] ++ ssSeqFFNResidual seqLen dModel dFF) }
 
 /-- Concrete SSA graph for one additive-bias decoder-core block. -/
 def decoderCoreGraph {seqLen dModel numHeads headDim dFF : Nat}
     (merge :
-      Vec (Spec.Shape.size (MultiHeadAttention.HeadsShape seqLen numHeads headDim)) →L[ℝ]
+      Vec (Spec.Shape.size (DirectReshapeAttention.HeadsShape seqLen numHeads headDim)) →L[ℝ]
         Vec (Spec.Shape.size (LayerNorm.MatShape seqLen dModel)))
     (mergeBias : Vec (Spec.Shape.size (LayerNorm.MatShape seqLen dModel)))
     (fc1 :
@@ -404,7 +410,7 @@ def decoderCoreGraph {seqLen dModel numHeads headDim dFF : Nat}
         Vec (Spec.Shape.size (SeqFFNModelShape seqLen dModel)))
     (b2 : Vec (Spec.Shape.size (SeqFFNModelShape seqLen dModel)))
     (c ε₁ ε₂ : ℝ)
-    (bias : Vec (Spec.Shape.size (MultiHeadAttention.ScoresShape seqLen numHeads)) := 0) :
+    (bias : Vec (Spec.Shape.size (DirectReshapeAttention.ScoresShape seqLen numHeads)) := 0) :
     Graph (ΓDecoderCore seqLen dModel numHeads headDim)
       (ssDecoderCore seqLen dModel numHeads headDim dFF) :=
   Graph.snoc
@@ -413,7 +419,7 @@ def decoderCoreGraph {seqLen dModel numHeads headDim dFF : Nat}
       merge mergeBias fc1 b1 fc2 b2 c ε₁ bias)
     (LayerNorm.wholeNode
       (Γ := ΓDecoderCore seqLen dModel numHeads headDim ++
-        MultiHeadAttention.ssMaskedCore seqLen numHeads headDim ++
+        DirectReshapeAttention.ssMaskedCore seqLen numHeads headDim ++
         [LayerNorm.MatShape seqLen dModel, LayerNorm.MatShape seqLen dModel,
           LayerNorm.MatShape seqLen dModel] ++ ssSeqFFNResidual seqLen dModel dFF)
       (m := seqLen) (n := dModel)
@@ -424,7 +430,7 @@ def decoderCoreGraph {seqLen dModel numHeads headDim dFF : Nat}
 /-- Pointwise analytic correctness for the decoder graph through the FFN residual. -/
 def decoderFfnResidualGraphFDerivCorrectAt {seqLen dModel numHeads headDim dFF : Nat}
     (merge :
-      Vec (Spec.Shape.size (MultiHeadAttention.HeadsShape seqLen numHeads headDim)) →L[ℝ]
+      Vec (Spec.Shape.size (DirectReshapeAttention.HeadsShape seqLen numHeads headDim)) →L[ℝ]
         Vec (Spec.Shape.size (LayerNorm.MatShape seqLen dModel)))
     (mergeBias : Vec (Spec.Shape.size (LayerNorm.MatShape seqLen dModel)))
     (fc1 :
@@ -436,12 +442,12 @@ def decoderFfnResidualGraphFDerivCorrectAt {seqLen dModel numHeads headDim dFF :
         Vec (Spec.Shape.size (SeqFFNModelShape seqLen dModel)))
     (b2 : Vec (Spec.Shape.size (SeqFFNModelShape seqLen dModel)))
     (c ε₁ : ℝ)
-    (bias : Vec (Spec.Shape.size (MultiHeadAttention.ScoresShape seqLen numHeads)) := 0)
+    (bias : Vec (Spec.Shape.size (DirectReshapeAttention.ScoresShape seqLen numHeads)) := 0)
     (xV : CtxVec (ΓDecoderCore seqLen dModel numHeads headDim))
     (hε₁ : 0 < ε₁) :
     GraphFDerivCorrectAt
       (Γ := ΓDecoderCore seqLen dModel numHeads headDim)
-      (ss := MultiHeadAttention.ssMaskedCore seqLen numHeads headDim ++
+      (ss := DirectReshapeAttention.ssMaskedCore seqLen numHeads headDim ++
         [LayerNorm.MatShape seqLen dModel, LayerNorm.MatShape seqLen dModel,
           LayerNorm.MatShape seqLen dModel] ++ ssSeqFFNResidual seqLen dModel dFF)
       (decoderFfnResidualGraph (seqLen := seqLen) (dModel := dModel)
@@ -453,15 +459,15 @@ def decoderFfnResidualGraphFDerivCorrectAt {seqLen dModel numHeads headDim dFF :
     (numHeads := numHeads) (headDim := headDim) c bias
   let hgCore : GraphFDerivCorrectAt
       (Γ := ΓDecoderCore seqLen dModel numHeads headDim)
-      (ss := MultiHeadAttention.ssMaskedCore seqLen numHeads headDim) dgCore.g xV :=
-    DGraph.graphFDerivCorrectAtOfCorrect dgCore.hg xV
+      (ss := DirectReshapeAttention.ssMaskedCore seqLen numHeads headDim) dgCore.g xV :=
+    GraphFDerivCorrect.at dgCore.hg xV
   refine ⟨⟨⟨⟨⟨⟨⟨?_, ?_⟩, ?_⟩, ?_⟩, ?_⟩, ?_⟩, ?_⟩, ?_⟩
   · simpa [decoderAfterNorm1Graph, dgCore] using hgCore
   · exact NodeFDerivCorrect.at
       (TapeNodes.affineFderiv
         (Γ := ΓDecoderCore seqLen dModel numHeads headDim ++
-          MultiHeadAttention.ssMaskedCore seqLen numHeads headDim)
-        (sIn := MultiHeadAttention.HeadsShape seqLen numHeads headDim)
+          DirectReshapeAttention.ssMaskedCore seqLen numHeads headDim)
+        (sIn := DirectReshapeAttention.HeadsShape seqLen numHeads headDim)
         (sOut := LayerNorm.MatShape seqLen dModel)
         (idxDecoderHeadOut (seqLen := seqLen) (dModel := dModel)
           (numHeads := numHeads) (headDim := headDim))
@@ -470,7 +476,7 @@ def decoderFfnResidualGraphFDerivCorrectAt {seqLen dModel numHeads headDim dFF :
   · exact NodeFDerivCorrect.at
       (addFderiv
         (Γ := ΓDecoderCore seqLen dModel numHeads headDim ++
-          MultiHeadAttention.ssMaskedCore seqLen numHeads headDim ++
+          DirectReshapeAttention.ssMaskedCore seqLen numHeads headDim ++
           [LayerNorm.MatShape seqLen dModel])
         (s := LayerNorm.MatShape seqLen dModel)
         (idxDecoderResidualInputAfterMerge (seqLen := seqLen) (dModel := dModel)
@@ -478,46 +484,18 @@ def decoderFfnResidualGraphFDerivCorrectAt {seqLen dModel numHeads headDim dFF :
         (idxDecoderMergedAttention (seqLen := seqLen) (dModel := dModel)
           (numHeads := numHeads) (headDim := headDim)))
       _
-  · simpa [decoderAfterNorm1Graph, dgCore] using
-      LayerNorm.wholeNodeFDerivCorrectAt
-          (Γ := ΓDecoderCore seqLen dModel numHeads headDim ++
-            MultiHeadAttention.ssMaskedCore seqLen numHeads headDim ++
-            [LayerNorm.MatShape seqLen dModel, LayerNorm.MatShape seqLen dModel])
-          (m := seqLen) (n := dModel)
-          (decoderNorm1Inputs (seqLen := seqLen) (dModel := dModel)
-            (numHeads := numHeads) (headDim := headDim))
-          ε₁
-          (Graph.evalVec
-            (Γ := ΓDecoderCore seqLen dModel numHeads headDim)
-            (ss := MultiHeadAttention.ssMaskedCore seqLen numHeads headDim ++
-              [LayerNorm.MatShape seqLen dModel, LayerNorm.MatShape seqLen dModel])
-            (Graph.snoc
-              (Graph.snoc
-                (decoderMaskedCoreDGraph (seqLen := seqLen) (dModel := dModel)
-                  (numHeads := numHeads) (headDim := headDim) c bias).g
-                (TapeNodes.affine
-                  (Γ := ΓDecoderCore seqLen dModel numHeads headDim ++
-                    MultiHeadAttention.ssMaskedCore seqLen numHeads headDim)
-                  (sIn := MultiHeadAttention.HeadsShape seqLen numHeads headDim)
-                  (sOut := LayerNorm.MatShape seqLen dModel)
-                  (idxDecoderHeadOut (seqLen := seqLen) (dModel := dModel)
-                    (numHeads := numHeads) (headDim := headDim))
-                  merge mergeBias))
-              (add
-                (Γ := ΓDecoderCore seqLen dModel numHeads headDim ++
-                  MultiHeadAttention.ssMaskedCore seqLen numHeads headDim ++
-                  [LayerNorm.MatShape seqLen dModel])
-                (s := LayerNorm.MatShape seqLen dModel)
-                (idxDecoderResidualInputAfterMerge (seqLen := seqLen) (dModel := dModel)
-                  (numHeads := numHeads) (headDim := headDim))
-                (idxDecoderMergedAttention (seqLen := seqLen) (dModel := dModel)
-                  (numHeads := numHeads) (headDim := headDim))))
-            xV)
-          hε₁
+  · exact LayerNorm.wholeNodeFDerivCorrectAt
+      (Γ := ΓDecoderCore seqLen dModel numHeads headDim ++
+        DirectReshapeAttention.ssMaskedCore seqLen numHeads headDim ++
+        [LayerNorm.MatShape seqLen dModel, LayerNorm.MatShape seqLen dModel])
+      (m := seqLen) (n := dModel)
+      (decoderNorm1Inputs (seqLen := seqLen) (dModel := dModel)
+        (numHeads := numHeads) (headDim := headDim))
+      ε₁ _ hε₁
   · exact NodeFDerivCorrect.at
       (TapeNodes.affineFderiv
         (Γ := ΓDecoderCore seqLen dModel numHeads headDim ++
-          MultiHeadAttention.ssMaskedCore seqLen numHeads headDim ++
+          DirectReshapeAttention.ssMaskedCore seqLen numHeads headDim ++
           [LayerNorm.MatShape seqLen dModel, LayerNorm.MatShape seqLen dModel,
             LayerNorm.MatShape seqLen dModel])
         (sIn := SeqFFNModelShape seqLen dModel) (sOut := SeqFFNHiddenShape seqLen dFF)
@@ -528,7 +506,7 @@ def decoderFfnResidualGraphFDerivCorrectAt {seqLen dModel numHeads headDim dFF :
   · exact NodeFDerivCorrect.at
       (geluFderiv
         (Γ := ΓDecoderCore seqLen dModel numHeads headDim ++
-          MultiHeadAttention.ssMaskedCore seqLen numHeads headDim ++
+          DirectReshapeAttention.ssMaskedCore seqLen numHeads headDim ++
           [LayerNorm.MatShape seqLen dModel, LayerNorm.MatShape seqLen dModel,
             LayerNorm.MatShape seqLen dModel] ++ [SeqFFNHiddenShape seqLen dFF])
         (s := SeqFFNHiddenShape seqLen dFF)
@@ -538,7 +516,7 @@ def decoderFfnResidualGraphFDerivCorrectAt {seqLen dModel numHeads headDim dFF :
   · exact NodeFDerivCorrect.at
       (TapeNodes.affineFderiv
         (Γ := ΓDecoderCore seqLen dModel numHeads headDim ++
-          MultiHeadAttention.ssMaskedCore seqLen numHeads headDim ++
+          DirectReshapeAttention.ssMaskedCore seqLen numHeads headDim ++
           [LayerNorm.MatShape seqLen dModel, LayerNorm.MatShape seqLen dModel,
             LayerNorm.MatShape seqLen dModel] ++
           [SeqFFNHiddenShape seqLen dFF, SeqFFNHiddenShape seqLen dFF])
@@ -550,7 +528,7 @@ def decoderFfnResidualGraphFDerivCorrectAt {seqLen dModel numHeads headDim dFF :
   · exact NodeFDerivCorrect.at
       (addFderiv
         (Γ := ΓDecoderCore seqLen dModel numHeads headDim ++
-          MultiHeadAttention.ssMaskedCore seqLen numHeads headDim ++
+          DirectReshapeAttention.ssMaskedCore seqLen numHeads headDim ++
           [LayerNorm.MatShape seqLen dModel, LayerNorm.MatShape seqLen dModel,
             LayerNorm.MatShape seqLen dModel] ++
           [SeqFFNHiddenShape seqLen dFF, SeqFFNHiddenShape seqLen dFF,
@@ -565,7 +543,7 @@ def decoderFfnResidualGraphFDerivCorrectAt {seqLen dModel numHeads headDim dFF :
 /-- Pointwise analytic correctness for the complete concrete decoder-core graph. -/
 def decoderCoreGraphFDerivCorrectAt {seqLen dModel numHeads headDim dFF : Nat}
     (merge :
-      Vec (Spec.Shape.size (MultiHeadAttention.HeadsShape seqLen numHeads headDim)) →L[ℝ]
+      Vec (Spec.Shape.size (DirectReshapeAttention.HeadsShape seqLen numHeads headDim)) →L[ℝ]
         Vec (Spec.Shape.size (LayerNorm.MatShape seqLen dModel)))
     (mergeBias : Vec (Spec.Shape.size (LayerNorm.MatShape seqLen dModel)))
     (fc1 :
@@ -577,7 +555,7 @@ def decoderCoreGraphFDerivCorrectAt {seqLen dModel numHeads headDim dFF : Nat}
         Vec (Spec.Shape.size (SeqFFNModelShape seqLen dModel)))
     (b2 : Vec (Spec.Shape.size (SeqFFNModelShape seqLen dModel)))
     (c ε₁ ε₂ : ℝ)
-    (bias : Vec (Spec.Shape.size (MultiHeadAttention.ScoresShape seqLen numHeads)) := 0)
+    (bias : Vec (Spec.Shape.size (DirectReshapeAttention.ScoresShape seqLen numHeads)) := 0)
     (xV : CtxVec (ΓDecoderCore seqLen dModel numHeads headDim))
     (hε₁ : 0 < ε₁)
     (hε₂ : 0 < ε₂) :
@@ -587,26 +565,25 @@ def decoderCoreGraphFDerivCorrectAt {seqLen dModel numHeads headDim dFF : Nat}
       (decoderCoreGraph (seqLen := seqLen) (dModel := dModel)
         (numHeads := numHeads) (headDim := headDim) (dFF := dFF)
         merge mergeBias fc1 b1 fc2 b2 c ε₁ ε₂ bias)
-      xV := by
-  exact
-    ⟨decoderFfnResidualGraphFDerivCorrectAt
-      (seqLen := seqLen) (dModel := dModel) (numHeads := numHeads) (headDim := headDim)
-      (dFF := dFF) merge mergeBias fc1 b1 fc2 b2 c ε₁ bias xV hε₁,
-      LayerNorm.wholeNodeFDerivCorrectAt
-          (Γ := ΓDecoderCore seqLen dModel numHeads headDim ++
-            MultiHeadAttention.ssMaskedCore seqLen numHeads headDim ++
-            [LayerNorm.MatShape seqLen dModel, LayerNorm.MatShape seqLen dModel,
-              LayerNorm.MatShape seqLen dModel] ++ ssSeqFFNResidual seqLen dModel dFF)
-          (m := seqLen) (n := dModel)
-          (decoderNorm2Inputs (seqLen := seqLen) (dModel := dModel)
-            (numHeads := numHeads) (headDim := headDim) (dFF := dFF))
-          ε₂ _ hε₂⟩
+      xV :=
+  ⟨decoderFfnResidualGraphFDerivCorrectAt
+    (seqLen := seqLen) (dModel := dModel) (numHeads := numHeads) (headDim := headDim)
+    (dFF := dFF) merge mergeBias fc1 b1 fc2 b2 c ε₁ bias xV hε₁,
+    LayerNorm.wholeNodeFDerivCorrectAt
+      (Γ := ΓDecoderCore seqLen dModel numHeads headDim ++
+        DirectReshapeAttention.ssMaskedCore seqLen numHeads headDim ++
+        [LayerNorm.MatShape seqLen dModel, LayerNorm.MatShape seqLen dModel,
+          LayerNorm.MatShape seqLen dModel] ++ ssSeqFFNResidual seqLen dModel dFF)
+      (m := seqLen) (n := dModel)
+      (decoderNorm2Inputs (seqLen := seqLen) (dModel := dModel)
+        (numHeads := numHeads) (headDim := headDim) (dFF := dFF))
+      ε₂ _ hε₂⟩
 
 /-- End-to-end VJP theorem for the concrete additive-bias decoder-core graph. -/
 theorem decoderCore_backpropVec_eq_adjoint_fderiv_at
     {seqLen dModel numHeads headDim dFF : Nat}
     (merge :
-      Vec (Spec.Shape.size (MultiHeadAttention.HeadsShape seqLen numHeads headDim)) →L[ℝ]
+      Vec (Spec.Shape.size (DirectReshapeAttention.HeadsShape seqLen numHeads headDim)) →L[ℝ]
         Vec (Spec.Shape.size (LayerNorm.MatShape seqLen dModel)))
     (mergeBias : Vec (Spec.Shape.size (LayerNorm.MatShape seqLen dModel)))
     (fc1 :
@@ -618,7 +595,7 @@ theorem decoderCore_backpropVec_eq_adjoint_fderiv_at
         Vec (Spec.Shape.size (SeqFFNModelShape seqLen dModel)))
     (b2 : Vec (Spec.Shape.size (SeqFFNModelShape seqLen dModel)))
     (c ε₁ ε₂ : ℝ)
-    (bias : Vec (Spec.Shape.size (MultiHeadAttention.ScoresShape seqLen numHeads)) := 0)
+    (bias : Vec (Spec.Shape.size (DirectReshapeAttention.ScoresShape seqLen numHeads)) := 0)
     (xV : CtxVec (ΓDecoderCore seqLen dModel numHeads headDim))
     (seedV : CtxVec (ΓDecoderCore seqLen dModel numHeads headDim ++
       ssDecoderCore seqLen dModel numHeads headDim dFF))
@@ -652,129 +629,14 @@ theorem decoderCore_backpropVec_eq_adjoint_fderiv_at
       (dFF := dFF) merge mergeBias fc1 b1 fc2 b2 c ε₁ ε₂ bias xV hε₁ hε₂)
 
 /--
-Projection-to-residual bridge for a GPT-style masked decoder attention sublayer.
-
-The concrete decoder-core graph above starts from already split `Q`, `Kᵀ`, and `V` heads.  This
-theorem is the reusable front-end hook for full GPT blocks: any differentiable projection/split
-stage may build those heads, and any differentiable merge/residual pack may turn the masked
-attention trace into the first LayerNorm input triple `[x + MaskedMHA(x), gamma₁, beta₁]`.
-
-Combine this theorem with `postNormGptDecoderBlock_hasFDerivAt` below to get the full projected
-finite-mask decoder-block differentiability statement.
--/
-theorem projectedMaskedDecoderAttentionPack_hasFDerivAt
-    {E : Type u} [NormedAddCommGroup E] [NormedSpace ℝ E]
-    {seqLen dModel numHeads headDim : Nat}
-    (c : ℝ) (bias : Vec (Spec.Shape.size (MultiHeadAttention.ScoresShape seqLen numHeads)) := 0)
-    (projectPack : E → CtxVec (MultiHeadAttention.ΓMaskedCore seqLen numHeads headDim))
-    (DprojectPack : E →L[ℝ] CtxVec (MultiHeadAttention.ΓMaskedCore seqLen numHeads headDim))
-    (attentionPack :
-      CtxVec (MultiHeadAttention.ΓMaskedCore seqLen numHeads headDim ++
-        MultiHeadAttention.ssMaskedCore seqLen numHeads headDim) →
-        CtxVec (ΓPostNorm seqLen dModel))
-    (DattentionPack :
-      CtxVec (MultiHeadAttention.ΓMaskedCore seqLen numHeads headDim ++
-        MultiHeadAttention.ssMaskedCore seqLen numHeads headDim) →L[ℝ]
-        CtxVec (ΓPostNorm seqLen dModel))
-    (x : E)
-    (hProject : HasFDerivAt projectPack DprojectPack x)
-    (hAttentionPack :
-      HasFDerivAt attentionPack DattentionPack
-        (Graph.evalVec
-          (Γ := MultiHeadAttention.ΓMaskedCore seqLen numHeads headDim)
-          (ss := MultiHeadAttention.ssMaskedCore seqLen numHeads headDim)
-          (MultiHeadAttention.maskedCoreDGraph
-            (n := seqLen) (numHeads := numHeads) (headDim := headDim) c bias).g
-          (projectPack x))) :
-    HasFDerivAt
-      (fun z : E =>
-        attentionPack
-          (Graph.evalVec
-            (Γ := MultiHeadAttention.ΓMaskedCore seqLen numHeads headDim)
-            (ss := MultiHeadAttention.ssMaskedCore seqLen numHeads headDim)
-            (MultiHeadAttention.maskedCoreDGraph
-              (n := seqLen) (numHeads := numHeads) (headDim := headDim) c bias).g
-            (projectPack z)))
-      (DattentionPack.comp
-        ((fderiv ℝ
-          (Graph.evalVec
-            (Γ := MultiHeadAttention.ΓMaskedCore seqLen numHeads headDim)
-            (ss := MultiHeadAttention.ssMaskedCore seqLen numHeads headDim)
-            (MultiHeadAttention.maskedCoreDGraph
-              (n := seqLen) (numHeads := numHeads) (headDim := headDim) c bias).g)
-          (projectPack x)).comp DprojectPack))
-      x :=
-  MultiHeadAttention.projectedMaskedAttention_hasFDerivAt
-    (n := seqLen) (numHeads := numHeads) (headDim := headDim)
-    c bias projectPack DprojectPack attentionPack DattentionPack x hProject hAttentionPack
-
-
-
-/--
 Fréchet differentiability of a GPT-style post-norm decoder block.
 
-`maskedAttentionPack` builds the first LayerNorm input triple
-`[x + MaskedMHA(x), gamma₁, beta₁]`.  Instantiate its differentiability hypothesis with
-`MultiHeadAttention.projectedMaskedAttention_hasFDerivAt` when the attention sublayer is built from
-the proved finite-mask split-head core.
+This is `twoSublayerPostNormBlock_hasFDerivAt` under its decoder name: the first pack builds the
+LayerNorm input triple `[x + MaskedMHA(x), gamma₁, beta₁]`.  Instantiate its differentiability
+hypothesis with `DirectReshapeAttention.projectedMaskedAttention_hasFDerivAt` when the attention
+sublayer is built from the proved finite-mask split-head core.
 -/
-theorem postNormGptDecoderBlock_hasFDerivAt
-    {E : Type u} [NormedAddCommGroup E] [NormedSpace ℝ E]
-    {seqLen dModel : Nat} (ε₁ ε₂ : ℝ)
-    (maskedAttentionPack : E → CtxVec (ΓPostNorm seqLen dModel))
-    (DmaskedAttentionPack : E →L[ℝ] CtxVec (ΓPostNorm seqLen dModel))
-    (ffnPack :
-      CtxVec (ΓPostNorm seqLen dModel ++ ssPostNorm seqLen dModel) →
-        CtxVec (ΓPostNorm seqLen dModel))
-    (DffnPack :
-      CtxVec (ΓPostNorm seqLen dModel ++ ssPostNorm seqLen dModel) →L[ℝ]
-        CtxVec (ΓPostNorm seqLen dModel))
-    (x : E)
-    (hMaskedAttentionPack : HasFDerivAt maskedAttentionPack DmaskedAttentionPack x)
-    (hε₁ : 0 < ε₁)
-    (hFfnPack :
-      HasFDerivAt ffnPack DffnPack
-        (Graph.evalVec
-          (Γ := ΓPostNorm seqLen dModel)
-          (ss := ssPostNorm seqLen dModel)
-          (postNormGraph (seqLen := seqLen) (dModel := dModel) ε₁)
-          (maskedAttentionPack x)))
-    (hε₂ : 0 < ε₂) :
-    HasFDerivAt
-      (fun z : E =>
-        Graph.evalVec
-          (Γ := ΓPostNorm seqLen dModel)
-          (ss := ssPostNorm seqLen dModel)
-          (postNormGraph (seqLen := seqLen) (dModel := dModel) ε₂)
-          (ffnPack
-            (Graph.evalVec
-              (Γ := ΓPostNorm seqLen dModel)
-              (ss := ssPostNorm seqLen dModel)
-              (postNormGraph (seqLen := seqLen) (dModel := dModel) ε₁)
-              (maskedAttentionPack z))))
-      ((fderiv ℝ
-          (Graph.evalVec
-            (Γ := ΓPostNorm seqLen dModel)
-            (ss := ssPostNorm seqLen dModel)
-            (postNormGraph (seqLen := seqLen) (dModel := dModel) ε₂))
-          (ffnPack
-            (Graph.evalVec
-              (Γ := ΓPostNorm seqLen dModel)
-              (ss := ssPostNorm seqLen dModel)
-              (postNormGraph (seqLen := seqLen) (dModel := dModel) ε₁)
-              (maskedAttentionPack x)))).comp
-        (DffnPack.comp
-          ((fderiv ℝ
-            (Graph.evalVec
-              (Γ := ΓPostNorm seqLen dModel)
-              (ss := ssPostNorm seqLen dModel)
-              (postNormGraph (seqLen := seqLen) (dModel := dModel) ε₁))
-            (maskedAttentionPack x)).comp DmaskedAttentionPack)))
-      x :=
-  twoSublayerPostNormBlock_hasFDerivAt
-    (seqLen := seqLen) (dModel := dModel) ε₁ ε₂
-    maskedAttentionPack DmaskedAttentionPack ffnPack DffnPack x
-    hMaskedAttentionPack hε₁ hFfnPack hε₂
+alias postNormGptDecoderBlock_hasFDerivAt := twoSublayerPostNormBlock_hasFDerivAt
 
 end
 

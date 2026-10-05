@@ -24,14 +24,6 @@ namespace NN.Verification.Robustness.MarginCertCLI
 def defaultPath : String :=
   "NN/Examples/Verification/Robustness/digits_linear_margin_cert.json"
 
-/-- Check a logit-bound report with timing disabled. -/
-def check (path : String) : IO Unit :=
-  NN.Verification.Robustness.MarginCert.check path
-
-/-- Check a logit-bound report with optional per-example timing. -/
-def checkWithTiming (path : String) (timing : Bool) (timingEvery : Nat) : IO Unit :=
-  NN.Verification.Robustness.MarginCert.checkWithTiming path timing timingEvery
-
 /-- CLI entry point for `lake exe verify -- margin-report [report.json]`. -/
 def run (args : List String) : IO Unit := do
   let usage :=

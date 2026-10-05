@@ -389,26 +389,10 @@ theorem rearrangeCoordinateEquiv_linearize
       rearrangeLinearIndex checked.value.axisLength
         checked.value.normalized.inputAxes
         checked.value.normalized.outputAxes outputIndex.val := by
-  rw [Check.CheckedTransform.rearrangeCoordinateEquiv,
-    Lowering.outputTensorCoordinateEquiv_eq_reshape,
-    Lowering.inputTensorCoordinateEquiv_eq_reshape]
-  let elementaryOutputIndex :
-      Fin
-        (Shape.size
-          (checked.value.normalized.outputAxes.map
-            checked.value.axisLength)) :=
-    finCongr checked.elementary_output_size_eq.symm outputIndex
-  simp only [Equiv.trans_apply, Equiv.symm_trans_apply,
-    Equiv.symm_symm, AxisTuple.selectEquiv, Equiv.coe_fn_mk]
-  rw [linearize_reshapeCoordEquiv_val]
-  rw [reshapeCoordEquiv_unlinearize]
-  simpa only [elementaryOutputIndex, finCongr_apply_coe] using
-      linearize_axisTupleSelect checked.value.axisLength
-        checked.value.normalized.inputAxes
-        checked.value.normalized.outputAxes
-        (checked.valid.normalization.input_axes_subset_output_of_rearrange
-          hKind)
-        elementaryOutputIndex
+  rw [Check.CheckedTransform.rearrangeCoordinateEquiv_apply]
+  exact checked.inputCoordinateOfOutput_linearize
+    (checked.valid.normalization.input_axes_subset_output_of_rearrange hKind)
+    outputIndex
 
 /--
 Linearize a checked rearrangement at an arbitrary output coordinate.
@@ -450,30 +434,6 @@ theorem rearrangeCoordinateEquiv_toFun_linearize_coord
         checked.value.normalized.outputAxes
         (Coord.linearize outputCoordinate).val :=
   checked.rearrangeCoordinateEquiv_linearize_coord hKind outputCoordinate
-
-/--
-Linearizing a checked rearrangement is insensitive to transport of its output
-coordinate across an equal physical shape.
-
-This is the composition form used by proof-producing fusion. It absorbs the
-dependent cast introduced when independently checked stages share a physical
-shape, then exposes the same compact row-major index calculation as the
-uncast coordinate theorem.
--/
-theorem rearrangeCoordinateEquiv_linearize_cast
-    (checked : Check.CheckedTransform)
-    (hKind : checked.value.normalized.kind = .rearrange)
-    {shape : Shape}
-    (hShape : checked.value.output = shape)
-    (outputCoordinate : Coord shape) :
-    (Coord.linearize
-      (checked.rearrangeCoordinateEquiv hKind
-        (cast (congrArg Coord hShape.symm) outputCoordinate))).val =
-      rearrangeLinearIndex checked.value.axisLength
-        checked.value.normalized.inputAxes
-        checked.value.normalized.outputAxes
-        (Coord.linearize outputCoordinate).val := by
-  rw [rearrangeCoordinateEquiv_linearize_coord, linearize_cast_val hShape]
 
 end Check.CheckedTransform
 

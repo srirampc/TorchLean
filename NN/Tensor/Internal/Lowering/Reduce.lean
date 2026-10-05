@@ -575,13 +575,13 @@ namespace Reduce.Impl
 /-- The fused reduction enumerates exactly the certified number of fiber values. -/
 theorem reductionValues_card {α : Type u} [Storage α]
     (checked : CheckedTransform)
-    (hKind : checked.value.normalized.kind = .reduce)
     (inputTensor : checked.InputTensor α)
     (outputCoordinate : Coord checked.value.output) :
     (reductionValues checked inputTensor outputCoordinate).card =
       checked.reductionFiberSize := by
-  rw [reductionValues_eq checked hKind inputTensor outputCoordinate,
-    Fiber.values_card, checked.reduce_fiber_card hKind outputCoordinate]
+  simp only [reductionValues, reductionValuesFromFlat, Multiset.card_map,
+    Finset.card_val, Finset.card_univ, Fintype.card_fin,
+    checked.reductionShape_size]
 
 end Reduce.Impl
 
@@ -688,7 +688,7 @@ theorem reduceFoldTensor_correct
   simp only [reduceFoldTensor, Rep.get_ofFlatFn,
     Coord.unlinearize_linearize, Semantics.denoteReduce, Rep.reduce,
     Rep.get_ofFn]
-  rw [reductionFoldl_eq, ← reductionValues_card checked hKind inputTensor,
+  rw [reductionFoldl_eq, ← reductionValues_card checked inputTensor,
     ← hAggregate]
   exact congrArg aggregate <|
     reductionValues_eq checked hKind inputTensor outputCoordinate
@@ -718,7 +718,7 @@ theorem reduceFoldTensor_nonempty_correct
   simp only [reduceFoldTensor, Rep.get_ofFlatFn,
     Coord.unlinearize_linearize, Semantics.denoteReduceNonempty,
     Rep.reduceNonempty, Rep.get_ofFn]
-  rw [reductionFoldl_eq, ← reductionValues_card checked hKind inputTensor]
+  rw [reductionFoldl_eq, ← reductionValues_card checked inputTensor]
   change
     finish
         (Multiset.foldl step initial
@@ -732,7 +732,7 @@ theorem reduceFoldTensor_nonempty_correct
   have hValues :
       reductionValues checked inputTensor outputCoordinate ≠ 0 :=
     Multiset.card_pos.mp <| by
-      rw [reductionValues_card checked hKind inputTensor outputCoordinate]
+      rw [reductionValues_card checked inputTensor outputCoordinate]
       exact hPositive
   rw [← hAggregate _ hValues]
   exact Rep.nonemptyAggregate_congr aggregate
@@ -825,7 +825,7 @@ def reduceNonemptyTensor {α : Type u} {β : Type v}
     [Storage α] [Storage β]
     (aggregate : (values : Multiset α) → values ≠ 0 → β)
     (checked : CheckedTransform)
-    (hKind : checked.value.normalized.kind = .reduce)
+    (_hKind : checked.value.normalized.kind = .reduce)
     (hPositive : 0 < checked.reductionFiberSize)
     (inputTensor : checked.InputTensor α) : checked.OutputTensor β :=
   Rep.ofFlatFn fun flatIndex =>
@@ -833,7 +833,7 @@ def reduceNonemptyTensor {α : Type u} {β : Type v}
     let values := reductionValues checked inputTensor outputCoordinate
     aggregate values <| Multiset.card_pos.mp <| by
       change 0 < (reductionValues checked inputTensor outputCoordinate).card
-      rw [reductionValues_card checked hKind inputTensor outputCoordinate]
+      rw [reductionValues_card checked inputTensor outputCoordinate]
       exact hPositive
 
 /--

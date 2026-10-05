@@ -5,7 +5,7 @@ This exporter treats Cube R-CNN, SAM-3D-style systems, or any other 3D detector 
 producers; TorchLean accepts the result only after Lean recomputes the
 projection contract with:
 
-    lake exe verify -- camera-box3d-cert <out.json>
+    scripts/lake.sh exe verify -- camera-box3d-cert <out.json>
 
 Expected input shape
 --------------------
@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -41,6 +42,7 @@ from typing import Any
 
 DEFAULT_OUT = Path("_external/geometry3d/omni3d_box3d_cert.json")
 FORMAT = "torchlean.camera.box3d.v1"
+REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 def _as_float_list(value: Any, *, name: str) -> list[float]:
@@ -56,8 +58,14 @@ def _as_float_list(value: Any, *, name: str) -> list[float]:
     for item in value:
         if isinstance(item, list):
             out.extend(_as_float_list(item, name=name))
-        elif isinstance(item, (int, float)):
-            out.append(float(item))
+        elif isinstance(item, (int, float)) and not isinstance(item, bool):
+            try:
+                number = float(item)
+            except OverflowError as exc:
+                raise ValueError(f"{name}: expected finite numeric entries") from exc
+            if not math.isfinite(number):
+                raise ValueError(f"{name}: expected finite numeric entries")
+            out.append(number)
         else:
             raise ValueError(f"{name}: expected only numeric entries")
     return out
@@ -93,13 +101,13 @@ def _get_intrinsics(record: dict[str, Any], args: argparse.Namespace) -> list[fl
         raise ValueError("missing K; pass --focal-length or provide image-level K")
     width = float(record.get("width", args.width if args.width is not None else 0.0))
     height = float(record.get("height", args.height if args.height is not None else 0.0))
-    if width <= 0 or height <= 0:
+    if not all(math.isfinite(x) and x > 0 for x in (width, height)):
         raise ValueError("missing image width/height; pass --width and --height")
     cx = args.principal_x if args.principal_x is not None else width / 2.0
     cy = args.principal_y if args.principal_y is not None else height / 2.0
     fx = args.focal_length
     fy = args.focal_y if args.focal_y is not None else fx
-    return [fx, 0.0, cx, 0.0, fy, cy, 0.0, 0.0, 1.0]
+    return _as_float_list([fx, 0.0, cx, 0.0, fy, cy, 0.0, 0.0, 1.0], name="K")
 
 
 def _choose_instance(instances: list[dict[str, Any]], args: argparse.Namespace) -> dict[str, Any]:
@@ -110,7 +118,8 @@ def _choose_instance(instances: list[dict[str, Any]], args: argparse.Namespace) 
         if args.instance_index < 0 or args.instance_index >= len(instances):
             raise ValueError(f"--instance-index out of range for {len(instances)} instances")
         return instances[args.instance_index]
-    return max(instances, key=lambda inst: float(inst.get("score", 0.0)))
+    scores = [_as_float_list([inst.get("score", 0.0)], name="score")[0] for inst in instances]
+    return instances[max(range(len(instances)), key=scores.__getitem__)]
 
 
 def _field(obj: dict[str, Any], names: tuple[str, ...], *, ctx: str) -> Any:
@@ -140,8 +149,10 @@ def export_cert(payload: Any, args: argparse.Namespace) -> dict[str, Any]:
 
     width = float(record.get("width", args.width if args.width is not None else 0.0))
     height = float(record.get("height", args.height if args.height is not None else 0.0))
-    if width <= 0 or height <= 0:
+    if not all(math.isfinite(x) and x > 0 for x in (width, height)):
         raise ValueError("image width and height must be positive")
+    if not math.isfinite(args.tol) or args.tol < 0:
+        raise ValueError("tolerance must be finite and nonnegative")
 
     K = _get_intrinsics(record, args)
     camera_p = [
@@ -150,7 +161,7 @@ def export_cert(payload: Any, args: argparse.Namespace) -> dict[str, Any]:
         K[6], K[7], K[8], 0.0,
     ]
 
-    bbox = _as_float_list(_field(instance, ("bbox", "bbox2d", "bbox2d"), ctx="instance"), name="bbox")
+    bbox = _as_float_list(_field(instance, ("bbox", "bbox2d"), ctx="instance"), name="bbox")
     corners = _as_float_list(
         _field(instance, ("bbox3D", "bbox3d", "corners3d", "corners_3d"), ctx="instance"),
         name="bbox3D",
@@ -196,7 +207,7 @@ def main() -> None:
     parser.add_argument("--focal-y", type=float, default=None, help="fallback fy; defaults to fx")
     parser.add_argument("--principal-x", type=float, default=None, help="fallback cx; defaults to width/2")
     parser.add_argument("--principal-y", type=float, default=None, help="fallback cy; defaults to height/2")
-    parser.add_argument("--verify", action="store_true", help="run `lake exe verify -- camera-box3d-cert` after export")
+    parser.add_argument("--verify", action="store_true", help="run `scripts/lake.sh exe verify -- camera-box3d-cert` after export")
     args = parser.parse_args()
 
     with args.prediction_json.open("r", encoding="utf-8") as fh:
@@ -204,12 +215,13 @@ def main() -> None:
     cert = export_cert(payload, args)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     with args.out.open("w", encoding="utf-8") as fh:
-        json.dump(cert, fh, indent=2)
+        json.dump(cert, fh, indent=2, allow_nan=False)
         fh.write("\n")
     print(f"wrote {args.out}", flush=True)
 
     if args.verify:
-        subprocess.run(["lake", "exe", "verify", "--", "camera-box3d-cert", str(args.out)], check=True)
+        subprocess.run([str(REPO_ROOT / "scripts/lake.sh"), "exe", "verify", "--",
+                        "camera-box3d-cert", str(args.out.resolve())], cwd=REPO_ROOT, check=True)
 
 
 if __name__ == "__main__":

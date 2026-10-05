@@ -12,9 +12,9 @@ Generate the small local fixtures and run all three loader commands:
 
 ```bash
 python3 NN/Examples/Data/generate_small_data.py
-lake exe torchlean data_csv
-lake exe torchlean data_npy
-lake exe torchlean data_cifar10 --check-only --epochs 1 --batch 4 --train-size 8 --n-total 20
+scripts/lake.sh exe torchlean data_csv
+scripts/lake.sh exe torchlean data_npy
+scripts/lake.sh exe torchlean data_cifar10 --check-only --epochs 1 --batch 4 --train-size 8 --n-total 20
 ```
 
 The generator writes ignored tutorial files for:

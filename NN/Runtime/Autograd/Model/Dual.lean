@@ -62,13 +62,6 @@ namespace Dual
 
 /-- Embed a primal value as a dual number with zero tangent. -/
 def ofPrimal {α : Type} [Zero α] (x : α) : Dual α := ⟨x, 0⟩
-/-- Convenience constructor using the `(primal, tangent)` order. -/
-def mk' {α : Type} (x dx : α) : Dual α := ⟨x, dx⟩
-
-end Dual
-
-namespace Dual
-
 /-- `Dual` is inhabited by `default` primal value with zero tangent. -/
 instance {α : Type} [Inhabited α] [Zero α] : Inhabited (Dual α) :=
   ⟨⟨default, 0⟩⟩
@@ -296,19 +289,18 @@ def ofPrimal {α : Type} [TorchLean.Storage α]
 def ofPrimalPack {α : Type} [TorchLean.Storage α]
     [TorchLean.Storage (Dual α)] [Zero α] :
     {ss : List Shape} → TorchLean.TensorPack α ss →
-      TorchLean.TensorPack (Dual α) ss
-  | [], .nil => .nil
-  | _ :: ss, .cons x xs => .cons (ofPrimal (s := _) x) (ofPrimalPack (ss := ss) xs)
+      TorchLean.TensorPack (Dual α) ss :=
+  TorchLean.TensorPack.map ofPrimal
 
 /--
 Combine a primal tensor and a tangent tensor into a dual tensor.
 
-This is the tensor-level analogue of `Dual.mk'`.
+This is the tensor-level analogue of `Dual.mk`.
 -/
 def withTangents {α : Type} [TorchLean.Storage α]
     [TorchLean.Storage (Dual α)] [Context α]
     {s : Shape} (primal tangent : Tensor α s) : Tensor (Dual α) s :=
-  TorchLean.Tensor.map2Spec Dual.mk' primal tangent
+  TorchLean.Tensor.map2Spec Dual.mk primal tangent
 
 /-- Apply `withTangents` pointwise to a tensor pack. -/
 def withTangentsPack {α : Type} [TorchLean.Storage α]
@@ -316,10 +308,8 @@ def withTangentsPack {α : Type} [TorchLean.Storage α]
     {ss : List Shape} →
       TorchLean.TensorPack α ss →
       TorchLean.TensorPack α ss →
-      TorchLean.TensorPack (Dual α) ss
-  | [], .nil, .nil => .nil
-  | _ :: ss, .cons x xs, .cons dx dxs =>
-      .cons (withTangents (s := _) x dx) (withTangentsPack (ss := ss) xs dxs)
+      TorchLean.TensorPack (Dual α) ss :=
+  TorchLean.TensorPack.zipWith withTangents
 
 /-- Project the tangent part of a dual tensor. -/
 def tangent {α : Type} [TorchLean.Storage α]
@@ -331,9 +321,8 @@ def tangent {α : Type} [TorchLean.Storage α]
 def tangentPack {α : Type} [TorchLean.Storage α]
     [TorchLean.Storage (Dual α)] :
     {ss : List Shape} → TorchLean.TensorPack (Dual α) ss →
-      TorchLean.TensorPack α ss
-  | [], .nil => .nil
-  | _ :: ss, .cons x xs => .cons (tangent (s := _) x) (tangentPack (ss := ss) xs)
+      TorchLean.TensorPack α ss :=
+  TorchLean.TensorPack.map tangent
 
 end DualTensor
 

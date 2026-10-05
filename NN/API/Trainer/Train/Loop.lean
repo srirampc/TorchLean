@@ -14,8 +14,9 @@ public import NN.API.Trainer.Session
 
 Prediction, dataset training, checkpoint restoration, and stream training on `TorchLean.Trainer`.
 
-Every method here opens a `Session`, drives it, and finishes it. Programs that need a different
-loop use `trainer.open` directly.
+Training and checkpoint restoration open a `Session` and return a snapshot of its final state.
+Prediction opens a session without updating it. Programs that need a different training loop use
+`trainer.open` directly.
 -/
 
 @[expose] public section
@@ -73,12 +74,6 @@ def saveCheckpoint {σ τ : Shape} {trainer : TorchLean.Trainer σ τ}
       session.save path
       IO.println s!"  wrote checkpoint: {path}"
 
-/-- Reject training options that cannot describe a run. -/
-def validateOptions (options : TrainOptions) : IO Unit :=
-  match options.validate with
-  | .ok () => pure ()
-  | .error message => throw <| IO.userError message
-
 /--
 Run the requested number of optimizer updates over a finite sample stream.
 
@@ -96,13 +91,14 @@ def runSteps {σ τ : Shape} {trainer : TorchLean.Trainer σ τ}
     for stepIndex in [0:options.steps] do
       let batch ←
         nextCyclicBatch "Trainer.train" samples cursorRef options.samplesPerStep
-      if options.logEvery > 0 && stepIndex % options.logEvery = 0 then
-        let lossValue ← session.stepBatch batch
-        IO.println s!"step {stepIndex}: loss={lossValue}"
+      let completedSteps := stepIndex + 1
+      if Training.shouldReport options.logEvery completedSteps then
+        let lossValue ← session.step (batch := true) batch (loss := true)
+        IO.println s!"step {completedSteps}: loss={lossValue}"
       else
-        session.updateBatch batch
+        session.step (batch := true) batch
       memorySample? ←
-        Memory.sample runtime watchEvery options.steps (stepIndex + 1) memorySample?
+        Memory.sample runtime watchEvery options.steps completedSteps memorySample?
 
 end Internal
 
@@ -110,36 +106,35 @@ end Internal
 Predict one input using the trainer's current model and runtime settings.
 
 Inference before any training call. After training, use the returned trained result's
-`trained.predict` / `trained.predictMany` methods to predict with the trained parameters.
+`trained.predict` method to predict with the trained parameters.
+
+Each call opens a fresh session, which instantiates the model and binds the optimizer (and on
+CUDA uploads the parameters). For many inputs, open one session with `trainer.open` and call
+`session.predict` in the loop.
 
 Example:
 ```lean
 -- This is inference with the freshly initialized parameters, which is what makes it a useful
 -- baseline to print before training starts.
 def baseline (trainer : TorchLean.Trainer [2] [1]) : IO (Tensor Float [1]) :=
-  trainer.predict [0.25, -0.75]
+  trainer.predict ([0.25, -0.75] : Tensor Float [2])
 ```
 -/
-def predict {σ τ : Shape}
-    (trainer : TorchLean.Trainer σ τ) (input : Tensor Float σ) :
-    IO (Tensor Float τ) := do
+def predict {σ τ inputShape : Shape}
+    (trainer : TorchLean.Trainer σ τ) (input : Tensor Float inputShape)
+    (batch : Bool := false) (batchSize : Nat := 1)
+    [TorchLean.Internal.BatchInput
+      (Tensor Float σ) (Tensor Float (σ.prependDim batchSize)) batch (Tensor Float inputShape)] :
+    IO (Tensor Float (match batch with | false => τ | true => τ.prependDim batchSize)) := do
   let session ← trainer.open
-  session.predict input
-
-/-- Predict a tensor batch using the trainer's current model and runtime settings. -/
-def predictMany {σ τ : Shape} {batch : Nat}
-    (trainer : TorchLean.Trainer σ τ)
-    (inputs : Tensor Float (σ.prependDim batch)) : IO (Tensor Float (τ.prependDim batch)) := do
-  let session ← trainer.open
-  session.predictMany inputs
+  session.predict input (batch := batch) (batchSize := batchSize)
 
 /--
 Train the model with the loss and runtime settings stored in `trainer`.
 
 The signature uses `Tensor Float`, but the run itself executes in binary32: `.native` arithmetic
 instantiates the model over `Float32` and `.ieee` over `ExecFloat.Binary 8 23`. Dataset samples are
-converted
-into that scalar as they are used, and results are read back to `Float`.
+converted into that scalar as they are used, and results are read back to `Float`.
 
 The result stores the trained parameters together with prediction, reporting, state access, and
 verification methods. `trained.verify center (radius := r) (norm := .inf)` checks the model that
@@ -149,7 +144,8 @@ label. `trained.save path` writes the parameters; `trainer.load path data` resto
 A positive step count requires a nonempty materialized dataset.
 
 This is `trainer.open`, a loop of `step`, and `finish`; the reported losses are the evaluation-mode
-mean losses over `data` before and after the loop.
+mean losses over `data` before and after the loop. Set `reportLoss := false` to skip those two
+full passes over the dataset.
 
 Example:
 ```lean
@@ -158,7 +154,7 @@ def run (trainer : TorchLean.Trainer [2] [1])
     (data : Trainer.Dataset [2] [1]) : IO Unit := do
   let trained ← trainer.train data { steps := 200, logEvery := 25 }
   trained.printSummary
-  let prediction ← trained.predict [0.25, -0.75]
+  let prediction ← trained.predict ([0.25, -0.75] : Tensor Float [2])
   IO.println s!"trained(heldout) = {reprStr prediction}"
 ```
 -/
@@ -166,7 +162,7 @@ def train {σ τ : Shape}
     (trainer : TorchLean.Trainer σ τ)
     (data : Dataset σ τ) (trainOptions : TrainOptions)
     (probes : Array (Probe σ) := #[]) : IO (Result σ τ) := do
-  Internal.validateOptions trainOptions
+  IO.ofExcept trainOptions.validate
   let samples ← data.materialize (α := Float)
   if trainOptions.steps > 0 && samples.isEmpty then
     throw <| IO.userError
@@ -174,12 +170,17 @@ def train {σ τ : Shape}
   let session ← trainer.open trainOptions.scheduler
   Internal.loadCheckpoint session trainOptions.loadCheckpoint?
   IO.println s!"dataset size = {samples.size}"
-  let before ← session.meanLoss samples
-  IO.println s!"mean_loss(before training) = {before}"
+  let measure (label : String) : IO Float := do
+    if trainOptions.reportLoss then
+      let loss ← session.loss samples (batch := true)
+      IO.println s!"mean_loss({label} training) = {loss}"
+      pure loss
+    else
+      pure (0.0 / 0.0)
+  let before ← measure "before"
   Internal.printProbes session probes "predictions before training"
   Internal.runSteps session trainOptions samples
-  let after ← session.meanLoss samples
-  IO.println s!"mean_loss(after training) = {after}"
+  let after ← measure "after"
   Internal.printProbes session probes "predictions after training"
   Internal.saveCheckpoint session trainOptions.saveCheckpoint?
   let result ← session.finish { before, after }
@@ -249,7 +250,7 @@ def trainStream {σ τ : Shape}
       (Tensor Float σ → IO (Tensor Float τ)) → IO Unit :=
       fun _ _ _ => pure ()) :
     IO (StreamResult σ τ) := do
-  Internal.validateOptions trainOptions
+  IO.ofExcept trainOptions.validate
   let configured : TorchLean.Trainer σ τ :=
     { trainer with runtime := trainer.runtime.withRuntime options }
   let session ← configured.open trainOptions.scheduler
@@ -269,13 +270,12 @@ def trainStream {σ τ : Shape}
     for offset in [0:trainOptions.samplesPerStep] do
       batch := batch.push (sampleAt (stepIndex * trainOptions.samplesPerStep + offset))
     let completedSteps := stepIndex + 1
-    let logDue :=
-      trainOptions.logEvery > 0 && completedSteps % trainOptions.logEvery = 0
+    let logDue := Training.shouldReport trainOptions.logEvery completedSteps
     if logDue then
-      let stepLoss ← session.stepBatch batch
+      let stepLoss ← session.step (batch := true) batch (loss := true)
       IO.println s!"step {completedSteps}: loss={stepLoss}"
     else
-      session.updateBatch batch
+      session.step (batch := true) batch
     memorySample? ← Memory.sample runtime watchEvery steps completedSteps memorySample?
     if completedSteps < steps && Training.shouldReport every completedSteps then
       currentLoss ← session.loss evalSample
@@ -343,9 +343,9 @@ def trainAlternating {σ₁ τ₁ σ₂ τ₂ : Shape}
   let watchEvery := Memory.cadence runtime steps trainOptions.cudaMemorySampleEvery
   let mut memorySample? ← Memory.sample runtime watchEvery steps 0 none
   for stepIndex in [0:steps] do
-    firstSession.update (firstSampleAt stepIndex)
+    firstSession.step (firstSampleAt stepIndex)
     for sample in secondSamplesAt stepIndex do
-      secondSession.update sample
+      secondSession.step sample
     let completedSteps := stepIndex + 1
     memorySample? ← Memory.sample runtime watchEvery steps completedSteps memorySample?
     let curveDue := completedSteps < steps && Training.shouldReport every completedSteps

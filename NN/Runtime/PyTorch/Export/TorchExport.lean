@@ -613,8 +613,6 @@ def lowerFunctionalSpatialRules : Array String :=
    , indentEight ("dilation = _spatial_tuple(kwargs.get(\"dilation\", args[5] if len(args) > 5 " ++
        "else 1), rank, 1)")
    , indentEight "groups = int(kwargs.get(\"groups\", args[6] if len(args) > 6 else 1))"
-   , indentEight "out_channels = int(wshape[0]) if len(wshape) >= 2 else 0"
-   , indentEight "in_channels = int(wshape[1]) * groups if len(wshape) >= 2 else 0"
    , indentEight "input_shape = _shape_from_arg(args[0])"
    , indentEight ("return {" ++ Wire.kindField .conv ++ ", \"spatial_rank\": rank, " ++
        "\"kernel\": [int(v) for v in wshape[2:]], \"stride\": stride, \"padding\": padding, " ++
@@ -829,8 +827,13 @@ def exportFunctionSection (options : GraphBridgeOptions) : Array String :=
    , indentEight "raise RuntimeError(\"could not identify graph input/output\")"
    , indentFour ("payload = {\"format\": FORMAT, \"input_id\": input_id, \"output_ids\": " ++
        "output_ids, \"nodes\": nodes}")
+   , indentFour "try:"
+   , indentEight "text = json.dumps(payload, indent=2, sort_keys=True, allow_nan=False)"
+   , indentFour "except ValueError as exc:"
+   , indentEight ("raise ValueError(\"TorchLean IR JSON cannot carry NaN or infinite values;" ++
+       " check the model parameters and constants\") from exc")
    , indentFour "with open(json_path, \"w\", encoding=\"utf-8\") as f:"
-   , indentEight "json.dump(payload, f, indent=2, sort_keys=True)"
+   , indentEight "f.write(text)"
    , indentFour "return payload"
    , "" ]
 

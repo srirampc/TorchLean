@@ -10,7 +10,7 @@ public import NN.MLTheory.CROWN.Models.Mlp
 public import NN.MLTheory.CROWN.Graph.Theorems
 
 /-!
-# GraphIBPBasicTheorems
+# Validity of graph-level IBP boxes
 
 Basic theorems about the graph-level IBP engine:
 
@@ -45,6 +45,10 @@ theorem contains_lo_of_valid {n : Nat} (B : Box ℝ (.dim n .scalar)) (hB : Vali
   intro i
   exact ⟨le_rfl, hB i⟩
 
+/-- The degenerate box `[t, t]` is valid. -/
+theorem valid_point {n : Nat} (t : Tensor ℝ [n]) : Valid (Box.point (α := ℝ) t) :=
+  fun _ => le_rfl
+
 /-- Validity is preserved by (definitional) casts of the vector dimension. -/
 theorem valid_castBoxDim {n n' : Nat} (h : n = n')
     (B : Box ℝ (.dim n .scalar)) (hB : Valid B) :
@@ -64,23 +68,20 @@ open NN.MLTheory.CROWN
 
 namespace FlatBoxTheorems
 
-variable {α : Type} [TorchLean.Storage α] [Context α]
-
 /-- Converting a valid `Box` into a `FlatBox` preserves validity. -/
 theorem valid_toFlatBox_real {n : Nat} (B : Box ℝ (.dim n .scalar)) (hB :
   NN.MLTheory.CROWN.Box.Valid B) :
-    (toFlatBox (α := ℝ) n B).Valid := by
-  exact hB
+    (toFlatBox (α := ℝ) n B).Valid :=
+  hB
 
 /-- Converting a valid `FlatBox` into a `Box` preserves validity. -/
 theorem valid_ofFlatBox_real (B : FlatBox ℝ) (hB : B.Valid) :
-    NN.MLTheory.CROWN.Box.Valid (ofFlatBox (α := ℝ) B) := by
-  exact hB
+    NN.MLTheory.CROWN.Box.Valid (ofFlatBox (α := ℝ) B) :=
+  hB
 
 /-- Validity is preserved by interval addition on `FlatBox` (over `ℝ`). -/
 theorem valid_box_add_real (B1 B2 : FlatBox ℝ) (h1 : B1.Valid) (h2 : B2.Valid) :
     (boxAdd (α := ℝ) B1 B2).Valid := by
-  let : BoundOps ℝ := instBoundOpsReal
   cases B1 with
   | mk n1 lo1 hi1 =>
     cases B2 with
@@ -99,13 +100,7 @@ theorem valid_box_add_real (B1 B2 : FlatBox ℝ) (h1 : B1.Valid) (h2 : B2.Valid)
         -- reduce the goal to scalar arithmetic
         rw [hEq]
         intro i
-        have hdown :
-            (@BoundOps.addDown ℝ inferInstance inferInstance instBoundOpsReal) =
-              (fun x y : ℝ => x + y) := rfl
-        have hup :
-            (@BoundOps.addUp ℝ inferInstance inferInstance instBoundOpsReal) =
-              (fun x y : ℝ => x + y) := rfl
-        rw [Tensor.getScalar_map2Spec, Tensor.getScalar_map2Spec, hdown, hup]
+        rw [Tensor.getScalar_map2Spec, Tensor.getScalar_map2Spec]
         exact add_le_add (h1 i) (h2 i)
       · -- mismatch branch: returns B1 unchanged
         have hEq :
@@ -119,7 +114,6 @@ theorem valid_box_add_real (B1 B2 : FlatBox ℝ) (h1 : B1.Valid) (h2 : B2.Valid)
 /-- Validity is preserved by interval subtraction on `FlatBox` (over `ℝ`). -/
 theorem valid_box_sub_real (B1 B2 : FlatBox ℝ) (h1 : B1.Valid) (h2 : B2.Valid) :
     (boxSub (α := ℝ) B1 B2).Valid := by
-  let : BoundOps ℝ := instBoundOpsReal
   cases B1 with
   | mk n1 lo1 hi1 =>
     cases B2 with
@@ -136,13 +130,7 @@ theorem valid_box_sub_real (B1 B2 : FlatBox ℝ) (h1 : B1.Valid) (h2 : B2.Valid)
           simpa using (NN.MLTheory.CROWN.Graph.Theorems.box_sub_on_eq (α := ℝ) n1 lo1 hi1 lo2 hi2)
         rw [hEq]
         intro i
-        have hdown :
-            (@BoundOps.subDown ℝ inferInstance inferInstance instBoundOpsReal) =
-              (fun x y : ℝ => x - y) := rfl
-        have hup :
-            (@BoundOps.subUp ℝ inferInstance inferInstance instBoundOpsReal) =
-              (fun x y : ℝ => x - y) := rfl
-        rw [Tensor.getScalar_map2Spec, Tensor.getScalar_map2Spec, hdown, hup]
+        rw [Tensor.getScalar_map2Spec, Tensor.getScalar_map2Spec]
         exact sub_le_sub (h1 i) (h2 i)
       ·
         have hEq :
@@ -191,7 +179,6 @@ theorem graph_ibp_linear_valid_real (id : Nat) (ps : ParamStore ℝ) (Xin : Flat
   match ibpLinear (α := ℝ) id ps Xin with
   | none => True
   | some Bout => FlatBox.Valid (α := ℝ) Bout := by
-  classical
   unfold ibpLinear
   cases hlin : ps.linearWB[id]? with
   | none => simp
@@ -207,9 +194,7 @@ theorem graph_ibp_linear_valid_real (id : Nat) (ps : ParamStore ℝ) (Xin : Flat
             hXin
           exact NN.MLTheory.CROWN.Box.valid_castBoxDim (h := hdim) (B := ofFlatBox (α := ℝ) Xin)
             this
-        have hbBoxValid : Valid (Box.point (α := ℝ) p.b) := by
-          intro i
-          exact le_rfl
+        have hbBoxValid : Valid (Box.point (α := ℝ) p.b) := Box.valid_point p.b
         have hyValid : Valid (IBP.linear (α := ℝ) (m := p.m) (n := p.n) p.w
             (castBoxDim (α := ℝ) hdim (ofFlatBox (α := ℝ) Xin))
             (Box.point (α := ℝ) p.b)) :=
@@ -226,7 +211,6 @@ theorem graph_ibp_matmul_valid_real (id : Nat) (ps : ParamStore ℝ) (Xin : Flat
   match ibpMatmul (α := ℝ) id ps Xin with
   | none => True
   | some Bout => FlatBox.Valid (α := ℝ) Bout := by
-  classical
   unfold ibpMatmul
   cases hmat : ps.matmulW[id]? with
   | none => simp
@@ -240,9 +224,7 @@ theorem graph_ibp_matmul_valid_real (id : Nat) (ps : ParamStore ℝ) (Xin : Flat
             this
         -- zero bias point box is valid
         let z : Tensor ℝ [p.m] := Tensor.full (α := ℝ) (.dim p.m .scalar) 0
-        have hbBoxValid : Valid (Box.point (α := ℝ) z) := by
-          intro i
-          exact le_rfl
+        have hbBoxValid : Valid (Box.point (α := ℝ) z) := Box.valid_point z
         have hyValid : Valid (IBP.linear (α := ℝ) (m := p.m) (n := p.n) p.w
             (castBoxDim (α := ℝ) hdim (ofFlatBox (α := ℝ) Xin))
             (Box.point (α := ℝ) z)) :=

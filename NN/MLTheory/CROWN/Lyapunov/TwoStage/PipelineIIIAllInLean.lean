@@ -52,18 +52,6 @@ open NN.MLTheory.CROWN.Lyapunov.TwoStage.Execution
 local notation "Scalar" => (ExecFloat.Binary 8 23)
 
 
-/-- Learning rate for the stage-1 and stage-2 SGD loops. -/
-def lr : Scalar := Execution.defaultLr
-
-/-- PGD step size when searching for counterexample-ish inputs. -/
-def pgdStepSize : Scalar := Execution.defaultPgdStepSize
-
-/-- Radius of the training box `[-rad, rad]^2` (also used for clamping PGD iterates). -/
-def rad : Scalar := Execution.defaultRad
-
-/-- Half-width of the small box around the origin used for the final IBP/CROWN post-check. -/
-def epsCheck : Scalar := Execution.defaultEpsCheck
-
 /-- Initial parameters: Xavier-uniform weights and zero biases, with fixed seeds per tensor.
 
 The seeds are hard-coded so a pipeline run is reproducible from the source alone; that matters
@@ -124,32 +112,32 @@ def run (width : Nat) (args : List String) : IO Unit := do
   -- Stage 1: initialization pass on random x in [-rad, rad]^2
   let mut seed : UInt64 := 1
   for i in [0:stage1Steps] do
-    let (seed', x) := sampleStateTensor seed rad
+    let (seed', x) := sampleStateTensor seed Execution.defaultRad
     seed := seed'
     let xs := TorchLean.TensorPack.singleton x
     let currentLoss := (←
-      Runtime.Autograd.Torch.ScalarTrainer.runLoss tr xs .nil).item
-    Runtime.Autograd.Torch.ScalarTrainer.runStep tr lr xs .nil
+      Runtime.Autograd.Torch.ScalarTrainer.loss tr xs .nil).item
+    Runtime.Autograd.Torch.ScalarTrainer.step tr Execution.defaultLr xs .nil
     if i % 5 = 0 then
       IO.println s!"[stage1] step {i}: loss={currentLoss}"
 
   -- Stage 2: PGD on x to find violations, then train on them
   for round in [0:stage2Rounds] do
-    let (seed', x0) := sampleStateTensor seed rad
+    let (seed', x0) := sampleStateTensor seed Execution.defaultRad
     seed := seed'
     let params := TorchLean.nn.State.Internal.fromTensorPack (← tr.getState)
     let mut x := x0
     for _k in [0:pgdSteps] do
       x := LossAnalysis.projectedGradientStep
-        width cLoss params x pgdStepSize rad
+        width cLoss params x Execution.defaultPgdStepSize Execution.defaultRad
     let xs := TorchLean.TensorPack.singleton x
     let lossFound := (←
-      Runtime.Autograd.Torch.ScalarTrainer.runLoss tr xs .nil).item
-    Runtime.Autograd.Torch.ScalarTrainer.runStep tr lr xs .nil
+      Runtime.Autograd.Torch.ScalarTrainer.loss tr xs .nil).item
+    Runtime.Autograd.Torch.ScalarTrainer.step tr Execution.defaultLr xs .nil
     IO.println s!"[stage2] round {round}: loss={lossFound}"
 
   let params := TorchLean.nn.State.Internal.fromTensorPack (← tr.getState)
-  LossAnalysis.checkLossBox width params epsCheck
+  LossAnalysis.checkLossBox width params Execution.defaultEpsCheck
 
 /-- Default hidden width used by the Pipeline III all-in-Lean workflow. -/
 def defaultWidth : Nat := 100

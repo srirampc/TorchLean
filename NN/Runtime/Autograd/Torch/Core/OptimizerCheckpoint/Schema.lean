@@ -67,10 +67,6 @@ def isWellFormed (schema : ParameterSchema) : Bool := Id.run do
           return false
   return true
 
-/-- Number of trainable slots, including repeated uses of shared storage. -/
-def trainableCount (schema : ParameterSchema) : Nat :=
-  schema.requiresGrad.count true
-
 /-- Whether this slot owns a moment entry rather than referring to another slot's history. -/
 def isRepresentative (schema : ParameterSchema) (index : Nat) : Bool :=
   schema.representative? index == some index

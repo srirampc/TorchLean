@@ -19,7 +19,6 @@ The code is organized into focused modules:
 - `Graph/Core`: graph aliases, flattened affine-bound state, and propagation state records,
 - `Graph/Engine`: the executable engine: IBP, derivative IBP, forward affine CROWN, and
   objective-dependent backward CROWN,
-- `Graph/Backward`: a narrow import façade for users who want the backward-CROWN chapter name,
 - `Graph/Theorems`: shape, dimension, and enclosure lemmas used by proof modules.
 
 Import this module when you want the complete graph engine API.

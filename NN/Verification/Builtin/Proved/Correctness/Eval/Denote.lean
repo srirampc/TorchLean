@@ -9,6 +9,7 @@ module
 public import NN.Verification.Builtin.Proved.Correctness.Eval.LoweringPrefix
 public import NN.Verification.Builtin.Proved.Correctness.Eval.LoweredNodeBasic
 public import NN.Verification.Builtin.Proved.Correctness.Eval.LoweredNodePayload
+public import NN.Verification.Builtin.Proved.Correctness.Eval.LoweringPayload
 public import NN.Verification.Builtin.Proved.Correctness.Eval.NodeShape
 
 /-!
@@ -56,10 +57,10 @@ theorem evalAt_eq_evalNode_of_lowerNode
   cases node with
   | const wf t =>
       exact evalAt_eq_evalNode_const wf t params G P input vals id hGetNode
-        (hConst.trans (by simp [lowerNode]))
+        (hConst.trans (IRStep.lowerNode_const_payload id wf t params ps))
   | paramConst wf p =>
       exact evalAt_eq_evalNode_paramConst wf p params G P input vals id hGetNode
-        (hConst.trans (by simp [lowerNode]))
+        (hConst.trans (IRStep.lowerNode_paramConst_payload id wf p params ps))
   | add a b =>
       exact evalAt_eq_evalNode_add a b params G _ input vals id hShapes hGetNode
   | sub a b =>
@@ -85,40 +86,18 @@ theorem evalAt_eq_evalNode_of_lowerNode
       exact evalAt_eq_evalNode_softmax axis hAxis xIdx params G _ input vals id hShapes hGetNode
   | layerNorm op xIdx =>
       exact evalAt_eq_evalNode_layerNorm op xIdx params G P input vals id hShapes hGetNode
-        (hLayerNorm.trans (by simp [lowerNode]))
+        (hLayerNorm.trans (IRStep.lowerNode_layerNorm_payload id op xIdx params ps))
   | linear inDim outDim w b xIdx =>
       exact evalAt_eq_evalNode_linear inDim outDim w b xIdx params G P input vals id hShapes
-        hGetNode (hLin.trans (by simp [lowerNode]))
+        hGetNode (hLin.trans (IRStep.lowerNode_linear_payload id inDim outDim w b xIdx params ps))
   | conv inC outC kernelShape stride padding inSpatial hIn hKernel hStride hInfer kernel bias
       xIdx =>
       exact evalAt_eq_evalNode_conv inC outC kernelShape stride padding inSpatial hIn hKernel
         hStride hInfer kernel bias xIdx params G P input vals id hShapes hGetNode
-        (hConv.trans (by simp [lowerNode, loweredConvParams]))
+        (hConv.trans (IRStep.lowerNode_conv_payload id inC outC kernelShape stride padding
+          inSpatial hIn hKernel hStride hInfer kernel bias xIdx params ps))
   | mseLoss yhat target =>
       exact evalAt_eq_evalNode_mseLoss yhat target params G _ input vals id hShapes hGetNode
-
-/-- The lowering accumulator after appending the lowering of one node at the fresh id. -/
-def lowerStep
-    {α : Type} [TorchLean.Storage α] [Context α]
-    {paramShapes : List Shape} {inShape : Shape} {ss : List Shape} {mid : Shape}
-    (node : Node α paramShapes inShape ss mid) (params : TorchLean.TensorPack α paramShapes)
-    (c : NN.Verification.Builtin.LoweredIR α) : NN.Verification.Builtin.LoweredIR α :=
-  let res := lowerNode (α := α) c.graph.nodes.size node params c.ps
-  { c with
-      graph := { nodes := c.graph.nodes.push res.1 }
-      ps := res.2
-      outputId := c.graph.nodes.size }
-
-/-- Lowering a `let1` chain lowers the head node and continues from the extended accumulator. -/
-theorem lowerForwardLetChain_let1
-    {α : Type} [TorchLean.Storage α] [Context α]
-    {paramShapes : List Shape} {inShape : Shape} {ss : List Shape} {mid out : Shape}
-    (node : Node α paramShapes inShape ss mid)
-    (gNext : ForwardLetChain α paramShapes inShape (ss ++ [mid]) out)
-    (params : TorchLean.TensorPack α paramShapes) (c : NN.Verification.Builtin.LoweredIR α) :
-    lowerForwardLetChain (α := α) (ForwardLetChain.let1 node gNext) params c =
-      lowerForwardLetChain (α := α) gNext params (lowerStep node params c) := by
-  rfl
 
 /-- The id reserved by `lowerStep` stays in range after lowering the rest of the chain. -/
 theorem size_lt_lowerForwardLetChain_lowerStep
@@ -180,18 +159,6 @@ theorem denoteAllFrom_eq_bind_of_lt
   rw [Graph.denoteAllFrom.eq_1]
   simp [hi]
 
-/-- Pushing a successfully evaluated node value extends the shape context by its output shape. -/
-theorem shapesOfVals_push_of_evalNode_ok
-    {α : Type} [TorchLean.Storage α] [Context α]
-    {paramShapes : List Shape} {inShape : Shape} {ss : List Shape} {mid : Shape}
-    (node : Node α paramShapes inShape ss mid) (params : TorchLean.TensorPack α paramShapes)
-    (vals : Array (Spec.SomeTensor α)) (v : Spec.SomeTensor α)
-    (hShapes : shapesOfVals (α := α) vals = Ctx inShape ss)
-    (hEval : evalNode (α := α) node params vals = Except.ok v) :
-    shapesOfVals (α := α) (vals.push v) = Ctx inShape (ss ++ [mid]) := by
-  have hv : v.1 = mid := evalNode_ok_shape_of_hShapes node params vals hShapes hEval
-  simp only [shapesOfVals_push, hShapes, hv, Ctx, List.cons_append]
-
 /--
 `denoteAllFrom` for the lowered IR agrees with the forward-fragment evaluator that returns all
 intermediate values. Lowering preserves the full SSA value vector up to the current
@@ -205,7 +172,6 @@ theorem denoteAllFrom_lowerForwardLetChain_eq_evalForwardLetChainVals
     (c : NN.Verification.Builtin.LoweredIR α)
     (x : Tensor α inShape)
     (vals : Array (Spec.SomeTensor α))
-    (hSize : vals.size = c.graph.nodes.size)
     (hShapes : shapesOfVals (α := α) vals = Ctx inShape ss) :
     (NN.IR.Graph.denoteAllFrom (α := α)
       (g := (lowerForwardLetChain (α := α) (paramShapes := paramShapes) (inShape := inShape)
@@ -232,10 +198,8 @@ theorem denoteAllFrom_lowerForwardLetChain_eq_evalForwardLetChainVals
       | error e =>
           rfl
       | ok vOut =>
-          have hSize' : (vals.push vOut).size = (lowerStep node params c).graph.nodes.size := by
-            simp [lowerStep, hSize]
           have hShapes' := shapesOfVals_push_of_evalNode_ok node params vals vOut hShapes hEval
-          have hIH := ih (lowerStep node params c) (vals.push vOut) hSize' hShapes'
+          have hIH := ih (lowerStep node params c) (vals.push vOut) hShapes'
           simpa [lowerStep, Bind.bind, Except.bind] using hIH
 
 end Correctness

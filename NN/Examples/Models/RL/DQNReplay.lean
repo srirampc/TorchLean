@@ -25,7 +25,7 @@ typed graph TorchLean models and an optimizer step.
 Run from the repo root through the maintained example runner:
 
 ```bash
-lake exe torchlean dqn_replay
+scripts/lake.sh exe torchlean dqn_replay
 ```
 
 References:
@@ -75,24 +75,17 @@ def transitionB : rl.core.Transition Float observation actionCount :=
 
 /-- Compact online Q-function used by the example. -/
 def onlineQ (obs : Tensor Float observation) : Tensor Float [actionCount] :=
-  let x0 := obs[0]
-  let x1 := obs[1]
-  [x0 + 0.2, x1 + 1.0, 0.5]
+  [obs[0] + 0.2, obs[1] + 1.0, 0.5]
 
 /-- Compact target Q-function used by the example. -/
 def targetQ (obs : Tensor Float observation) : Tensor Float [actionCount] :=
-  let x0 := obs[0]
-  let x1 := obs[1]
-  [0.1 + x1, 1.4 + x0, 0.3]
+  [0.1 + obs[1], 1.4 + obs[0], 0.3]
 
 /-- Build a replay buffer, sample a minibatch, and compute DQN losses. -/
 def run : IO Unit := do
   IO.println "dqn_replay: begin"
 
-  let buffer0 : rl.replay.Buffer Float observation actionCount :=
-    rl.replay.empty 8
-  let buffer :=
-    rl.replay.pushMany buffer0 #[transitionA, transitionB]
+  let buffer := rl.replay.pushMany (rl.replay.empty 8) #[transitionA, transitionB]
   IO.println s!"stored transitions: {rl.replay.size buffer}"
 
   let batch := rl.replay.sampleContiguous buffer (start := 0) (batchSize := 4)
@@ -100,9 +93,10 @@ def run : IO Unit := do
 
   let gamma : Float := 0.9
   let mse :=
-    rl.dqn.minibatchMSELoss (α := Float) onlineQ targetQ gamma batch
+    rl.dqn.loss onlineQ targetQ gamma batch (batch := true)
   let huber :=
-    rl.dqn.minibatchHuberLoss (α := Float) onlineQ targetQ gamma 1.0 batch
+    rl.dqn.loss onlineQ targetQ gamma batch (batch := true)
+      (error := fun prediction target => rl.core.huberLoss prediction target 1.0)
   IO.println s!"DQN minibatch MSE loss:   {mse}"
   IO.println s!"DQN minibatch Huber loss: {huber}"
 
@@ -116,13 +110,13 @@ def run : IO Unit := do
 def usage : String :=
   String.intercalate "\n"
     [ "Usage:"
-    , "  lake exe torchlean dqn_replay"
+    , "  scripts/lake.sh exe torchlean dqn_replay"
     , ""
     , "Runs a fixed replay-buffer and DQN-loss executable check. "
         ++ "This command has no training flags."
     ]
 
-/-- Runner entrypoint used by `lake exe torchlean dqn_replay`. -/
+/-- Runner entrypoint used by `scripts/lake.sh exe torchlean dqn_replay`. -/
 def main (args : List String) : IO UInt32 := do
   if CLI.hasHelp args then
     IO.println usage

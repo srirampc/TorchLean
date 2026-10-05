@@ -95,10 +95,8 @@ def fx2022 : Citable := .inProceedings
     url := some "https://arxiv.org/abs/2112.08429" }
 
 /--
-The compiler infrastructure that made "operations are data, with declared types and a verifier" the
-default way to build an ML IR. TorchLean's node array is far smaller, but the design decisions it
-copies, a closed operation vocabulary and shape metadata that a checker validates, come from this
-line of work.
+A reference for operations represented as data with declared types and a verifier. The IR chapter
+compares this approach with TorchLean's smaller node array and explicit shape checker.
 -/
 @[bib "mlir2021"]
 def mlir2021 : Citable := .inProceedings
@@ -162,10 +160,9 @@ def griewank2000 : Citable := .article
     url := some "https://doi.org/10.1145/347837.347846" }
 
 /--
-The paper that made the ReLU-at-zero question respectable. It builds a calculus of "conservative
-fields" in which the value automatic differentiation returns at a kink is a legitimate derivative
-object, and shows that gradient methods converge with it. We cite it wherever this manual says
-that a nonsmooth rule needs a stated convention rather than an apology.
+A reference for conservative fields in nonsmooth automatic differentiation. The guide uses it
+when explaining why a rule at a kink requires a stated convention and an appropriate mathematical
+notion of derivative.
 -/
 @[bib "bolte2020"]
 def bolte2020 : Citable := .inProceedings
@@ -261,7 +258,7 @@ def wongkolter2018 : Citable := .arXiv
     year := 2018
     id := "1711.00851" }
 
-/-- Interval bound propagation, the cheapest sound bound TorchLean implements. -/
+/-- Interval bound propagation, used in TorchLean's interval enclosure proofs. -/
 @[bib "gowal2018"]
 def gowal2018 : Citable := .arXiv
   { title :=
@@ -342,7 +339,7 @@ def neurallyapunov2019 : Citable := .inProceedings
 
 /-! ## Proof-carrying artifacts and testing of tensor frameworks -/
 
-/-- Proof-carrying code, the earliest statement of the idea a certificate checker implements. -/
+/-- Proof-carrying code, a reference for independently checkable evidence accompanying code. -/
 @[bib "necula1997"]
 def necula1997 : Citable := .inProceedings
   { title := inlines!"Proof-Carrying Code"
@@ -449,9 +446,8 @@ def benton2012 : Citable := .article
 /-! ## Optimization and learning theory -/
 
 /--
-Stochastic approximation, the origin of the update rule every optimizer in this guide specializes.
-We cite it in the training chapter because the one-sample step is not an approximation of a
-full-batch step invented for speed; it is the older idea.
+Stochastic approximation, cited in the training chapter to explain updates formed from sampled
+information.
 -/
 @[bib "robbins1951"]
 def robbins1951 : Citable := .article

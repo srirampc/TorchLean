@@ -52,7 +52,7 @@ The initial parallel width is a scheduling policy, not a correctness boundary:
 the executor and its proof accept every list length.
 -/
 def einsumOutputTaskCount
-    (_factored : Bool) (outputShape : Shape)
+    (outputShape : Shape)
     (contractionEntries : Nat) : Nat :=
   match outputShape with
   | [] => 1
@@ -74,9 +74,8 @@ native-counter implementation when the chunk length is portable. The result is
 `none` when shapes are symbolic or the static work policy rejects task launch.
 -/
 def compileParallelEinsumOutput?
-    (scalarType storage outputBufferType reference : Expr)
+    (scalarType storage bufferType reference : Expr)
     (outputLengths : List Expr) (contractionEntries? : Option Nat)
-    (factored : Bool)
     (buildOutputLoops :
       List Expr → List Expr → Expr →
         TermElabM (Expr × Expr × Expr))
@@ -90,7 +89,7 @@ def compileParallelEinsumOutput?
   | outerLength :: innerLengths, some (outer :: innerShape),
       some contractionEntries =>
       let taskCount :=
-        einsumOutputTaskCount factored (outer :: innerShape)
+        einsumOutputTaskCount (outer :: innerShape)
           contractionEntries
       unless 1 < taskCount do
         return none
@@ -116,7 +115,7 @@ def compileParallelEinsumOutput?
             scalarType, storage, capacityExpr]
         let localCoordinateType ← mkAppM ``Fin #[countExpr]
         let (rawChunk, _referenceChunk, hRawChunkReference) ←
-          withLocalDeclD `output outputBufferType fun loopOutput =>
+          withLocalDeclD `output bufferType fun loopOutput =>
             withLocalDeclD `localOuterCoordinate localCoordinateType
                 fun localCoordinate => do
               let localCoordinateAtStart ←
@@ -168,8 +167,8 @@ def compileParallelEinsumOutput?
                   pure (nativeLoop, referenceLoop, hNativeReference)
         let hCoordinateChunk ←
           mkAppM ``coordinateFoldl_push_outerRange_eq_array_ofFn #[
-            outerLength, startExpr, countExpr, innerShapeExpr, hRange,
-            reference]
+            outerLength, startExpr, countExpr, innerShapeExpr, capacityExpr,
+            hRange, reference]
         let hCoordinateChunkType ←
           withTransparency .reducible <| whnf (← inferType hCoordinateChunk)
         let some (_, observedCoordinateFold, _) := hCoordinateChunkType.eq?
@@ -188,7 +187,7 @@ def compileParallelEinsumOutput?
             mkExpectedTypeHint hRawChunkReference
               (← mkEq rawChunk coordinateFold)
         let toArrayFunction ←
-          withLocalDeclD `buffer outputBufferType fun buffer => do
+          withLocalDeclD `buffer bufferType fun buffer => do
             let observed :=
               mkAppN (mkConst ``Storage.toArray [scalarLevel]) #[
                 scalarType, storage, buffer]
@@ -224,7 +223,7 @@ def compileParallelEinsumOutput?
         pure (part, hFlatRange, certificate)
       let outerCoordinateType ← mkAppM ``Fin #[outerLength]
       let (generatedOuterStep, referenceOuterStep, hOuterStep) ←
-        withLocalDeclD `output outputBufferType fun loopOutput =>
+        withLocalDeclD `output bufferType fun loopOutput =>
           withLocalDeclD `outerCoordinate outerCoordinateType
               fun outerCoordinate => do
             let (generatedBody, referenceBody, hBody) ←
@@ -246,7 +245,7 @@ def compileParallelEinsumOutput?
       let remainder := outer % taskCount
       let extra (chunk : Nat) : Nat :=
         if chunk < remainder then 1 else 0
-      let (outputBuffer, hOutputArray) ←
+      let (buffer, hOutputArray) ←
         withGeneratedLetPair
             [(`parallelOutputStep, generatedOuterStep)] fun values => do
           let parallelOutputStep := values[0]!
@@ -269,9 +268,9 @@ def compileParallelEinsumOutput?
             rangeProofs := rangeProofs.push hRange
             certificates := certificates.push certificate
             start := start + count
-          let partType ← mkArrow (mkConst ``Unit) outputBufferType
+          let partType ← mkArrow (mkConst ``Unit) bufferType
           let partsList ← mkListLit partType parts.toList
-          let outputBuffer :=
+          let buffer :=
             mkAppN (mkConst ``parallelBuffer [scalarLevel]) #[
               scalarType, storage, partsList]
           let total := mkNatLit outputSize
@@ -288,10 +287,10 @@ def compileParallelEinsumOutput?
             partition ← sealCertificate partitionType partition
           let hOutputArray ←
             mkAppM ``parallelBuffer_toArray_eq_array_ofFn #[partition]
-          pure (outputBuffer, hOutputArray)
+          pure (buffer, hOutputArray)
       let hOutputArrayType ← inferType hOutputArray
       let hOutputArray ← sealCertificate hOutputArrayType hOutputArray
-      return some (outputBuffer, hOutputArray)
+      return some (buffer, hOutputArray)
   | _, _, _ => return none
 
 end TorchLean.Tensor.Internal.Elab.Impl

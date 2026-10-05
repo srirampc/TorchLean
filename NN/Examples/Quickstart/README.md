@@ -42,7 +42,7 @@ Read them in the order of the table.
 
 ```lean
 let trainer := Trainer.new model
-  { objective := .meanSquaredError
+  { objective := .mse
     optimizer := optim.adam { learningRate := 0.03 }
     seed := 0 }
 let trained ← trainer.train data { steps := 200, logEvery := 25 }
@@ -70,7 +70,7 @@ let (gradient, value) ← autograd.grad loss x (value := true)
 `autograd.model` differentiates through a model:
 
 ```lean
-let state := autograd.model.initialState model
+let state := nn.initialState model
 let (gradient, lossValue) ←
   autograd.model.grad model lossFn state x target (value := true)
 IO.println s!"loss = {lossValue}"

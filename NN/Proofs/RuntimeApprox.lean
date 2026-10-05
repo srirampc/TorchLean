@@ -10,6 +10,7 @@ public import NN.Proofs.RuntimeApprox.Core
 public import NN.Proofs.RuntimeApprox.FP32
 public import NN.Proofs.RuntimeApprox.FP32.CROWN
 public import NN.Proofs.RuntimeApprox.Graph
+public import NN.Proofs.RuntimeApprox.IEEE32.Expressions
 public import NN.Proofs.RuntimeApprox.IEEE32.MinMaxTotal
 public import NN.Proofs.RuntimeApprox.NF
 public import NN.Proofs.RuntimeApprox.Optimizer
@@ -29,6 +30,7 @@ The runtime-approximation library is intentionally layered:
 - `NF`: proof-relevant rounded tensor/operator backend;
 - `FP32`: convenient FP32-specialized layer/MLP/CROWN statements;
 - `Optimizer`: one finite-run contract for numerical optimizer updates;
+- `IEEE32`: finite binary32 refinements of arithmetic, expression trees, and min/max contracts;
 - `Reductions`: error bounds for rounded-addition trees and finite binary32 schedules;
 - `Scale`: optional magnitude propagation for abs/rel tolerance reporting.
 

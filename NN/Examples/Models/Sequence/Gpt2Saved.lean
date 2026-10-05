@@ -16,8 +16,9 @@ This is the load-and-sample half of the byte-level GPT example.
 1. Train and save a model checkpoint:
 
 ```bash
-lake -R -K cuda=true build torchlean:exe
-lake -R -K cuda=true exe torchlean gpt2 --device cuda --tiny-shakespeare --steps 1 --windows 1 \
+scripts/lake.sh -Kcuda=true build torchlean:exe
+scripts/lake.sh -Kcuda=true exe torchlean gpt2 --device cuda \
+    --tiny-shakespeare --steps 1 --windows 1 \
   --prompt "First Citizen:" --generate 0 \
   --save-checkpoint data/examples/gpt2_shakespeare.state.json
 ```
@@ -25,7 +26,7 @@ lake -R -K cuda=true exe torchlean gpt2 --device cuda --tiny-shakespeare --steps
 2. Load the checkpoint and sample text (no training loop or optimizer state):
 
 ```bash
-lake -R -K cuda=true exe torchlean gpt2_saved --device cuda \
+scripts/lake.sh -Kcuda=true exe torchlean gpt2_saved --device cuda \
   --checkpoint data/examples/gpt2_shakespeare.state.json \
   --prompt "First Citizen:" --generate 0
 ```
@@ -60,7 +61,7 @@ def exeName : String := "gpt2_saved"
 def usage : String :=
   String.intercalate "\n"
     [ "Usage:"
-    , "  lake -R -K cuda=true exe torchlean gpt2_saved --device cuda --checkpoint PATH "
+    , "  scripts/lake.sh -Kcuda=true exe torchlean gpt2_saved --device cuda --checkpoint PATH "
         ++ "[generation flags]"
     , ""
     , "Required:"
@@ -111,11 +112,8 @@ def sampleCheckpoint
   session.load load.checkpointPath
   let predict : NN.Examples.Models.Sequence.Gpt2.Predictor := session.predict
   let outIds ←
-    NN.Examples.Models.Sequence.Gpt2.generateSampled
-      predict load.generation.prompt load.generation.newTokenCount
-      load.generation.temperature load.generation.topK load.generation.seed
-      load.generation.repeatWindow load.generation.repeatPenalty
-      load.generation.asciiOnly
+    Gpt2.generate predict
+      (Tensor.from (text.Tokenizer.byte.encode load.generation.prompt)) load.generation
   let txt := text.formatByteTokens outIds
   IO.println s!"  loaded={load.checkpointPath}"
   IO.println s!"  prompt={text.escape load.generation.prompt}"

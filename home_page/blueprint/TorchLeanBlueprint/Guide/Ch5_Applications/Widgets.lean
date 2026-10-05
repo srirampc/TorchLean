@@ -66,8 +66,9 @@ The same named object can be evaluated, viewed, and checked:
 
 Read-only views such as `#tensor_view` format a value without changing it. Trace views execute a
 specific Lean computation: `#ir_exec_trace_view` steps through `NN.IR.Semantics`, while
-`#tape_trace_view` follows the autograd engine's reverse pass. The interpretation is therefore
-explicit. A theorem about that same interpretation is still a separate proof.
+`#tape_trace_view` runs reverse mode and recomputes local VJP contributions from the resulting
+cotangents. It does not record intermediate gradient-map updates. A theorem about either
+computation is still a separate proof.
 
 The available views expose different parts of these objects:
 
@@ -95,7 +96,7 @@ The available views expose different parts of these objects:
 *
   * gradients
   * `#tape_grads_view`, `#tape_trace_view`
-  * tape structure, reverse steps, and accumulated gradients
+  * tape structure, local VJP contributions, and accumulated gradients
 *
   * a completed run
   * `#train_log_view` or a file-backed log view
@@ -124,7 +125,7 @@ PPO run instead writes a named artifact, which a later Lean file reads:
 -- their producer commands.
 #train_log_file_view "data/examples/cnn_trainlog.json"
 #train_log_file_view "data/examples/gpt2_trainlog.json"
-#rl_boundary_rollout_file_view "data/rl/cartpole_rollout.json", contract, 12
+#rl_boundary_rollout_file_view "data/rl/gym_cartpole_rollout.json", contract, 12
 #pytorch_translate_file "NN/Examples/Interop/PyTorch/MLP/train_mlp.py"
 ```
 
@@ -560,7 +561,7 @@ def samplePropState : Graph.PropState Float :=
 
 #crown_view sampleGraph, samplePropState
 
--- Interval widths (`hi - lo`) are a fast
+-- Interval widths (`hi - lo`) are a
 -- "where did bounds blow up?" diagnostic.
 #bounds_tightness_view sampleGraph, samplePropState
 ```
@@ -730,9 +731,11 @@ a contribution was omitted or computed incorrectly.
 The two internal gradients explain the reverse traversal as well. The final addition is seeded
 with one because it is the selected scalar output. Its multiplication parent receives one, and
 that parent sends `b` to `a` and `a` to `b`. The direct addition edge supplies the extra one to `b`.
-Looking only at the final leaf numbers would miss this route through the graph. The trace is most
-useful when a shared parameter has several consumers, because each consumer's contribution must
-arrive before the accumulated gradient is interpreted.
+Looking only at the final leaf numbers would miss this route through the graph. The trace panel
+shows each local VJP applied to its final accumulated cotangent, in reverse node order. It can
+explain the contributions from several consumers, but does not show the accumulator after each
+individual addition. Nodes with `requiresGrad=false` keep their VJP disabled in the view as in the
+engine.
 
 ## Unused Leaves And Missing Gradients
 
@@ -948,7 +951,7 @@ The file can also be elaborated from a terminal:
 ```terminal
 # Elaborate the widget examples; interactive panels are
 # displayed by the editor.
-lake env lean NN/Examples/DeepDives/Widgets.lean
+scripts/lake.sh env lean NN/Examples/DeepDives/Widgets.lean
 ```
 
 Terminal elaboration checks the commands and definitions, while the VS Code Infoview provides the

@@ -14,9 +14,8 @@ public import NN.Proofs.RuntimeApprox.NF.Ops.Elementwise.SoftplusSafeLog
 public import NN.Proofs.RuntimeApprox.NF.Ops.Elementwise.Unary
 
 /-!
-Elementwise NeuralFloat approximation proofs.
+# NF Elementwise Bounds
 
-This module contains operation-level error bounds for scalar elementwise nodes used by the
-normal-form runtime approximation development.
+Elementwise approximation lemmas for the rounded `NF` backend: per-entry error budgets and the
+`approxTensor` bounds for arithmetic and activation operators applied pointwise.
 -/
-

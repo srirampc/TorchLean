@@ -87,29 +87,11 @@ private theorem pluses_updateAt_gt_of_energy_eq_of_ne
   · have hdec : decide (p.θ u ≤ net (α := ℝ) p s u) = true := by simp [hnet]
     -- The update sets `u := true`; changing implies the old bit was `false`.
     have hsuf : s u = false := by
-      have hsu : updateAt (α := ℝ) p s u u ≠ s u := by
-        intro hEq
-        apply hchange
-        funext i
-        by_cases hi : i = u
-        · subst hi; simpa using hEq
-        · simp [updateAt_apply_ne (p := p) (s := s) (u := u) (v := i) hi]
-      have hup : updateAt (α := ℝ) p s u u = true := by
-        have hu'' :
-            updateAt (α := ℝ) p s u u = decide (p.θ u ≤ net (α := ℝ) p s u) := by
-          simp [updateAt]
-        exact hu''.trans hdec
-      cases hsu0 : s u <;> try rfl
-      exfalso
-      exact hsu (by simpa [hsu0] using hup)
+      simpa [hdec] using apply_eq_not_decide_of_updateAt_ne p s u hchange
     have hps :
         pluses (n := n) (updateAt (α := ℝ) p s u) = pluses (n := n) s + 1 :=
       pluses_updateAt_eq_succ_of_set_true (p := p) (s := s) (u := u) hsuf hdec
-    -- Rewrite the goal using `hps`.
-    have : pluses (n := n) (updateAt (α := ℝ) p s u) > pluses (n := n) s := by
-      rw [hps]
-      simp
-    exact this
+    exact lt_of_lt_of_eq (Nat.lt_succ_self _) hps.symm
   · have hlt :=
       energy_updateAt_lt_of_change_of_ne (n := n) p hsym hdiag s u hchange (by simpa [eq_comm] using
         hnet)
@@ -179,17 +161,10 @@ private theorem pluses_foldl_gt_of_energy_eq_of_ne
       intro s hE hne
       set s1 : State n := updateAt (α := ℝ) p s u with hs1
       set sf : State n := l.foldl (fun s u => updateAt (α := ℝ) p s u) s1 with hsf
-      have hfold : (u :: l).foldl (fun s u => updateAt (α := ℝ) p s u) s = sf := by
-        -- `foldl` on a `cons` and rewrite the initial accumulator using `hs1`/`hsf`.
-        have h0 :
-            (u :: l).foldl (fun s u => updateAt (α := ℝ) p s u) s =
-              l.foldl (fun s u => updateAt (α := ℝ) p s u) (updateAt (α := ℝ) p s u) := by
-          rfl
-        have h1 :
-            l.foldl (fun s u => updateAt (α := ℝ) p s u) (updateAt (α := ℝ) p s u) =
-              l.foldl (fun s u => updateAt (α := ℝ) p s u) s1 := by
-          exact congrArg (fun t => l.foldl (fun s u => updateAt (α := ℝ) p s u) t) hs1.symm
-        exact h0.trans (h1.trans hsf.symm)
+      -- `foldl` on a `cons` steps through `s1`; the accumulator names come from `hs1`/`hsf`.
+      have hfold : (u :: l).foldl (fun s u => updateAt (α := ℝ) p s u) s = sf :=
+        (congrArg (fun t => l.foldl (fun s u => updateAt (α := ℝ) p s u) t) hs1.symm).trans
+          hsf.symm
       have hne_sf : sf ≠ s := by
         intro hEq
         apply hne
@@ -237,16 +212,8 @@ private theorem pluses_foldl_gt_of_energy_eq_of_ne
           exact hs1.symm.trans hHead
         have hfull :
             (u :: l).foldl (fun s u => updateAt (α := ℝ) p s u) s =
-              l.foldl (fun s u => updateAt (α := ℝ) p s u) s := by
-          have h0 :
-              (u :: l).foldl (fun s u => updateAt (α := ℝ) p s u) s =
-                l.foldl (fun s u => updateAt (α := ℝ) p s u) (updateAt (α := ℝ) p s u) := by
-            rfl
-          have h1 :
-              l.foldl (fun s u => updateAt (α := ℝ) p s u) (updateAt (α := ℝ) p s u) =
-                l.foldl (fun s u => updateAt (α := ℝ) p s u) s := by
-            exact congrArg (fun t => l.foldl (fun s u => updateAt (α := ℝ) p s u) t) huNoop
-          exact h0.trans h1
+              l.foldl (fun s u => updateAt (α := ℝ) p s u) s :=
+          congrArg (fun t => l.foldl (fun s u => updateAt (α := ℝ) p s u) t) huNoop
         -- Avoid `simp` here: `updateAt` has simp lemmas that unfold to `Function.update`.
         have hpl :
             pluses (n := n) (l.foldl (fun s u => updateAt (α := ℝ) p s u) s) =

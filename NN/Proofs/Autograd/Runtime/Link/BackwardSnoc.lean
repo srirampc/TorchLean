@@ -74,49 +74,55 @@ theorem addGradAll_addNode_push (t : Tape α) (nd : Runtime.Autograd.Node α)
     rw [getNode?_addNode_of_lt t nd hpid, hnodePrev]
   have hgetPrev : acc[pid]? = some (acc[pid]'hpidAcc) := Array.getElem?_eq_getElem hpidAcc
   have hgetNext : (acc.push v)[pid]? = some (acc[pid]'hpidAcc) := Array.getElem?_push_lt hpidAcc
-  cases hreq : nodeAt.requiresGrad with
-  | false =>
-      simp [Tape.addGradAll, hnodePrev, hnodeNext, hreq, result_pure_eq_ok, result_bind_ok,
-        result_map_ok]
-  | true =>
-      by_cases hshape : pg.shape = nodeAt.value.shape
-      · by_cases hex : (acc[pid]'hpidAcc).shape = nodeAt.value.shape
-        · let pg' : Spec.SomeTensor α := { shape := nodeAt.value.shape, tensor := pg.cast hshape }
-          let existing' : Spec.SomeTensor α :=
-            { shape := nodeAt.value.shape, tensor := (acc[pid]'hpidAcc).cast hex }
-          cases hadd : Runtime.Autograd.SomeTensor.add existing' pg' with
+  simp only [Tape.addGradAll, hnodePrev, hnodeNext, Bind.bind, Except.bind,
+    Pure.pure, Except.pure, throw, throwThe, MonadExceptOf.throw]
+  by_cases hreq : nodeAt.requiresGrad = false
+  · simp [hreq, Except.map]
+  · simp only [ite_eq_right hreq]
+    by_cases hshape : pg.shape = nodeAt.value.shape
+    · simp only [dite_eq_left hshape]
+      split
+      · rename_i hget
+        simp [hgetNext] at hget
+      · rename_i existing hget
+        have heq : existing = acc[pid] := Option.some.inj (hget.symm.trans hgetNext)
+        subst existing
+        by_cases hex : acc[pid].shape = nodeAt.value.shape
+        · simp only [dite_eq_left hex]
+          cases hadd : Runtime.Autograd.SomeTensor.add
+              (Spec.SomeTensor.ofTensor ((acc[pid]).cast hex))
+              (Spec.SomeTensor.ofTensor (pg.cast hshape)) with
           | error e =>
-              have hprev : Tape.addGradAll (t := t) acc pid pg = .error e := by
-                simp [Tape.addGradAll, hnodePrev, hreq, hshape, hgetPrev, hex, pg', existing',
-                  hadd, result_throw_eq_error, result_bind_error]
-              have hnext : Tape.addGradAll (t := (t.addNode nd).1) (acc.push v) pid pg =
-                  .error e := by
-                simp [Tape.addGradAll, hnodeNext, hreq, hshape, hgetNext, hex, pg', existing',
-                  hadd, result_throw_eq_error, result_bind_error]
-              simp [hprev, hnext, result_map_error]
+            dsimp only
+            split
+            · rename_i hget
+              simp [hgetPrev] at hget
+            · rename_i previous hget
+              have heq : previous = acc[pid] := Option.some.inj (hget.symm.trans hgetPrev)
+              subst previous
+              simp only [dite_eq_left hex]
+              rw [hadd]
+              rfl
           | ok summed =>
-              have hprev :
-                  Tape.addGradAll (t := t) acc pid pg =
-                    .ok (acc.set pid summed (h := hpidAcc)) := by
-                simp [Tape.addGradAll, hnodePrev, hreq, hshape, hex, pg', existing', hadd,
-                  hpidAcc, result_throw_eq_error, result_bind_ok, result_pure_eq_ok]
-              have hnext :
-                  Tape.addGradAll (t := (t.addNode nd).1) (acc.push v) pid pg =
-                    .ok ((acc.set pid summed (h := hpidAcc)).push v) := by
-                have hpidAccPush : pid < (acc.push v).size := by
-                  rw [Array.size_push]
-                  exact Nat.lt_succ_of_lt hpidAcc
-                have hget : (acc.push v)[pid] = acc[pid] := by
-                  simpa using (Array.getElem_push_lt (xs := acc) (x := v) (i := pid) hpidAcc)
-                simp [Tape.addGradAll, hnodeNext, hreq, hshape, hex, pg', existing', hadd,
-                  hpidAcc, hgetNext, Array.set_push, result_throw_eq_error, result_bind_ok,
-                  result_pure_eq_ok]
-                omega
-              simp [hprev, hnext, result_map_ok]
-        · simp [Tape.addGradAll, hnodePrev, hnodeNext, hreq, hshape, hgetPrev, hgetNext, hex,
-            result_map_error, result_throw_eq_error]
-      · simp [Tape.addGradAll, hnodePrev, hnodeNext, hreq, hshape, result_map_error,
-          result_throw_eq_error]
+            dsimp only
+            split
+            · rename_i hget
+              simp [hgetPrev] at hget
+            · rename_i previous hget
+              have heq : previous = acc[pid] := Option.some.inj (hget.symm.trans hgetPrev)
+              subst previous
+              simp only [dite_eq_left hex]
+              rw [hadd]
+              simp [Except.map, Array.set_push, hpidAcc]
+        · simp only [dite_eq_right hex]
+          split
+          · rename_i hget
+            simp [hgetPrev] at hget
+          · rename_i previous hget
+            have heq : previous = acc[pid] := Option.some.inj (hget.symm.trans hgetPrev)
+            subst previous
+            simp [hex, Except.map]
+    · simp [hshape, Except.map]
 
 /--
 Folding `addGradAll` over a contribution list commutes with pushing an unused last slot, as long

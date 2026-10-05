@@ -239,9 +239,8 @@ namespace Internal
 /--
 Binary search for `n` in a sorted array of inclusive ranges, over the slice `[lo, hi)`.
 
-`fuel` is what makes the recursion structural. The interval halves at every step, so any fuel at
-least `log2 ranges.size` suffices; callers pass `ranges.size` and stay clear of the bound without
-having to prove anything about it.
+`fuel` makes the recursion structural. Each search step shrinks the interval; the public wrapper
+supplies `ranges.size + 1`, enough to inspect every range even without using the halving bound.
 -/
 def inSortedRanges (ranges : Array (Nat × Nat)) (n lo hi : Nat) : Nat → Bool
   | 0 => false

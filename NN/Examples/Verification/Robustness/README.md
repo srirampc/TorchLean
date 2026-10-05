@@ -3,7 +3,7 @@
 Start with a few bundled 8×8 digit images:
 
 ```bash
-lake exe verify -- digits --eps=0.02 --max=10
+scripts/lake.sh exe verify -- digits --eps=0.02 --max=10
 ```
 
 The command loads `digits_linear_weights.json` (a 64-input, 10-output linear classifier) and
@@ -18,7 +18,7 @@ Read `NN/Verification/Robustness/Digits.lean` for the arithmetic, clipping, and 
 There is a separate report-format example:
 
 ```bash
-lake exe verify -- margin-report
+scripts/lake.sh exe verify -- margin-report
 ```
 
 It checks `digits_linear_margin_cert.json`: the supplied logit intervals, margin decisions, and

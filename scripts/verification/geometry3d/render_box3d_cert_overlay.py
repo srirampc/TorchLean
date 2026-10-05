@@ -4,7 +4,7 @@
 This script is a human-facing companion to the Lean checker, not part of the checker itself:
 
 1. load one or more exported camera-box JSON artifacts;
-2. optionally run `lake exe verify -- camera-box3d-cert <cert>`;
+2. optionally run `scripts/lake.sh exe verify -- camera-box3d-cert <cert>`;
 3. reproject the exported 3D corners for display; and
 4. save PNG overlays showing the claimed 2D box, projected 3D corners, cuboid edges, and checker
    status.
@@ -35,8 +35,7 @@ from safe_image_io import load_local_rgb_image, load_remote_rgb_image
 
 DEFAULT_CERT = Path("NN/Verification/Geometry3D/check_box3d_camera_cert.json")
 DEFAULT_OUT_DIR = Path("_external/geometry3d/overlays")
-DEFAULT_BAD_GLOB = "_external/geometry3d/bad/*.json"
-DEFAULT_REAL_GLOB = "_external/geometry3d/realworld/*.json"
+REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 EDGE_INDEX_PAIRS: tuple[tuple[int, int], ...] = (
@@ -44,6 +43,24 @@ EDGE_INDEX_PAIRS: tuple[tuple[int, int], ...] = (
     (4, 5), (5, 7), (7, 6), (6, 4),
     (0, 4), (1, 5), (2, 6), (3, 7),
 )
+PERIMETER_EDGE_INDEX_PAIRS = (
+    (0, 1), (1, 2), (2, 3), (3, 0),
+    (4, 5), (5, 6), (6, 7), (7, 4),
+    (0, 4), (1, 5), (2, 6), (3, 7),
+)
+
+
+def edge_index_pairs(cert: dict[str, Any]) -> tuple[tuple[int, int], ...]:
+    """Respect the producer's vertex order; older WildDet artifacts used perimeter order too."""
+    metadata = cert.get("metadata", {})
+    if not isinstance(metadata, dict):
+        return EDGE_INDEX_PAIRS
+    order = metadata.get("corner_order")
+    if order == "perimeter" or (
+        order is None and str(metadata.get("producer", "")).endswith("export_wilddet3d_box3d_cert.py")
+    ):
+        return PERIMETER_EDGE_INDEX_PAIRS
+    return EDGE_INDEX_PAIRS
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -92,7 +109,9 @@ def load_background(cert: dict[str, Any]) -> Image.Image:
 def verify_cert(path: Path) -> tuple[bool, str]:
     """Ask Lean whether the certificate is accepted."""
     proc = subprocess.run(
-        ["lake", "exe", "verify", "--", "camera-box3d-cert", str(path)],
+        [str(REPO_ROOT / "scripts/lake.sh"), "exe", "verify", "--",
+         "camera-box3d-cert", str(path.resolve())],
+        cwd=REPO_ROOT,
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
@@ -136,6 +155,8 @@ def project_corners(cert: dict[str, Any]) -> tuple[list[tuple[float, float, floa
         u = u_num / depth
         v = v_num / depth
         projected.append((u, v, depth))
+        if not math.isfinite(u) or not math.isfinite(v):
+            warnings.append(f"corner {i}: non-finite projected coordinate")
         if depth <= 0.0:
             warnings.append(f"corner {i}: non-positive depth {depth:g}")
     return projected, warnings
@@ -144,6 +165,8 @@ def project_corners(cert: dict[str, Any]) -> tuple[list[tuple[float, float, floa
 def bbox_from_cert(cert: dict[str, Any]) -> tuple[float, float, float, float]:
     """Extract the claimed `[xmin, ymin, xmax, ymax]` bbox."""
     bbox = validate_flat_numbers("bbox2d", cert.get("bbox2d"), 4)
+    if not all(math.isfinite(x) for x in bbox) or bbox[0] > bbox[2] or bbox[1] > bbox[3]:
+        raise ValueError("bbox2d: expected finite ordered bbox")
     return bbox[0], bbox[1], bbox[2], bbox[3]
 
 
@@ -202,7 +225,7 @@ def draw_overlay(path: Path, out_path: Path, run_verify: bool) -> Path:
         draw.text((xmin + 4, max(0, ymin - 16)), "claimed bbox", fill=bbox_color)
 
     if len(projected) == 8:
-        for a, b in EDGE_INDEX_PAIRS:
+        for a, b in edge_index_pairs(cert):
             pa = projected[a]
             pb = projected[b]
             if math.isfinite(pa[0]) and math.isfinite(pa[1]) and math.isfinite(pb[0]) and math.isfinite(pb[1]):
@@ -255,7 +278,7 @@ def make_contact_sheet(images: list[Path], out_path: Path) -> None:
         return
     thumbs: list[Image.Image] = []
     for path in images:
-        img = Image.open(path).convert("RGB")
+        img = load_local_rgb_image(path)
         img.thumbnail((360, 260), Image.Resampling.LANCZOS)
         canvas = Image.new("RGB", (380, 300), (245, 245, 242))
         canvas.paste(img, ((380 - img.width) // 2, 10))

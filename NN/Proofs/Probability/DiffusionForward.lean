@@ -91,10 +91,11 @@ instance (a b : ℝ) (x : E) : ProbabilityTheory.IsGaussian (forwardNoising (E :
 instance (a b : ℝ) (x : E) : IsProbabilityMeasure (forwardNoising (E := E) a b x) := by
   infer_instance
 
-/-- The explicit total-mass theorem for the forward-noising measure. -/
-@[simp]
-theorem forwardNoising_univ (a b : ℝ) (x : E) : forwardNoising (E := E) a b x Set.univ = 1 := by
-  exact measure_univ
+/-- Total mass of the forward-noising measure, as a named theorem for downstream references.
+`measure_univ` already proves it through the `IsProbabilityMeasure` instance, so it is not a
+`simp` lemma. -/
+theorem forwardNoising_univ (a b : ℝ) (x : E) : forwardNoising (E := E) a b x Set.univ = 1 :=
+  measure_univ
 
 /--
 The mean of one forward-noising step is the scaled clean state:

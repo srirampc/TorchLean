@@ -21,8 +21,8 @@ Optimizer configuration records and runtime optimizer constructors.
 The default trainer config exposes self-contained core update rules for SGD, momentum SGD,
 AdaGrad, RMSProp, Adam, AdamW, and Adadelta. Runtime-only extension points live here too:
 
-- Muon is an optimizer, but `optim.muon.optimizer` requires an explicit orthogonalization backend.
-  The identity backend is available for proofs and fallback behavior.
+- `optim.muon.optimizer` accepts an orthogonalization backend and defaults to the identity
+  backend for proofs and fallback behavior.
 - GaLore is exposed as gradient-projection machinery around a base update.  The public name is
   therefore `optim.galore.sgd`, which says exactly which update rule owns the state.
 -/
@@ -39,15 +39,16 @@ Check the supplied configuration and its representation in the selected runtime 
 `Float32` and IEEE32 reject overflow, positive stabilizers rounded to zero, and averaging
 coefficients rounded to one. `Float` retains binary64 domains. Custom scalar instances may supply
 `Runtime.FromFloat.roundForValidation`; its default retains the input-domain checks.
+`scalarName` labels conversion errors when an execution boundary selects a specific format.
 -/
 def Optimizer.validateFor {α : Type} [Runtime.FromFloat α]
-    (optimizer : Optimizer) : Except String Unit := do
+    (optimizer : Optimizer) (scalarName : String := "the runtime scalar") : Except String Unit := do
   optimizer.validate
   let converted := Optimizer.Internal.mapScalars
     (Runtime.FromFloat.roundForValidation (α := α)) optimizer
   match converted.validate with
   | .ok () => pure ()
-  | .error message => throw s!"{message} after conversion to the runtime scalar"
+  | .error message => throw s!"{message} after conversion to {scalarName}"
 
 /-- Optimizer algorithms accepted by model-training commands. -/
 inductive Algorithm where

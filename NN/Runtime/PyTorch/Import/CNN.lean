@@ -7,7 +7,6 @@ Authors: TorchLean Team
 module
 
 public import NN.Runtime.PyTorch.Import.Core
-public import NN.Tensor
 
 /-!
 # CNN PyTorch Reference Import

@@ -6,17 +6,26 @@ interfaces and proves facts about convergence, fallback cases, and optimizer ext
 
 ## Files
 
-- `FirstOrder.lean`: relations between executable first-order update rules.
-- `StronglyConvexGD.lean`: gradient-descent facts for strongly convex objectives.
+- `FirstOrder.lean`: relations between executable first-order update rules (zero-decay AdamW
+  agrees with Adam over `ℝ`).
+- `GDLinearConvergence.lean`: the one-step squared-norm contraction of `x ↦ x - η g x` under
+  strong monotonicity and a Lipschitz bound on `g`.
+- `StronglyConvexGD.lean`: the contraction factor `q`, its step-size conditions, the iterated and
+  limiting convergence statements, and the scalar quadratic warm-up (`ScalarGD`).
 - `SmoothStrongConvexBridge.lean`: from `StrongConvexOn` or first-order strong convexity of `f` to
-  strong monotonicity of `∇ f`, and a linear-convergence corollary that additionally assumes the
+  strong monotonicity of `∇ f`, and linear-convergence corollaries that additionally assume the
   gradient is Lipschitz. The Lipschitz-gradient half is not derived from smoothness of `f` here.
-- `GDLinearConvergence.lean`: linear-convergence statements for gradient descent under the stated
-  hypotheses.
 - `OptimizerLaws.lean`: a generic `TensorOptimizer` interface over runtime optimizers, plus
   compositional step-stream laws.
-- `Muon.lean`: proof contracts for Muon-style orthogonalized momentum, including exact and
-  approximate column-Gram conditions on matrix update directions.
+- `Muon.lean`: umbrella for the Muon proof layer, which is split into
+  - `Muon/Core.lean`: orthogonalizer contracts (exact and entrywise-approximate column Gram) and
+    the certified/checked backend records;
+  - `Muon/Certificates.lean`: step certificates tying a backend contract to one executable Muon
+    update;
+  - `Muon/NewtonSchulz.lean`: the Newton-Schulz polynomial backend, its residual-checked
+    packaging, and the fixed-point exact backend;
+  - `Muon/QR.lean`: the real-valued QR backend with positive-pivot certificates, together with the
+    real-valued Newton-Schulz facts at an exactly column-orthogonal matrix.
 
 ## Muon and GaLore-Style Updates
 
@@ -25,10 +34,12 @@ an identity orthogonalizer, an exact orthogonalizer, or a future optimized backe
 states what must be true of the backend output, for example exact $Q^\mathsf{T}Q=I$ or an entrywise
 bound on the Gram residual.
 
-GaLore-style code is treated as projected-gradient structure. The important theorem-level fallback
-is that the projected update reduces to ordinary SGD when the projector is the identity. That gives
-future projection backends a clean boundary: they may optimize memory or rank structure, but the
-surrounding update semantics already have a checked baseline case.
+GaLore-style code is treated as projected-gradient structure: `NN/Runtime/Optim/Optimizers.lean`
+defines the `GaLore.Projector` record, the identity projector, and the projected-SGD update. No
+theorem about that update is proved in this folder yet. The intended first theorem-level fact is
+the fallback that the projected update reduces to ordinary SGD when the projector is the identity;
+until it is stated and proved, the identity projector is a runtime default rather than a checked
+baseline case.
 
 ## Adding A New Optimizer
 

@@ -30,8 +30,10 @@ nodes used by graph-level reverse-mode autograd proofs:
 - `Elementwise`: pointwise scalar functions and activations;
 - `Arithmetic`: affine maps, pointwise arithmetic, and fixed-mask stochastic nodes;
 - `Matrix`: matmul, transpose, and row/column matrix adapters;
+- `Batched`: head-wise matmul and last-axis softmax on rank-3 tensors;
 - `Softmax`: last-axis softmax and log-softmax;
-- `Reductions`: sums, broadcasts, reductions, concatenation, and shape adapters;
+- `Shape`: reshape, flatten, and reindexing adapters;
+- `Reductions`: sums, broadcasts, axis reductions, and concatenation;
 - `Losses`: training losses;
 - `Piecewise`: branch-selected min/max nodes;
 - `GraphComposition`: the `DGraph` layer for composing node-local proofs into model-level VJP

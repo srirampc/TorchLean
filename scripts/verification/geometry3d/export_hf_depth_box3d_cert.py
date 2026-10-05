@@ -38,7 +38,7 @@ DEFAULT_IMAGE_URL = (
     "https://images.cocodataset.org/val2017/000000039769.jpg"
 )
 DEFAULT_OUT = Path("_external/geometry3d/hf_depth_box3d_cert.json")
-DEFAULT_BATCH_MANIFEST = Path("scripts/verification/geometry3d/realworld_manifest.json")
+REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 def load_image(path: Path | None, url: str | None) -> Image.Image:
@@ -64,8 +64,13 @@ def pipeline_device(device: str) -> int | str:
         return 0 if torch.cuda.is_available() else -1
     if device == "cpu":
         return -1
-    if device.startswith("cuda"):
+    if device == "cuda":
         return 0
+    if device.startswith("cuda:"):
+        index = device.removeprefix("cuda:")
+        if not index.isascii() or not index.isdecimal():
+            raise ValueError(f"invalid CUDA device: {device!r}")
+        return int(index)
     return device
 
 
@@ -79,12 +84,15 @@ def detection_box(det: dict[str, Any]) -> tuple[float, float, float, float]:
     box = det.get("box")
     if not isinstance(box, dict):
         raise ValueError(f"detection has no box dict: {det}")
-    return (
+    bbox = (
         float(box["xmin"]),
         float(box["ymin"]),
         float(box["xmax"]),
         float(box["ymax"]),
     )
+    if not all(math.isfinite(x) for x in bbox) or bbox[0] > bbox[2] or bbox[1] > bbox[3]:
+        raise ValueError("detection box must be finite and ordered")
+    return bbox
 
 
 def choose_detection(detections: list[dict[str, Any]], args: argparse.Namespace) -> dict[str, Any]:
@@ -93,7 +101,10 @@ def choose_detection(detections: list[dict[str, Any]], args: argparse.Namespace)
     The default policy takes the highest-scoring detection after threshold and optional label filtering.
     Users can pass `--detection-index` when they want a specific filtered detection instead.
     """
-    filtered = [d for d in detections if float(d.get("score", 0.0)) >= args.det_threshold]
+    if not math.isfinite(args.det_threshold):
+        raise ValueError("detection threshold must be finite")
+    filtered = [d for d in detections if math.isfinite(float(d.get("score", 0.0)))
+                and float(d.get("score", 0.0)) >= args.det_threshold]
     if args.label:
         want = args.label.lower()
         filtered = [d for d in filtered if str(d.get("label", "")).lower() == want]
@@ -129,6 +140,8 @@ def depth_to_array(depth_output: Any, size: tuple[int, int]) -> np.ndarray:
 
     if arr.ndim == 3:
         arr = arr[..., 0]
+    if arr.ndim != 2 or 0 in arr.shape:
+        raise ValueError("depth output must be a nonempty image")
     if arr.shape != (size[1], size[0]):
         pil = Image.fromarray(arr.astype(np.float32), mode="F")
         arr = np.asarray(pil.resize(size, Image.Resampling.BILINEAR), dtype=np.float64)
@@ -214,6 +227,8 @@ def export_cert_with_pipelines(
     image = load_image(args.image, args.image_url)
     width, height = image.size
     device = pipeline_device(args.device)
+    if not math.isfinite(args.tol) or args.tol < 0:
+        raise ValueError("tolerance must be finite and nonnegative")
 
     if detector is None:
         detector = pipeline("object-detection", model=args.detector_model, device=device)
@@ -234,6 +249,8 @@ def export_cert_with_pipelines(
     fy = args.focal_y if args.focal_y is not None else fx
     cx = args.principal_x if args.principal_x is not None else width / 2.0
     cy = args.principal_y if args.principal_y is not None else height / 2.0
+    if not all(math.isfinite(x) for x in (fx, fy, cx, cy)) or fx <= 0 or fy <= 0:
+        raise ValueError("intrinsics must be finite with positive focal lengths")
 
     camera_p = [
         fx, 0.0, cx, 0.0,
@@ -253,6 +270,7 @@ def export_cert_with_pipelines(
         "bbox2d": [float(x) for x in bbox],
         "metadata": {
             "producer": "scripts/verification/geometry3d/export_hf_depth_box3d_cert.py",
+            "corner_order": "binary",
             "detector_model": args.detector_model,
             "depth_model": args.depth_model,
             "label": det.get("label"),
@@ -263,11 +281,6 @@ def export_cert_with_pipelines(
             "image": str(args.image) if args.image is not None else args.image_url or DEFAULT_IMAGE_URL,
         },
     }
-
-
-def export_cert(args: argparse.Namespace) -> dict[str, Any]:
-    """Single-image wrapper that creates model pipelines internally."""
-    return export_cert_with_pipelines(args)
 
 
 def args_with_case(args: argparse.Namespace, case: dict[str, Any], index: int) -> argparse.Namespace:
@@ -334,7 +347,7 @@ def run_batch(args: argparse.Namespace) -> None:
         cert = export_cert_with_pipelines(case_args, detector, depth_estimator)
         case_args.out.parent.mkdir(parents=True, exist_ok=True)
         with case_args.out.open("w", encoding="utf-8") as fh:
-            json.dump(cert, fh, indent=2)
+            json.dump(cert, fh, indent=2, allow_nan=False)
             fh.write("\n")
         written.append(case_args.out)
         label = cert.get("metadata", {}).get("label")
@@ -343,7 +356,8 @@ def run_batch(args: argparse.Namespace) -> None:
 
     if args.verify:
         for path in written:
-            subprocess.run(["lake", "exe", "verify", "--", "camera-box3d-cert", str(path)], check=True)
+            subprocess.run([str(REPO_ROOT / "scripts/lake.sh"), "exe", "verify", "--",
+                            "camera-box3d-cert", str(path.resolve())], cwd=REPO_ROOT, check=True)
 
 
 def main() -> None:
@@ -372,15 +386,16 @@ def main() -> None:
         run_batch(args)
         return
 
-    cert = export_cert(args)
+    cert = export_cert_with_pipelines(args)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     with args.out.open("w", encoding="utf-8") as fh:
-        json.dump(cert, fh, indent=2)
+        json.dump(cert, fh, indent=2, allow_nan=False)
         fh.write("\n")
     print(f"wrote {args.out}", flush=True)
 
     if args.verify:
-        subprocess.run(["lake", "exe", "verify", "--", "camera-box3d-cert", str(args.out)], check=True)
+        subprocess.run([str(REPO_ROOT / "scripts/lake.sh"), "exe", "verify", "--",
+                        "camera-box3d-cert", str(args.out.resolve())], cwd=REPO_ROOT, check=True)
 
 
 if __name__ == "__main__":

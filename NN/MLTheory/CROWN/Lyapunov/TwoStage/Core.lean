@@ -23,9 +23,8 @@ pipeline” workflow in the TorchLean paper (`arXiv:2602.22631`, Figure 7):
 - (ii) **Hybrid**: Stage-1 training in PyTorch, exported as *float32 bit patterns*; Stage-2
   refinement + the final IBP/CROWN check run inside TorchLean under exact `ExecFloat.Binary 8 23`
   semantics.
-- (iii) **All-in-Lean**: both stages run inside TorchLean under `ExecFloat.Binary 8 23`; the final
-IBP/CROWN
-  check is also in Lean.
+- (iii) **All-in-Lean**: both stages run inside TorchLean under `ExecFloat.Binary 8 23`; the
+  final IBP/CROWN check is also in Lean.
 
 This file is shared by (ii) and (iii). It contains:
 - the shapes / parameter pack layout for a small controller and a 1-hidden-layer Lyapunov net, and
@@ -188,7 +187,7 @@ def Internal.closedLoopDynamics
     (s₂ := [1]) x2 (by simp [Spec.Shape.size])
   let dx2V ← Runtime.Autograd.Model.reshape (m := m) (α := β) (s₁ := [])
     (s₂ := [1]) dx2 (by simp [Spec.Shape.size])
-  Runtime.Autograd.Model.concatLeadingAxis (m := m) (α := β) (s := [])
+  Runtime.Autograd.Model.concat (m := m) (α := β) (s := [])
     (nDim := 1) (mDim := 1) x2V dx2V
 
 /-- Form the positivity and decrease penalties from `V`, `∇V`, and the closed-loop dynamics. -/
@@ -213,7 +212,7 @@ def Internal.lossFromDynamics
   let decPenalty ← Runtime.Autograd.Model.relu (m := m) (α := β) (s := []) decExpr
   Runtime.Autograd.Model.add (m := m) (α := β) (s := []) posPenalty decPenalty
 
-/-- The full stage-1 loss as a graph program: MSE-style fit plus the two Lyapunov penalties.
+/-- The full stage-1 loss as a graph program: the positivity penalty plus the decrease penalty.
 
 Marked `noinline`/`nospecialize` on purpose. The program is built once and then run many times, so
 specializing it per storage type costs compile time without buying anything at run time. -/

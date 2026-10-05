@@ -83,9 +83,9 @@ def checkDiv : Runtime.Autograd.Result Bool := do
   let ((aId, bId, yVal, grads), _) ← TapeM.run t0 m
   let da ← Train.requireGradTensor (tag := tag) (s := s2) grads aId
   let db ← Train.requireGradTensor (tag := tag) (s := s2) grads bId
-  let okY  := decide (pretty yVal = pretty yExp)
-  let okDa := decide (pretty da = pretty daExp)
-  let okDb := decide (pretty db = pretty dbExp)
+  let okY := Tensor.to yVal (Array ℚ) == Tensor.to yExp (Array ℚ)
+  let okDa := Tensor.to da (Array ℚ) == Tensor.to daExp (Array ℚ)
+  let okDb := Tensor.to db (Array ℚ) == Tensor.to dbExp (Array ℚ)
   pure (okY && okDa && okDb)
 
 /-- Entrypoint (called by `NN/Tests/Runtime/Rationals/Suite.lean`). -/

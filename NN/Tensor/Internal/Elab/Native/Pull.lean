@@ -103,8 +103,8 @@ private def compileNativePullFlatData?
         let runtimeSourceIndexBound ←
           mkAppM ``Fin.isLt #[runtimeSourceIndex]
         let optimizedSourceIndexBound ←
-          indexBoundFromValueEquality sourceSize
-            hOptimizedRuntimeSourceIndex runtimeSourceIndexBound
+          mkAppM ``lt_of_eq_of_lt #[
+            hOptimizedRuntimeSourceIndex, runtimeSourceIndexBound]
         let sourceIndexType ← mkAppM ``Fin #[sourceSize]
         let sourceIndexValue ←
           withLocalDeclD `sourceIndex sourceIndexType fun sourceIndex => do
@@ -311,10 +311,10 @@ private def compileNativeTranspose2D?
   let (implementation, hNative) ←
     if isPackedFloatStorage then
       let implementation ←
-        mkAppM ``nativeFloatTranspose2D #[
+        mkAppM ``nativePackedTranspose2D #[
           literalRows, literalColumns, sourceTensor]
       let hNative ←
-        mkAppM ``nativeFloatTranspose2D_correct #[
+        mkAppM ``nativePackedTranspose2D_correct #[
           literalRows, literalColumns, sourceTensor]
       pure (implementation, hNative)
     else

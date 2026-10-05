@@ -65,11 +65,6 @@ open TorchLean.Tensor
 open Lean
 open Json
 
-/-!
-Simple `Float` intervals used for time partitioning.
-
-These are *not* the interval arithmetic backend; they only control domain splitting.
--/
 /--
 Simple time interval `[lo, hi]` used for recursive domain splitting.
 
@@ -106,9 +101,6 @@ def split (I : Interval) : Interval × Interval :=
 
 end Interval
 
-/-!
-Bounds required from bound propagation: the enclosure of `u(t)` and `u'(t)` on a time box.
--/
 /--
 Bounds for a corridor candidate on a time interval.
 
@@ -121,22 +113,13 @@ structure Bounds (α : Type) where
   du : α × α
   deriving Repr
 
-/-!
-An imported corridor model plus its derived-graph.
-
-We store:
-- `g`: forward graph,
-- `dg`: derivative-augmented graph,
-- `baseParams`: parameters and constants,
-- `outId` and `dOutId`: output node ids for `u` and `du/dt`,
-- `inDim`: expected input dimension (1 for ODE time).
--/
 /--
 An imported corridor network together with its derived (time-derivative) graph.
 
-This is the core executable artifact we verify against a parsed ODE certificate.
+This is the core executable artifact we verify against a parsed ODE certificate. The name avoids
+clashing with the opened FloatLib `Model`, which is the IEEE format model used by `toBinary32`.
 -/
-structure Model (α : Type) [TorchLean.Storage α] [Context α] where
+structure CorridorModel (α : Type) [TorchLean.Storage α] [Context α] where
   /-- Forward graph computing `u(t)`. -/
   g     : Graph
   /-- Derived graph computing both `u(t)` and `du/dt` (by structural differentiation). -/
@@ -445,7 +428,7 @@ Compute bounds for `u(t)` and `du/dt` on a time interval.
 This evaluates IBP over the derivative graph `m.dg` after seeding the converted endpoints of `I`.
 -/
 private def boundsOn {α : Type} [TorchLean.Storage α] [Context α] [BoundOps α]
-    (ofFloat : Float → α) (m : Model α) (I : Interval) : IO (Bounds α) := do
+    (ofFloat : Float → α) (m : CorridorModel α) (I : Interval) : IO (Bounds α) := do
   if m.inDim ≠ 1 then
     throw <| IO.userError s!"ODE verifier expects inputDim=1, got {m.inDim}"
   let ps := seedInput1D (α := α) m.baseParams ofFloat I
@@ -504,7 +487,7 @@ Load a corridor model using the direct graph builder, and build its derivative g
 This is the simplest path: import the PyTorch graph, then run `buildDerivativeGraph1D`.
 -/
 private def loadModelDirectWith {α : Type} [TorchLean.Storage α] [Context α] (ofFloat : Float → α)
-    (path : String) : IO (Model α) := do
+    (path : String) : IO (CorridorModel α) := do
   let sd ← loadPinnState path
   if sd.arch.outputDim ≠ 1 then
     throw <| IO.userError
@@ -554,105 +537,77 @@ private def chainOfPinnLayers :
         .error s!"layer dim mismatch: {l.outDim} ≠ {inTail}"
 
 /--
+The imported layer chain as an execution-polymorphic TorchLean program: alternate linear layers
+with the given hidden activation. The activation is chosen once per program, so every hidden layer
+uses the same nonlinearity, matching `SequentialPINNArch`.
+-/
+private def layerChainProgram {inDim outDim : Nat} (activation : HiddenActivation)
+    (chain : LayerChain inDim outDim) :
+    Runtime.Autograd.Model.Program Float [Shape.dim inDim .scalar] (Shape.dim outDim .scalar) :=
+  fun {m} [Monad m] [Runtime.Autograd.Torch.Ops (m := m) (α := Float)] =>
+    fun x =>
+      let rec evalChain
+          {inD outD : Nat}
+          (ch : LayerChain inD outD)
+          (x : Runtime.Autograd.Model.RefTy (m := m) (α := Float) (.dim inD .scalar)) :
+          m (Runtime.Autograd.Model.RefTy (m := m) (α := Float) (.dim outD .scalar)) := do
+        match ch with
+        | .last l =>
+          let wR ← Runtime.Autograd.Model.const (m := m) (α := Float)
+            (s := .dim outD (.dim inD .scalar)) l.w
+          let bR ← Runtime.Autograd.Model.const (m := m) (α := Float)
+            (s := .dim outD .scalar) l.b
+          Runtime.Autograd.Torch.linear (m := m) (α := Float)
+            (inDim := inD) (outDim := outD) wR bR x
+        | .cons l tail =>
+          let wR ← Runtime.Autograd.Model.const (m := m) (α := Float)
+            (s := .dim _ (.dim _ .scalar)) l.w
+          let bR ← Runtime.Autograd.Model.const (m := m) (α := Float)
+            (s := .dim _ .scalar) l.b
+          let z ← Runtime.Autograd.Torch.linear (m := m) (α := Float)
+            (inDim := inD) (outDim := _) wR bR x
+          let a ←
+            match activation with
+            | .tanh => Runtime.Autograd.Model.tanh (m := m) (α := Float) (s := .dim _ .scalar) z
+            | .relu => Runtime.Autograd.Model.relu (m := m) (α := Float) (s := .dim _ .scalar) z
+            | .sin => Runtime.Autograd.Model.sin (m := m) (α := Float) (s := .dim _ .scalar) z
+          evalChain tail a
+      evalChain chain x
+
+/--
 Load a corridor model via the TorchLean lowering pipeline.
 
 This path reconstructs a small TorchLean program from the imported weights, lowers it to a CROWN
-graph, and then builds the derivative graph from that lowered graph.
+graph, and then builds the derivative graph from that lowered graph. Only ReLU and tanh hidden
+activations are accepted here; `sin` networks must use the direct import path.
 -/
-private def loadModelTorchLean (path : String) : IO (Model Float) := do
+private def loadModelTorchLean (path : String) : IO (CorridorModel Float) := do
   let sd ← loadPinnState path
   match chainOfPinnLayers sd.layers.toList with
   | .error e => throw <| IO.userError s!"Bad layer chain in {path}: {e}"
   | .ok ⟨inDim, outDim, chain⟩ =>
     if outDim ≠ 1 then
       throw <| IO.userError s!"ODE verifier expects scalar outputDim=1, got {outDim} in {path}"
+    if sd.arch.activation = .sin then
+      throw <| IO.userError
+        ("ODE verifier: --model=torchlean accepts ReLU/Tanh activations; " ++
+          "use --model=direct for sin.")
     let xShape : Shape := .dim inDim .scalar
     let yShape : Shape := .dim outDim .scalar
-
-    match sd.arch.activation with
-    | .tanh =>
-      let model : Runtime.Autograd.Model.Program Float [xShape] yShape :=
-        fun {m} [Monad m] [Runtime.Autograd.Torch.Ops (m := m) (α := Float)] =>
-          fun x =>
-            let rec evalT
-                {inD outD : Nat}
-                (ch : LayerChain inD outD)
-                (x : Runtime.Autograd.Model.RefTy (m := m) (α := Float) (.dim inD .scalar)) :
-                m (Runtime.Autograd.Model.RefTy (m := m) (α := Float) (.dim outD .scalar)) := do
-              match ch with
-              | .last l =>
-                let wR ← Runtime.Autograd.Model.const (m := m) (α := Float)
-                  (s := .dim outD (.dim inD .scalar)) l.w
-                let bR ← Runtime.Autograd.Model.const (m := m) (α := Float)
-                  (s := .dim outD .scalar) l.b
-                Runtime.Autograd.Torch.linear (m := m) (α := Float)
-                  (inDim := inD) (outDim := outD) wR bR x
-              | .cons l tail =>
-                let wR ← Runtime.Autograd.Model.const (m := m) (α := Float)
-                  (s := .dim _ (.dim _ .scalar)) l.w
-                let bR ← Runtime.Autograd.Model.const (m := m) (α := Float)
-                  (s := .dim _ .scalar) l.b
-                let z ← Runtime.Autograd.Torch.linear (m := m) (α := Float)
-                  (inDim := inD) (outDim := _) wR bR x
-                let a ← Runtime.Autograd.Model.tanh (m := m) (α := Float) (s := .dim _ .scalar)
-                  z
-                evalT tail a
-            evalT chain x
-      let lowered ←
-        match NN.Verification.Builtin.lowerForwardToIR
-              (α := Float) (paramShapes := []) (inShape := xShape) (outShape := yShape)
-              model (.nil) with
-        | .ok c => pure c
-        | .error e => throw <| IO.userError e
-      let (dg, paramsWithDerivative, dOutId) ←
-        buildDerivativeGraph1D (α := Float) lowered.graph lowered.ps lowered.outputId
-      pure { g := lowered.graph, dg := dg, baseParams := paramsWithDerivative,
-             outId := lowered.outputId, dOutId := dOutId, inDim := inDim }
-    | .relu =>
-      let model : Runtime.Autograd.Model.Program Float [xShape] yShape :=
-        fun {m} [Monad m] [Runtime.Autograd.Torch.Ops (m := m) (α := Float)] =>
-          fun x =>
-            let rec evalR
-                {inD outD : Nat}
-                (ch : LayerChain inD outD)
-                (x : Runtime.Autograd.Model.RefTy (m := m) (α := Float) (.dim inD .scalar)) :
-                m (Runtime.Autograd.Model.RefTy (m := m) (α := Float) (.dim outD .scalar)) := do
-              match ch with
-              | .last l =>
-                let wR ← Runtime.Autograd.Model.const (m := m) (α := Float)
-                  (s := .dim outD (.dim inD .scalar)) l.w
-                let bR ← Runtime.Autograd.Model.const (m := m) (α := Float)
-                  (s := .dim outD .scalar) l.b
-                Runtime.Autograd.Torch.linear (m := m) (α := Float)
-                  (inDim := inD) (outDim := outD) wR bR x
-              | .cons l tail =>
-                let wR ← Runtime.Autograd.Model.const (m := m) (α := Float)
-                  (s := .dim _ (.dim _ .scalar)) l.w
-                let bR ← Runtime.Autograd.Model.const (m := m) (α := Float)
-                  (s := .dim _ .scalar) l.b
-                let z ← Runtime.Autograd.Torch.linear (m := m) (α := Float)
-                  (inDim := inD) (outDim := _) wR bR x
-                let a ← Runtime.Autograd.Model.relu (m := m) (α := Float) (s := .dim _ .scalar)
-                  z
-                evalR tail a
-            evalR chain x
-      let lowered ←
-        match NN.Verification.Builtin.lowerForwardToIR
-              (α := Float) (paramShapes := []) (inShape := xShape) (outShape := yShape)
-              model (.nil) with
-        | .ok c => pure c
-        | .error e => throw <| IO.userError e
-      let (dg, paramsWithDerivative, dOutId) ←
-        buildDerivativeGraph1D (α := Float) lowered.graph lowered.ps lowered.outputId
-      pure { g := lowered.graph, dg := dg, baseParams := paramsWithDerivative,
-             outId := lowered.outputId, dOutId := dOutId, inDim := inDim }
-    | .sin =>
-      throw <| IO.userError
-        ("ODE verifier: --model=torchlean accepts ReLU/Tanh/Sigmoid activations; " ++
-          "use --model=direct for sin.")
+    let lowered ←
+      match NN.Verification.Builtin.lowerForwardToIR
+            (α := Float) (paramShapes := []) (inShape := xShape) (outShape := yShape)
+            (layerChainProgram sd.arch.activation chain) (.nil) with
+      | .ok c => pure c
+      | .error e => throw <| IO.userError e
+    let (dg, paramsWithDerivative, dOutId) ←
+      buildDerivativeGraph1D (α := Float) lowered.graph lowered.ps lowered.outputId
+    pure { g := lowered.graph, dg := dg, baseParams := paramsWithDerivative,
+           outId := lowered.outputId, dOutId := dOutId, inDim := inDim }
 
 /-- Load a corridor model in the default native arithmetic (`Float`), choosing the backend path. -/
-private def loadModelFloat (backend : ModelBackend) (path : String) : IO (Model Float) := do
+private def loadModelFloat (backend : ModelBackend) (path : String) :
+    IO (CorridorModel Float) := do
   match backend with
   | .direct => loadModelDirectWith (α := Float) (fun x => x) path
   | .torchlean => loadModelTorchLean path
@@ -660,7 +615,7 @@ private def loadModelFloat (backend : ModelBackend) (path : String) : IO (Model 
 /-- Load a corridor model in a non-`Float` arithmetic mode (supported in `direct`
   mode). -/
 private def loadModelNonFloat {α : Type} [TorchLean.Storage α] [Context α] (ofFloat : Float → α)
-    (backend : ModelBackend) (path : String) : IO (Model α) := do
+    (backend : ModelBackend) (path : String) : IO (CorridorModel α) := do
   match backend with
   | .direct => loadModelDirectWith (α := α) ofFloat path
   | .torchlean =>
@@ -774,32 +729,29 @@ private def parseIntervalObj (j : Json) : Except String Interval := do
   if hi < lo then throw "interval: hi < lo" else
   pure { lo := lo, hi := hi }
 
-/-- Parse an interval object as a raw pair `(lo, hi)`. -/
-private def parsePairObj (j : Json) : Except String (Float × Float) := do
-  let I ← parseIntervalObj j
-  pure (I.lo, I.hi)
-
-/-- Parse the optional `settings` object in the certificate JSON. -/
+/-- Parse the optional `settings` object in the certificate JSON. Omitted fields take the
+`ODEVerifierSettings` defaults. -/
 private def parseSettings (j : Json) : Except String ODEVerifierSettings := do
+  let defaults : ODEVerifierSettings := {}
   match j with
   | .obj o =>
     let maxDepth ←
       match o.get? "maxDepth" with
       | some value => TorchLean.Json.expectNat "settings.maxDepth" value
-      | none => pure 18
+      | none => pure defaults.maxDepth
     let minWidth ←
       match o.get? "minWidth" with
       | some value => NN.Verification.Json.parseFiniteFloat "settings.minWidth" value
-      | none => pure 1e-3
+      | none => pure defaults.minWidth
     let slack ←
       match o.get? "slack" with
       | some value => NN.Verification.Json.parseFiniteFloat "settings.slack" value
-      | none => pure 0.0
+      | none => pure defaults.slack
     let verbose ←
       match o.get? "verbose" with
       | some (.bool b) => pure b
       | some _ => throw "settings.verbose: expected boolean"
-      | none => pure false
+      | none => pure defaults.verbose
     let modelBackend ←
       match o.get? "modelBackend" with
       | some (.str name) =>
@@ -807,7 +759,7 @@ private def parseSettings (j : Json) : Except String ODEVerifierSettings := do
           | some backend => pure backend
           | none => throw s!"settings.modelBackend: expected direct or torchlean; got `{name}`"
       | some _ => throw "settings.modelBackend: expected string"
-      | none => pure ModelBackend.direct
+      | none => pure defaults.modelBackend
     let arithmetic ←
       match o.get? "arithmetic" with
       | some (.str name) =>
@@ -815,7 +767,7 @@ private def parseSettings (j : Json) : Except String ODEVerifierSettings := do
           | some arithmetic => pure arithmetic
           | none => throw s!"settings.arithmetic: expected native or ieee; got `{name}`"
       | some _ => throw "settings.arithmetic: expected string"
-      | none => pure Arithmetic.native
+      | none => pure defaults.arithmetic
     let config : ODEVerifierSettings :=
       { maxDepth := maxDepth
         minWidth := minWidth
@@ -825,7 +777,7 @@ private def parseSettings (j : Json) : Except String ODEVerifierSettings := do
         arithmetic := arithmetic }
     validateSettings config
     pure config
-  | .null => pure {}
+  | .null => pure defaults
   | _ => throw "settings: expected object"
 
 /-- Parse a single segment object from the certificate JSON. -/
@@ -836,7 +788,9 @@ private def parseSegment (j : Json) : Except String ODECertificateSegment := do
   let initJ ← TorchLean.Json.expectField "segment" "init" j
   let init ←
     match initJ with
-    | .obj _ => parsePairObj initJ
+    | .obj _ =>
+        let I ← parseIntervalObj initJ
+        pure (I.lo, I.hi)
     | .num _ =>
         let x ← NN.Verification.Json.parseFiniteFloat "segment.init" initJ
         pure (x, x)
@@ -868,10 +822,6 @@ def parseODECertificate (j : Json) : Except String ODECertificate := do
     | none => parseSettings Json.null
   pure { rhs := rhs, segments := segs, settings := settings }
 
-/-- Boolean `<=` on scalars, rejecting unordered values such as NaN. -/
-def leBool {α : Type} [TorchLean.Storage α] [Context α] (x y : α) : Bool :=
-  Ival.leBool x y
-
 /-- Show a closed interval pair as `(lo, hi)`. -/
 private def showPair {α : Type} [ToString α] (p : α × α) : String :=
   s!"({p.1}, {p.2})"
@@ -886,7 +836,7 @@ def checkSub {α : Type} [TorchLean.Storage α] [Context α] (du : α × α) (f 
     Bool :=
   let duHi := du.2
   let fLo := f.1
-  leBool duHi (fLo + slack)
+  Ival.leBool duHi (fLo + slack)
 
 /--
 Supersolution check: ensure `du/dt >= f(t, u)` on the interval (with slack).
@@ -898,13 +848,13 @@ def checkSuper {α : Type} [TorchLean.Storage α] [Context α] (du : α × α) (
     Bool :=
   let duLo := du.1
   let fHi := f.2
-  leBool fHi (duLo + slack)
+  Ival.leBool fHi (duLo + slack)
 
 /-- Order check: ensure the lower corridor stays below the upper corridor (`u₋ <= u₊`), up to
 the configured slack. -/
 def checkOrder {α : Type} [TorchLean.Storage α] [Context α] (uL uU : α × α)
     (slack : α := 0) : Bool :=
-  leBool uL.2 (uU.1 + slack)
+  Ival.leBool uL.2 (uU.1 + slack)
 
 /--
 Verify a single time interval by bounding `u₋, u₊, du₋, du₊` and checking the corridor inequalities.
@@ -912,7 +862,7 @@ Verify a single time interval by bounding `u₋, u₊, du₋, du₊` and checkin
 Returns `(ok, msg)` where `msg` is a short debug string explaining the first failing check.
 -/
 private def verifyInterval {α : Type} [TorchLean.Storage α] [Context α] [BoundOps α] [ToString α]
-    (ofFloat : Float → α) (rhs : Expr) (mL mU : Model α) (I : Interval)
+    (ofFloat : Float → α) (rhs : Expr) (mL mU : CorridorModel α) (I : Interval)
     (config : ODEVerifierSettings) : IO (Bool × String) := do
   let bL ← boundsOn (α := α) ofFloat mL I
   let bU ← boundsOn (α := α) ofFloat mU I
@@ -940,7 +890,7 @@ succeeds everywhere or we hit `(depth = 0)` / the `minWidth` cutoff.
 -/
 private partial def verifySegmentRecursive {α : Type} [TorchLean.Storage α] [Context α] [BoundOps α]
     [ToString α]
-    (ofFloat : Float → α) (rhs : Expr) (mL mU : Model α) (I : Interval)
+    (ofFloat : Float → α) (rhs : Expr) (mL mU : CorridorModel α) (I : Interval)
     (config : ODEVerifierSettings) (depth : Nat) : IO Bool := do
   let (ok, msg) ← verifyInterval (α := α) ofFloat rhs mL mU I config
   if ok then
@@ -970,9 +920,9 @@ Verify a full certificate segment: check initial conditions at `t0`, then recurs
 
 This loads both corridor networks and then recursively verifies `seg.t`.
 -/
-  private def verifySegmentWith {α : Type} [TorchLean.Storage α] [Context α] [BoundOps α]
+private def verifySegmentWith {α : Type} [TorchLean.Storage α] [Context α] [BoundOps α]
     [ToString α]
-    (ofFloat : Float → α) (loadModel : ModelBackend → String → IO (Model α))
+    (ofFloat : Float → α) (loadModel : ModelBackend → String → IO (CorridorModel α))
     (rhs : Expr) (seg : ODECertificateSegment) (config : ODEVerifierSettings) : IO Bool := do
   if config.verbose then
     IO.println <|
@@ -987,10 +937,10 @@ This loads both corridor networks and then recursively verifies `seg.t`.
   let (iLoF, iHiF) := seg.init
   let iLo : α := ofFloat iLoF
   let iHi : α := ofFloat iHiF
-  if !leBool bL0.u.2 iLo then
+  if !Ival.leBool bL0.u.2 iLo then
     IO.eprintln s!"[ODE] FAIL initial: uL(t0)∈{showPair bL0.u} not ≤ init.lo={iLoF}"
     return false
-  if !leBool iHi bU0.u.1 then
+  if !Ival.leBool iHi bU0.u.1 then
     IO.eprintln s!"[ODE] FAIL initial: uU(t0)∈{showPair bU0.u} not ≥ init.hi={iHiF}"
     return false
   if ¬checkOrder (α := α) bL0.u bU0.u slackA then
@@ -998,6 +948,28 @@ This loads both corridor networks and then recursively verifies `seg.t`.
     return false
   IO.println s!"[ODE] initial OK at t0={seg.t.lo}"
   verifySegmentRecursive (α := α) ofFloat rhs mL mU seg.t config config.maxDepth
+
+/-- Round a host `Float` to the binary32 value used by the IEEE reference arithmetic. -/
+private def toBinary32 (x : Float) : ExecFloat.Binary 8 23 :=
+  ExecFloat.Binary.ofModel
+    (Model.cast FloatFormat.binary64 FloatFormat.binary32
+      (ExecFloat.Binary.toModel (ExecFloat.Binary.ofFloat x)))
+
+/-- Verify every segment under the configured arithmetic. Checking continues past a failing
+segment so that all failures are reported before the overall verdict. -/
+private def verifySegments (rhs : Expr) (segments : Array ODECertificateSegment)
+    (config : ODEVerifierSettings) : IO Bool := do
+  let mut allOk := true
+  for seg in segments do
+    let ok ←
+      match config.arithmetic with
+      | .native =>
+          verifySegmentWith (α := Float) (fun x => x) loadModelFloat rhs seg config
+      | .ieee =>
+          verifySegmentWith (α := ExecFloat.Binary 8 23) toBinary32
+            (loadModelNonFloat (α := ExecFloat.Binary 8 23) toBinary32) rhs seg config
+    if ¬ok then allOk := false
+  pure allOk
 
 /--
 Run verification for a parsed certificate file.
@@ -1030,31 +1002,10 @@ def runCertificate (path : String) (backendOverride : Option ModelBackend)
     match validateSegment seg with
     | .error msg => throw <| IO.userError s!"Invalid ODE certificate segment: {msg}"
     | .ok () => pure ()
-  match config.arithmetic with
-  | .native =>
-    let mut allOk := true
-    for seg in cert.segments do
-      let ok ← verifySegmentWith (α := Float) (fun x => x) (fun mb p => loadModelFloat mb p) rhsAst
-        seg config
-      if ¬ok then allOk := false
-    if allOk then
-      IO.println "[ODE] certificate verified: all segments succeeded."
-    else
-      throw <| IO.userError "[ODE] certificate verification failed."
-  | .ieee =>
-    let ofF := (fun x => (ExecFloat.Binary.ofModel (Model.cast FloatFormat.binary64
-      FloatFormat.binary32 (ExecFloat.Binary.toModel (ExecFloat.Binary.ofFloat x))) :
-      ExecFloat.Binary 8 23))
-    let mut allOk := true
-    for seg in cert.segments do
-      let ok ← verifySegmentWith (α := ExecFloat.Binary 8 23) ofF
-        (fun mb p => loadModelNonFloat (α := ExecFloat.Binary 8 23) ofF mb p)
-        rhsAst seg config
-      if ¬ok then allOk := false
-    if allOk then
-      IO.println "[ODE] certificate verified: all segments succeeded."
-    else
-      throw <| IO.userError "[ODE] certificate verification failed."
+  if ← verifySegments rhsAst cert.segments config then
+    IO.println "[ODE] certificate verified: all segments succeeded."
+  else
+    throw <| IO.userError "[ODE] certificate verification failed."
 
 /--
 Parse CLI arguments and either:
@@ -1099,27 +1050,28 @@ def runArgs (args : List String) : IO Unit := do
       TorchLean.CLI.requireFlagValue args "lower" (some "missing --lower=<weights.json>")
     let (uw, args) ← IO.ofExcept <|
       TorchLean.CLI.requireFlagValue args "upper" (some "missing --upper=<weights.json>")
+    let defaults : ODEVerifierSettings := {}
     let (maxDepth, args) ← IO.ofExcept <|
-      TorchLean.CLI.takeNatFlag args "maxDepth" (default := 18)
+      TorchLean.CLI.takeNatFlag args "maxDepth" (default := defaults.maxDepth)
     let (minWidth, args) ← IO.ofExcept <|
-      TorchLean.CLI.takeFloatFlag args "minWidth" (default := 1e-3)
+      TorchLean.CLI.takeFloatFlag args "minWidth" (default := defaults.minWidth)
     let (slack, args) ← IO.ofExcept <|
-      TorchLean.CLI.takeFloatFlag args "slack" (default := 0.0)
+      TorchLean.CLI.takeFloatFlag args "slack" (default := defaults.slack)
     let (verbose, args) ← IO.ofExcept <|
-      TorchLean.CLI.takeBoolValueFlag args "verbose" (default := false)
+      TorchLean.CLI.takeBoolValueFlag args "verbose" (default := defaults.verbose)
     IO.ofExcept (TorchLean.CLI.checkNoArgs args)
     let init := (initF, initF)
     let rhsAst ←
       match Parse.parseExpr rhsS with
       | .ok e => pure e
       | .error msg => throw <| IO.userError s!"RHS parse error: {msg}"
-    let cfg0 : ODEVerifierSettings :=
+    let config : ODEVerifierSettings :=
       { maxDepth := maxDepth
         minWidth := minWidth
         slack := slack
         verbose := verbose
-        modelBackend := backendOverride.getD .direct }
-    let config := { cfg0 with arithmetic := arithmeticOverride.getD .native }
+        modelBackend := backendOverride.getD defaults.modelBackend
+        arithmetic := arithmeticOverride.getD defaults.arithmetic }
     let seg : ODECertificateSegment :=
       { t := { lo := t0, hi := t1 }, init := init, lowerWeights := lw, upperWeights := uw }
     match validateSettings config with
@@ -1128,21 +1080,10 @@ def runArgs (args : List String) : IO Unit := do
     match validateSegment seg with
     | .error msg => throw <| IO.userError s!"Invalid ODE certificate segment: {msg}"
     | .ok () => pure ()
-    match config.arithmetic with
-    | .native =>
-      let ok ← verifySegmentWith (α := Float) (fun x => x) (fun mb p => loadModelFloat mb p) rhsAst
-        seg config
-      if ok then IO.println "[ODE] verification succeeded."
-      else throw <| IO.userError "[ODE] verification failed."
-    | .ieee =>
-      let ofF := (fun x => (ExecFloat.Binary.ofModel (Model.cast FloatFormat.binary64
-        FloatFormat.binary32 (ExecFloat.Binary.toModel (ExecFloat.Binary.ofFloat x))) :
-        ExecFloat.Binary 8 23))
-      let ok ← verifySegmentWith (α := ExecFloat.Binary 8 23) ofF
-        (fun mb p => loadModelNonFloat (α := ExecFloat.Binary 8 23) ofF mb p)
-        rhsAst seg config
-      if ok then IO.println "[ODE] verification succeeded."
-      else throw <| IO.userError "[ODE] verification failed."
+    if ← verifySegments rhsAst #[seg] config then
+      IO.println "[ODE] verification succeeded."
+    else
+      throw <| IO.userError "[ODE] verification failed."
 
 /--
 `lake exe verify` entry point for the ODE verifier.

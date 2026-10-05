@@ -10,11 +10,11 @@ public import NN.Verification.Builtin.Proved.Correctness.Eval.PayloadBridge
 public import NN.Verification.Builtin.Proved.Correctness.Eval.LoweringPrefix
 
 /-!
-# Lowering pass Payload Insertion
+# Lowering Pass Payload Insertion
 
 The forward-fragment lowering pass emits an IR node and, when the node needs external data,
 records that data in the verifier `ParamStore` at the same fresh node id.  These lemmas pin down
-that insertion step for the payload-backed constructors in the proved forward fragment.
+that insertion step for every constructor of the proved forward fragment that touches the store.
 -/
 
 @[expose] public section
@@ -28,9 +28,6 @@ open NN.IR
 namespace Correctness
 
 open NN.Verification.Builtin
--- Typed context indices come from `NN.Proofs.Autograd.Tape.Util.Idx`, the one place
--- `Idx` and `getIdx` are defined.
-open Proofs (Idx getIdx)
 
 namespace IRStep
 
@@ -83,6 +80,47 @@ theorem lowerNode_linear_payload
           NN.MLTheory.CROWN.Graph.LinParams α) := by
   simp [lowerNode]
 
+/-- Lowering a LayerNorm node leaves no LayerNorm payload at the fresh IR node id, so the IR
+evaluator falls back to unit affine parameters. -/
+theorem lowerNode_layerNorm_payload
+    {α : Type} [TorchLean.Storage α] [Context α]
+    {paramShapes : List Shape} {inShape : Shape} {ss : List Shape} {s : Shape}
+    (id : Nat)
+    (op : LayerNormOperation s)
+    (x : Idx (Ctx inShape ss) s)
+    (params : TorchLean.TensorPack α paramShapes)
+    (ps : NN.MLTheory.CROWN.Graph.ParamStore α) :
+    (lowerNode (α := α) (paramShapes := paramShapes) (inShape := inShape) (ss := ss)
+        (out := s) id (.layerNorm op x) params ps).2.layerNorm.get? id = none := by
+  simp [lowerNode]
+
+/-- Lowering a convolution stores the dense kernel and bias as a unit-dilation, symmetric-padding
+convolution payload at the fresh IR node id. -/
+theorem lowerNode_conv_payload
+    {α : Type} [TorchLean.Storage α] [Context α]
+    {paramShapes : List Shape} {inShape : Shape} {ss : List Shape} {d : Nat}
+    (id inC outC : Nat) (kernelShape stride padding inSpatial : TorchLean.Tensor Nat [d])
+    (hIn : inC ≠ 0)
+    (hKernel : ∀ i : Fin d, kernelShape.getScalar i ≠ 0)
+    (hStride : ∀ i : Fin d, stride.getScalar i ≠ 0)
+    (hInfer : OpContracts.inferConvOutShape "conv" 0 inC outC
+      kernelShape stride padding (Shape.ofList (inC :: (Tensor.to inSpatial (List Nat)))) =
+        .ok (Shape.ofList
+          (outC :: Tensor.to (Spec.convOutSpatial inSpatial kernelShape stride padding)
+            (List Nat))))
+    (kernel : Idx paramShapes (Shape.ofList (outC :: inC :: (Tensor.to kernelShape (List Nat)))))
+    (bias : Idx paramShapes (.dim outC .scalar))
+    (x : Idx (Ctx inShape ss) (Shape.ofList (inC :: (Tensor.to inSpatial (List Nat)))))
+    (params : TorchLean.TensorPack α paramShapes)
+    (ps : NN.MLTheory.CROWN.Graph.ParamStore α) :
+    (lowerNode (α := α) (paramShapes := paramShapes) (inShape := inShape) (ss := ss) id
+        (.conv inC outC kernelShape stride padding inSpatial hIn hKernel hStride hInfer
+          kernel bias x) params ps).2.convCfg.get? id =
+      some (loweredConvParams (α := α) inC outC kernelShape stride padding inSpatial hKernel
+        hStride (getParam (α := α) (paramShapes := paramShapes) params kernel)
+        (getParam (α := α) (paramShapes := paramShapes) params bias)) := by
+  simp [lowerNode, loweredConvParams]
+
 /-- The lowered IR node for a literal constant is the corresponding payload-backed `const` node. -/
 theorem lowerNode_const_node
     {α : Type} [TorchLean.Storage α] [Context α]
@@ -126,87 +164,6 @@ theorem lowerNode_linear_node
         (out := .dim outDim .scalar) id (.linear inDim outDim w b x) params ps).1 =
       { id := id, parents := #[x.id], kind := .linear, outShape := .dim outDim .scalar } := by
   rfl
-
-/-- Lowering a suffix preserves already-existing constant payload lookups seen by IR evaluation. -/
-theorem lowerForwardLetChain_payloadOfParamStore_const?_lt
-    {α : Type} [TorchLean.Storage α] [Context α]
-    {paramShapes : List Shape} {inShape : Shape} {ss : List Shape} {out : Shape}
-    (g : ForwardLetChain α paramShapes inShape ss out)
-    (params : TorchLean.TensorPack α paramShapes)
-    (c : NN.Verification.Builtin.LoweredIR α)
-    {k : Nat} (hk : k < c.graph.nodes.size) :
-    (payloadOfParamStore (α := α)
-        (lowerForwardLetChain (α := α) (paramShapes := paramShapes) (inShape := inShape) (ss := ss)
-          (out := out) g params c).ps).const? k =
-      (payloadOfParamStore (α := α) c.ps).const? k := by
-  rw [payloadOfParamStore_const?_eq, payloadOfParamStore_const?_eq,
-    lowerForwardLetChain_ps_constVals_get?_lt (α := α) (paramShapes := paramShapes)
-      (inShape := inShape) (ss := ss) (out := out) g params c hk]
-
-/-- Lowering a suffix preserves already-existing linear payload lookups seen by IR evaluation. -/
-theorem lowerForwardLetChain_payloadOfParamStore_linear?_lt
-    {α : Type} [TorchLean.Storage α] [Context α]
-    {paramShapes : List Shape} {inShape : Shape} {ss : List Shape} {out : Shape}
-    (g : ForwardLetChain α paramShapes inShape ss out)
-    (params : TorchLean.TensorPack α paramShapes)
-    (c : NN.Verification.Builtin.LoweredIR α)
-    {k : Nat} (hk : k < c.graph.nodes.size) :
-    (payloadOfParamStore (α := α)
-        (lowerForwardLetChain (α := α) (paramShapes := paramShapes) (inShape := inShape) (ss := ss)
-          (out := out) g params c).ps).linear? k =
-      (payloadOfParamStore (α := α) c.ps).linear? k := by
-  rw [payloadOfParamStore_linear?_eq, payloadOfParamStore_linear?_eq,
-    lowerForwardLetChain_ps_linearWB_get?_lt (α := α) (paramShapes := paramShapes)
-      (inShape := inShape) (ss := ss) (out := out) g params c hk]
-
-/-- Lowering a suffix preserves already-existing convolution payload lookups seen by IR
-evaluation. -/
-theorem lowerForwardLetChain_payloadOfParamStore_conv?_lt
-    {α : Type} [TorchLean.Storage α] [Context α]
-    {paramShapes : List Shape} {inShape : Shape} {ss : List Shape} {out : Shape}
-    (g : ForwardLetChain α paramShapes inShape ss out)
-    (params : TorchLean.TensorPack α paramShapes)
-    (c : NN.Verification.Builtin.LoweredIR α)
-    {k : Nat} (hk : k < c.graph.nodes.size) :
-    (payloadOfParamStore (α := α)
-        (lowerForwardLetChain (α := α) (paramShapes := paramShapes) (inShape := inShape) (ss := ss)
-          (out := out) g params c).ps).conv? k =
-      (payloadOfParamStore (α := α) c.ps).conv? k := by
-  rw [payloadOfParamStore_conv?_eq, payloadOfParamStore_conv?_eq,
-    lowerForwardLetChain_ps_convCfg_get?_lt (α := α) (paramShapes := paramShapes)
-      (inShape := inShape) (ss := ss) (out := out) g params c hk]
-
-/-- Lowering a suffix preserves already-existing BatchNorm payload lookups seen by IR evaluation. -/
-theorem lowerForwardLetChain_payloadOfParamStore_batchNormEval?_lt
-    {α : Type} [TorchLean.Storage α] [Context α]
-    {paramShapes : List Shape} {inShape : Shape} {ss : List Shape} {out : Shape}
-    (g : ForwardLetChain α paramShapes inShape ss out)
-    (params : TorchLean.TensorPack α paramShapes)
-    (c : NN.Verification.Builtin.LoweredIR α)
-    {k : Nat} (hk : k < c.graph.nodes.size) :
-    (payloadOfParamStore (α := α)
-        (lowerForwardLetChain (α := α) (paramShapes := paramShapes) (inShape := inShape) (ss := ss)
-          (out := out) g params c).ps).batchNormEval? k =
-      (payloadOfParamStore (α := α) c.ps).batchNormEval? k := by
-  rw [payloadOfParamStore_batchNormEval?_eq, payloadOfParamStore_batchNormEval?_eq,
-    lowerForwardLetChain_ps_batchNormEval_get?_lt (α := α) (paramShapes := paramShapes)
-      (inShape := inShape) (ss := ss) (out := out) g params c hk]
-
-/-- Lowering a suffix preserves already-existing LayerNorm payload lookups seen by IR evaluation. -/
-theorem lowerForwardLetChain_payloadOfParamStore_layerNorm?_lt
-    {α : Type} [TorchLean.Storage α] [Context α]
-    {paramShapes : List Shape} {inShape : Shape} {ss : List Shape} {out : Shape}
-    (g : ForwardLetChain α paramShapes inShape ss out)
-    (params : TorchLean.TensorPack α paramShapes)
-    (c : NN.Verification.Builtin.LoweredIR α)
-    {k : Nat} (hk : k < c.graph.nodes.size) :
-    (payloadOfParamStore (α := α)
-        (lowerForwardLetChain (α := α) (paramShapes := paramShapes) (inShape := inShape)
-          (ss := ss) (out := out) g params c).ps).layerNorm? k =
-      (payloadOfParamStore (α := α) c.ps).layerNorm? k := by
-  rw [payloadOfParamStore_layerNorm?_eq, payloadOfParamStore_layerNorm?_eq,
-    lowerForwardLetChain_ps_layerNorm_get?_lt (α := α) (paramShapes := paramShapes)
-      (inShape := inShape) (ss := ss) (out := out) g params c hk]
 
 end IRStep
 

@@ -45,7 +45,7 @@ This is the formal statement that the executable engine implements the same reve
 accumulation semantics as the proved tape model.
 -/
 theorem backwardDenseFrom_lowerGraphToTape_eq_backpropAllCtx {α : Type} {Δ : Type}
-  [TorchLean.Storage α] [CommSemiring α]
+    [TorchLean.Storage α] [CommSemiring α]
     {Γ : List Shape} {ss : List Shape} (g : Graph (α := α) Δ Γ ss)
     (x : TorchLean.TensorPack α Γ)
     (d0 : Δ) (seed : TorchLean.TensorPack α (Γ ++ ss)) :
@@ -56,7 +56,7 @@ theorem backwardDenseFrom_lowerGraphToTape_eq_backpropAllCtx {α : Type} {Δ : T
         (backpropAllCtx (α := α) (Δ := Δ) (Γ := Γ) (ss := ss) g x d0 seed)) := by
   induction g with
   | nil =>
-      simpa [lowerGraphToTape, backpropAllCtx] using
+      simpa [lowerGraphToTape, backpropAllCtx, toData, GraphData.backpropAllCtx] using
         backwardDenseFrom_addLeaves_empty (α := α) x
           (TorchLean.TensorPack.cast (α := α) (h := List.append_nil Γ) seed)
   | snoc g node ih =>
@@ -113,7 +113,9 @@ theorem backwardDenseFrom_lowerGraphToTape_eq_backpropAllCtx {α : Type} {Δ : T
         rw [TorchLean.TensorPack.snoc_unsnoc,
           TorchLean.TensorPack.toShapeErasedArray_cast]
       rw [hTape, hseed, hctx]
-      simp only [backpropAllCtx, TorchLean.TensorPack.toShapeErasedArray_cast]
+      -- `Graph.backpropAllCtx` is the `GraphData` program on `g.toData`; expose its `snoc` step.
+      simp only [backpropAllCtx, toData, GraphData.backpropAllCtx,
+        TorchLean.TensorPack.toShapeErasedArray_cast]
       subst hctx
       exact backwardDenseFrom_addNode_lowerNode tPrev _ node.toNodeData _ d0
         (backpropAllCtx (α := α) (Δ := Δ) (Γ := Γ) (ss := ssPrev) g x d0) hsize hreq hvals hpids hbp

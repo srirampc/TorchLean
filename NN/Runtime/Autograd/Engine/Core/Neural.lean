@@ -14,8 +14,8 @@ public import NN.Spec.Layers.Normalization.BatchNorm
 /-!
 Neural-network operations for the eager engine.
 
-This file implements runtime nodes such as dropout, normalization, attention, and recurrent/sequence
-building blocks on top of the core tensor operation layer.
+This file records layer normalization, batch normalization, and multi-head attention nodes using
+the corresponding specification-level forward and backward operations.
 -/
 
 @[expose] public section
@@ -34,7 +34,8 @@ Layer normalization for `(seqLen, embedDim)` tensors.
 This records a single node whose backward returns gradients for `x`, `gamma`, and `beta`.
 PyTorch comparison: `torch.nn.LayerNorm(embedDim)` (applied per token) / `functional.layer_norm`.
 -/
-def layerNorm {α : Type} [TorchLean.Storage α] [Context α] [DecidableRel ((· > ·) : α → α → Prop)]
+@[inline] def layerNorm {α : Type} [TorchLean.Storage α] [Context α]
+  [DecidableRel ((· > ·) : α → α → Prop)]
   {seqLen embedDim : Nat} (h_seq_pos : seqLen > 0) (h_embed_pos : embedDim > 0)
   (t : Tape α) (xId gammaId betaId : Nat)
   (epsilon : α := TorchLean.normalizationEpsilon) : Result (Tape α × Nat) := do
@@ -46,7 +47,10 @@ def layerNorm {α : Type} [TorchLean.Storage α] [Context α] [DecidableRel ((·
   let node : Node α :=
     { name := some "layer_norm"
       value := Spec.SomeTensor.ofTensor y
-      requiresGrad := true
+      requiresGrad :=
+        (t.getNode? xId).any (·.requiresGrad) ||
+        (t.getNode? gammaId).any (·.requiresGrad) ||
+        (t.getNode? betaId).any (·.requiresGrad)
       parents := #[xId, gammaId, betaId]
       backward := fun dLdyAny => do
         let dLdy ← requireGrad (α := α) (τ := .dim seqLen (.dim embedDim .scalar)) dLdyAny
@@ -64,7 +68,8 @@ def layerNorm {α : Type} [TorchLean.Storage α] [Context α] [DecidableRel ((·
   pure (t.addNode node)
 
 /-- Batch normalization over every spatial axis of a channel-first tensor. -/
-def batchNorm {α : Type} [TorchLean.Storage α] [Context α] [DecidableRel ((· > ·) : α → α → Prop)]
+@[inline] def batchNorm {α : Type} [TorchLean.Storage α] [Context α]
+  [DecidableRel ((· > ·) : α → α → Prop)]
   {channels : Nat} {sSpatial : Shape}
   (hWellFormed : (Shape.dim channels sSpatial).wellFormed)
   (t : Tape α) (xId gammaId betaId : Nat)
@@ -77,7 +82,10 @@ def batchNorm {α : Type} [TorchLean.Storage α] [Context α] [DecidableRel ((·
   let node : Node α :=
     { name := some "batch_norm"
       value := Spec.SomeTensor.ofTensor y
-      requiresGrad := true
+      requiresGrad :=
+        (t.getNode? xId).any (·.requiresGrad) ||
+        (t.getNode? gammaId).any (·.requiresGrad) ||
+        (t.getNode? betaId).any (·.requiresGrad)
       parents := #[xId, gammaId, betaId]
       backward := fun dLdyAny => do
         let dLdy ← requireGrad (α := α) (τ := .dim channels sSpatial) dLdyAny
@@ -100,7 +108,7 @@ optional boolean `(n,n)` mask and returns the attended output of shape `(n,dMode
 
 PyTorch comparison: similar to `torch.nn.MultiheadAttention` / scaled dot-product attention.
 -/
-def multiHeadAttention {α : Type} [TorchLean.Storage α] [Context α]
+@[inline] def attention {α : Type} [TorchLean.Storage α] [Context α]
   [DecidableRel ((· > ·) : α → α → Prop)]
   {n numHeads dModel headDim : Nat} (h1 : n ≠ 0)
   (t : Tape α) (wqId wkId wvId woId xId : Nat)
@@ -121,7 +129,12 @@ def multiHeadAttention {α : Type} [TorchLean.Storage α] [Context α]
   let node : Node α :=
     { name := some "multi_head_attention"
       value := Spec.SomeTensor.ofTensor y
-      requiresGrad := true
+      requiresGrad :=
+        (t.getNode? wqId).any (·.requiresGrad) ||
+        (t.getNode? wkId).any (·.requiresGrad) ||
+        (t.getNode? wvId).any (·.requiresGrad) ||
+        (t.getNode? woId).any (·.requiresGrad) ||
+        (t.getNode? xId).any (·.requiresGrad)
       parents := #[wqId, wkId, wvId, woId, xId]
       backward := fun dLdyAny => do
         let dLdy ← requireGrad (α := α) (τ := .dim n (.dim dModel .scalar)) dLdyAny

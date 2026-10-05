@@ -40,24 +40,10 @@ theorem eval_sum {Γ : List Shape} {s : Shape} {α : Type} [TorchLean.Storage α
       terms.foldl (fun total term => TorchLean.Tensor.addSpec total (Term.eval env term))
         (Tensor.full s 0) := by
   unfold sum
-  let stepTerm : Term Γ s → Term Γ s → Term Γ s := fun total term =>
-    Term.op (PrimOp.add s) (.cons total (.cons term .nil))
-  let stepValue : TorchLean.Tensor α s → Term Γ s → TorchLean.Tensor α s :=
-    fun total term =>
-    TorchLean.Tensor.addSpec total (Term.eval env term)
-  have eval_foldl : ∀ (xs : List (Term Γ s)) (initial : Term Γ s),
-      Term.eval env (xs.foldl stepTerm initial) =
-        xs.foldl stepValue (Term.eval env initial) := by
-    intro xs
-    induction xs with
-    | nil => intro initial; rfl
-    | cons term rest ih =>
-        intro initial
-        simp only [List.foldl_cons]
-        rw [ih]
-        rfl
-  simpa [stepTerm, stepValue, Term.eval, Term.evalArgs, PrimOp.zero] using
-    eval_foldl terms (Term.op (PrimOp.zero s) .nil)
+  exact (List.foldl_hom (Term.eval env)
+    (g₁ := fun total term => Term.op (PrimOp.add s) (.cons total (.cons term .nil)))
+    (g₂ := fun total term => TorchLean.Tensor.addSpec total (Term.eval env term))
+    (l := terms) (init := Term.op (PrimOp.zero s) .nil) (fun _ _ => rfl)).symm
 
 
 

@@ -93,7 +93,7 @@ $$`E(s)
 =-\frac12\sum_i\sum_j W_{ij}x_i x_j
  +\sum_i\theta_i x_i.`
 
-The factor of one half is why the scalar has to be more than a ring:
+The API requests a field instance to supply the division by two in this expression:
 
 ```lean (name := energySig)
 -- The energy expression uses division by two, supplied by
@@ -207,8 +207,9 @@ Neuron `1` receives net input `+1`, so its activation changes from `-1` to `+1`.
 off-diagonal products in the energy change from negative to positive, lowering the exact rational
 energy from `1` to `-1`.
 Changing `W 0 1` without changing `W 1 0` still produces an executable state sequence, but it
-prevents use of `energy_updateAt_le`: Lean asks for `SymmetricW p`. Setting a diagonal weight to a
-nonzero value similarly leaves the program runnable while invalidating the theorem's
+prevents use of `energy_updateAt_le` on the real-valued counterpart: Lean asks for
+`SymmetricW p`. Setting a diagonal weight to a nonzero value similarly leaves the program runnable
+while invalidating the theorem's
 `DiagonalZero p` premise.
 
 # Energy Ties And Convergence
@@ -336,10 +337,12 @@ fixed-point bounds:
 
 ```leanOutput convergence (whitespace := lax)
 @cycleUpdate_exists_fixedpoint_le_pow : ∀ {n : ℕ} (p : Params ℝ n),
-  SymmetricW p → DiagonalZero p → ∀ (s0 : State n), ∃ m ≤ 2 ^ n, (f p)^[m + 1] s0 = (f p)^[m] s0
+  SymmetricW p → DiagonalZero p → ∀ (s0 : State n), ∃ m ≤ 2 ^ n, (cycleUpdate p)^[m + 1] s0 =
+    (cycleUpdate p)^[m] s0
 ```
 
-`(f p)^[m]` is Mathlib's iterated-function notation, so the conclusion reads: within $`2^n` sweeps,
+`(cycleUpdate p)^[m]` is Mathlib's iterated-function notation. The conclusion reads: within
+$`2^n` sweeps,
 one more sweep changes nothing. The `_le_card` variant says the same thing with
 `Fintype.card (State n)` in place of $`2^n`; the explicit power is the one to quote, and the
 cardinality form is the one the proof actually produces.
@@ -851,7 +854,9 @@ nor do they extend the
 real theorem to a backend without a refinement argument.
 This identity lets a ReLU network carry an affine term exactly even though each hidden unit clips
 negative values. Two units retain its positive and negative parts; subtracting their outputs
-recovers the affine term. The bounded-box multiplication construction uses this identity:
+recovers the affine term. The bridge uses this identity for exact affine representation. Its
+bounded-box multiplication construction instead lifts square approximants along ridge directions
+and combines their outputs:
 
 ```lean (name := reluMul)
 -- Inspect the bounded-domain hypotheses and the existential
@@ -883,7 +888,8 @@ layers whose types use that dimension. Only after those choices does the stateme
 inputs in `box M`. A proof cannot satisfy it by selecting a new network for each input point.
 The same returned pair of layers must meet the error budget throughout the entire box.
 
-`relu_mul_universal_approximation_box` uses this algebra inside a uniform approximation argument.
+`relu_mul_universal_approximation_box` uses ridge-lifting and affine-combination lemmas inside a
+uniform approximation argument.
 For its construction, quantitative hypotheses, and the distinction between existence, checkpoint
 verification, and finite-precision execution, return to *Approximation Theory*.
 
@@ -933,7 +939,7 @@ example {α : Type} [Storage α] [Context α]
 
 The five dimensions are arbitrary natural numbers. The scalar type needs `Storage` and `Context`
 instances, which provide the tensor representation and operations used by the specification.
-The same statement therefore covers `Float`, `Rat`, and `ℝ` instances.
+The same statement therefore covers `Float`, `ℝ`, and the opt-in scoped `Rat` context.
 
 Its content is one equation. `runArray` returns the final recurrent state together with the array of
 outputs, and the statement is about the outputs component: run the block on `xs ++ ys`, keep the
@@ -948,14 +954,16 @@ same `m` and `h0` occur on both sides. Comparing two runs that also change the i
 would be a different statement: earlier outputs can depend on that state even when they cannot
 depend on a later suffix.
 
-The theorem is polymorphic over any scalar `α` with a TorchLean `Context`. Its proof is structural:
-induct on `xs`, unfold one recurrent step, and apply the induction hypothesis to the updated state
-and history. It does not require commutative or exact arithmetic because causality depends on
+The theorem is polymorphic over any scalar `α` with a TorchLean `Context`. The runner theorem
+instantiates the generic `scanArray_append_outputs_take` lemma. Its supporting scan proof inducts
+over the input list with the state and emitted outputs generalized; the selective block's state
+includes the convolution history. It does not require commutative or exact arithmetic because
+causality depends on
 evaluation order, not algebraic rearrangement.
 
 The selective block's causal convolution needs a window of
 recent inputs, so the internal runner threads a newest-first history alongside the recurrent state.
-That runner is where the induction happens, and it is stated separately:
+The generic scan lemma is instantiated for that runner, stated separately:
 
 ```lean (name := history)
 -- Keep the initial convolution history fixed when comparing
@@ -987,7 +995,7 @@ streaming implementation must preserve when splitting a sequence into chunks: dr
 reordering the history changes the initial configuration to which the theorem applies.
 
 The reusable array argument is factored through
-[`Scan`](https://github.com/lean-dojo/TorchLean/blob/main/NN/MLTheory/Proofs/StateSpace/Scan.lean),
+{src "NN/MLTheory/Proofs/StateSpace/Scan.lean"}[`Scan`],
 which proves append and prefix laws for state-threading scans. `MambaCausality` instantiates that
 structure with the S4/Mamba state and convolution history; it does not assert that an optimized
 selective-scan kernel refines the specification.
@@ -1021,7 +1029,8 @@ example {α : Type} [Storage α] [Context α]
 
 Both equations compare the output prefix in the same way; the state shape and the spec
 structure change. `DiagonalS4Spec` carries a single `[stateDim]` vector, `MambaBlockSpec` adds the
-selection projections but keeps the same state shape, and the selective block above is the one that
+sigmoid gate projection on the readout but keeps the same state shape, and the selective block
+above is the one that
 grows to `[innerDim, stateDim]` plus a history.
 
 The prefix length matters: the next output may depend on the first token of the suffix. To see

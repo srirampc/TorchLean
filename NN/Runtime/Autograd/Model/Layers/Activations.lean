@@ -165,7 +165,8 @@ Dropout layer controlled by `Mode`.
 
 - In `Mode.train`, randomly zeroes entries with probability `p`.
 - In `Mode.eval`, it is the identity.
-- At `p = 1`, training returns zero exactly rather than evaluating the undefined scale `1 / (1-p)`.
+- At `p = 1`, training scales by zero without evaluating `1 / (1-p)`. Non-finite inputs can
+  still produce NaN.
 
 We store `p` as a scalar parameter tensor (with `requiresGrad := false`) so it can be threaded
 through the unified parameter list without being optimized.

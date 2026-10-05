@@ -71,9 +71,6 @@ theorem mem_toIndexedShapeErasedArray_lt :
   | _ :: ss, .cons _t ts => by
       simp [toShapeErasedArray, size_toShapeErasedArray (ss := ss) ts, Nat.add_comm]
 
--- Tell `grind` about the most common cast/length normalization lemmas for these conversions.
-attribute [grind =] toShapeErasedArray_cast size_toShapeErasedArray
-
 /-- Recovering a typed pack ignores array entries before and after its encoded segment. -/
 theorem ofShapeErasedArray_surround (suffix : Array (Spec.SomeTensor α))
     : (pref : Array (Spec.SomeTensor α)) → {ss : List Shape} → (xs : TensorPack α ss) →
@@ -158,14 +155,11 @@ node ids to positions in the typed proof context `Γ ++ ss`.
           simp [TorchLean.TensorPack.snoc, toShapeErasedArray, ih (xs := xs)]
 
 /-- `toShapeErasedArray` of a cons context is array cons/append of the head element. -/
-theorem toShapeErasedArray_cons {α : Type} [Storage α] {s : Shape} {ss : List Shape}
-    (x : Tensor α s) (xs : TensorPack α ss)
-  :
+theorem toShapeErasedArray_cons {s : Shape} {ss : List Shape}
+    (x : Tensor α s) (xs : TensorPack α ss) :
     toShapeErasedArray (α := α) (ss := s :: ss) (TensorPack.cons x xs) =
       #[Spec.SomeTensor.ofTensor x] ++ toShapeErasedArray (α := α) (ss := ss) xs := by
   rfl
-
-attribute [grind =] toShapeErasedArray_snoc toShapeErasedArray_cons
 
 /--
 Array lookup through `toShapeErasedArray` corresponds to `TorchLean.TensorPack.get` after
@@ -174,7 +168,7 @@ erasing the result's shape from its type.
 This is the key lemma that lets us connect runtime indexing (`arr[i]`) to proof indexing (`get xs
   i`).
 -/
-theorem get_toShapeErasedArray {α : Type} [Storage α] :
+theorem get_toShapeErasedArray :
     {ss : List Shape} → (xs : TensorPack α ss) → (i : Fin ss.length) →
       let arr := toShapeErasedArray (α := α) (ss := ss) xs
       arr[i.1]'(by
@@ -198,6 +192,6 @@ theorem get_toShapeErasedArray {α : Type} [Storage α] :
   | _ :: ss, .cons x xs, ⟨Nat.succ i, hi⟩ => by
       have : i < ss.length := Nat.lt_of_succ_lt_succ hi
       simpa [toShapeErasedArray, TorchLean.TensorPack.get] using
-        (get_toShapeErasedArray (α := α) (ss := ss) xs ⟨i, this⟩)
+        (get_toShapeErasedArray xs ⟨i, this⟩)
 
 end TorchLean.TensorPack

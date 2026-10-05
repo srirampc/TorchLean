@@ -34,8 +34,8 @@ unfold the lowering branch, normalize `Except` control flow, compare dependent s
 the lowered `ForwardNode` appends the same `Spec.SomeTensor` as the IR evaluator. Keeping these
 families separate makes the proof obligations local and keeps incremental builds predictable.
 
-The remaining proof engineering is to factor the repeated one-parent/two-parent boilerplate into
-reusable helper lemmas and keep individual branches focused on their semantic equation.
+Unary and binary elementwise cases share parent validation and graph-tail helpers in
+`Correctness.Common`; shape-changing operators keep their dependent guards in focused proofs.
 -/
 
 @[expose] public section

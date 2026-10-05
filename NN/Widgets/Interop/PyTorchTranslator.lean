@@ -257,7 +257,7 @@ private def analyzeLine (raw : String) : Option Layer :=
   let s := lineClean raw
   if s.isEmpty || s.startsWith "#" then
     none
-  else if hasCall s "nn.linear" || hasCall s "Linear" then
+  else if hasCall s "nn.Linear" || hasCall s "Linear" then
     let ns := (constructorNatArgs? s #["in_features", "out_features"]).getD #[]
     match (ns[0]?.getD none), (ns[1]?.getD none) with
     | some i, some o => some (.linear i o)

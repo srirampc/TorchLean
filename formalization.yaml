@@ -19,7 +19,7 @@ toolchain:
 numeric_dependency:
   name: FloatLib
   repository: "https://github.com/lean-dojo/FloatLib"
-  revision: "52ab504bfcd8e5395b29a4f64b617b401e5d16ac"
+  revision: "5f8218dc571c01d6f8bd070c65bcd0de3a40b3c5"
   description: >
     Shared floating-point formats, executable software arithmetic, rounding
     theory, interval semantics, and native logical-model bridges. TorchLean
@@ -64,19 +64,20 @@ status:
 
 build_and_validation:
   standard_build:
-    command: "lake build"
+    command: "scripts/lake.sh build"
   ci_surface:
-    command: "lake build NN.CI.All"
+    command: "scripts/lake.sh build NNCI"
   cuda_build:
-    command: "lake build -R -K cuda=true"
+    command: "scripts/lake.sh -Kcuda=true build"
     note: >
-      Builds native CUDA sources when the CUDA toolkit is available. Executing
-      CUDA examples additionally requires a working NVIDIA driver and GPU.
+      Builds the C++ backend against a LibTorch SDK. Its CMake configuration may
+      require a CUDA development toolkit. Executing CUDA examples additionally
+      requires a working NVIDIA driver and GPU.
   non_cuda_build:
-    command: "lake build -R -K cuda=false"
+    command: "scripts/lake.sh -Kcuda=false build"
   documentation_build:
-    working_directory: home_page/blueprint
-    command: "lake build"
+    working_directory: .
+    command: "TORCHLEAN_PACKAGE_ROOT=$PWD/home_page/blueprint scripts/lake.sh build"
   repository_checks:
     - "python3 scripts/checks/repo_lint.py"
     - "git diff --check"

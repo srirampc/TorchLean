@@ -58,7 +58,9 @@
 
   var index = [];
   var loaded = false;
+  var loadFailed = false;
   var activeMode = "site";
+  var previousFocus = null;
 
   function siteRoot() {
     var scripts = document.getElementsByTagName("script");
@@ -87,10 +89,11 @@
       .then(function (items) {
         index = items;
         loaded = true;
+        loadFailed = false;
         return index;
       })
       .catch(function () {
-        results.innerHTML = '<p class="search-empty">Search is unavailable in this build.</p>';
+        loadFailed = true;
         return [];
       });
   }
@@ -126,7 +129,7 @@
     modeButtons.forEach(function (button) {
       var selected = button.getAttribute("data-search-mode") === activeMode;
       button.classList.toggle("active", selected);
-      button.setAttribute("aria-selected", selected ? "true" : "false");
+      button.setAttribute("aria-pressed", selected ? "true" : "false");
     });
     input.setAttribute(
       "placeholder",
@@ -170,6 +173,11 @@
       return;
     }
 
+    if (loadFailed) {
+      results.innerHTML = '<p class="search-empty">Search is unavailable in this build.</p>';
+      return;
+    }
+
     if (!query.trim()) {
       results.innerHTML = '<p class="search-empty">Type to search guide pages, examples, verification notes, CUDA material, and updates. Use API declarations for Lean names.</p>';
       return;
@@ -209,19 +217,28 @@
   }
 
   function openSearch() {
+    if (overlay.hidden) {
+      previousFocus = document.activeElement;
+    }
     overlay.hidden = false;
     document.body.classList.add("search-active");
+    input.focus();
+    input.select();
     loadIndex().then(function (items) {
-      render(items, input.value);
-      input.focus();
-      input.select();
+      if (!overlay.hidden) {
+        render(items, input.value);
+      }
     });
   }
 
   function closeSearch() {
     overlay.hidden = true;
     document.body.classList.remove("search-active");
-    openButton.focus();
+    if (previousFocus && previousFocus.isConnected) {
+      previousFocus.focus();
+    } else {
+      openButton.focus();
+    }
   }
 
   openButton.addEventListener("click", openSearch);
@@ -247,6 +264,18 @@
     });
   });
   document.addEventListener("keydown", function (event) {
+    if (event.key === "Tab" && !overlay.hidden) {
+      var controls = overlay.querySelectorAll('button, input, a[href]');
+      var first = controls[0];
+      var last = controls[controls.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
       event.preventDefault();
       openSearch();

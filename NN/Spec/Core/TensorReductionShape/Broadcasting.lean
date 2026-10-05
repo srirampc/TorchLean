@@ -211,14 +211,18 @@ theorem broadcastTo_expand {α : Type} [TorchLean.Storage α] {n : Nat} {s t : S
 @[simp] theorem broadcastTo_self {α : Type} [TorchLean.Storage α] {shape : Shape}
     (h : Shape.CanBroadcastTo shape shape) (tensor : Tensor α shape) :
     broadcastTo h tensor = tensor := by
-  induction shape with
-  | scalar => exact broadcastTo_scalar h tensor
-  | dim n rest ih =>
-      rw [broadcastTo_dim_eq rfl h]
-      conv_rhs => rw [← Tensor.dim_unstack tensor]
-      congr 1
-      funext i
-      exact ih _ (Tensor.unstack tensor i)
+  unfold broadcastTo
+  rw [Broadcasting.Internal.broadcastPadded_congr (Nat.sub_self shape.rank)]
+  unfold Broadcasting.Internal.broadcastPadded
+  rw [Spec.padLeft_zero]
+  apply TorchLean.Tensor.Internal.Rep.ext
+  intro coordinate
+  change (TorchLean.Tensor.Internal.Rep.pull
+    (TorchLean.Tensor.Internal.Coord.broadcast shape shape _) tensor) coordinate =
+      tensor coordinate
+  rw [TorchLean.Tensor.Internal.Rep.pull_apply]
+  exact congrArg (TorchLean.Tensor.Internal.Rep.get tensor)
+    (TorchLean.Tensor.Internal.Coord.broadcast_self _ coordinate)
 
 /-- Broadcasting across one new leading target axis replicates the source. -/
 @[simp] theorem broadcastTo_dim_self {α : Type} [TorchLean.Storage α] {n : Nat} {s : Shape}
@@ -228,37 +232,5 @@ theorem broadcastTo_expand {α : Type} [TorchLean.Storage α] {n : Nat} {s t : S
   congr 1
   funext _
   exact broadcastTo_self _ tensor
-
-/-! ## Broadcasted maps -/
-
-/-- Helper: map a scalar on the left over any tensor shape. -/
-def mapScalarLeft {α : Type} [TorchLean.Storage α]
-    (f : α → α → α) (x : α) {s : Shape} (tensor : Tensor α s) :
-    Tensor α s :=
-  Tensor.mapSpec (f x) tensor
-
-/-- Helper: map a scalar on the right over any tensor shape. -/
-def mapScalarRight {α : Type} [TorchLean.Storage α]
-    (f : α → α → α) (y : α) {s : Shape} (tensor : Tensor α s) :
-    Tensor α s :=
-  Tensor.mapSpec (fun x => f x y) tensor
-
-/--
-Binary element-wise operation with broadcasting to an explicit target shape.
-
-This is the helper you typically want in spec code:
-- pick the output shape `t`,
-- broadcast each operand to `t`,
-- then `map2Spec` the pointwise operation.
-
-PyTorch analogy: `f(x, y)` where `x` and/or `y` are broadcastable to a common shape.
-The common shape is explicit rather than discovered at runtime, which makes the result type
-predictable and fixes the intended output shape at the call site.
--/
-def broadcastMapTo {α} [TorchLean.Storage α]
-    (f : α → α → α)
-    {s₁ s₂ t : Shape} (cbx : Shape.CanBroadcastTo s₁ t) (cby : Shape.CanBroadcastTo s₂ t) :
-    Tensor α s₁ → Tensor α s₂ → Tensor α t :=
-  fun x y => map2Spec f (broadcastTo cbx x) (broadcastTo cby y)
 
 end TorchLean.Tensor

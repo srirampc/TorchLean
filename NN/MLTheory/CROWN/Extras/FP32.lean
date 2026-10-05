@@ -9,21 +9,27 @@ module
 public import NN.Floats.FP32
 public import NN.Spec.Core.FloatInstances.NF
 public import NN.MLTheory.CROWN.Extras.IntervalLemmas
-public import NN.MLTheory.CROWN.Graph
 
 /-!
 # FP32
 
-FP32-specialized entrypoints for the CROWN/LiRPA graph engine.
+Directed-rounding and nonlinear-enclosure instances for the rounded-real `FP32` model.
 
 This is *not* an executable backend (it is `noncomputable` in general, because `FP32` is modeled on
 `ℝ`). It exists so proofs can state “sound w.r.t. float32 semantics” without mentioning Lean’s
 builtin `Float`.
 
+`FP32` is an unbounded-exponent binary32 model: it has 24-bit significands and gradual underflow,
+but no overflow, infinities, or NaNs. The nonlinear bounds use `Real.exp` and other real
+functions, so results here hold for this proof model and say nothing about overflow on a real
+binary32 device.
+
 This module is an optional convenience layer and lives under `NN/MLTheory/CROWN/Extras/`.
 -/
 
 @[expose] public section
+
+open FloatLib.Floats.Formats.BinaryInterchange (Model FloatFormat)
 
 open FloatLib FloatLib.Numerics FloatLib.Floats.Formats
 open Flocq
@@ -31,14 +37,13 @@ open Flocq
 
 namespace NN.MLTheory.CROWN
 
-/-! ## FP32 entrypoints -/
+/-! ## FP32 instances -/
 
 /-- FP32 scalar type used for FP32-specialized CROWN/LiRPA statements. -/
 abbrev FP32 := TorchLean.Floats.FP32
 
 namespace FP32
 
-open NN.MLTheory.CROWN.Graph
 
 /--
 Directed endpoint arithmetic for the rounded-real FP32 model.
@@ -50,22 +55,22 @@ appropriate side of the binary32 grid. The enclosure laws are
 noncomputable instance : BoundOps FP32 where
   addDown a b :=
     ⟨FloatLib.Floats.Interval.roundDown
-      (β := binaryRadix) (fexp := TorchLean.Floats.fexp32) (a.val + b.val)⟩
+      (β := binaryRadix) (fexp := (Model.fexpOf FloatFormat.binary32)) (a.val + b.val)⟩
   addUp a b :=
     ⟨FloatLib.Floats.Interval.roundUp
-      (β := binaryRadix) (fexp := TorchLean.Floats.fexp32) (a.val + b.val)⟩
+      (β := binaryRadix) (fexp := (Model.fexpOf FloatFormat.binary32)) (a.val + b.val)⟩
   subDown a b :=
     ⟨FloatLib.Floats.Interval.roundDown
-      (β := binaryRadix) (fexp := TorchLean.Floats.fexp32) (a.val - b.val)⟩
+      (β := binaryRadix) (fexp := (Model.fexpOf FloatFormat.binary32)) (a.val - b.val)⟩
   subUp a b :=
     ⟨FloatLib.Floats.Interval.roundUp
-      (β := binaryRadix) (fexp := TorchLean.Floats.fexp32) (a.val - b.val)⟩
+      (β := binaryRadix) (fexp := (Model.fexpOf FloatFormat.binary32)) (a.val - b.val)⟩
   mulDown a b :=
     ⟨FloatLib.Floats.Interval.roundDown
-      (β := binaryRadix) (fexp := TorchLean.Floats.fexp32) (a.val * b.val)⟩
+      (β := binaryRadix) (fexp := (Model.fexpOf FloatFormat.binary32)) (a.val * b.val)⟩
   mulUp a b :=
     ⟨FloatLib.Floats.Interval.roundUp
-      (β := binaryRadix) (fexp := TorchLean.Floats.fexp32) (a.val * b.val)⟩
+      (β := binaryRadix) (fexp := (Model.fexpOf FloatFormat.binary32)) (a.val * b.val)⟩
 
 /--
 The proof-oriented FP32 endpoint operations enclose exact real arithmetic.
@@ -76,49 +81,74 @@ dictionary used by sound rounded CROWN statements over `FP32`.
 noncomputable instance : LawfulBoundOps FP32 where
   toReal := TorchLean.Floats.FP32.toReal
   lt_iff _ _ := Iff.rfl
+  toReal_zero := by
+    change Flocq.round (β := binaryRadix) (fexp := (Model.fexpOf FloatFormat.binary32))
+      FloatLib.Floats.Formats.Flocq.nearestEven 0 = 0
+    exact round_preserves_generic _ _ generic_format_zero
+  toReal_one := by
+    change Flocq.round (β := binaryRadix) (fexp := (Model.fexpOf FloatFormat.binary32))
+      FloatLib.Floats.Formats.Flocq.nearestEven 1 = 1
+    have h := generic_format_bpow (β := binaryRadix) (fexp := (Model.fexpOf FloatFormat.binary32)) 0
+      (by decide)
+    simp at h
+    exact round_preserves_generic _ _ h
+  toReal_max a b := by
+    change (max a b).val = max a.val b.val
+    rcases le_total a b with h | h
+    · rw [max_eq_right h, max_eq_right (show a.val ≤ b.val from h)]
+    · rw [max_eq_left h, max_eq_left (show b.val ≤ a.val from h)]
+  toReal_eq_of_beq h := by rw [beq_iff_eq.mp h]
   addDown_le a b := by
     change Flocq.round
-        (β := binaryRadix) (fexp := TorchLean.Floats.fexp32)
+        (β := binaryRadix) (fexp := (Model.fexpOf FloatFormat.binary32))
         floorRound (a.val + b.val) ≤ a.val + b.val
     exact round_floor_le _
   le_addUp a b := by
     change a.val + b.val ≤
       Flocq.round
-        (β := binaryRadix) (fexp := TorchLean.Floats.fexp32)
+        (β := binaryRadix) (fexp := (Model.fexpOf FloatFormat.binary32))
         ceilRound (a.val + b.val)
     exact le_round_ceil _
   subDown_le a b := by
     change Flocq.round
-        (β := binaryRadix) (fexp := TorchLean.Floats.fexp32)
+        (β := binaryRadix) (fexp := (Model.fexpOf FloatFormat.binary32))
         floorRound (a.val - b.val) ≤ a.val - b.val
     exact round_floor_le _
   le_subUp a b := by
     change a.val - b.val ≤
       Flocq.round
-        (β := binaryRadix) (fexp := TorchLean.Floats.fexp32)
+        (β := binaryRadix) (fexp := (Model.fexpOf FloatFormat.binary32))
         ceilRound (a.val - b.val)
     exact le_round_ceil _
   mulDown_le a b := by
     change Flocq.round
-        (β := binaryRadix) (fexp := TorchLean.Floats.fexp32)
+        (β := binaryRadix) (fexp := (Model.fexpOf FloatFormat.binary32))
         floorRound (a.val * b.val) ≤ a.val * b.val
     exact round_floor_le _
   le_mulUp a b := by
     change a.val * b.val ≤
       Flocq.round
-        (β := binaryRadix) (fexp := TorchLean.Floats.fexp32)
+        (β := binaryRadix) (fexp := (Model.fexpOf FloatFormat.binary32))
         ceilRound (a.val * b.val)
     exact le_round_ceil _
+
+/-- Minimum selects an existing endpoint, so it preserves the underlying real value. -/
+noncomputable instance : LawfulMinBoundOps FP32 where
+  toReal_min a b := by
+    change (min a b).val = min a.val b.val
+    rcases le_total a b with h | h
+    · rw [min_eq_left h, min_eq_left (show a.val ≤ b.val from h)]
+    · rw [min_eq_right h, min_eq_right (show b.val ≤ a.val from h)]
 
 /-- Embed a real endpoint after rounding it downward to the binary32 grid. -/
 noncomputable def roundDownEndpoint (x : ℝ) : FP32 :=
   ⟨FloatLib.Floats.Interval.roundDown
-    (β := binaryRadix) (fexp := TorchLean.Floats.fexp32) x⟩
+    (β := binaryRadix) (fexp := (Model.fexpOf FloatFormat.binary32)) x⟩
 
 /-- Embed a real endpoint after rounding it upward to the binary32 grid. -/
 noncomputable def roundUpEndpoint (x : ℝ) : FP32 :=
   ⟨FloatLib.Floats.Interval.roundUp
-    (β := binaryRadix) (fexp := TorchLean.Floats.fexp32) x⟩
+    (β := binaryRadix) (fexp := (Model.fexpOf FloatFormat.binary32)) x⟩
 
 /-- Exact-real nonlinear operations rounded outward to the binary32 grid. -/
 noncomputable instance : NonlinearBoundOps FP32 where
@@ -155,12 +185,21 @@ noncomputable instance : NonlinearBoundOps FP32 where
   supportsIdealCoupledDerivatives := false
 
 /-- Downward-rounded proof endpoints do not exceed their exact real inputs. -/
-theorem roundDownEndpoint_le (x : ℝ) : (roundDownEndpoint x).val ≤ x := by
-  exact round_floor_le x
+theorem roundDownEndpoint_le (x : ℝ) : (roundDownEndpoint x).val ≤ x :=
+  round_floor_le x
 
 /-- Upward-rounded proof endpoints do not fall below their exact real inputs. -/
-theorem le_roundUpEndpoint (x : ℝ) : x ≤ (roundUpEndpoint x).val := by
-  exact le_round_ceil x
+theorem le_roundUpEndpoint (x : ℝ) : x ≤ (roundUpEndpoint x).val :=
+  le_round_ceil x
+
+/-- FP32 rounds the positive rational stabilizer once; valid rounding preserves nonnegativity. -/
+theorem normalizationEpsilon_nonneg :
+    0 ≤ LawfulBoundOps.toReal (TorchLean.normalizationEpsilon : FP32) := by
+  change (0 : ℝ) ≤ FloatLib.Floats.Formats.Flocq.round
+    (β := FloatLib.Numerics.binaryRadix) (fexp := (Model.fexpOf FloatFormat.binary32))
+    FloatLib.Floats.Formats.Flocq.nearestEven ((1 / 100000 : ℚ) : ℝ)
+  apply FloatLib.Floats.Formats.Flocq.round_nonneg
+  norm_num
 
 private theorem roundedUnaryEnclosure_of_monotone (f : ℝ → ℝ) (hf : Monotone f) :
     UnaryEnclosure (α := FP32) f
@@ -306,53 +345,6 @@ noncomputable instance : LawfulNonlinearBoundOps FP32 where
     exact le_roundUpEndpoint _
   coupledDerivatives_exact := by simp
 
-/-- Run IBP over `FP32` graph semantics. -/
-noncomputable def runIBP (g : Graph) (ps : NN.MLTheory.CROWN.Graph.ParamStore FP32) :
-    Array (Option (NN.MLTheory.CROWN.FlatBox FP32)) :=
-  NN.MLTheory.CROWN.Graph.runIBP (α := FP32) g ps
-
-/-- Run the scalar-input derivative IBP pass over `FP32` graph semantics. -/
-noncomputable def runScalarDerivative (g : Graph) (ps : NN.MLTheory.CROWN.Graph.ParamStore FP32)
-    (ibp : Array (Option (NN.MLTheory.CROWN.FlatBox FP32))) :
-    Array (Option (NN.MLTheory.CROWN.FlatBox FP32)) :=
-  NN.MLTheory.CROWN.Graph.runScalarDerivative (α := FP32) g ps ibp
-
-/-- Run a first-derivative pass from an arbitrary interval-valued direction. -/
-noncomputable def runDirectionalDerivative (g : Graph)
-    (ps : NN.MLTheory.CROWN.Graph.ParamStore FP32)
-    (ibp : Array (Option (NN.MLTheory.CROWN.FlatBox FP32)))
-    (seed : NN.MLTheory.CROWN.FlatBox FP32) :
-    Array (Option (NN.MLTheory.CROWN.FlatBox FP32)) :=
-  NN.MLTheory.CROWN.Graph.runDirectionalDerivative (α := FP32) g ps ibp seed
-
-/-- Run the mixed second-derivative pass `D²f[u, v]` over `FP32` graph semantics. -/
-noncomputable def runMixedSecondDerivative (g : Graph)
-    (ps : NN.MLTheory.CROWN.Graph.ParamStore FP32)
-    (ibp dLeft dRight : Array (Option (NN.MLTheory.CROWN.FlatBox FP32))) :
-    Array (Option (NN.MLTheory.CROWN.FlatBox FP32)) :=
-  NN.MLTheory.CROWN.Graph.runMixedSecondDerivative (α := FP32) g ps ibp dLeft dRight
-
-/-- Run the second-derivative IBP pass over `FP32` graph semantics. -/
-noncomputable def runScalarSecondDerivative (g : Graph)
-    (ps : NN.MLTheory.CROWN.Graph.ParamStore FP32)
-    (ibp : Array (Option (NN.MLTheory.CROWN.FlatBox FP32)))
-    (d1 : Array (Option (NN.MLTheory.CROWN.FlatBox FP32))) :
-    Array (Option (NN.MLTheory.CROWN.FlatBox FP32)) :=
-  NN.MLTheory.CROWN.Graph.runScalarSecondDerivative (α := FP32) g ps ibp d1
-
-/-- Run the forward affine CROWN pass over `FP32` graph semantics. -/
-noncomputable def runAffine (g : Graph) (ps : NN.MLTheory.CROWN.Graph.ParamStore FP32)
-    (ctx : NN.MLTheory.CROWN.Graph.AffineCtx)
-    (ibp : Array (Option (NN.MLTheory.CROWN.FlatBox FP32))) :
-    Array (Option (NN.MLTheory.CROWN.Graph.FlatAffine FP32)) :=
-  NN.MLTheory.CROWN.Graph.runAffine (α := FP32) g ps ctx ibp
-
-/-- Run the forward CROWN lower/upper affine-bounds pass over `FP32` graph semantics. -/
-noncomputable def runCROWN (g : Graph) (ps : NN.MLTheory.CROWN.Graph.ParamStore FP32)
-    (ctx : NN.MLTheory.CROWN.Graph.AffineCtx)
-    (ibp : Array (Option (NN.MLTheory.CROWN.FlatBox FP32))) :
-    Array (Option (NN.MLTheory.CROWN.Graph.FlatAffineBounds FP32)) :=
-  NN.MLTheory.CROWN.Graph.runCROWN (α := FP32) g ps ctx ibp
 
 end FP32
 

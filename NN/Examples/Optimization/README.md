@@ -55,7 +55,7 @@ For initialized-state and fixed-point variants, use the library theorems in `Opt
 ## Build and continue
 
 ```bash
-lake build NN.Examples.Optimization
+scripts/lake.sh build NN.Examples.Optimization
 ```
 
 This directory contains proof tutorials, so it has no CLI or loss-curve output. Runtime users

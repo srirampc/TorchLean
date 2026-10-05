@@ -28,7 +28,6 @@ interpreter used elsewhere in TorchLean.
 
 @[expose] public section
 
-
 namespace Proofs
 namespace RuntimeApprox
 namespace NFBackend
@@ -147,8 +146,8 @@ theorem backprop_gradient_approx_graphData {Γ : List Shape} {ss : List Shape}
             (Γ := Γ) (ss := ss) g) xR () seedR) i)
       (EList.get
         (RevGraph.backpropBounds g epsIn xR epsSeed seedR
-          (ctxAddBound (β := β) (fexp := fexp) (rnd := rnd))) i) := by
-  exact approxCtx_get
+          (ctxAddBound (β := β) (fexp := fexp) (rnd := rnd))) i) :=
+  approxCtx_get
     (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd))
     (backprop_approx_graphData (β := β) (fexp := fexp) (rnd := rnd)
       g xS xR epsIn seedS seedR epsSeed hx hseed) i

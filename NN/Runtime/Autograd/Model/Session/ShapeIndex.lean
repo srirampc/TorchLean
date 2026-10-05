@@ -25,6 +25,7 @@ namespace Autograd
 namespace Model
 
 open Spec TorchLean
+open Runtime.Autograd.Torch.Internal (EagerSession)
 open TorchLean TorchLean.Tensor
 
 namespace Session
@@ -80,7 +81,8 @@ def softmax {α : Type} [TorchLean.Storage α] (s : Session α) [Context α]
   (x : Runtime.Autograd.Torch.TensorRef α sh) :
   IO (Runtime.Autograd.Torch.TensorRef α sh) := do
   match s.state with
-  | .eager sess => EagerSession.softmax (α := α) sess (sh := sh) axis x
+  | .eager sess =>
+      F.softmax (m := Runtime.Autograd.Torch.Internal.EagerM α) (α := α) (s := sh) axis x sess
   | .typedGraph sess =>
       Runtime.Autograd.Torch.Internal.TypedGraphSession.softmax
         (α := α) sess (sh := sh) axis x
@@ -91,7 +93,8 @@ def logSoftmax {α : Type} [TorchLean.Storage α] (s : Session α) [Context α]
   (x : Runtime.Autograd.Torch.TensorRef α sh) :
   IO (Runtime.Autograd.Torch.TensorRef α sh) := do
   match s.state with
-  | .eager sess => EagerSession.logSoftmax (α := α) sess (sh := sh) axis x
+  | .eager sess =>
+      F.logSoftmax (m := Runtime.Autograd.Torch.Internal.EagerM α) (α := α) (s := sh) axis x sess
   | .typedGraph sess =>
       Runtime.Autograd.Torch.Internal.TypedGraphSession.logSoftmax
         (α := α) sess (sh := sh) axis x

@@ -38,6 +38,8 @@ open Spec TorchLean TorchLean.Tensor
 
 namespace BlockMask
 
+variable {α : Type} [Storage α] [Zero α]
+
 namespace Internal
 
 /--
@@ -94,10 +96,10 @@ ordinary value and the mask cannot depend on evaluation order.
 -/
 def apply (shape : Shape) (blocks : List (Option Nat))
     (period offset : Nat) (coordinatePrefix : List Nat) :
-    (remainingShape : Shape) → Tensor Float remainingShape → Tensor Float remainingShape
+    (remainingShape : Shape) → Tensor α remainingShape → Tensor α remainingShape
   | .scalar, tensor =>
       if blockHidden shape blocks period offset coordinatePrefix then
-        Tensor.full [] 0.0
+        Tensor.full [] 0
       else
         tensor
   | .dim _ remainingShape, tensor =>
@@ -116,12 +118,12 @@ coordinate the same way on both sides. -/
 theorem apply_scalar_at
     (shape : Shape) (blocks : List (Option Nat)) (period offset : Nat)
     (coordinatePrefix : List Nat) :
-    ∀ (remainingShape : Shape) (x : Tensor Float remainingShape) (coordinates : List Nat),
+    ∀ (remainingShape : Shape) (x : Tensor α remainingShape) (coordinates : List Nat),
       Spec.getSpec
           (apply shape blocks period offset coordinatePrefix remainingShape x) coordinates =
         (Spec.getSpec x coordinates).map (fun value =>
           if blockHidden shape blocks period offset (coordinatePrefix ++ coordinates) then
-            0.0
+            0
           else
             value) := by
   intro remainingShape
@@ -172,23 +174,25 @@ def hidden {shape : Shape} (blocks : Tensor (Option Nat) [shape.rank])
 /--
 Set every scalar in a selected block to zero, preserving the tensor's arbitrary-rank shape.
 
+Only storage and a zero value are required; entries are otherwise copied unchanged.
+
 For example, policies `[none, some 4, some 4]` repeat a 4-by-4 block mask across the first axis;
 `[some 8]` masks intervals in a signal; and `[some 2, some 2, some 2]` masks volume blocks.
 -/
-def apply {shape : Shape} (x : Tensor Float shape)
+def apply {shape : Shape} (x : Tensor α shape)
     (blocks : Tensor (Option Nat) [shape.rank]) (period offset : Nat) :
-    Tensor Float shape :=
+    Tensor α shape :=
   Internal.apply shape (Tensor.to blocks (List (Option Nat)))
     period offset [] shape x
 
 /-- Exact coordinate semantics of `apply`, including out-of-bounds coordinates. -/
 theorem apply_scalar_at {shape : Shape}
     (blocks : Tensor (Option Nat) [shape.rank]) (period offset : Nat)
-    (x : Tensor Float shape) (coordinate : Tensor Nat [shape.rank]) :
+    (x : Tensor α shape) (coordinate : Tensor Nat [shape.rank]) :
     Spec.getSpec (apply x blocks period offset) (Tensor.to coordinate (List Nat)) =
       (Spec.getSpec x (Tensor.to coordinate (List Nat))).map (fun value =>
         if hidden blocks period offset coordinate then
-          0.0
+          0
         else value) := by
   simpa [apply, hidden, index, Internal.blockHidden] using
     Internal.apply_scalar_at shape (Tensor.to blocks (List (Option Nat))) period offset [] shape x
@@ -197,19 +201,19 @@ theorem apply_scalar_at {shape : Shape}
 /-- A selected in-bounds coordinate is exactly zero after masking. -/
 theorem hidden_scalar_eq_zero {shape : Shape}
     (blocks : Tensor (Option Nat) [shape.rank]) (period offset : Nat)
-    (x : Tensor Float shape) (coordinate : Tensor Nat [shape.rank])
-    (value : Float) (hValue : Spec.getSpec x (Tensor.to coordinate (List Nat)) = some value)
+    (x : Tensor α shape) (coordinate : Tensor Nat [shape.rank])
+    (value : α) (hValue : Spec.getSpec x (Tensor.to coordinate (List Nat)) = some value)
     (hHidden : hidden blocks period offset coordinate = true) :
     Spec.getSpec (apply x blocks period offset) (Tensor.to coordinate (List Nat)) =
-      some 0.0 := by
+      some 0 := by
   rw [apply_scalar_at, hValue, hHidden]
   rfl
 
 /-- A visible in-bounds coordinate is copied unchanged by the mask. -/
 theorem visible_scalar_eq_input {shape : Shape}
     (blocks : Tensor (Option Nat) [shape.rank]) (period offset : Nat)
-    (x : Tensor Float shape) (coordinate : Tensor Nat [shape.rank])
-    (value : Float) (hValue : Spec.getSpec x (Tensor.to coordinate (List Nat)) = some value)
+    (x : Tensor α shape) (coordinate : Tensor Nat [shape.rank])
+    (value : α) (hValue : Spec.getSpec x (Tensor.to coordinate (List Nat)) = some value)
     (hVisible : hidden blocks period offset coordinate = false) :
     Spec.getSpec (apply x blocks period offset) (Tensor.to coordinate (List Nat)) =
       some value := by
@@ -228,11 +232,12 @@ Create a masked-reconstruction sample after validating the requested target widt
 The model input retains its original shape. The target is a row-major prefix of the unmasked source
 because TorchLean's compact decoder heads produce matrices.
 -/
-def sample (batchShape : Shape) {dataShape : Shape} (reconstructionWidth : Nat)
+def sample {α : Type} [Storage α] [Zero α] [Inhabited α]
+    (batchShape : Shape) {dataShape : Shape} (reconstructionWidth : Nat)
     (blocks : Tensor (Option Nat) [dataShape.rank]) (period offset : Nat)
     (hReconstruction : reconstructionWidth ≤ dataShape.size)
-    (x : Tensor Float (batchShape.concat dataShape)) :
-    TorchLean.Sample.Supervised Float
+    (x : Tensor α (batchShape.concat dataShape)) :
+    TorchLean.Sample.Supervised α
       (batchShape.concat dataShape) (batchShape.appendDim reconstructionWidth) :=
   { input :=
       Tensor.mapLeading batchShape
@@ -245,12 +250,11 @@ def hiddenReconstructionIndices {dataShape : Shape} (reconstructionWidth : Nat)
     (blocks : Tensor (Option Nat) [dataShape.rank]) (period offset : Nat)
     (hReconstruction : reconstructionWidth ≤ dataShape.size) :
     Array (Fin reconstructionWidth) :=
-  let ones : Tensor Float dataShape := Tensor.ones (α := Float) dataShape
-  let masked := BlockMask.apply ones blocks period offset
-  let flatMask : Tensor Float [reconstructionWidth] :=
-    TorchLean.Tensor.flattenThenTake [] reconstructionWidth hReconstruction masked
+  let policies := Tensor.to blocks (List (Option Nat))
   (Array.finRange reconstructionWidth).filter fun i =>
-    flatMask[i] == 0.0
+    let coordinate := Shape.Coord.unlinearize (i.castLE hReconstruction)
+    BlockMask.Internal.blockHidden dataShape policies period offset
+      (Shape.Coord.toList dataShape coordinate)
 
 end Internal
 
@@ -258,12 +262,14 @@ end Internal
 def hiddenMask {dataShape : Shape}
     (blocks : Tensor (Option Nat) [dataShape.rank]) (period offset : Nat) :
     Tensor Bool [dataShape.size] :=
-  let visible := BlockMask.apply (Tensor.ones (α := Float) dataShape) blocks period offset
-  (TorchLean.Tensor.flattenThenTake [] dataShape.size (Nat.le_refl _) visible).map
-    (fun value => value == 0.0)
+  let policies := Tensor.to blocks (List (Option Nat))
+  Tensor.ofFn fun i : Fin dataShape.size =>
+    BlockMask.Internal.blockHidden dataShape policies period offset
+      (Shape.Coord.toList dataShape (Shape.Coord.unlinearize i))
 
 /-- Uniform reconstruction weights on hidden entries, or all zeros when no entry is hidden. -/
-def reconstructionWeights {α : Type} [TorchLean.Storage α] [Context α] {dataShape : Shape}
+def reconstructionWeights {α : Type} [Storage α] [Zero α] [One α] [NatCast α] [Div α]
+    {dataShape : Shape}
     (blocks : Tensor (Option Nat) [dataShape.rank]) (period offset : Nat) :
     Tensor α [dataShape.size] :=
   let mask := hiddenMask blocks period offset
@@ -281,16 +287,17 @@ def hiddenIndices {dataShape : Shape}
   Internal.hiddenReconstructionIndices dataShape.size blocks period offset (Nat.le_refl _)
 
 /--
-Create a masked-reconstruction sample with arbitrary batch and data shapes.
+Create a masked-reconstruction sample with arbitrary batch and data shapes, retaining its scalar.
 
 The model input retains its original shape. The target is a row-major prefix of the unmasked source.
 An invalid reconstruction width is reported at the ordinary executable boundary rather than
 requiring callers to provide a theorem.
 -/
-def sample (batchShape : Shape) {dataShape : Shape} (reconstructionWidth : Nat)
+def sample {α : Type} [Storage α] [Zero α] [Inhabited α]
+    (batchShape : Shape) {dataShape : Shape} (reconstructionWidth : Nat)
     (blocks : Tensor (Option Nat) [dataShape.rank]) (period offset : Nat)
-    (x : Tensor Float (batchShape.concat dataShape)) :
-    Except String (TorchLean.Sample.Supervised Float
+    (x : Tensor α (batchShape.concat dataShape)) :
+    Except String (TorchLean.Sample.Supervised α
       (batchShape.concat dataShape) (batchShape.appendDim reconstructionWidth)) :=
   if h : reconstructionWidth ≤ dataShape.size then
     .ok (Internal.sample batchShape reconstructionWidth blocks period offset h x)
@@ -315,14 +322,15 @@ def hiddenReconstructionIndices {dataShape : Shape} (reconstructionWidth : Nat)
 namespace Proof
 
 /-- One batch row of block-MAE training as a finite predictive-view contract. -/
-def rowPredictiveContract {dataShape : Shape} (batch reconstructionWidth : Nat)
+def rowPredictiveContract {α : Type} [Storage α] [Zero α] [Inhabited α]
+    {dataShape : Shape} (batch reconstructionWidth : Nat)
     (blocks : Tensor (Option Nat) [dataShape.rank]) (period offset : Nat)
     (hReconstruction : reconstructionWidth ≤ dataShape.size)
-    (x : Tensor Float (dataShape.prependDim batch))
-    (prediction : Tensor Float [batch, reconstructionWidth])
-    (row : Fin batch) (loss : Float → Float → Nat) :
+    (x : Tensor α (dataShape.prependDim batch))
+    (prediction : Tensor α [batch, reconstructionWidth])
+    (row : Fin batch) (loss : α → α → Nat) :
     NN.MLTheory.SelfSupervised.PredictiveViewContract
-      reconstructionWidth Unit Float Float Float :=
+      reconstructionWidth Unit α α α :=
     NN.MLTheory.SelfSupervised.maeAsPredictiveViewContract
     (Internal.hiddenReconstructionIndices reconstructionWidth blocks period offset hReconstruction)
     (fun j => TorchLean.Tensor.item <|
@@ -333,13 +341,14 @@ def rowPredictiveContract {dataShape : Shape} (batch reconstructionWidth : Nat)
     loss
 
 /-- The runnable block-MAE row objective is exactly the finite MAE objective. -/
-theorem row_predictive_objective_eq_mae_loss {dataShape : Shape}
+theorem row_predictive_objective_eq_mae_loss {α : Type} [Storage α] [Zero α] [Inhabited α]
+    {dataShape : Shape}
     (batch reconstructionWidth : Nat)
     (blocks : Tensor (Option Nat) [dataShape.rank]) (period offset : Nat)
     (hReconstruction : reconstructionWidth ≤ dataShape.size)
-    (x : Tensor Float (dataShape.prependDim batch))
-    (prediction : Tensor Float [batch, reconstructionWidth])
-    (row : Fin batch) (loss : Float → Float → Nat) :
+    (x : Tensor α (dataShape.prependDim batch))
+    (prediction : Tensor α [batch, reconstructionWidth])
+    (row : Fin batch) (loss : α → α → Nat) :
     NN.MLTheory.SelfSupervised.predictiveViewObjective
         (rowPredictiveContract batch reconstructionWidth blocks period offset hReconstruction
           x prediction row loss) =

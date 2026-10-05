@@ -43,8 +43,6 @@ open NN.MLTheory.CROWN.Graph
 
 variable {α : Type} [TorchLean.Storage α] [Context α]
 
-/-! ## Small affine helpers (non-private) -/
-
 /-!
 ### Affine bounds in the graph dialect
 
@@ -58,55 +56,6 @@ The certificate checker recomputes these affine maps node-by-node, so the functi
 written in an executable style (using the repo’s `Tensor` operations), while still being usable
 in theorem statements over `ℝ`.
 -/
-
-/-!
-The two `AffineVec` dimension casts come from `Graph`, not from here.
-
-`Graph.castAffineIn` and `Graph.castAffineOut` in `NN/MLTheory/CROWN/Graph/Engine/Base.lean` had
-exact twins in this namespace, and they really were interchangeable rather than merely similar.
-`Base.lean` declares `variable [Context α] [BoundOps α]` above them, so the twins looked like they
-carried a heavier instance context, but neither cast mentions those classes, so Lean leaves them
-out. Both elaborate to `{α} [Storage α] {n m m'} → m = m' → AffineVec α n m → AffineVec α n m'`.
-
-`castAffineIn` had no users in this layer at all, and the checker below now calls
-`Graph.castAffineOut` directly, which also keeps the certificate-soundness theorems in
-`CROWN/Proofs/` talking about the same constant the engine uses.
--/
-
-/-- The identity affine form `x ↦ x` (as `A = I`, `c = 0`). -/
-def affIdentity (n : Nat) : AffineVec α n n :=
-  let A : Tensor α [n, n] :=
-    Tensor.dim (fun i =>
-      Tensor.dim (fun j => Tensor.scalar (if i = j then 1 else 0)))
-  let c := Tensor.full (α := α) (.dim n .scalar) 0
-  { A := A, c := c }
-
-/-- Identity affine bounds: both lower and upper are `affIdentity`. -/
-def boundsIdentity (inDim : Nat) : FlatAffineBounds α :=
-  { inDim := inDim, outDim := inDim, loAff := affIdentity (α := α) inDim, hiAff := affIdentity (α
-    := α) inDim }
-
-/--
-Constant affine bounds for a node output.
-
-Both maps have `A = 0`; the offsets are the provided endpoint vectors.
--/
-def boundsConst (inDim outDim : Nat) (lo hi : Tensor α [outDim]) : FlatAffineBounds α
-  :=
-  let zA : Tensor α [outDim, inDim] :=
-    Tensor.full (α := α) (.dim outDim (.dim inDim .scalar)) 0
-  { inDim := inDim
-    outDim := outDim
-    loAff := { A := zA, c := lo }
-    hiAff := { A := zA, c := hi } }
-
-/-- Pointwise addition of affine forms (`A` and `c`). -/
-def affAdd {n m : Nat} (a b : AffineVec α n m) : AffineVec α n m :=
-  { A := Tensor.addSpec a.A b.A, c := Tensor.addSpec a.c b.c }
-
-/-- Pointwise subtraction of affine forms (`A` and `c`). -/
-def affSub {n m : Nat} (a b : AffineVec α n m) : AffineVec α n m :=
-  { A := Tensor.subSpec a.A b.A, c := Tensor.subSpec a.c b.c }
 
 /-! ## α-ReLU lower relaxation -/
 
@@ -149,13 +98,13 @@ def alphaRelaxLowerVec {n : Nat}
 /-! ## Node step function -/
 
 /-- Safe lookup of the affine bounds recorded for node id `pid`, `none` when out of range. -/
-def getAff? (cert : Array (Option (FlatAffineBounds α))) (pid : Nat) : Option (FlatAffineBounds α)
-  :=
-  if _h : pid < cert.size then cert[pid]! else none
+def getAff? (cert : Array (Option (FlatAffineBounds α))) (pid : Nat) :
+    Option (FlatAffineBounds α) :=
+  cert.getD pid none
 
 /-- Safe lookup of the optional α vector at node id `pid`. -/
 def getAlpha? (alpha : Array (Option (FlatTensor α))) (pid : Nat) : Option (FlatTensor α) :=
-  if _h : pid < alpha.size then alpha[pid]! else none
+  alpha.getD pid none
 
 /--
 Default α vector used when the certificate omits α values.
@@ -166,65 +115,7 @@ def defaultAlphaVec {n : Nat} (lo hi : Tensor α [n]) : Tensor α [n] :=
   Tensor.dim fun i =>
     let l := lo.getScalar i
     let u := hi.getScalar i
-    -- Match TorchLean's default lower relaxation: choose slope 1 iff `u > -l`, else 0.
     Tensor.scalar <| if u > (-l) then 1 else 0
-
-/--
-Transfer rule for affine bounds through a linear layer `y = W x + b` (sign-splitting).
-
-The parent node provides affine lower/upper bounds in terms of the *global input*; we compose with
-`W` using the standard `W = W⁺ + W⁻` decomposition (as in IBP/CROWN).
--/
-def linearBoundsFromAffine
-    {inDim n m : Nat}
-    (W : Tensor α [m, n])
-    (b : Tensor α [m])
-    (xB : FlatAffineBounds α)
-    (hout : xB.outDim = n)
-    (_hin : xB.inDim = inDim := by rfl) : FlatAffineBounds α :=
-  /-
-  Linear transfer rule (sign-splitting).
-
-  Suppose the parent node has affine bounds
-  $$
-    \ell(x) = A_\ell x + c_\ell,\qquad u(x) = A_u x + c_u
-  $$
-  for its output vector, expressed as functions of the *global input* $x$.
-
-  For a linear layer $y = Wx + b$, we propagate affine bounds using the standard
-  positive/negative decomposition $W = W^+ + W^-$, where $W^+\ge 0$ and $W^-\le 0$.
-  Componentwise, this gives the sound enclosure
-  $$
-    y \le W^+\,u(x) + W^-\,\ell(x) + b,\qquad
-    y \ge W^+\,\ell(x) + W^-\,u(x) + b.
-  $$
-
-  This is exactly the same “sign split” as used in IBP, but applied to affine bounds.
-  -/
-  let xLo : AffineVec α xB.inDim n := Graph.castAffineOut (α := α) (n := xB.inDim)
-    (m := xB.outDim) (m' := n) hout xB.loAff
-  let xHi : AffineVec α xB.inDim n := Graph.castAffineOut (α := α) (n := xB.inDim)
-    (m := xB.outDim) (m' := n) hout xB.hiAff
-  let Wpos := NN.MLTheory.CROWN.IBP.matPos (α := α) (m := m) (n := n) W
-  let Wneg := NN.MLTheory.CROWN.IBP.matNeg (α := α) (m := m) (n := n) W
-  let A_hi := Tensor.addSpec (Spec.matMulSpec (α := α) Wpos xHi.A) (Spec.matMulSpec (α := α)
-    Wneg xLo.A)
-  let c_hi :=
-    Tensor.addSpec
-      (Tensor.addSpec (Spec.matVecMulSpec (α := α) Wpos xHi.c) (Spec.matVecMulSpec (α := α)
-        Wneg xLo.c))
-      b
-  let A_lo := Tensor.addSpec (Spec.matMulSpec (α := α) Wpos xLo.A) (Spec.matMulSpec (α := α)
-    Wneg xHi.A)
-  let c_lo :=
-    Tensor.addSpec
-      (Tensor.addSpec (Spec.matVecMulSpec (α := α) Wpos xLo.c) (Spec.matVecMulSpec (α := α)
-        Wneg xHi.c))
-      b
-  { inDim := xB.inDim
-    outDim := m
-    loAff := { A := A_lo, c := c_lo }
-    hiAff := { A := A_hi, c := c_hi } }
 
 /--
 One-node α-CROWN step function for a supported subset of IR ops.
@@ -277,8 +168,8 @@ def alphaCrownStepNode?
           match getAff? (α := α) cert p1, ps.linearWB[id]? with
           | some xin, some p =>
               if hout : xin.outDim = p.n then
-                let out := linearBoundsFromAffine (α := α) (inDim := xin.inDim) (n := p.n) (m :=
-                  p.m) p.w p.b xin hout
+                let out := Graph.propagateLinearBounds (α := α) (n := p.n) (m := p.m) p.w p.b xin
+                  hout
                 some out
               else
                 none
@@ -292,8 +183,8 @@ def alphaCrownStepNode?
               if hout : xin.outDim = p.n then
                 let zb : Tensor α [p.m] := Tensor.full (α := α) (.dim p.m
                   .scalar) 0
-                let out := linearBoundsFromAffine (α := α) (inDim := xin.inDim) (n := p.n) (m :=
-                  p.m) p.w zb xin hout
+                let out := Graph.propagateLinearBounds (α := α) (n := p.n) (m := p.m) p.w zb xin
+                  hout
                 some out
               else none
           | _, _ => none
@@ -301,21 +192,22 @@ def alphaCrownStepNode?
   | .relu =>
       match NN.IR.unaryParent? node.parents with
       | some p1 =>
-          match getAff? (α := α) cert p1, ibp[p1]!, getAlpha? (α := α) alpha id with
-          | some xin, some preB, some αv =>
+          match getAff? (α := α) cert p1, ibp[p1]! with
+          | some xin, some preB =>
               if hout : xin.outDim = preB.dim then
-                let xLo : AffineVec α xin.inDim preB.dim := by
-                  simpa [hout] using xin.loAff
-                let xHi : AffineVec α xin.inDim preB.dim := by
-                  simpa [hout] using xin.hiAff
+                let xLo := Graph.castAffineOut (α := α) hout xin.loAff
+                let xHi := Graph.castAffineOut (α := α) hout xin.hiAff
                 let relaxHi :=
                   NN.MLTheory.CROWN.Runtime.Ops.ReLU.relaxVector (α := α) (n := preB.dim) preB.lo
                     preB.hi
                 let αt : Tensor α [preB.dim] :=
-                  if hα : αv.n = preB.dim then
-                    castDimScalar (α := α) (n := αv.n) (n' := preB.dim) hα αv.v
-                  else
-                    defaultAlphaVec (α := α) (n := preB.dim) preB.lo preB.hi
+                  match getAlpha? (α := α) alpha id with
+                  | some αv =>
+                      if hα : αv.n = preB.dim then
+                        castDimScalar (α := α) (n := αv.n) (n' := preB.dim) hα αv.v
+                      else
+                        defaultAlphaVec (α := α) (n := preB.dim) preB.lo preB.hi
+                  | none => defaultAlphaVec (α := α) (n := preB.dim) preB.lo preB.hi
                 let relaxLo :=
                   alphaRelaxLowerVec (α := α) (n := preB.dim) preB.lo preB.hi αt
                 let loAff :=
@@ -326,28 +218,7 @@ def alphaCrownStepNode?
                     (inDim := xin.inDim) (hidDim := preB.dim) relaxHi xHi
                 some { inDim := xin.inDim, outDim := preB.dim, loAff := loAff, hiAff := hiAff }
               else none
-          | some xin, some preB, none =>
-              -- No alpha provided: use TorchLean's default 0/1 lower relaxation as a
-              -- certificate-free producer.
-              if hout : xin.outDim = preB.dim then
-                let xLo : AffineVec α xin.inDim preB.dim := by
-                  simpa [hout] using xin.loAff
-                let xHi : AffineVec α xin.inDim preB.dim := by
-                  simpa [hout] using xin.hiAff
-                let relaxHi :=
-                  NN.MLTheory.CROWN.Runtime.Ops.ReLU.relaxVector (α := α) (n := preB.dim) preB.lo
-                    preB.hi
-                let αt := defaultAlphaVec (α := α) (n := preB.dim) preB.lo preB.hi
-                let relaxLo := alphaRelaxLowerVec (α := α) (n := preB.dim) preB.lo preB.hi αt
-                let loAff :=
-                  NN.MLTheory.CROWN.Runtime.Ops.ReLU.propagateAffine (α := α)
-                    (inDim := xin.inDim) (hidDim := preB.dim) relaxLo xLo
-                let hiAff :=
-                  NN.MLTheory.CROWN.Runtime.Ops.ReLU.propagateAffine (α := α)
-                    (inDim := xin.inDim) (hidDim := preB.dim) relaxHi xHi
-                some { inDim := xin.inDim, outDim := preB.dim, loAff := loAff, hiAff := hiAff }
-              else none
-          | _, _, _ => none
+          | _, _ => none
       | none => none
   | .sum =>
       match NN.IR.unaryParent? node.parents with
@@ -359,9 +230,7 @@ def alphaCrownStepNode?
                 Tensor.full (α := α) (.dim 1 (.dim xin.outDim .scalar)) 1
               let zb : Tensor α [1] := Tensor.full (α := α) (.dim 1 .scalar) 0
               let out :=
-                linearBoundsFromAffine (α := α)
-                  (inDim := xin.inDim) (n := xin.outDim) (m := 1)
-                  onesRow zb xin (by rfl)
+                Graph.propagateLinearBounds (α := α) (n := xin.outDim) (m := 1) onesRow zb xin rfl
               some out
           | none => none
       | none => none

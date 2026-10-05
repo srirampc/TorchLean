@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
 
@@ -37,10 +38,15 @@ class PinnDataset:
                 row = [float(entry[k]) for k in keys]
             except KeyError as exc:
                 raise ValueError(f"Dataset entry {idx} missing key '{exc.args[0]}'") from exc
+            if not all(math.isfinite(value) for value in row):
+                raise ValueError(f"Dataset entry {idx} must contain finite numbers.")
             rows.append(row)
         if not rows:
             return None
-        return torch.tensor(rows, dtype=torch.float32, device=device)
+        result = torch.tensor(rows, dtype=torch.float32, device=device)
+        if not torch.isfinite(result).all():
+            raise ValueError("Dataset values must be representable as finite float32 numbers.")
+        return result
 
     @classmethod
     def load(
@@ -56,6 +62,8 @@ class PinnDataset:
         return data
 
     def sample(self, section: str, count: int) -> Optional[torch.Tensor]:
+        if count <= 0:
+            raise ValueError("Sample count must be positive.")
         mat = self.sections.get(section)
         if mat is None:
             return None
@@ -68,6 +76,8 @@ class PinnDataset:
         samples = self.sample(section, count)
         if samples is None:
             return None
+        if not 0 < columns <= samples.shape[1]:
+            raise ValueError("Requested columns exceed the dataset schema.")
         return tuple(samples[:, i : i + 1] for i in range(columns))
 
 
@@ -143,11 +153,9 @@ def eval_pinn_expr(expr: str, **tensors):
 
 
 def ensure_tensor(val, like: torch.Tensor) -> torch.Tensor:
-    if isinstance(val, torch.Tensor):
-        return val.to(like)
     arr = torch.as_tensor(val, dtype=like.dtype, device=like.device)
     if arr.numel() == 1:
-        return torch.full_like(like, arr.item())
+        return arr.reshape(()).expand_as(like)
     return arr.reshape_as(like)
 
 
@@ -158,13 +166,37 @@ def parse_const_flags(items) -> Dict[str, float]:
             raise ValueError(f"--const expects name=value, got '{raw}'")
         name, value = raw.split("=", 1)
         name = name.strip()
-        if not name:
+        reserved = {
+            "x", "y", "t", "u", "ux", "uy", "ut", "uxx", "uyy", "utt",
+            "uxy", "uyx", "uxt", "utx", "u_x", "u_y", "u_t", "u_xx", "u_yy",
+            "u_tt", "u_xy", "u_yx", "u_xt", "u_tx", "math", "torch", "np", "abs",
+        }
+        if not name.isidentifier() or name in reserved:
             raise ValueError(f"Invalid constant name in '{raw}'")
         try:
             constants[name] = float(value)
         except ValueError as exc:
             raise ValueError(f"Invalid constant value in '{raw}'") from exc
+        if not math.isfinite(constants[name]):
+            raise ValueError(f"Constant must be finite in '{raw}'")
     return constants
+
+
+def validate_training_args(args) -> None:
+    """Reject empty loss batches and invalid weights before allocating a model."""
+    for name in ("collocation_points", "boundary_points", "initial_points"):
+        if hasattr(args, name) and getattr(args, name) <= 0:
+            raise ValueError(f"--{name.replace('_', '-')} must be positive")
+    for name in ("steps", "data_points"):
+        if getattr(args, name) < 0:
+            raise ValueError(f"--{name.replace('_', '-')} must be nonnegative")
+    for name in ("weight_ic", "weight_bc", "weight_data"):
+        if hasattr(args, name):
+            value = getattr(args, name)
+            if not math.isfinite(value) or value < 0:
+                raise ValueError(f"--{name.replace('_', '-')} must be finite and nonnegative")
+    if hasattr(args, "nu") and not math.isfinite(args.nu):
+        raise ValueError("--nu must be finite")
 
 
 def export_model(model: nn.Sequential, *, out_ckpt: str, out_json: str, hidden_widths, activation: str) -> None:
@@ -181,5 +213,5 @@ def export_model(model: nn.Sequential, *, out_ckpt: str, out_json: str, hidden_w
         "hidden_layers": list(hidden_widths),
         "activation": activation,
     }
-    json_path.write_text(json.dumps(to_json_dict(model, meta=meta)))
+    json_path.write_text(json.dumps(to_json_dict(model, meta=meta), allow_nan=False))
     print(f"Exported weights JSON: {json_path}")

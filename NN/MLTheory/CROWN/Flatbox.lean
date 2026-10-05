@@ -45,6 +45,18 @@ structure FlatBox (α : Type) [TorchLean.Storage α] [Context α] where
 
 namespace FlatBox
 
+/-- Extensionality for the dependent record `FlatBox`: equal dimension and heterogeneously equal
+endpoints. Stated by hand because the endpoint types depend on `dim`, so the `ext` tactic has no
+automatically generated lemma to use. -/
+@[ext] theorem ext {B1 B2 : FlatBox α} (hDim : B1.dim = B2.dim) (hLo : HEq B1.lo B2.lo)
+    (hHi : HEq B1.hi B2.hi) : B1 = B2 := by
+  cases B1
+  cases B2
+  cases hDim
+  cases hLo
+  cases hHi
+  rfl
+
 /--
 Componentwise validity of a flat interval box: `lo ≤ hi` for every coordinate.
 

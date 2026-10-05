@@ -21,8 +21,7 @@ model:
 - decoder layers (masked self-attention, cross-attention, FFN, each wrapped in residual +
   LayerNorm),
 - an encoder-decoder wrapper (`Transformer`),
-- spec-level backward passes for the encoder stack,
-- a helper for masked multi-head self-attention.
+- spec-level backward passes for the encoder stack.
 
 Sinusoidal positional encodings live in `NN.Spec.Layers.PositionalEncoding` as
 `Spec.sinusoidalPositionalEncodingSpec`; causal masks are `Spec.causalMask` in
@@ -69,81 +68,6 @@ open Activation
 
 variable {α : Type} [TorchLean.Storage α] [Context α]
   [DecidableRel ((· > ·) : α → α → Prop)]
-
-/-!
-## Configuration helpers
-
-This file mostly defines reusable transformer *building blocks* (encoder/decoder layers, attention,
-layer-norm wrappers, etc.). To make compact model instantiations easier, we also provide a
-small config record for the common hyperparameters together with a couple of canonical configs
-(Base/Big).
-
-The core definitions below still expose the hyperparameters as Nat parameters. The config layer is
-only a named packaging of those parameters, so the mathematical specification remains the
-parameterized transformer definition.
--/
-
-/-- Common transformer layer hyperparameters. -/
-structure TransformerLayerConfig where
-  /-- Number of attention heads. -/
-  headCount : Nat := 8
-  /-- Embedding dimension (`d_model`). -/
-  embedDim : Nat := 512
-  /-- Feedforward hidden dimension (`d_ff`). -/
-  hiddenDim : Nat := 2048
-
-/-- Stack hyperparameters for an encoder/decoder: common layer config plus a layer count. -/
-structure TransformerStackConfig extends TransformerLayerConfig where
-  /-- Number of layers in the stack. -/
-  numLayers : Nat := 6
-
-/--
-Well-formedness conditions for `TransformerLayerConfig`.
-
-The divisibility condition keeps the per-head width exact: `embedDim / headCount` should partition
-the model dimension without silently dropping a tail through `Nat` floor division.
--/
-structure TransformerLayerConfig.WF (config : TransformerLayerConfig) : Prop where
-  headCount_pos : config.headCount > 0
-  embedDim_pos : config.embedDim > 0
-  hiddenDim_pos : config.hiddenDim > 0
-  headCount_dvd_embedDim : config.headCount ∣ config.embedDim
-
-/-- Well-formedness conditions for `TransformerStackConfig`. -/
-structure TransformerStackConfig.WF (config : TransformerStackConfig) : Prop where
-  layer : config.toTransformerLayerConfig.WF
-
-/-- Canonical Transformer "base" hyperparameters (Vaswani et al. 2017). -/
-def transformerBaseConfig : TransformerStackConfig :=
-  { headCount := 8
-    embedDim := 512
-    hiddenDim := 2048
-    numLayers := 6 }
-
-/-- `transformerBaseConfig` is well-formed. -/
-theorem transformerBaseConfig_wf : transformerBaseConfig.WF := by
-  refine { layer := ?_ }
-  refine
-    { headCount_pos := by decide
-      embedDim_pos := by decide
-      hiddenDim_pos := by decide
-      headCount_dvd_embedDim := by decide }
-
-/-- Canonical Transformer "big" hyperparameters (Vaswani et al. 2017). -/
-def transformerBigConfig : TransformerStackConfig :=
-  { headCount := 16
-    embedDim := 1024
-    hiddenDim := 4096
-    numLayers := 6 }
-
-/-- `transformerBigConfig` is well-formed. -/
-theorem transformerBigConfig_wf : transformerBigConfig.WF := by
-  refine { layer := ?_ }
-  refine
-    { headCount_pos := by decide
-      embedDim_pos := by decide
-      hiddenDim_pos := by decide
-      headCount_dvd_embedDim := by decide }
 
 /-!
 ## Gradient containers
@@ -197,8 +121,7 @@ Semantics (per token):
 PyTorch analogue: the `linear1` / `linear2` submodule in `torch.nn.TransformerEncoderLayer`.
 -/
 structure FeedForward (embedDim hiddenDim : Nat) (α : Type)
-    [TorchLean.Storage α] [Context α]
-    [DecidableRel ((· > ·) : α → α → Prop)] where
+    [TorchLean.Storage α] where
   /-- First linear layer weights (`embedDim -> hiddenDim`). -/
   inputWeight : Tensor α [embedDim, hiddenDim]
   /-- Second linear layer weights (`hiddenDim -> embedDim`). -/
@@ -248,8 +171,7 @@ PyTorch analogue: `torch.nn.TransformerEncoderLayer` with `norm_first=False` (po
 ignoring dropout and other configuration knobs.
 -/
 structure TransformerEncoderLayer (headCount embedDim hiddenDim : Nat) (α : Type)
-  [TorchLean.Storage α] [Context α]
-  [DecidableRel ((· > ·) : α → α → Prop)] where
+  [TorchLean.Storage α] where
   /-- Multi-head self-attention block. -/
   mha : MultiHeadAttention α headCount embedDim (embedDim / headCount)
   /-- Position-wise feedforward block. -/
@@ -290,8 +212,7 @@ Transformer encoder: a stack of `TransformerEncoderLayer`s.
 PyTorch analogue: `torch.nn.TransformerEncoder` (a list of layers composed sequentially).
 -/
 structure TransformerEncoder (numLayers headCount embedDim hiddenDim : Nat) (α : Type)
-  [TorchLean.Storage α] [Context α]
-  [DecidableRel ((· > ·) : α → α → Prop)] where
+  [TorchLean.Storage α] where
   /-- Encoder layers, with the stack depth recorded in the type. -/
   layers : Tensor (TransformerEncoderLayer headCount embedDim hiddenDim α)
     [numLayers]
@@ -388,8 +309,7 @@ PyTorch analogue: `torch.nn.TransformerDecoderLayer` with `norm_first=False` (po
 ignoring dropout and a few configuration knobs.
 -/
 structure TransformerDecoderLayer (headCount embedDim hiddenDim : Nat) (α : Type)
-  [TorchLean.Storage α] [Context α]
-  [DecidableRel ((· > ·) : α → α → Prop)] where
+  [TorchLean.Storage α] where
   /-- Self-attention block over the decoder sequence. -/
   selfAttn : MultiHeadAttention α headCount embedDim (embedDim / headCount)
   /-- Cross-attention block (decoder queries, encoder keys/values). -/
@@ -457,8 +377,7 @@ Transformer decoder: a stack of `TransformerDecoderLayer`s.
 PyTorch analogue: `torch.nn.TransformerDecoder` (a list of decoder layers composed sequentially).
 -/
 structure TransformerDecoder (numLayers headCount embedDim hiddenDim : Nat) (α : Type)
-  [TorchLean.Storage α] [Context α]
-  [DecidableRel ((· > ·) : α → α → Prop)] where
+  [TorchLean.Storage α] where
   /-- Decoder layers, with the stack depth recorded in the type. -/
   layers : Tensor (TransformerDecoderLayer headCount embedDim hiddenDim α)
     [numLayers]
@@ -498,8 +417,7 @@ In a full implementation, `outputProjection` would usually map to a vocabulary s
 kept as an `embedDim -> embedDim` projection to stay in the "core tensor algebra" setting.
 -/
 structure Transformer (numLayers headCount embedDim hiddenDim : Nat) (α : Type)
-  [TorchLean.Storage α] [Context α]
-  [DecidableRel ((· > ·) : α → α → Prop)] where
+  [TorchLean.Storage α] where
   /-- Encoder stack. -/
   encoder : TransformerEncoder numLayers headCount embedDim hiddenDim α
   /-- Decoder stack. -/
@@ -581,12 +499,6 @@ def FeedForward.backward {embedDim hiddenDim seqLen : Nat}
   let z1 := addSpec preact (broadcastTo h1 ffn.inputBias)
   let a1 := reluSpec z1
 
-  let h1 : Shape.CanBroadcastTo (.dim embedDim .scalar) (.dim seqLen (.dim embedDim .scalar)) := by
-    apply Shape.CanBroadcastTo.expand_dims
-    apply Shape.CanBroadcastTo.dim_eq
-    exact Shape.CanBroadcastTo.scalar
-  let z2 := addSpec (matMulSpec a1 ffn.outputWeight) (broadcastTo h1 ffn.outputBias)
-
   -- Backward pass
   let dz2 := outputGrad
 
@@ -651,7 +563,6 @@ def TransformerEncoderLayer.backward
   let norm1 := layerNorm res1 layer.norm1Scale layer.norm1Bias h1 h2
   let ffnOut := FeedForward.forward layer.ffn norm1
   let res2 := addSpec norm1 ffnOut
-  let _y := layerNorm res2 layer.norm2Scale layer.norm2Bias h1 h2
 
   -- Backprop through final LayerNorm.
   let norm2Gradients :=
@@ -733,27 +644,5 @@ def TransformerEncoder.backward {numLayers headCount embedDim hiddenDim seqLen :
       TransformerEncoderLayer.backward (encoder.layers.getScalar i) (inputs.getScalar i) grad h1 h2
     (previousGrad, paramsGrad)
   (layerGrads, inputGrad)
-
--- Causal (autoregressive) attention masks are defined in `NN.Spec.Layers.Attention` as
--- `Spec.causalMask`.
-/--
-Multi-head self-attention with an optional boolean mask.
-
-This helper prepares the proof obligations required by `MultiHeadAttention.forward`:
-- derives the required `seqLen ≠ 0` proof from `h1 : seqLen > 0`,
-- forwards the provided `mask` (typically a causal mask for autoregressive decoding).
-
-PyTorch analogue: masked self-attention in `torch.nn.TransformerDecoderLayer` implemented via
-`torch.nn.MultiheadAttention(..., attn_mask=...)`.
--/
-def maskedMultiHeadAttention {headCount embedDim seqLen : Nat}
-  (mha : MultiHeadAttention α headCount embedDim (embedDim / headCount))
-  (x : Tensor α [seqLen, embedDim])
-  (mask : Option (Tensor Bool [seqLen, seqLen]))
-  (h1 : seqLen > 0) :
-  Tensor α [seqLen, embedDim] :=
-  let h3 : seqLen ≠ 0 := Nat.ne_of_gt h1
-  MultiHeadAttention.forward seqLen h3 mha x mask
-
 
 end Spec

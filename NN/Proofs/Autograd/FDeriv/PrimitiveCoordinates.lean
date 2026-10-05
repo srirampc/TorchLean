@@ -25,12 +25,6 @@ open Spec TorchLean TorchLean.Tensor
 
 noncomputable section
 
-/-- Coordinate evaluation removes the Euclidean wrapper around a pointwise function. -/
-@[simp] theorem coordinatewise_apply {n : Nat} (f : Fin n → ℝ → ℝ)
-    (x : Vec n) (i : Fin n) :
-    coordinatewise f x i = f i (x i) := by
-  simp [coordinatewise, euclideanEquiv]
-
 /-- Row-major flattening commutes with a unary pointwise map. -/
 @[simp] theorem tensorToVec_mapSpec_apply {s : Shape} (f : ℝ → ℝ)
     (x : Tensor ℝ s) (i : Fin (Shape.size s)) :

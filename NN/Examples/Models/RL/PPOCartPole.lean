@@ -42,7 +42,8 @@ Run (from the repo root):
 
 ```bash
 python3 -m pip install --user 'gymnasium>=1.0'
-lake -R -K cuda=true exe torchlean ppo_cartpole --device cuda --updates 1 --eval-every 1 \
+scripts/lake.sh -Kcuda=true exe torchlean ppo_cartpole --device cuda \
+    --updates 1 --eval-every 1 \
   --eval-episodes 1 --eval-max-steps 8
 ```
 
@@ -56,8 +57,8 @@ Artifacts:
 - The PPO/GAE math and the autograd loss program are Lean definitions, so they are suitable targets
   for formal reasoning.
 - When Gymnasium is external, TorchLean cannot prove the environment satisfies Markov/measurability
-  assumptions. The trust-boundary contract turns some common assumptions (finite tensors, reward
-  bounds, done-flag semantics) into checked preconditions.
+  assumptions. This command's boundary contract checks finite observations and rewards. It leaves
+  observation and reward ranges unrestricted and permits both done flags to be true.
 - The run favors readability, typed boundaries, and widget inspection over benchmark-specific PPO
   tuning.
 
@@ -198,7 +199,7 @@ Evaluation APIs live in `rl.eval`.
 ## Main Training Loop
 -/
 
-/-- Entry point for `lake exe torchlean ppo_cartpole`.
+/-- Entry point for `scripts/lake.sh exe torchlean ppo_cartpole`.
 
 This executable:
 - launches a Python Gymnasium subprocess for `CartPole-v1`,
@@ -209,26 +210,23 @@ This executable:
 def main (args : List String) : IO UInt32 := do
   Module.Command.run
     (config := {
-      banner? := some <| Support.bannerWithDeviceDetails
+      banner? := some <| Support.banner
         exeName
         s!"PPO on {envId} (horizon={horizon})"
-        "  env: Python Gymnasium subprocess (JSON-lines bridge) + Lean boundary contract"
-      usage? := some <| rl.cli.PPOOptions.usage exeName
+        (details := some
+          "  env: Python Gymnasium subprocess (JSON-lines bridge) + Lean boundary contract")
+      usage? := some <| rl.cli.Options.usage exeName
       printSuccess := true })
     exeName args
     (.native fun runtime rest => do
       let (ppo, rest) ← CLI.orThrow exeName <|
-        rl.cli.PPOOptions.parse
+        rl.cli.Options.parse
           exeName rest Runtime.RL.Artifacts.DefaultPaths.ppoCartPoleTrainLog
           (defaultUpdateCount := maxUpdates)
           (defaultEvaluationInterval := defaultEvaluationInterval)
           (defaultEvaluationEpisodes := defaultEvaluationEpisodes)
           (defaultMaximumEvaluationSteps := 500)
       CLI.orThrow exeName <| CLI.checkNoArgs rest
-      let updateCount : Nat := ppo.updateCount
-      let evaluationInterval : Nat := ppo.evaluationInterval
-      let evaluationEpisodes : Nat := ppo.evaluationEpisodes
-      let maximumEvaluationSteps : Nat := ppo.maximumEvaluationSteps
       let contract : rl.boundary.Contract observation actionCount :=
         { checkObsFinite := true
           checkRewardFinite := true
@@ -288,14 +286,14 @@ def main (args : List String) : IO UInt32 := do
             rl.eval.averageEpisodeTotalReward
               (obsShape := observation) (nActions := actionCount)
               evaluationSessionAt policyLogits0 (baseSeed := 1000)
-              (episodes := evaluationEpisodes)
-              (maxSteps := maximumEvaluationSteps)
+              (episodes := ppo.evaluationEpisodes)
+              (maxSteps := ppo.maximumEvaluationSteps)
           curve := curve.push 0 avg0
           IO.println s!"  eval(step=0) avg_return={avg0}"
 
         curve ← rl.ppo.train discountFactor gaeLambda
-          { updates := updateCount, epochs := updateEpochs,
-            evaluationEvery := evaluationInterval, seed := runtime.seed }
+          { updates := ppo.updateCount, epochs := updateEpochs,
+            evaluationEvery := ppo.evaluationInterval, seed := runtime.seed }
           (fun update rngSeed rngCounter => do
               let psAll ← rl.ppo.state (α := Float) m
               let predictLogits :
@@ -320,8 +318,8 @@ def main (args : List String) : IO UInt32 := do
                 rl.eval.averageEpisodeTotalReward
                   (obsShape := observation) (nActions := actionCount)
                   evaluationSessionAt policyLogits (baseSeed := 1000 + completedUpdates)
-                    (episodes := evaluationEpisodes)
-                  (maxSteps := maximumEvaluationSteps)
+                    (episodes := ppo.evaluationEpisodes)
+                  (maxSteps := ppo.maximumEvaluationSteps)
               IO.println s!"  update={completedUpdates} avg_return={avg}"
               if avg ≥ solvedAverageReturn then
                 IO.println s!"{exeName}: solved (avg_return ≥ {solvedAverageReturn})"
@@ -341,10 +339,10 @@ def main (args : List String) : IO UInt32 := do
             s!"gamma={discountFactor}",
             s!"lambda={gaeLambda}",
             s!"lr={learningRate}",
-            s!"updates={updateCount}",
-            s!"eval_every={evaluationInterval}",
-            s!"eval_episodes={evaluationEpisodes}",
-            s!"eval_max_steps={maximumEvaluationSteps}",
+            s!"updates={ppo.updateCount}",
+            s!"eval_every={ppo.evaluationInterval}",
+            s!"eval_episodes={ppo.evaluationEpisodes}",
+            s!"eval_max_steps={ppo.maximumEvaluationSteps}",
             Support.deviceNote runtime
           ]
         IO.println s!"{exeName}: done"

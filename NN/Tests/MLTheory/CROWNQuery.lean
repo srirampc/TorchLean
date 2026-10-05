@@ -14,7 +14,7 @@ public import NN.Verification.Cert.CROWNQuery.Json
 
 namespace NN.Tests.MLTheory.CROWNQuery
 
-open NN.Verification.CROWNQuery
+open NN.Verification.Cert.CROWNQuery
 
 /-- `relu(x) + relu(-x) < 3/2` on `[-1, 1]`; retaining affine dependence proves the query. -/
 def exampleText : String :=

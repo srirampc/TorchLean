@@ -51,7 +51,7 @@ private def mapLayerOverAxis (n : Nat) {σ τ : Spec.Shape} (layer : Layer σ τ
                 (Ref := fun shape =>
                   TorchLean.Runtime.ValueRef (m := m) (α := α) shape)
                 (ss := layer.stateShapes) (τ := σ.prependDim n) arguments
-            Runtime.Autograd.Torch.mapOuterAxis (m := m) (α := α)
+            Runtime.Autograd.Torch.mapBatch (m := m) (α := α)
               (fun input => layer.forwardRef (α := α) (m := m) mode state input)
               inputBatch) }
 

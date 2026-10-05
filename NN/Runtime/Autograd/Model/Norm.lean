@@ -35,15 +35,9 @@ namespace Norm
 namespace Internal
 
 /-- Flatten an arbitrary spatial shape while preserving the batch and channel axes. -/
-theorem reshapeBatchChannelFlatSize {batch channels : Nat} {spatial : Shape} :
+theorem reshape_batch_channel_flat_size {batch channels : Nat} {spatial : Shape} :
     Shape.size (.dim batch (.dim channels spatial)) =
       Shape.size (.dim batch (.dim channels (.dim (Shape.size spatial) .scalar))) := by
-  simp [Spec.Shape.size]
-
-/-- Flatten an arbitrary spatial shape while preserving the channel axis. -/
-theorem reshapeChannelFlatSize {channels : Nat} {spatial : Shape} :
-    Shape.size (.dim channels spatial) =
-      Shape.size (.dim channels (.dim (Shape.size spatial) .scalar)) := by
   simp [Spec.Shape.size]
 
 /-- Repeat a channel vector over the batch and flattened spatial axes. -/
@@ -171,7 +165,7 @@ def instanceNorm {α : Type} [TorchLean.Storage α] [Context α]
   let _ : Shape.WellFormed inputShape := ⟨hWellFormed⟩
   let _ : Shape.WellFormed flatShape := ⟨⟨hBatch, ⟨hChannels, ⟨hSpatial, trivial⟩⟩⟩⟩
   let xFlat ← reshape (m := m) (α := α) (s₁ := inputShape) (s₂ := flatShape) x
-    (Internal.reshapeBatchChannelFlatSize (batch := batch) (channels := channels)
+    (Internal.reshape_batch_channel_flat_size (batch := batch) (channels := channels)
       (spatial := spatial))
   let axis := Shape.rank flatShape - 1
   let _ : Shape.HasNonemptyAxis axis flatShape :=
@@ -199,7 +193,7 @@ def instanceNorm {α : Type} [TorchLean.Storage α] [Context α]
   let yFlat ← add (m := m) (α := α) (s := flatShape)
     (← mul (m := m) (α := α) (s := flatShape) normalized gammaB) betaB
   reshape (m := m) (α := α) (s₁ := flatShape) (s₂ := inputShape) yFlat
-    (Internal.reshapeBatchChannelFlatSize (batch := batch) (channels := channels)
+    (Internal.reshape_batch_channel_flat_size (batch := batch) (channels := channels)
       (spatial := spatial)).symm
 
 /--
@@ -270,7 +264,7 @@ def groupNorm {α : Type} [TorchLean.Storage α] [Context α]
   let _ : Shape.WellFormed flatShape :=
     ⟨⟨hBatch, ⟨hWellFormed.2.1, ⟨hSpatial, trivial⟩⟩⟩⟩
   let yFlat ← reshape (m := m) (α := α) (s₁ := inputShape) (s₂ := flatShape)
-    normalizedInput (Internal.reshapeBatchChannelFlatSize (batch := batch)
+    normalizedInput (Internal.reshape_batch_channel_flat_size (batch := batch)
       (channels := channels) (spatial := spatial))
   let gammaB ← Internal.broadcastChannelToBatchSpatial
     (m := m) (α := α) batch channels spatialSize gamma
@@ -279,7 +273,7 @@ def groupNorm {α : Type} [TorchLean.Storage α] [Context α]
   let yFlat ← add (m := m) (α := α) (s := flatShape)
     (← mul (m := m) (α := α) (s := flatShape) yFlat gammaB) betaB
   reshape (m := m) (α := α) (s₁ := flatShape) (s₂ := inputShape) yFlat
-    (Internal.reshapeBatchChannelFlatSize (batch := batch) (channels := channels)
+    (Internal.reshape_batch_channel_flat_size (batch := batch) (channels := channels)
       (spatial := spatial)).symm
 
 /--
@@ -312,7 +306,7 @@ def batchNormTrainStats {α : Type} [TorchLean.Storage α] [Context α]
   let _ : Shape.WellFormed inputShape := ⟨hWellFormed⟩
   let _ : Shape.WellFormed flatShape := ⟨⟨hBatch, ⟨hChannels, ⟨hSpatial, trivial⟩⟩⟩⟩
   let xFlat ← reshape (m := m) (α := α) (s₁ := inputShape) (s₂ := flatShape) x
-    (Internal.reshapeBatchChannelFlatSize (batch := batch) (channels := channels)
+    (Internal.reshape_batch_channel_flat_size (batch := batch) (channels := channels)
       (spatial := spatial))
   let spatialAxis := Shape.rank flatShape - 1
   let _ : Shape.HasNonemptyAxis spatialAxis flatShape :=
@@ -354,7 +348,7 @@ def batchNormTrainStats {α : Type} [TorchLean.Storage α] [Context α]
   let yFlat ← add (m := m) (α := α) (s := flatShape)
     (← mul (m := m) (α := α) (s := flatShape) normalized gammaB) betaB
   let y ← reshape (m := m) (α := α) (s₁ := flatShape) (s₂ := inputShape) yFlat
-    (Internal.reshapeBatchChannelFlatSize (batch := batch) (channels := channels)
+    (Internal.reshape_batch_channel_flat_size (batch := batch) (channels := channels)
       (spatial := spatial)).symm
   pure (y, mean, varClamped)
 
@@ -399,7 +393,7 @@ def batchNormEval {α : Type} [TorchLean.Storage α] [Context α]
   let _ : Shape.WellFormed flatShape :=
     ⟨⟨hWellFormed.1, ⟨hWellFormed.2.1, ⟨hSpatial, trivial⟩⟩⟩⟩
   let xFlat ← reshape (m := m) (α := α) (s₁ := inputShape) (s₂ := flatShape) x
-    (Internal.reshapeBatchChannelFlatSize (batch := batch) (channels := channels)
+    (Internal.reshape_batch_channel_flat_size (batch := batch) (channels := channels)
       (spatial := spatial))
   let meanB ← Internal.broadcastChannelToBatchSpatial
     (m := m) (α := α) batch channels spatialSize mean
@@ -422,7 +416,7 @@ def batchNormEval {α : Type} [TorchLean.Storage α] [Context α]
   let yFlat ← add (m := m) (α := α) (s := flatShape)
     (← mul (m := m) (α := α) (s := flatShape) normalized gammaB) betaB
   reshape (m := m) (α := α) (s₁ := flatShape) (s₂ := inputShape) yFlat
-    (Internal.reshapeBatchChannelFlatSize (batch := batch) (channels := channels)
+    (Internal.reshape_batch_channel_flat_size (batch := batch) (channels := channels)
       (spatial := spatial)).symm
 
 end Norm

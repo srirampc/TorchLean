@@ -6,10 +6,8 @@ Authors: TorchLean Team
 
 module
 
-public import NN.Floats.FP32.Notation
+public import NN.Floats.FP32
 public import NN.Proofs.RuntimeApprox.Core.Tolerance
-import Mathlib.Algebra.Order.Algebra
-import NN.Floats.FP32.Error
 
 /-!
 # FP32 Runtime-Approximation Bridge
@@ -20,7 +18,7 @@ import NN.Floats.FP32.Error
 
 Here we connect that generic notion of tolerance to our `FP32` rounding model.
 
-In `NN.Floats.FP32.Error` we prove *per‑operation* absolute error bounds like
+FloatLib’s `Model.abs_roundAt_sub_le` supplies the per-operation absolute error bound
 
 $$
 |\mathrm{approx}-\mathrm{exact}|
@@ -44,6 +42,8 @@ Two small conventions show up everywhere below:
 
 @[expose] public section
 
+open FloatLib.Floats.Formats.BinaryInterchange (Model FloatFormat)
+
 open FloatLib FloatLib.Numerics FloatLib.Floats.Formats
 open Flocq
 
@@ -52,15 +52,6 @@ namespace TorchLean.Floats
 namespace FP32
 
 open Proofs.RuntimeApprox
-
-/-!
-The next two lemmas are local rewrite helpers:
-
-* `approxR_absOnly_of_abs_sub_le` turns a plain `abs (y - x) ≤ eps` inequality into an `approxR`.
-* `eps32_nonneg` is the nonnegativity proof we need to use `approxR_absOnly_iff`.
-
-They are private because they are only used by this file's approximation bridge.
--/
 
 /--
 Helper: turn a plain absolute-error inequality into an `approxR` with an absolute-only tolerance.
@@ -73,15 +64,15 @@ private theorem approxR_absOnly_of_abs_sub_le {x y eps : ℝ} (heps : 0 ≤ eps)
   (approxR_absOnly_iff (x := x) (y := y) (eps := eps) heps).2 h
 
 /--
-Nonnegativity of the FP32 half-ULP scale `eps32`.
+Nonnegativity of the FP32 half-ULP scale `Model.epsilonAt FloatFormat.binary32`.
 
 This is needed to use `approxR_absOnly_iff`, which requires $\varepsilon\ge 0$.
 -/
-private theorem eps32_nonneg (x : ℝ) : 0 ≤ eps32 x := by
+private theorem epsilon_nonneg (x : ℝ) : 0 ≤ Model.epsilonAt FloatFormat.binary32 x := by
   -- Unfold to FloatLib’s `ulp` so we can reuse its nonnegativity lemma.
-  unfold eps32 ulp32
+  unfold Model.epsilonAt Model.ulpAt
   exact div_nonneg
-    (ulp.nonneg (β := binaryRadix) (fexp := fexp32) (x := x))
+    (ulp.nonneg (β := binaryRadix) (fexp := (Model.fexpOf FloatFormat.binary32)) (x := x))
     (by norm_num)
 
 /-! ## Arithmetic (one real op + one rounding step) -/
@@ -102,13 +93,13 @@ $\operatorname{val}(a)+\operatorname{val}(b)
 -/
 theorem add_approxR (a b : FP32) :
     approxR (a.val + b.val) (a + b).val
-      (ApproxTol.absOnly (eps32 (a.val + b.val))) := by
-  refine approxR_absOnly_of_abs_sub_le (x := a.val + b.val) (y := (a + b).val) (eps := _)
-    (eps32_nonneg (x := a.val + b.val)) ?_
-  simpa [sub_eq_add_neg, add_comm, add_left_comm, add_assoc] using add_abs_error (a := a) (b := b)
+      (ApproxTol.absOnly (Model.epsilonAt FloatFormat.binary32 (a.val + b.val))) := by
+  refine approxR_absOnly_of_abs_sub_le (epsilon_nonneg _) ?_
+  exact Model.abs_roundAt_sub_le FloatFormat.binary32 (a.val + b.val)
 
 /--
-`FP32` subtraction, stated as an `≈[t]` fact with `t = absOnly (eps32(exact))`.
+`FP32` subtraction as an `≈[t]` fact, where `t` is the absolute-only half-ulp tolerance at the
+exact difference.
 
 Informally,
 $\operatorname{val}(a)-\operatorname{val}(b)
@@ -117,13 +108,13 @@ $\operatorname{val}(a)-\operatorname{val}(b)
 -/
 theorem sub_approxR (a b : FP32) :
     approxR (a.val - b.val) (a - b).val
-      (ApproxTol.absOnly (eps32 (a.val - b.val))) := by
-  refine approxR_absOnly_of_abs_sub_le (x := a.val - b.val) (y := (a - b).val) (eps := _)
-    (eps32_nonneg (x := a.val - b.val)) ?_
-  simpa [sub_eq_add_neg, add_assoc, add_left_comm, add_comm] using sub_abs_error (a := a) (b := b)
+      (ApproxTol.absOnly (Model.epsilonAt FloatFormat.binary32 (a.val - b.val))) := by
+  refine approxR_absOnly_of_abs_sub_le (epsilon_nonneg _) ?_
+  exact Model.abs_roundAt_sub_le FloatFormat.binary32 (a.val - b.val)
 
 /--
-`FP32` multiplication, stated as an `≈[t]` fact with `t = absOnly (eps32(exact))`.
+`FP32` multiplication as an `≈[t]` fact, where `t` is the absolute-only half-ulp tolerance at the
+exact product.
 
 Informally,
 $\operatorname{val}(a)\operatorname{val}(b)
@@ -132,13 +123,13 @@ $\operatorname{val}(a)\operatorname{val}(b)
 -/
 theorem mul_approxR (a b : FP32) :
     approxR (a.val * b.val) (a * b).val
-      (ApproxTol.absOnly (eps32 (a.val * b.val))) := by
-  refine approxR_absOnly_of_abs_sub_le (x := a.val * b.val) (y := (a * b).val) (eps := _)
-    (eps32_nonneg (x := a.val * b.val)) ?_
-  simpa using mul_abs_error (a := a) (b := b)
+      (ApproxTol.absOnly (Model.epsilonAt FloatFormat.binary32 (a.val * b.val))) := by
+  refine approxR_absOnly_of_abs_sub_le (epsilon_nonneg _) ?_
+  exact Model.abs_roundAt_sub_le FloatFormat.binary32 (a.val * b.val)
 
 /--
-`FP32` division, stated as an `≈[t]` fact with `t = absOnly (eps32(exact))`.
+`FP32` division as an `≈[t]` fact, where `t` is the absolute-only half-ulp tolerance at the exact
+quotient.
 
 Informally,
 $\frac{\operatorname{val}(a)}{\operatorname{val}(b)}
@@ -147,10 +138,9 @@ $\frac{\operatorname{val}(a)}{\operatorname{val}(b)}
 -/
 theorem div_approxR (a b : FP32) :
     approxR (a.val / b.val) (a / b).val
-      (ApproxTol.absOnly (eps32 (a.val / b.val))) := by
-  refine approxR_absOnly_of_abs_sub_le (x := a.val / b.val) (y := (a / b).val) (eps := _)
-    (eps32_nonneg (x := a.val / b.val)) ?_
-  simpa using div_abs_error (a := a) (b := b)
+      (ApproxTol.absOnly (Model.epsilonAt FloatFormat.binary32 (a.val / b.val))) := by
+  refine approxR_absOnly_of_abs_sub_le (epsilon_nonneg _) ?_
+  exact Model.abs_roundAt_sub_le FloatFormat.binary32 (a.val / b.val)
 
 /-! ## Transcendentals (real function + rounding) -/
 
@@ -164,11 +154,9 @@ $\exp(\operatorname{val}(a))
 -/
 theorem exp_approxR (a : FP32) :
     approxR (Real.exp a.val) (Numerics.MathFunctions.exp a).val
-      (ApproxTol.absOnly (eps32 (Real.exp a.val))) := by
-  refine approxR_absOnly_of_abs_sub_le (x := Real.exp a.val)
-    (y := (Numerics.MathFunctions.exp a).val) (eps := _)
-    (eps32_nonneg (x := Real.exp a.val)) ?_
-  simpa using exp_abs_error (a := a)
+      (ApproxTol.absOnly (Model.epsilonAt FloatFormat.binary32 (Real.exp a.val))) := by
+  refine approxR_absOnly_of_abs_sub_le (epsilon_nonneg _) ?_
+  exact Model.abs_roundAt_sub_le FloatFormat.binary32 (Real.exp a.val)
 
 /--
 `FP32` `tanh` as an `≈[t]` statement.
@@ -180,11 +168,9 @@ $\tanh(\operatorname{val}(a))
 -/
 theorem tanh_approxR (a : FP32) :
     approxR (Real.tanh a.val) (Numerics.MathFunctions.tanh a).val
-      (ApproxTol.absOnly (eps32 (Real.tanh a.val))) := by
-  refine approxR_absOnly_of_abs_sub_le (x := Real.tanh a.val)
-    (y := (Numerics.MathFunctions.tanh a).val) (eps := _)
-    (eps32_nonneg (x := Real.tanh a.val)) ?_
-  simpa using tanh_abs_error (a := a)
+      (ApproxTol.absOnly (Model.epsilonAt FloatFormat.binary32 (Real.tanh a.val))) := by
+  refine approxR_absOnly_of_abs_sub_le (epsilon_nonneg _) ?_
+  exact Model.abs_roundAt_sub_le FloatFormat.binary32 (Real.tanh a.val)
 
 /--
 `FP32` `log` as an `≈[t]` statement (using `Real.log` as the exact reference).
@@ -196,11 +182,9 @@ $\log(\operatorname{val}(a))
 -/
 theorem log_approxR (a : FP32) :
     approxR (Real.log a.val) (Numerics.MathFunctions.log a).val
-      (ApproxTol.absOnly (eps32 (Real.log a.val))) := by
-  refine approxR_absOnly_of_abs_sub_le (x := Real.log a.val)
-    (y := (Numerics.MathFunctions.log a).val) (eps := _)
-    (eps32_nonneg (x := Real.log a.val)) ?_
-  simpa using log_abs_error (a := a)
+      (ApproxTol.absOnly (Model.epsilonAt FloatFormat.binary32 (Real.log a.val))) := by
+  refine approxR_absOnly_of_abs_sub_le (epsilon_nonneg _) ?_
+  exact Model.abs_roundAt_sub_le FloatFormat.binary32 (Real.log a.val)
 
 /--
 `FP32` `cos` as an `≈[t]` statement.
@@ -212,11 +196,9 @@ $\cos(\operatorname{val}(a))
 -/
 theorem cos_approxR (a : FP32) :
     approxR (Real.cos a.val) (Numerics.MathFunctions.cos a).val
-      (ApproxTol.absOnly (eps32 (Real.cos a.val))) := by
-  refine approxR_absOnly_of_abs_sub_le (x := Real.cos a.val)
-    (y := (Numerics.MathFunctions.cos a).val) (eps := _)
-    (eps32_nonneg (x := Real.cos a.val)) ?_
-  simpa using cos_abs_error (a := a)
+      (ApproxTol.absOnly (Model.epsilonAt FloatFormat.binary32 (Real.cos a.val))) := by
+  refine approxR_absOnly_of_abs_sub_le (epsilon_nonneg _) ?_
+  exact Model.abs_roundAt_sub_le FloatFormat.binary32 (Real.cos a.val)
 
 /--
 `FP32` `sin` as an `≈[t]` statement.
@@ -228,11 +210,9 @@ $\sin(\operatorname{val}(a))
 -/
 theorem sin_approxR (a : FP32) :
     approxR (Real.sin a.val) (Numerics.MathFunctions.sin a).val
-      (ApproxTol.absOnly (eps32 (Real.sin a.val))) := by
-  refine approxR_absOnly_of_abs_sub_le (x := Real.sin a.val)
-    (y := (Numerics.MathFunctions.sin a).val) (eps := _)
-    (eps32_nonneg (x := Real.sin a.val)) ?_
-  simpa using sin_abs_error (a := a)
+      (ApproxTol.absOnly (Model.epsilonAt FloatFormat.binary32 (Real.sin a.val))) := by
+  refine approxR_absOnly_of_abs_sub_le (epsilon_nonneg _) ?_
+  exact Model.abs_roundAt_sub_le FloatFormat.binary32 (Real.sin a.val)
 
 /--
 `FP32` `sinh` as an `≈[t]` statement.
@@ -244,11 +224,9 @@ $\sinh(\operatorname{val}(a))
 -/
 theorem sinh_approxR (a : FP32) :
     approxR (Real.sinh a.val) (Numerics.MathFunctions.sinh a).val
-      (ApproxTol.absOnly (eps32 (Real.sinh a.val))) := by
-  refine approxR_absOnly_of_abs_sub_le (x := Real.sinh a.val)
-    (y := (Numerics.MathFunctions.sinh a).val) (eps := _)
-    (eps32_nonneg (x := Real.sinh a.val)) ?_
-  simpa using sinh_abs_error (a := a)
+      (ApproxTol.absOnly (Model.epsilonAt FloatFormat.binary32 (Real.sinh a.val))) := by
+  refine approxR_absOnly_of_abs_sub_le (epsilon_nonneg _) ?_
+  exact Model.abs_roundAt_sub_le FloatFormat.binary32 (Real.sinh a.val)
 
 /--
 `FP32` `cosh` as an `≈[t]` statement.
@@ -260,11 +238,9 @@ $\cosh(\operatorname{val}(a))
 -/
 theorem cosh_approxR (a : FP32) :
     approxR (Real.cosh a.val) (Numerics.MathFunctions.cosh a).val
-      (ApproxTol.absOnly (eps32 (Real.cosh a.val))) := by
-  refine approxR_absOnly_of_abs_sub_le (x := Real.cosh a.val)
-    (y := (Numerics.MathFunctions.cosh a).val) (eps := _)
-    (eps32_nonneg (x := Real.cosh a.val)) ?_
-  simpa using cosh_abs_error (a := a)
+      (ApproxTol.absOnly (Model.epsilonAt FloatFormat.binary32 (Real.cosh a.val))) := by
+  refine approxR_absOnly_of_abs_sub_le (epsilon_nonneg _) ?_
+  exact Model.abs_roundAt_sub_le FloatFormat.binary32 (Real.cosh a.val)
 
 /--
 `FP32` `sqrt` as an `≈[t]` statement.
@@ -276,11 +252,9 @@ $\sqrt{\operatorname{val}(a)}
 -/
 theorem sqrt_approxR (a : FP32) :
     approxR (Real.sqrt a.val) (Numerics.MathFunctions.sqrt a).val
-      (ApproxTol.absOnly (eps32 (Real.sqrt a.val))) := by
-  refine approxR_absOnly_of_abs_sub_le (x := Real.sqrt a.val)
-    (y := (Numerics.MathFunctions.sqrt a).val) (eps := _)
-    (eps32_nonneg (x := Real.sqrt a.val)) ?_
-  simpa using sqrt_abs_error (a := a)
+      (ApproxTol.absOnly (Model.epsilonAt FloatFormat.binary32 (Real.sqrt a.val))) := by
+  refine approxR_absOnly_of_abs_sub_le (epsilon_nonneg _) ?_
+  exact Model.abs_roundAt_sub_le FloatFormat.binary32 (Real.sqrt a.val)
 
 /--
 `FP32` `abs` as an `≈[t]` statement.
@@ -292,11 +266,9 @@ $|\operatorname{val}(a)|
 -/
 theorem abs_approxR (a : FP32) :
     approxR (abs a.val) (Numerics.MathFunctions.abs a).val
-      (ApproxTol.absOnly (eps32 (abs a.val))) := by
-  refine approxR_absOnly_of_abs_sub_le (x := abs a.val)
-    (y := (Numerics.MathFunctions.abs a).val) (eps := _)
-    (eps32_nonneg (x := abs a.val)) ?_
-  simpa using abs_abs_error (a := a)
+      (ApproxTol.absOnly (Model.epsilonAt FloatFormat.binary32 (abs a.val))) := by
+  refine approxR_absOnly_of_abs_sub_le (epsilon_nonneg _) ?_
+  exact Model.abs_roundAt_sub_le FloatFormat.binary32 (abs a.val)
 
 /-! ## Examples (how this looks in practice) -/
 
@@ -309,7 +281,7 @@ variable (a b : FP32)
 /-- The same `add_approxR` theorem, but written using the `≈[t]` notation. -/
 example :
     (a.val + b.val) ≈[
-      ApproxTol.absOnly (eps32 (a.val + b.val))
+      ApproxTol.absOnly (Model.epsilonAt FloatFormat.binary32 (a.val + b.val))
     ] (a + b).val := by
   simpa using add_approxR (a := a) (b := b)
 
@@ -320,19 +292,19 @@ This is useful when feeding the result into lemmas stated using `abs`, or into `
 -/
 example :
     abs ((a + b).val - (a.val + b.val)) ≤
-      eps32 (a.val + b.val) := by
+      Model.epsilonAt FloatFormat.binary32 (a.val + b.val) := by
   have happ :
       approxR (a.val + b.val) (a + b).val
-        (ApproxTol.absOnly (eps32 (a.val + b.val))) :=
+        (ApproxTol.absOnly (Model.epsilonAt FloatFormat.binary32 (a.val + b.val))) :=
     add_approxR (a := a) (b := b)
   have heps :
-      0 ≤ eps32 (a.val + b.val) :=
-    eps32_nonneg (x := a.val + b.val)
+      0 ≤ Model.epsilonAt FloatFormat.binary32 (a.val + b.val) :=
+    epsilon_nonneg (x := a.val + b.val)
   -- `approxR_absOnly_iff` says `≈[absOnly eps]` is exactly `|y - x| ≤ eps`.
   have : abs ((a + b).val - (a.val + b.val)) ≤
-      eps32 (a.val + b.val) :=
+      Model.epsilonAt FloatFormat.binary32 (a.val + b.val) :=
     (approxR_absOnly_iff (x := a.val + b.val) (y := (a + b).val)
-      (eps := eps32 (a.val + b.val)) heps).1 happ
+      (eps := Model.epsilonAt FloatFormat.binary32 (a.val + b.val)) heps).1 happ
   simpa [abs_sub_comm] using this
 
 end Examples

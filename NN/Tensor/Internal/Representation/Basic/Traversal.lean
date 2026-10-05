@@ -21,17 +21,6 @@ namespace TorchLean.Tensor.Internal
 
 universe u
 
-private theorem list_foldl_flatten
-    {α β : Type*} (lists : List (List β))
-    (step : α → β → α) (initial : α) :
-    lists.flatten.foldl step initial =
-      lists.foldl (fun value entries => entries.foldl step value) initial := by
-  induction lists generalizing initial with
-  | nil => rfl
-  | cons entries lists inductionHypothesis =>
-      simp only [List.flatten_cons, List.foldl_append, List.foldl_cons]
-      exact inductionHypothesis _
-
 private theorem foldl_flatten_ofFn
     {α β : Type*} (outer inner : Nat)
     (entries : Fin outer → Fin inner → β)
@@ -46,7 +35,7 @@ private theorem foldl_flatten_ofFn
               step value (entries outerIndex innerIndex))
             value)
         initial := by
-  rw [list_foldl_flatten]
+  rw [List.foldl_flatten]
   simp only [List.ofFn_eq_map, List.foldl_map,
     Fin.foldl_eq_foldl_finRange]
 
@@ -94,7 +83,7 @@ theorem fin_foldl_product
 namespace Rep
 
 /-- A packed fold is the finite fold over the tensor's flat row-major indices. -/
-theorem foldl_eq_fin_foldl {α β : Type} [Storage α] {s : Shape}
+theorem foldl_eq_fin_foldl {α β : Type u} [Storage α] {s : Shape}
     (step : β → α → β) (initial : β) (x : Rep α s) :
     x.foldl step initial =
       Fin.foldl (Shape.size s)
@@ -110,7 +99,7 @@ theorem foldl_eq_fin_foldl {α β : Type} [Storage α] {s : Shape}
     ← Fin.foldl_eq_foldl_finRange]
 
 /-- Flat lookup into a stack selects the corresponding row and inner flat index. -/
-theorem getFlat_stack_product {α : Type} [Storage α] {n : Nat} {s : Shape}
+theorem getFlat_stack_product {α : Type u} [Storage α] {n : Nat} {s : Shape}
     (components : Fin n → Rep α s) (outer : Fin n)
     (inner : Fin (Shape.size s)) :
     (stack components).getFlat
@@ -139,7 +128,7 @@ theorem getFlat_stack_product {α : Type} [Storage α] {n : Nat} {s : Shape}
       rw [Coord.linearize_unlinearize]
 
 /-- Folding a stack is folding each row in leading-axis order. -/
-theorem foldl_stack {α β : Type} [Storage α] {n : Nat} {s : Shape}
+theorem foldl_stack {α β : Type u} [Storage α] {n : Nat} {s : Shape}
     (step : β → α → β) (initial : β)
     (components : Fin n → Rep α s) :
     (stack components).foldl step initial =

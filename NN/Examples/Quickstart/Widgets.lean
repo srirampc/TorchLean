@@ -28,10 +28,7 @@ This quickstart keeps only the smallest useful examples; the full widget gallery
 
 @[expose] public section
 
-open FloatLib.Floats (ExecFloat)
 open FloatLib.Floats.ExecFloat (Binary)
-open FloatLib.Floats.ExecFloat.Binary (ofModel toModel)
-open FloatLib.Floats.Formats.BinaryInterchange (Model FloatFormat)
 
 namespace NN.Examples.Quickstart.Widgets
 
@@ -49,12 +46,10 @@ def matrix : Tensor Int [2, 3] :=
   ]
 
 /-- A binary32 value; the widget shows sign/exponent/fraction fields and classification flags. -/
-def one32 : Binary 8 23 :=
-  (fun x => (ofModel (Model.cast .binary64 .binary32 (toModel (Binary.ofFloat x))) : Binary 8 23))
-    1.0
+def one : Binary 8 23 := 1
 
 /-- A minimal training log; runtime examples can write the same structure as JSON. -/
-def tinyTrainLog : Training.TrainLog :=
+def trainingLog : Training.TrainLog :=
   { title := "Quickstart loss"
     steps := #[0, 1, 2, 3]
     series := #[
@@ -71,9 +66,9 @@ not change runtime behavior or proof status.
 #tensor_view matrix
 #tensor_stats_view vector
 
-#float32_view one32
+#float32_view one
 #float32_round_view (0.1 : Float)
 
-#train_log_view tinyTrainLog
+#train_log_view trainingLog
 
 end NN.Examples.Quickstart.Widgets

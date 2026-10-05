@@ -6,8 +6,8 @@ Authors: TorchLean Team
 
 module
 
-public import NN.Spec.Module.Activation -- shake: keep
-public import NN.Spec.Module.Linear -- shake: keep
+public import NN.Spec.Core.Tensor
+public import NN.Spec.Module.Core
 
 /-!
 # Export Core
@@ -30,8 +30,8 @@ The public helpers are organized as follows:
 - `generatePyTorchImports` / `generatePyTorchSupportDefinitions` provide the shared Python prelude.
 - `generateBasePyTorchModule` is the reusable class skeleton for the example exporters.
 - `generatePyTorchModule` is the simplest end-to-end exporter for a `Spec.Module.Chain`.
-- `NN.Runtime.PyTorch.Export.StateDict` is the general checkpoint-to-JSON adapter for users who
-  already have PyTorch weights.
+- `generateWeightLoadingUtils` emits Python state-dictionary save/load helpers. Callers supply
+  any checkpoint-to-JSON conversion needed by the import path.
 
 ## References
 
@@ -72,8 +72,7 @@ def indentEight (s : String) : String := indent 8 s
 ## Common boilerplate fragments
 
 Many exporters emit the same small pieces of Python: `@property` metadata and a `get_model_info`
-dictionary. Shared boilerplate keeps the hand-written example exporters
-and the more general IR exporter.
+dictionary. These fragments are shared by the example exporters and the general IR exporter.
 -/
 
 /--
@@ -114,11 +113,6 @@ def shapeToPyTupleString (s : Shape) : String :=
   | [] => "()"
   | [n] => s!"({n},)"
   | _ => "(" ++ String.intercalate ", " (dims.map (fun n => toString n)) ++ ")"
-
-/-- Count the number of primitive layers in a `Spec.Module.Chain`. -/
-def countLayers {α : Type} {s t : Shape} : Spec.Module.Chain α s t → Nat
-| .single _ => 1
-| .comp a b => countLayers a + countLayers b
 
 /-- Render a Python float expression preserving every finite binary64 value and signed zero.
 
@@ -382,8 +376,8 @@ def generateBasePyTorchModule (className : String) (docstring : String) : String
     , indentFour "super().__init__()"
     , indentFour "self._initialize_layers()"
     , indentFour ""
-    , indentFour "def _initialize_layers(self):"
-    , indentSix "raise NotImplementedError(\"Subclasses must implement _initialize_layers\")"
+    , indentTwo "def _initialize_layers(self):"
+    , indentFour "raise NotImplementedError(\"Subclasses must implement _initialize_layers\")"
     , indentFour ""
     , indentTwo "def forward(self, x):"
     , indentFour "raise NotImplementedError(\"Subclasses must implement forward\")"
@@ -408,7 +402,7 @@ def generateBasePyTorchModule (className : String) (docstring : String) : String
       , indentFour "raise NotImplementedError(\"Subclasses must implement operation_types\")"
       ]
 
-/-- Emit Python helpers for saving/loading state dictionaries and JSON checkpoints. -/
+/-- Emit Python helpers for saving/loading state-dict checkpoints. -/
 def generateWeightLoadingUtils : String :=
   joinLines #[
     "def load_weights_from_dict(model: nn.Module, state_dict: dict):",
@@ -467,8 +461,8 @@ def generatePyTorchModule {α : Type} {s t : Shape}
   (chain : Spec.Module.Chain α s t) (className : String := "ExportedModel") : String :=
   let inputShape := shapeToPyTupleString s
   let outputShape := shapeToPyTupleString t
-  let layerCount := countLayers chain
   let layers := Spec.Module.Chain.layerInfo chain
+  let layerCount := layers.size
   let layerStrings := layers.map (fun (_, pytorch) => indentEight pytorch)
   let opList :=
     "[" ++ String.intercalate ", " (layers.map (fun (op, _) => s!"\"{op}\"")).toList ++ "]"

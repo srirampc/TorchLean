@@ -55,9 +55,6 @@ inductive Kind where
   | sigmoid
 deriving Repr, DecidableEq
 
-/-- Explicit spelling of the existing tanh GELU activation; `.gelu` remains compatible. -/
-abbrev Kind.geluTanh : Kind := .gelu
-
 namespace Math
 
 variable {α : Type} [TorchLean.Storage α] [Context α]
@@ -212,9 +209,12 @@ def eluDerivSpec {α : Type} [Zero α] [One α] [LT α] [DecidableRel ((· > ·)
   [MathFunctions α] [Mul α] (x : α) (alpha : α) : α :=
   if x > 0 then 1 else alpha * MathFunctions.exp x
 
-/-- The rational coefficient `44715 / 1000000` in the standard tanh approximation to GELU. -/
-def geluTanhCoeff {α : Type} [TorchLean.Storage α] [Context α] : α :=
-  ((44715 : Nat) : α) / ((1000000 : Nat) : α)
+/-- The GELU tanh coefficient, rounded from the exact rational `44715 / 1000000`.
+
+Casting the fraction once avoids overflowing its denominator in small floating-point formats.
+-/
+def geluTanhCoeff {α : Type} [RatCast α] : α :=
+  Rat.cast (44715 / 1000000 : Rat)
 
 /-- GELU (approximate): the common tanh-based approximation used in many Transformer codebases.
 
@@ -350,8 +350,14 @@ Derivative of sigmoid when the sigmoid output has already been computed.
 Recurrent layers save gate activations during the forward pass, so their backward specs should use
 this shared helper instead of re-defining `s * (1 - s)` locally.
 -/
-def sigmoidOutputDerivSpec {s : Shape} (sigmoidOutput : Tensor α s) : Tensor α s :=
+def sigmoidOutputDerivSpec {α : Type} [TorchLean.Storage α] [One α] [Sub α] [Mul α]
+    {s : Shape} (sigmoidOutput : Tensor α s) : Tensor α s :=
   mulSpec sigmoidOutput (subSpec (Tensor.full s 1) sigmoidOutput)
+
+/-- Derivative of tanh from its cached output, shared by recurrent gate backward passes. -/
+def tanhOutputDerivSpec {α : Type} [TorchLean.Storage α] [One α] [Sub α] [Mul α]
+    {s : Shape} (tanhOutput : Tensor α s) : Tensor α s :=
+  subSpec (Tensor.full s 1) (mulSpec tanhOutput tanhOutput)
 
 /-- Tensor-level tanh derivative (pointwise). -/
 def tanhDerivSpec {s : Shape} (t : Tensor α s) : Tensor α s :=
@@ -604,25 +610,25 @@ def logSoftmaxBackwardSpec {s : Shape} (axis : Nat) [Shape.AxisInBounds axis s]
 def leakyReluSpec {α : Type} [TorchLean.Storage α] [Zero α] [Mul α] [LT α]
     [DecidableRel ((· > ·) : α → α → Prop)] {s : Shape}
     (t : Tensor α s) (αₗ : α) : Tensor α s :=
-  mapSpec (Activation.Math.leakyReluSpec αₗ) t
+  mapSpec (fun x => Activation.Math.leakyReluSpec x αₗ) t
 
 /-- Tensor-level derivative of leaky ReLU (pointwise). -/
 def leakyReluDerivSpec {α : Type} [TorchLean.Storage α] [Zero α] [One α] [LT α]
     [DecidableRel ((· > ·) : α → α → Prop)] {s : Shape}
     (t : Tensor α s) (αₗ : α) : Tensor α s :=
-  mapSpec (Activation.Math.leakyReluDerivSpec αₗ) t
+  mapSpec (fun x => Activation.Math.leakyReluDerivSpec x αₗ) t
 
 /-- Tensor-level ELU (pointwise).  PyTorch analogy: `torch.nn.functional.elu`. -/
 def eluSpec {α : Type} [TorchLean.Storage α] [Zero α] [One α] [LT α]
     [DecidableRel ((· > ·) : α → α → Prop)] [MathFunctions α] [Sub α] [Mul α]
     {s : Shape} (t : Tensor α s) (alpha : α) : Tensor α s :=
-  mapSpec (Activation.Math.eluSpec alpha) t
+  mapSpec (fun x => Activation.Math.eluSpec x alpha) t
 
 /-- Tensor-level derivative of ELU (pointwise). -/
 def eluDerivSpec {α : Type} [TorchLean.Storage α] [Zero α] [One α] [LT α]
     [DecidableRel ((· > ·) : α → α → Prop)] [MathFunctions α] [Mul α]
     {s : Shape} (t : Tensor α s) (alpha : α) : Tensor α s :=
-  mapSpec (Activation.Math.eluDerivSpec alpha) t
+  mapSpec (fun x => Activation.Math.eluDerivSpec x alpha) t
 
 /-- Tensor-level GELU (approximate, pointwise). PyTorch analogy: `gelu(..., approximate="tanh")`. -/
 def geluSpec {α : Type} [TorchLean.Storage α] [Context α] {s : Shape} (t : Tensor α s) :

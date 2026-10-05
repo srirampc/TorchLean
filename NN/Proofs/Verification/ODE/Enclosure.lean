@@ -89,16 +89,6 @@ We implement this by reducing to mathlib’s 1D *fencing theorem*
 2. a lower fence via the same argument applied to `-u`.
 -/
 
-/-- Helper: on $[0,T]$, we have $1+t>0$ (used to pick $\varepsilon$ scaled by $1+t$). -/
-private theorem one_add_pos_of_mem_Icc {T t : ℝ} (ht : t ∈ Icc 0 T) : 0 < (1 + t) := by
-  have : 0 ≤ t := ht.1
-  linarith
-
-/-- Helper: on `[0,T)`, we have `1 + t > 0` (used in the fencing boundary condition). -/
-private theorem one_add_pos_of_mem_Ico {T t : ℝ} (ht : t ∈ Ico 0 T) : 0 < (1 + t) := by
-  have : 0 ≤ t := ht.1
-  linarith
-
 /-- Core local corridor theorem:
 
 If `u` solves the clamped ODE (right-derivative form), and `uL,uU` are sub- and
@@ -108,7 +98,7 @@ This corresponds to the paper's local enclosure result, but the public Lean name
 mathematical content rather than the theorem number.
 -/
 theorem localEnclosure_fromClampedDynamics
-    {T : ℝ} (hT : 0 ≤ T) {f : ℝ → ℝ → ℝ}
+    {T : ℝ} {f : ℝ → ℝ → ℝ}
     {u uL uU uL' uU' : ℝ → ℝ} {a : ℝ}
     (hu_cont : ContinuousOn u (Icc 0 T))
     (hu_der :
@@ -125,8 +115,6 @@ theorem localEnclosure_fromClampedDynamics
     (hU0 : a ≤ uU 0)
     (hLU : ∀ t ∈ Icc 0 T, uL t ≤ uU t) :
     ∀ t ∈ Icc 0 T, uL t ≤ u t ∧ u t ≤ uU t := by
-  have hLU0 : uL 0 ≤ uU 0 := hLU 0 ⟨le_rfl, hT⟩
-
   -- Upper enclosure: `u ≤ uU + ε(1+t)` for all ε>0.
   have upper_eps :
       ∀ ε : ℝ, 0 < ε → ∀ t ∈ Icc 0 T, u t ≤ uU t + ε * (1 + t) := by
@@ -138,12 +126,7 @@ theorem localEnclosure_fromClampedDynamics
     have hB_der : ∀ t ∈ Ico 0 T, HasDerivWithinAt B (B' t) (Ici t) t := by
       intro t ht
       have : HasDerivWithinAt (fun t => ε * (1 + t)) ε (Ici t) t := by
-        change HasDerivWithinAt ((fun _ : ℝ => ε) * ((fun _ : ℝ => (1 : ℝ)) + id)) ε
-          (Ici t) t
-        simpa [one_mul] using
-          (hasDerivWithinAt_const (c := ε) (s := Ici t) (x := t)).mul
-            ((hasDerivWithinAt_const (c := (1 : ℝ)) (s := Ici t) (x := t)).add
-              (hasDerivWithinAt_id t (Ici t)))
+        simpa using ((hasDerivWithinAt_id t (Ici t)).const_add 1).const_mul ε
       change HasDerivWithinAt (uU + fun t : ℝ => ε * (1 + t)) (B' t) (Ici t) t
       simpa [B', add_assoc, add_left_comm, add_comm] using (hU_der t ht).add this
     have h0 : u 0 ≤ B 0 := by
@@ -155,10 +138,10 @@ theorem localEnclosure_fromClampedDynamics
         ∀ t ∈ Ico 0 T, u t = B t →
           f t (clampToCorridor uL uU t (u t)) < B' t := by
       intro t ht htEq
-      have ht1 : 0 < (1 + t) := one_add_pos_of_mem_Ico (T := T) ht
+      have ht1 : 0 < 1 + t := by linarith [ht.1]
       have hLUt : uL t ≤ uU t := hLU t ⟨ht.1, le_of_lt ht.2⟩
       have hUlt : uU t < u t := by
-        have hpos : 0 < ε * (1 + t) := by nlinarith [hε, ht1]
+        have hpos : 0 < ε * (1 + t) := mul_pos hε ht1
         have : uU t < B t := by simpa [B] using (lt_add_of_pos_right (uU t) hpos)
         simpa [htEq] using this
       -- The clamp snaps to the upper wall exactly at a hypothetical first upper crossing.
@@ -196,12 +179,7 @@ theorem localEnclosure_fromClampedDynamics
     have hB_der : ∀ t ∈ Ico 0 T, HasDerivWithinAt B (B' t) (Ici t) t := by
       intro t ht
       have : HasDerivWithinAt (fun t => ε * (1 + t)) ε (Ici t) t := by
-        change HasDerivWithinAt ((fun _ : ℝ => ε) * ((fun _ : ℝ => (1 : ℝ)) + id)) ε
-          (Ici t) t
-        simpa [one_mul] using
-          (hasDerivWithinAt_const (c := ε) (s := Ici t) (x := t)).mul
-            ((hasDerivWithinAt_const (c := (1 : ℝ)) (s := Ici t) (x := t)).add
-              (hasDerivWithinAt_id t (Ici t)))
+        simpa using ((hasDerivWithinAt_id t (Ici t)).const_add 1).const_mul ε
       have hsum :
           HasDerivWithinAt (fun x => ε * (1 + x) + (-uL x)) (ε + (-uL' t)) (Ici t) t := by
         change HasDerivWithinAt ((fun x : ℝ => ε * (1 + x)) + -uL)
@@ -221,12 +199,12 @@ theorem localEnclosure_fromClampedDynamics
     have bound :
         ∀ t ∈ Ico 0 T, F t = B t → F' t < B' t := by
       intro t ht htEq
-      have ht1 : 0 < (1 + t) := one_add_pos_of_mem_Ico (T := T) ht
+      have ht1 : 0 < 1 + t := by linarith [ht.1]
       have hLUt : uL t ≤ uU t := hLU t ⟨ht.1, le_of_lt ht.2⟩
       have hEqU : u t = uL t - ε * (1 + t) := by
         -- `-u = ε(1+t) - uL` ⇒ `u = uL - ε(1+t)`
         linarith [htEq]
-      have hLgt : u t < uL t := by nlinarith [hε, ht1, hEqU]
+      have hLgt : u t < uL t := by linarith [mul_pos hε ht1]
       have htr : clampToCorridor uL uU t (u t) = uL t :=
         clampToCorridor_eq_lower (t := t) (u := u t) hLUt hLgt
       have huL' : uL' t ≤ f t (clampToCorridor uL uU t (u t)) := by
@@ -246,53 +224,19 @@ theorem localEnclosure_fromClampedDynamics
       linarith [this]
     simpa using this
 
-  -- Turn ε-enclosures into exact `≤` / `≥` bounds by contradiction.
+  -- Let `ε ↓ 0` in the two fences: since `1 + t > 0`, the slack `ε * (1 + t)` sweeps every
+  -- positive number.
   intro t ht
-  have ht1 : 0 < (1 + t) := one_add_pos_of_mem_Icc (T := T) ht
+  have ht1 : 0 < 1 + t := by linarith [ht.1]
   have hu_le_uU : u t ≤ uU t := by
-    by_contra h
-    have hlt : uU t < u t := lt_of_not_ge h
-    let δ : ℝ := u t - uU t
-    have hδ : 0 < δ := by simpa [δ] using sub_pos.mpr hlt
-    let ε : ℝ := δ / (2 * (1 + t))
-    have hε : 0 < ε := by
-      have : 0 < 2 * (1 + t) := by nlinarith [ht1]
-      exact div_pos hδ this
-    have hbound := upper_eps ε hε t ht
-    -- From `u ≤ uU + ε(1+t)` with `ε = δ/(2(1+t))`, derive `δ ≤ δ/2`, contradiction.
-    have hδle : δ ≤ ε * (1 + t) := by
-      have : u t - uU t ≤ ε * (1 + t) := by linarith [hbound]
-      simpa [δ] using this
-    have hmul : ε * (1 + t) = δ / 2 := by
-      have ht1ne : (1 + t) ≠ 0 := ne_of_gt ht1
-      -- `δ/(2*(1+t)) * (1+t) = δ/2`
-      dsimp [ε]
-      field_simp [ht1ne]
-      try ring_nf
-    have hδle' : δ ≤ δ / 2 := by simpa [hmul] using hδle
-    have hlt' : (δ / 2) < δ := by nlinarith [hδ]
-    exact (not_lt_of_ge hδle') hlt'
+    refine le_of_forall_pos_le_add fun ε hε => ?_
+    have h := upper_eps (ε / (1 + t)) (div_pos hε ht1) t ht
+    rwa [div_mul_cancel₀ _ ht1.ne'] at h
   have hu_ge_uL : uL t ≤ u t := by
-    by_contra h
-    have hlt : u t < uL t := lt_of_not_ge h
-    let δ : ℝ := uL t - u t
-    have hδ : 0 < δ := by simpa [δ] using sub_pos.mpr hlt
-    let ε : ℝ := δ / (2 * (1 + t))
-    have hε : 0 < ε := by
-      have : 0 < 2 * (1 + t) := by nlinarith [ht1]
-      exact div_pos hδ this
-    have hbound := lower_eps ε hε t ht
-    have hδle : δ ≤ ε * (1 + t) := by
-      have : uL t - u t ≤ ε * (1 + t) := by linarith [hbound]
-      simpa [δ] using this
-    have hmul : ε * (1 + t) = δ / 2 := by
-      have ht1ne : (1 + t) ≠ 0 := ne_of_gt ht1
-      dsimp [ε]
-      field_simp [ht1ne]
-      try ring_nf
-    have hδle' : δ ≤ δ / 2 := by simpa [hmul] using hδle
-    have hlt' : (δ / 2) < δ := by nlinarith [hδ]
-    exact (not_lt_of_ge hδle') hlt'
+    refine le_of_forall_pos_le_add fun ε hε => ?_
+    have h := lower_eps (ε / (1 + t)) (div_pos hε ht1) t ht
+    rw [div_mul_cancel₀ _ ht1.ne'] at h
+    linarith
   exact ⟨hu_ge_uL, hu_le_uU⟩
 
 /--
@@ -304,7 +248,7 @@ interval. This is the exact real-analysis contract that interval/PINN certificat
 must establish before TorchLean can claim a verified ODE solve.
 -/
 theorem localSolutionEnclosed_fromClampedDynamics
-    {T : ℝ} (hT : 0 ≤ T) {f : ℝ → ℝ → ℝ}
+    {T : ℝ} {f : ℝ → ℝ → ℝ}
     {u uL uU uL' uU' : ℝ → ℝ} {a : ℝ}
     (hu_cont : ContinuousOn u (Icc 0 T))
     (hu_der :
@@ -323,9 +267,8 @@ theorem localSolutionEnclosed_fromClampedDynamics
     (∀ t ∈ Icc 0 T, uL t ≤ u t ∧ u t ≤ uU t) ∧
       (∀ t ∈ Ico 0 T, HasDerivWithinAt u (f t (u t)) (Ici t) t) := by
   have hEnc :=
-    localEnclosure_fromClampedDynamics (T := T) hT
-      (f := f) (u := u) (uL := uL) (uU := uU) (uL' := uL') (uU' := uU')
-      (a := a)
+    localEnclosure_fromClampedDynamics (T := T) (f := f)
+      (u := u) (uL := uL) (uU := uU) (uL' := uL') (uU' := uU') (a := a)
       hu_cont hu_der hu0 hL_cont hL_der hL_sub hL0 hU_cont hU_der hU_sup hU0 hLU
   refine ⟨hEnc, ?_⟩
   intro t ht
@@ -360,7 +303,7 @@ noncomputable def constantExtensionAfter (T : ℝ) (g : ℝ → ℝ) : ℝ → �
 The next two lemmas provide derivatives for `constantExtensionAfter T g`:
 - strictly before `T`, the derivative matches `g'` because the extension and `g` agree locally;
 - at/after `T`, the derivative is zero because the extension is locally constant there
-  when viewed within the right-derivative filter `𝓝[Ici t] t`).
+  when viewed within the right-derivative filter `𝓝[Ici t] t`.
 -/
 /-- Derivative of `constantExtensionAfter T g` strictly before `T` matches the derivative of `g`. -/
 private theorem hasDerivWithinAt_constantExtensionAfter_before
@@ -396,10 +339,32 @@ private theorem hasDerivWithinAt_constantExtensionAfter_after
   exact (hasDerivWithinAt_const (c := g T) (s := Ici t) (x := t)).congr_of_mem
     (fun x hx => by simp [hEq x hx]) (by simp)
 
+/-- Freezing a function that is continuous on `[0, T]` after time `T` keeps it continuous on any
+`[0, τ]`: the two pieces agree at the switching time `T`. -/
+private theorem continuousOn_constantExtensionAfter {T τ : ℝ} {g : ℝ → ℝ}
+    (hg : ContinuousOn g (Icc 0 T)) :
+    ContinuousOn (constantExtensionAfter T g) (Icc 0 τ) := by
+  classical
+  have h1 : ContinuousOn g (Icc 0 τ ∩ closure {t : ℝ | t ≤ T}) := by
+    refine hg.mono fun t ht => ⟨ht.1.1, ?_⟩
+    have htcl : t ∈ closure (Iic T) := by simpa [Set.Iic] using ht.2
+    have htIic : t ∈ Iic T := by simpa [closure_Iic] using htcl
+    simpa [Set.Iic] using htIic
+  have hp : ∀ a ∈ Icc 0 τ ∩ frontier {t : ℝ | t ≤ T}, g a = (fun _ => g T) a := by
+    intro a ha
+    have haFront : a ∈ frontier (Iic T) := by simpa [Set.Iic] using ha.2
+    have haT : a ∈ ({T} : Set ℝ) := (frontier_Iic_subset (α := ℝ) T) haFront
+    have : a = T := by simpa using haT
+    simp [this]
+  change ContinuousOn (fun a : ℝ => if a ≤ T then g a else g T) (Icc 0 τ)
+  exact ContinuousOn.if (s := Icc 0 τ) (p := fun t : ℝ => t ≤ T) (f := g)
+    (g := fun _ => g T) hp h1 continuousOn_const
+
 /-- Constant-extension enclosure theorem:
 
 Assume we have `uL,uU` on `[0,T]` satisfying the local corridor hypotheses, and assume the paper's
-extra sign/monotonicity conditions for `f` beyond `T`. Then for any `τ ≥ T`, any solution `u` of
+extra sign/monotonicity conditions for `f` beyond `T`. Then for any horizon `τ` (the case of
+interest being `τ ≥ T`; for `τ ≤ T` the statement reduces to the local one), any solution `u` of
 the clamped ODE built from the constant extensions is enclosed on `[0,τ]` and is a genuine solution
 of `u' = f(t,u)` on `[0,τ]`.
 
@@ -407,7 +372,7 @@ This is the reusable Lean form of the paper's global-in-time step: after the ver
 walls stop moving, and the vector field points inward at those frozen walls.
 -/
 theorem extendedSolutionEnclosed_fromClampedDynamics
-    {T τ : ℝ} (hT : 0 ≤ T) (hτ : T ≤ τ) {f : ℝ → ℝ → ℝ}
+    {T τ : ℝ} (hT : 0 ≤ T) {f : ℝ → ℝ → ℝ}
     {u uL uU uL' uU' : ℝ → ℝ} {a : ℝ}
     (hu_cont : ContinuousOn u (Icc 0 τ))
     (hu_der : ∀ t ∈ Ico 0 τ,
@@ -436,58 +401,10 @@ theorem extendedSolutionEnclosed_fromClampedDynamics
   let uLext' : ℝ → ℝ := fun t => if t < T then uL' t else 0
   let uUext' : ℝ → ℝ := fun t => if t < T then uU' t else 0
 
-  have hLext_cont : ContinuousOn uLext (Icc 0 τ) := by
-    classical
-    -- Continuity by piecing `uL` (on `t ≤ T`) with a constant (on `t ≥ T`).
-    have h1 : ContinuousOn uL (Icc 0 τ ∩ closure {t : ℝ | t ≤ T}) := by
-      have : Icc 0 τ ∩ closure {t : ℝ | t ≤ T} ⊆ Icc 0 T := by
-        intro t ht
-        have ht0 : 0 ≤ t := ht.1.1
-        have htT : t ≤ T := by
-          have htcl : t ∈ closure (Iic T) := by
-            simpa [Set.Iic] using ht.2
-          have htIic : t ∈ Iic T := by simpa [closure_Iic] using htcl
-          simpa [Set.Iic] using htIic
-        exact ⟨ht0, htT⟩
-      exact hL_cont.mono this
-    have h2 : ContinuousOn (fun _ : ℝ => uL T) (Icc 0 τ ∩ closure {t : ℝ | ¬t ≤ T}) :=
-      continuousOn_const
-    have hp : ∀ a ∈ (Icc 0 τ) ∩ frontier {t : ℝ | t ≤ T}, uL a = (fun _ => uL T) a := by
-      intro a ha
-      have haFront : a ∈ frontier (Iic T) := by
-        simpa [Set.Iic] using ha.2
-      have haT : a ∈ ({T} : Set ℝ) := (frontier_Iic_subset (α := ℝ) T) haFront
-      have : a = T := by simpa using haT
-      simp [this]
-    change ContinuousOn (fun a : ℝ => if a ≤ T then uL a else uL T) (Icc 0 τ)
-    exact ContinuousOn.if (s := Icc 0 τ) (p := fun t : ℝ => t ≤ T) (f := uL)
-      (g := fun _ => uL T) hp h1 h2
-
-  have hUext_cont : ContinuousOn uUext (Icc 0 τ) := by
-    classical
-    have h1 : ContinuousOn uU (Icc 0 τ ∩ closure {t : ℝ | t ≤ T}) := by
-      have : Icc 0 τ ∩ closure {t : ℝ | t ≤ T} ⊆ Icc 0 T := by
-        intro t ht
-        have ht0 : 0 ≤ t := ht.1.1
-        have htT : t ≤ T := by
-          have htcl : t ∈ closure (Iic T) := by
-            simpa [Set.Iic] using ht.2
-          have htIic : t ∈ Iic T := by simpa [closure_Iic] using htcl
-          simpa [Set.Iic] using htIic
-        exact ⟨ht0, htT⟩
-      exact hU_cont.mono this
-    have h2 : ContinuousOn (fun _ : ℝ => uU T) (Icc 0 τ ∩ closure {t : ℝ | ¬t ≤ T}) :=
-      continuousOn_const
-    have hp : ∀ a ∈ (Icc 0 τ) ∩ frontier {t : ℝ | t ≤ T}, uU a = (fun _ => uU T) a := by
-      intro a ha
-      have haFront : a ∈ frontier (Iic T) := by
-        simpa [Set.Iic] using ha.2
-      have haT : a ∈ ({T} : Set ℝ) := (frontier_Iic_subset (α := ℝ) T) haFront
-      have : a = T := by simpa using haT
-      simp [this]
-    change ContinuousOn (fun a : ℝ => if a ≤ T then uU a else uU T) (Icc 0 τ)
-    exact ContinuousOn.if (s := Icc 0 τ) (p := fun t : ℝ => t ≤ T) (f := uU)
-      (g := fun _ => uU T) hp h1 h2
+  have hLext_cont : ContinuousOn uLext (Icc 0 τ) :=
+    continuousOn_constantExtensionAfter (τ := τ) hL_cont
+  have hUext_cont : ContinuousOn uUext (Icc 0 τ) :=
+    continuousOn_constantExtensionAfter (τ := τ) hU_cont
 
   have hLext_der : ∀ t ∈ Ico 0 τ, HasDerivWithinAt uLext (uLext' t) (Ici t) t := by
     intro t ht
@@ -573,7 +490,7 @@ theorem extendedSolutionEnclosed_fromClampedDynamics
   -- Apply the local corridor theorem on `[0,τ]` with the extended corridor.
   exact localSolutionEnclosed_fromClampedDynamics (T := τ) (f := f)
     (u := u) (uL := uLext) (uU := uUext) (uL' := uLext') (uU' := uUext') (a := a)
-    (by linarith [hT, hτ]) hu_cont hu_der hu0
+    hu_cont hu_der hu0
     hLext_cont hLext_der hLext_sub hLext0
     hUext_cont hUext_der hUext_sup hUext0 hLUext
 

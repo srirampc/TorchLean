@@ -6,14 +6,14 @@ Authors: TorchLean Team
 
 module
 
-public import NN.Runtime.Autograd.Engine.Cuda.Kernels
+public import NN.Runtime.Autograd.Engine.LibTorch.Kernels
 public import NN.Tests.Runtime.Cuda.Utils
 
 /-!
 # CUDA kernel coverage: diagonal selective scan
 
-This checks the low-level buffer primitive backing the first Mamba/SSM runtime path. The test runs
-both with real CUDA (`lake test -K cuda=true`) and with the CPU stub backend.
+This checks the low-level buffer primitive backing the first Mamba/SSM runtime path under
+`scripts/lake.sh -Kcuda=true test`.
 -/
 
 @[expose] public section
@@ -22,15 +22,9 @@ namespace Tests
 namespace Cuda
 namespace SelectiveScan
 
-open Runtime.Autograd.Cuda
+open Runtime.Autograd.LibTorch
 
-/-!
-The float-buffer assertions and the `floatArray` literal wrapper come from `Cuda.Utils`, where the
-rest of this directory already gets them. This file used to define its own `assertFloatArrayApprox`
-that open-coded the absolute difference. The shared one goes through `Utils.assertApprox`, so these
-checks now also reject `NaN` and infinities: with `d := NaN` the old `d > tol` test was false, which
-means a kernel returning `NaN` used to pass this suite silently.
--/
+-- Shared buffer assertions check tolerances and reject nonfinite values.
 open Tests.Cuda.Utils (floatArray assertFloatArrayApprox)
 
 def run : IO Unit := do
@@ -107,6 +101,29 @@ def run : IO Unit := do
   ]
   assertFloatArrayApprox "selectiveScanDiagVarFwd" (Buffer.toFloatArray outVar) expectedVar
     (tol := 1e-5)
+
+  -- Nonuniform cotangents expose time-index shifts in the variable-coefficient VJP.
+  let dyVar := Buffer.ofFloatArray (floatArray #[1.0, -2.0, 3.0, 4.0, -1.0, 0.5])
+  let (daVar, dbVar, dxVar, dhVar) :=
+    Buffer.selectiveScanDiagVarBwd Avar Bvar Xvar h0 outVar dyVar 3 2
+  assertFloatArrayApprox "selectiveScanDiagVarBwd.dA" (Buffer.toFloatArray daVar)
+    (floatArray #[1.4, -1.075, 10.0, 7.175, -2.25, 1.65625]) (tol := 1e-5)
+  assertFloatArrayApprox "selectiveScanDiagVarBwd.dB" (Buffer.toFloatArray dbVar)
+    (floatArray #[2.8, 1.075, 16.0, -8.2, 0.0, 1.5]) (tol := 1e-5)
+  assertFloatArrayApprox "selectiveScanDiagVarBwd.dX" (Buffer.toFloatArray dxVar)
+    (floatArray #[1.4, 2.15, 2.0, -4.1, -0.25, 0.25]) (tol := 1e-5)
+  assertFloatArrayApprox "selectiveScanDiagVarBwd.dH0" (Buffer.toFloatArray dhVar)
+    (floatArray #[0.7, 0.26875]) (tol := 1e-5)
+
+  let (daEmpty, dbEmpty, dxEmpty, dhEmpty) :=
+    Buffer.selectiveScanDiagBwd A B emptyX h0 emptyOut emptyX 0 2
+  for (label, buffer, expected) in [
+      ("dA", daEmpty, floatArray #[0.0, 0.0]),
+      ("dB", dbEmpty, floatArray #[0.0, 0.0]),
+      ("dX", dxEmpty, floatArray #[]),
+      ("dH0", dhEmpty, floatArray #[0.0, 0.0])] do
+    assertFloatArrayApprox s!"selectiveScanDiagBwd.empty.{label}"
+      (Buffer.toFloatArray buffer) expected (tol := 0.0)
 
   IO.println "== CUDA selective_scan_diag_fwd: OK =="
 

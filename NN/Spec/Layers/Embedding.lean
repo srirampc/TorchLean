@@ -39,7 +39,7 @@ namespace Spec
 
 open TorchLean TorchLean.Tensor
 
-variable {α : Type} [TorchLean.Storage α] [Context α]
+variable {α : Type} [TorchLean.Storage α] [Add α] [Mul α] [Zero α]
 
 /-- A trainable table with `vocab` rows of width `embedDim`. -/
 structure Embedding (vocab embedDim : Nat) (α : Type)

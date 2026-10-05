@@ -18,8 +18,8 @@ Forward (runtime→spec) approximation lemmas for non-elementwise linear algebra
 This extends `NN.Proofs.RuntimeApprox.NF.Ops` with bounds for the core
 sum-of-products patterns that appear in linear layers and matrix multiplication.
 
-The central trick is to separate proof-friendly scalar fold bounds for dot products from
-tensor-level wrappers that turn those fold bounds into `approxTensor` theorems and graph nodes.
+The development separates scalar fold bounds for dot products from the tensor-level wrappers that
+turn those fold bounds into `approxTensor` theorems and graph nodes.
 
 ## PyTorch correspondence / citations
 This is the proof analogue of linear algebra building blocks used throughout PyTorch models:
@@ -50,19 +50,6 @@ variable {β : Radix} {fexp : ℤ → ℤ} [ValidExp fexp]
 variable {rnd : ℝ → ℤ} [ValidRndToNearest rnd]
 
 local notation "R" => NF β fexp rnd
-
--- ---------------------------------------------------------------------------
--- Scalar access helpers
--- ---------------------------------------------------------------------------
-
-/-- Extract matrix entry `(i,j)` from a runtime matrix tensor as an `NF` scalar. -/
-def matGet {m n : Nat} (A : Tensor R [m, n]) (i : Fin m) (j : Fin n) : R :=
-  Spec.get2 A i j
-
-/-- Extract matrix entry `(i,j)` from a spec matrix tensor as a real scalar. -/
-private def matGetS {m n : Nat} (A : SpecTensor [m, n]) (i : Fin m) (j : Fin n)
-  : SpecScalar :=
-  Spec.get2 A i j
 
 -- ---------------------------------------------------------------------------
 -- Exact shape ops preserve approximation (`unsqueeze`, `transpose`)
@@ -98,7 +85,7 @@ theorem approxTensor_unsqueeze_spec {shape : Shape} {xS : SpecTensor shape}
           simpa only [Tensor.unstack_dim] using
             ih (Nat.lt_succ_iff.mp (by
               simpa [Shape.rank, Nat.add_comm] using hAxis))
-              (approxTensor_dim_get hx i)
+              (approxTensor_unstack hx i)
 
 omit [ValidExp fexp] [ValidRndToNearest rnd] in
 /-- Swapping any pair of adjacent axes preserves the approximation error budget. -/
@@ -121,7 +108,7 @@ theorem approxTensor_swapAdjacentAxes {shape : Shape} {depth : Nat}
               apply approxTensor_dim_of_forall (approxTensor_eps_nonneg hx)
               intro i
               simpa only [Tensor.unstack_dim, Spec.get] using
-                (approxTensor_dim_get (approxTensor_dim_get hx i) j)
+                (approxTensor_unstack (approxTensor_unstack hx i) j)
   | succ depth ih =>
       cases shape with
       | scalar => simpa [Tensor.swapAdjacentAxes] using hx
@@ -129,7 +116,7 @@ theorem approxTensor_swapAdjacentAxes {shape : Shape} {depth : Nat}
           simp only [Tensor.swapAdjacentAxes]
           apply approxTensor_dim_of_forall (approxTensor_eps_nonneg hx)
           intro i
-          simpa only [Tensor.unstack_dim] using ih (approxTensor_dim_get hx i)
+          simpa only [Tensor.unstack_dim] using ih (approxTensor_unstack hx i)
 
 -- ---------------------------------------------------------------------------
 -- Dot-product (sum of products) bound over a list of indices
@@ -163,7 +150,7 @@ def dotStep {n : Nat} (epsa epsb : ℝ) (aR bR : Fin n → R) :
 /--
 Closed-form bound for a runtime dot-product over `List.finRange n`.
 
-`dot_bound epsa epsb aR bR` is the accumulated `eps` component produced by folding `dotStep`
+`dotBound epsa epsb aR bR` is the accumulated `eps` component produced by folding `dotStep`
 starting from 0.
 -/
 def dotBound {n : Nat} (epsa epsb : ℝ) (aR bR : Fin n → R) : ℝ :=
@@ -171,42 +158,14 @@ def dotBound {n : Nat} (epsa epsb : ℝ) (aR bR : Fin n → R) : ℝ :=
   ((List.finRange n).foldl (dotStep (β := β) (fexp := fexp) (rnd := rnd) epsa epsb aR bR)
       ((0 : R), initEps)).2
 
-omit [ValidRndToNearest rnd] in
-/-- The `i`-th output entry of `Spec.matVecMulSpec` is the dot-product of row `i` with `v`. -/
-private theorem vec_get_mat_vec_mul_spec {m n : Nat}
-    (A : Tensor R [m, n]) (v : Tensor R [n]) (i : Fin m) :
-    TorchLean.Tensor.getScalar (Spec.matVecMulSpec (α := R) A v) i =
+/-- Entry `i` of `Spec.matVecMulSpec A v` is the ordered dot product of row `i` of `A` with `v`. -/
+private theorem getScalar_matVecMulSpec {α : Type} [TorchLean.Storage α] [Add α] [Mul α] [Zero α]
+    {m n : Nat} (A : Tensor α [m, n]) (v : Tensor α [n]) (i : Fin m) :
+    TorchLean.Tensor.getScalar (Spec.matVecMulSpec A v) i =
       (List.finRange n).foldl
-        (fun acc k =>
-          acc +
-            matGet A i k * TorchLean.Tensor.getScalar v k)
-        (0 : R) := by
-  change
-    (TorchLean.Tensor.Internal.Rep.ofFn fun
-      coordinate : TorchLean.Tensor.Internal.Coord [m] =>
-      (List.finRange n).foldl
-        (fun sum k => sum + Spec.get2 A coordinate.1 k * v.getScalar k) 0)
-        (i, PUnit.unit) =
-      _
-  exact TorchLean.Tensor.Internal.Rep.get_ofFn _ _
-
-/-- Spec (real) version of `vec_get_mat_vec_mul_spec`. -/
-private theorem vec_getS_mat_vec_mul_spec {m n : Nat}
-    (A : SpecTensor [m, n]) (v : SpecTensor [n]) (i : Fin m) :
-    TorchLean.Tensor.getScalar (Spec.matVecMulSpec (α := SpecScalar) A v) i =
-      (List.finRange n).foldl
-        (fun acc k =>
-          acc +
-            matGetS A i k * TorchLean.Tensor.getScalar v k)
-        (0 : SpecScalar) := by
-  change
-    (TorchLean.Tensor.Internal.Rep.ofFn fun
-      coordinate : TorchLean.Tensor.Internal.Coord [m] =>
-      (List.finRange n).foldl
-        (fun sum k => sum + Spec.get2 A coordinate.1 k * v.getScalar k) 0)
-        (i, PUnit.unit) =
-      _
-  exact TorchLean.Tensor.Internal.Rep.get_ofFn _ _
+        (fun acc k => acc + Spec.get2 A i k * TorchLean.Tensor.getScalar v k) (0 : α) := by
+  rw [TorchLean.Tensor.getScalar_eq_apply]
+  simp only [Spec.matVecMulSpec, TorchLean.Tensor.Internal.Rep.get_ofFn]
 
 /--
 Dot-product approximation bound over an arbitrary list of indices.
@@ -226,13 +185,12 @@ private theorem approx_dot_list {n : Nat} (l : List (Fin n))
         (toSpec (β := β) (fexp := fexp) (rnd := rnd)
             (l.foldl (fun acc k => acc + aR k * bR k) accR) -
           l.foldl (fun acc k => acc + aS k * bS k) accS) ≤
-      (l.foldl (dotStep (β := β) (fexp := fexp) (rnd := rnd) epsa epsb aR bR) (accR, epsAcc)).2 :=
-        by
+      (l.foldl (dotStep (β := β) (fexp := fexp) (rnd := rnd) epsa epsb aR bR)
+        (accR, epsAcc)).2 := by
   induction l generalizing accS accR epsAcc with
   | nil =>
       simpa using hAcc
   | cons k tl ih =>
-      -- unfold one step
       have hProd :
           abs
               (toSpec (β := β) (fexp := fexp) (rnd := rnd) (aR k * bR k) - aS k * bS k) ≤
@@ -257,7 +215,6 @@ private theorem approx_dot_list {n : Nat} (l : List (Fin n))
               ulp β fexp
                   (toSpec (β := β) (fexp := fexp) (rnd := rnd) accR +
                     toSpec (β := β) (fexp := fexp) (rnd := rnd) (aR k * bR k)) / 2 := by
-        -- apply the scalar add bound with `acc` and `prod`
         have := approx_add_nf (β := β) (fexp := fexp) (rnd := rnd)
           (x := accS) (y := aS k * bS k) (xR := accR) (yR := aR k * bR k)
           (epsx := epsAcc)
@@ -268,10 +225,8 @@ private theorem approx_dot_list {n : Nat} (l : List (Fin n))
                   (toSpec (β := β) (fexp := fexp) (rnd := rnd) (aR k) *
                     toSpec (β := β) (fexp := fexp) (rnd := rnd) (bR k)) / 2))
           hAcc hProd
-        -- the lemma already has the correct RHS shape
         simpa [add_assoc, add_left_comm, add_comm] using this
 
-      -- apply IH to the tail, starting from the updated accumulator
       have ih' :=
         ih (accS := accS + aS k * bS k) (accR := accR + aR k * bR k)
           (epsAcc :=
@@ -285,8 +240,6 @@ private theorem approx_dot_list {n : Nat} (l : List (Fin n))
                   (toSpec (β := β) (fexp := fexp) (rnd := rnd) accR +
                     toSpec (β := β) (fexp := fexp) (rnd := rnd) (aR k * bR k)) / 2)
           hStep
-
-      -- rewrite folds for `cons`
       simpa [List.foldl, dotStep, add_assoc, add_left_comm, add_comm] using ih'
 
 /--
@@ -303,7 +256,6 @@ private theorem approx_dot_finRange {n : Nat}
             ((List.finRange n).foldl (fun acc k => acc + aR k * bR k) (0 : R)) -
           (List.finRange n).foldl (fun acc k => acc + aS k * bS k) (0 : SpecScalar)) ≤
       dotBound (β := β) (fexp := fexp) (rnd := rnd) epsa epsb aR bR := by
-    -- base approximation for the initial accumulator `0`
   have h0 :
       abs (toSpec (β := β) (fexp := fexp) (rnd := rnd) (0 : R) - (0 : SpecScalar)) ≤
         ulp β fexp 0 / 2 := by
@@ -330,15 +282,15 @@ def matVecMulBoundTensor {m n : Nat} (epsA epsV : ℝ)
     SpecTensor [m] :=
   Tensor.dim (fun i =>
     Tensor.scalar (dotBound (β := β) (fexp := fexp) (rnd := rnd) (n := n) epsA epsV
-      (fun k => matGet (β := β) (fexp := fexp) (rnd := rnd) A i k)
+      (fun k => Spec.get2 A i k)
       (fun k => TorchLean.Tensor.getScalar v k)))
 
 /--
 Forward approximation bound for matrix-vector multiplication.
 
 In words: if `A` and `v` are each approximated by runtime `AR`/`vR` within `epsA`/`epsV`,
-then `mat_vec_mul_spec AS vS` is approximated by `mat_vec_mul_spec AR vR`, with error bounded by
-`linf_norm (mat_vec_mul_bound_tensor epsA epsV AR vR)`.
+then `matVecMulSpec AS vS` is approximated by `matVecMulSpec AR vR`, with error bounded by
+`linfNorm (matVecMulBoundTensor epsA epsV AR vR)`.
 -/
 theorem approxTensor_mat_vec_mul_spec {m n : Nat} :
     ∀ {AS : SpecTensor [m, n]} {vS : SpecTensor [n]}
@@ -349,29 +301,28 @@ theorem approxTensor_mat_vec_mul_spec {m n : Nat} :
         approxTensor (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd))
           (Spec.matVecMulSpec (α := SpecScalar) AS vS)
           (Spec.matVecMulSpec (α := R) AR vR)
-          (linfNorm (matVecMulBoundTensor (β := β) (fexp := fexp) (rnd := rnd) (m := m) (n :=
-            n) epsA epsV AR vR)) := by
+          (linfNorm (matVecMulBoundTensor (β := β) (fexp := fexp) (rnd := rnd)
+            (m := m) (n := n) epsA epsV AR vR)) := by
   intro AS vS AR vR epsA epsV hA hv
   let bnd : SpecTensor [m] :=
     matVecMulBoundTensor (β := β) (fexp := fexp) (rnd := rnd)
       (m := m) (n := n) epsA epsV AR vR
   let B : ℝ := linfNorm bnd
   have hB_nonneg : 0 ≤ B := by
-    simpa [B] using linf_norm_nonneg (t := bnd)
+    simpa [B] using linfNorm_nonneg (t := bnd)
   refine approxTensor_dim_of_forall hB_nonneg ?_
   intro i
   apply (approxTensor_scalar_iff (α := R)
     (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd))).2
   have hAik : ∀ k : Fin n,
-      abs (toSpec (β := β) (fexp := fexp) (rnd := rnd)
-          (matGet (β := β) (fexp := fexp) (rnd := rnd) AR i k) -
-        matGetS AS i k) ≤ epsA := by
+      abs (toSpec (β := β) (fexp := fexp) (rnd := rnd) (Spec.get2 AR i k) -
+        Spec.get2 AS i k) ≤ epsA := by
     intro k
     change abs
       (toSpec (β := β) (fexp := fexp) (rnd := rnd) ((AR.unstack i).unstack k).item -
         ((AS.unstack i).unstack k).item) ≤ epsA
-    have hEntry := approxTensor_dim_get
-      (approxTensor_dim_get (α := R)
+    have hEntry := approxTensor_unstack
+      (approxTensor_unstack (α := R)
         (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd)) hA i) k
     exact (approxTensor_scalar_iff (α := R)
       (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd))).1 hEntry
@@ -382,32 +333,31 @@ theorem approxTensor_mat_vec_mul_spec {m n : Nat} :
     change abs
       (toSpec (β := β) (fexp := fexp) (rnd := rnd) (vR.unstack k).item -
         (vS.unstack k).item) ≤ epsV
-    have hEntry := approxTensor_dim_get (α := R)
+    have hEntry := approxTensor_unstack (α := R)
       (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd)) hv k
     exact (approxTensor_scalar_iff (α := R)
       (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd))).1 hEntry
   have hdot :=
     approx_dot_finRange (β := β) (fexp := fexp) (rnd := rnd) (n := n)
-      (aS := fun k => matGetS AS i k)
+      (aS := fun k => Spec.get2 AS i k)
       (bS := fun k => vS.getScalar k)
-      (aR := fun k => matGet (β := β) (fexp := fexp) (rnd := rnd) AR i k)
+      (aR := fun k => Spec.get2 AR i k)
       (bR := fun k => vR.getScalar k)
       (epsa := epsA) (epsb := epsV) hAik hvk
   have hEntryAbs :
       abs (dotBound (β := β) (fexp := fexp) (rnd := rnd) (n := n) epsA epsV
-        (fun k => matGet (β := β) (fexp := fexp) (rnd := rnd) AR i k)
+        (fun k => Spec.get2 AR i k)
         (fun k => vR.getScalar k)) ≤ B := by
     simpa [bnd, matVecMulBoundTensor, dotBound, B, linfNorm,
       RuntimeApprox.linfNorm, tensorLinfNorm, Numerics.MathFunctions.abs, SpecScalar] using
-      linf_norm_le_get_dim (t := bnd) i
+      linfNorm_unstack_le (t := bnd) i
   have hBound :
       dotBound (β := β) (fexp := fexp) (rnd := rnd) (n := n) epsA epsV
-        (fun k => matGet (β := β) (fexp := fexp) (rnd := rnd) AR i k)
+        (fun k => Spec.get2 AR i k)
         (fun k => vR.getScalar k) ≤ B :=
     le_trans (le_abs_self _) hEntryAbs
   have hOutput := le_trans hdot hBound
-  rw [← vec_get_mat_vec_mul_spec (β := β) (fexp := fexp) (rnd := rnd) AR vR i,
-    ← vec_getS_mat_vec_mul_spec AS vS i] at hOutput
+  rw [← getScalar_matVecMulSpec AR vR i, ← getScalar_matVecMulSpec AS vS i] at hOutput
   change abs
     (toSpec (β := β) (fexp := fexp) (rnd := rnd)
         ((Spec.matVecMulSpec (α := R) AR vR).unstack i).item -
@@ -422,7 +372,7 @@ theorem approxTensor_mat_vec_mul_spec {m n : Nat} :
 Per-entry bound tensor for `matMulSpec`.
 
 Entry `(i,j)` is a dot-product bound for row `i` of `A` dotted with column `j` of `B`, using
-  `dotBound`.
+`dotBound`.
 -/
 def matMulBoundTensor {m n p : Nat} (epsA epsB : ℝ)
     (A : Tensor R [m, n]) (B : Tensor R [n, p]) :
@@ -430,47 +380,26 @@ def matMulBoundTensor {m n p : Nat} (epsA epsB : ℝ)
   Tensor.dim (fun i =>
     Tensor.dim (fun j =>
       Tensor.scalar (dotBound (β := β) (fexp := fexp) (rnd := rnd) (n := n) epsA epsB
-        (fun k => matGet (β := β) (fexp := fexp) (rnd := rnd) A i k)
-        (fun k => matGet (β := β) (fexp := fexp) (rnd := rnd) B k j))))
+        (fun k => Spec.get2 A i k)
+        (fun k => Spec.get2 B k j))))
 
-omit [ValidRndToNearest rnd] in
-/-- The matrix entry `(i,j)` of `Spec.matMulSpec` is the dot-product of row `i` of `A` with column
-  `j` of `B`. -/
-private theorem mat_get_mat_mul_spec {m n p : Nat}
-    (A : Tensor R [m, n]) (B : Tensor R [n, p])
-    (i : Fin m) (j : Fin p) :
-    matGet (β := β) (fexp := fexp) (rnd := rnd) (Spec.matMulSpec (α := R) A B) i j =
+/-- Entry `(i, j)` of `Spec.matMulSpec A B` is the ordered dot product of row `i` of `A` with
+column `j` of `B`. -/
+private theorem get2_matMulSpec {α : Type} [TorchLean.Storage α] [Add α] [Mul α] [Zero α]
+    {m n p : Nat} (A : Tensor α [m, n]) (B : Tensor α [n, p]) (i : Fin m) (j : Fin p) :
+    Spec.get2 (Spec.matMulSpec A B) i j =
       (List.finRange n).foldl
-        (fun acc k =>
-          acc +
-            matGet (β := β) (fexp := fexp) (rnd := rnd) A i k *
-              matGet (β := β) (fexp := fexp) (rnd := rnd) B k j)
-        (0 : R) := by
-  simp only [matGet, Spec.matMulSpec, Spec.get2, Tensor.getScalar, Spec.get,
-    Tensor.unstack, Tensor.item, TorchLean.Tensor.Internal.Rep.unstack_apply,
-    TorchLean.Tensor.Internal.Rep.get_ofFn]
-
-/-- Spec (real) version of `mat_get_mat_mul_spec`. -/
-private theorem mat_getS_mat_mul_spec {m n p : Nat}
-    (A : SpecTensor [m, n]) (B : SpecTensor [n, p])
-    (i : Fin m) (j : Fin p) :
-    matGetS (Spec.matMulSpec (α := SpecScalar) A B) i j =
-      (List.finRange n).foldl
-        (fun acc k =>
-          acc +
-            matGetS A i k * matGetS B k j)
-        (0 : SpecScalar) := by
-  simp only [matGetS, Spec.matMulSpec, Spec.get2, Tensor.getScalar, Spec.get,
+        (fun acc k => acc + Spec.get2 A i k * Spec.get2 B k j) (0 : α) := by
+  simp only [Spec.matMulSpec, Spec.get2, Tensor.getScalar, Spec.get,
     Tensor.unstack, Tensor.item, TorchLean.Tensor.Internal.Rep.unstack_apply,
     TorchLean.Tensor.Internal.Rep.get_ofFn]
 
 /--
 Forward approximation bound for matrix-matrix multiplication.
 
-In words: if `A` and `B` are approximated by runtime matrices `AR`/`BR` within
-  `epsA`/`epsB`,
-then `mat_mul_spec AS BS` is approximated by `mat_mul_spec AR BR`, with error bounded by
-`linf_norm (mat_mul_bound_tensor epsA epsB AR BR)`.
+In words: if `A` and `B` are approximated by runtime matrices `AR`/`BR` within `epsA`/`epsB`,
+then `matMulSpec AS BS` is approximated by `matMulSpec AR BR`, with error bounded by
+`linfNorm (matMulBoundTensor epsA epsB AR BR)`.
 -/
 theorem approxTensor_mat_mul_spec {m n p : Nat} :
     ∀ {AS : SpecTensor [m, n]} {BS : SpecTensor [n, p]}
@@ -481,15 +410,15 @@ theorem approxTensor_mat_mul_spec {m n p : Nat} :
         approxTensor (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd))
           (Spec.matMulSpec (α := SpecScalar) AS BS)
           (Spec.matMulSpec (α := R) AR BR)
-          (linfNorm (matMulBoundTensor (β := β) (fexp := fexp) (rnd := rnd) (m := m) (n := n) (p
-            := p) epsA epsB AR BR)) := by
+          (linfNorm (matMulBoundTensor (β := β) (fexp := fexp) (rnd := rnd)
+            (m := m) (n := n) (p := p) epsA epsB AR BR)) := by
   intro AS BS AR BR epsA epsB hA hB
   let bnd : SpecTensor [m, p] :=
     matMulBoundTensor (β := β) (fexp := fexp) (rnd := rnd)
       (m := m) (n := n) (p := p) epsA epsB AR BR
   let B : ℝ := linfNorm bnd
   have hB_nonneg : 0 ≤ B := by
-    simpa [B] using linf_norm_nonneg (t := bnd)
+    simpa [B] using linfNorm_nonneg (t := bnd)
   refine approxTensor_dim_of_forall hB_nonneg ?_
   intro i
   refine approxTensor_dim_of_forall hB_nonneg ?_
@@ -497,57 +426,54 @@ theorem approxTensor_mat_mul_spec {m n p : Nat} :
   apply (approxTensor_scalar_iff (α := R)
     (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd))).2
   have hAik : ∀ k : Fin n,
-      abs (toSpec (β := β) (fexp := fexp) (rnd := rnd)
-          (matGet (β := β) (fexp := fexp) (rnd := rnd) AR i k) -
-        matGetS AS i k) ≤ epsA := by
+      abs (toSpec (β := β) (fexp := fexp) (rnd := rnd) (Spec.get2 AR i k) -
+        Spec.get2 AS i k) ≤ epsA := by
     intro k
     change abs
       (toSpec (β := β) (fexp := fexp) (rnd := rnd) ((AR.unstack i).unstack k).item -
         ((AS.unstack i).unstack k).item) ≤ epsA
-    have hEntry := approxTensor_dim_get
-      (approxTensor_dim_get (α := R)
+    have hEntry := approxTensor_unstack
+      (approxTensor_unstack (α := R)
         (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd)) hA i) k
     exact (approxTensor_scalar_iff (α := R)
       (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd))).1 hEntry
   have hBkj : ∀ k : Fin n,
-      abs (toSpec (β := β) (fexp := fexp) (rnd := rnd)
-          (matGet (β := β) (fexp := fexp) (rnd := rnd) BR k j) -
-        matGetS BS k j) ≤ epsB := by
+      abs (toSpec (β := β) (fexp := fexp) (rnd := rnd) (Spec.get2 BR k j) -
+        Spec.get2 BS k j) ≤ epsB := by
     intro k
     change abs
       (toSpec (β := β) (fexp := fexp) (rnd := rnd) ((BR.unstack k).unstack j).item -
         ((BS.unstack k).unstack j).item) ≤ epsB
-    have hEntry := approxTensor_dim_get
-      (approxTensor_dim_get (α := R)
+    have hEntry := approxTensor_unstack
+      (approxTensor_unstack (α := R)
         (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd)) hB k) j
     exact (approxTensor_scalar_iff (α := R)
       (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd))).1 hEntry
   have hdot :=
     approx_dot_finRange (β := β) (fexp := fexp) (rnd := rnd) (n := n)
-      (aS := fun k => matGetS AS i k)
-      (bS := fun k => matGetS BS k j)
-      (aR := fun k => matGet (β := β) (fexp := fexp) (rnd := rnd) AR i k)
-      (bR := fun k => matGet (β := β) (fexp := fexp) (rnd := rnd) BR k j)
+      (aS := fun k => Spec.get2 AS i k)
+      (bS := fun k => Spec.get2 BS k j)
+      (aR := fun k => Spec.get2 AR i k)
+      (bR := fun k => Spec.get2 BR k j)
       (epsa := epsA) (epsb := epsB) hAik hBkj
   have hEntryNorm :
       linfNorm ((bnd.unstack i).unstack j) ≤ B :=
-    le_trans (linf_norm_le_get_dim (t := bnd.unstack i) j)
-      (linf_norm_le_get_dim (t := bnd) i)
+    le_trans (linfNorm_unstack_le (t := bnd.unstack i) j)
+      (linfNorm_unstack_le (t := bnd) i)
   have hEntryAbs :
       abs (dotBound (β := β) (fexp := fexp) (rnd := rnd) (n := n) epsA epsB
-        (fun k => matGet (β := β) (fexp := fexp) (rnd := rnd) AR i k)
-        (fun k => matGet (β := β) (fexp := fexp) (rnd := rnd) BR k j)) ≤ B := by
+        (fun k => Spec.get2 AR i k)
+        (fun k => Spec.get2 BR k j)) ≤ B := by
     simpa [bnd, matMulBoundTensor, dotBound, B, linfNorm,
       RuntimeApprox.linfNorm, tensorLinfNorm, Numerics.MathFunctions.abs, SpecScalar]
       using hEntryNorm
   have hBound :
       dotBound (β := β) (fexp := fexp) (rnd := rnd) (n := n) epsA epsB
-        (fun k => matGet (β := β) (fexp := fexp) (rnd := rnd) AR i k)
-        (fun k => matGet (β := β) (fexp := fexp) (rnd := rnd) BR k j) ≤ B :=
+        (fun k => Spec.get2 AR i k)
+        (fun k => Spec.get2 BR k j) ≤ B :=
     le_trans (le_abs_self _) hEntryAbs
   have hOutput := le_trans hdot hBound
-  rw [← mat_get_mat_mul_spec (β := β) (fexp := fexp) (rnd := rnd) AR BR i j,
-    ← mat_getS_mat_mul_spec AS BS i j] at hOutput
+  rw [← get2_matMulSpec AR BR i j, ← get2_matMulSpec AS BS i j] at hOutput
   change abs
     (toSpec (β := β) (fexp := fexp) (rnd := rnd)
         (((Spec.matMulSpec (α := R) AR BR).unstack i).unstack j).item -
@@ -566,10 +492,8 @@ transposes can be used inside larger verified graphs.
 -/
 def matrixTransposeNode {Γ : List Shape} {m n : Nat}
     (x : Idx Γ (.dim m (.dim n .scalar))) :
-    FwdNode (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd)) Γ (.dim n (.dim m
-      .scalar)) :=
-by
-  classical
+    FwdNode (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd)) Γ
+      (.dim n (.dim m .scalar)) := by
   refine
     { forwardSpec := fun ctx =>
         Tensor.swapAdjacentAxes (depth := 0) (getIdx (α := SpecScalar)
@@ -591,13 +515,12 @@ by
 `FwdNode` for matrix-vector multiplication.
 
 The bound is computed by `matVecMulBoundTensor` and then reduced to a scalar budget via
-  `linfNorm`.
+`linfNorm`.
 -/
 def matVecMulNode {Γ : List Shape} {m n : Nat}
     (A : Idx Γ (.dim m (.dim n .scalar))) (v : Idx Γ (.dim n .scalar)) :
-    FwdNode (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd)) Γ (.dim m .scalar) :=
-by
-  classical
+    FwdNode (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd)) Γ
+      (.dim m .scalar) := by
   refine
     { forwardSpec := fun ctx =>
         Spec.matVecMulSpec (α := SpecScalar)
@@ -635,10 +558,8 @@ The bound is computed by `matMulBoundTensor` and then reduced to a scalar budget
 -/
 def matMulNode {Γ : List Shape} {m n p : Nat}
     (A : Idx Γ (.dim m (.dim n .scalar))) (B : Idx Γ (.dim n (.dim p .scalar))) :
-    FwdNode (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd)) Γ (.dim m (.dim p
-      .scalar)) :=
-by
-  classical
+    FwdNode (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd)) Γ
+      (.dim m (.dim p .scalar)) := by
   refine
     { forwardSpec := fun ctx =>
         Spec.matMulSpec (α := SpecScalar)

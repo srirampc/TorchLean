@@ -78,8 +78,7 @@ export Runtime.Autograd.Torch
    relu silu gelu sigmoid tanh softplus exp sin cos log inv safeLog
    sum flatten mseLoss)
 export Runtime.Autograd.Model
-  (mapLeading maxPool avgPool smoothMaxPool layerNorm multiHeadAttention
-   multiHeadAttentionOutputBias conv convTranspose)
+  (mapLeading maxPool avgPool smoothMaxPool layerNorm attention conv convTranspose)
 export Runtime.Autograd.Model.F (permute softmax logSoftmax)
 
 export Runtime.Autograd.Torch (ExecutionMode)
@@ -106,7 +105,7 @@ export NN.Backend (Device)
 
 namespace Device
 
-export NN.Backend.Device (cpu cuda rocm metal wasm tpu trainium custom external)
+export NN.Backend.Device (cpu gpu cuda rocm metal wasm tpu trainium custom external)
 
 /--
 Parse a public device selector. `auto` chooses the portable CPU runtime; every other value is

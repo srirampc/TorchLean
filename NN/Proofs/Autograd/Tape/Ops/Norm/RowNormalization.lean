@@ -120,8 +120,7 @@ def centD (i : Fin m) (j : Fin n) : Vec (matSize m n) →L[ℝ] ℝ :=
 /-- The centering derivative subtracts the perturbation's own row mean.
 
 Centering is linear too, so its derivative is itself; the nonlinearity in row normalization enters
-only
-through the variance and the square root below. -/
+only through the variance and the square root below. -/
 @[simp] theorem centD_apply (i : Fin m) (j : Fin n) (dX : Vec (matSize m n)) :
     centD (m := m) (n := n) i j dX = dX (idxMN (m := m) (n := n) i j) - rowMean dX i := by
   simp [centD]
@@ -250,7 +249,7 @@ theorem colOf_idxMN (i : Fin m) (j : Fin n) : colOf (idxMN (m := m) (n := n) i j
 /-- Reindex a sum over `Fin (vecSize n)` as a sum over `Fin n`. -/
 theorem sum_vecSize (f : Fin (vecSize n) → ℝ) :
     ∑ j : Fin (vecSize n), f j = ∑ j : Fin n, f (Fin.cast (vecSize_eq n).symm j) :=
-  (Fintype.sum_equiv (finCongr (vecSize_eq n).symm) _ _ (fun _ => rfl)).symm
+  (Fin.sum_congr' f (vecSize_eq n).symm).symm
 
 /-- The tape row-mean map computes `rowMean`. -/
 theorem rowMeanCLM_eq (x : Vec (matSize m n)) (i : Fin m) :
@@ -258,7 +257,7 @@ theorem rowMeanCLM_eq (x : Vec (matSize m n)) (i : Fin m) :
   show ((1 : ℝ) / (n : ℝ)) * ∑ j : Fin (vecSize n), x (finProdFinEquiv (i, j)) = rowMean x i
   rw [rowMean, one_div, div_eq_inv_mul]
   congr 1
-  exact Fintype.sum_equiv (finCongr (vecSize_eq n)) _ _ (fun _ => rfl)
+  exact sum_vecSize fun j => x (finProdFinEquiv (i, j))
 
 /-- The tape row-broadcast map at `idxMN i j` reads entry `i`. -/
 theorem broadcastRowCLM_idxMN (v : Vec m) (i : Fin m) (j : Fin n) :
@@ -284,8 +283,7 @@ def nrmVec (X : Vec (matSize m n)) (ε : ℝ) : Vec (matSize m n) :=
   simp [nrmVec]
 
 /-- Closed-form JVP of `nrmVec` at `X`, packaged as a continuous linear map. -/
-def nrmJvpCLM (X : Vec (matSize m n)) (ε : ℝ) : Vec (matSize m n) →L[ℝ] Vec (matSize m n) := by
-  classical
+def nrmJvpCLM (X : Vec (matSize m n)) (ε : ℝ) : Vec (matSize m n) →L[ℝ] Vec (matSize m n) :=
   let fLin : Vec (matSize m n) →ₗ[ℝ] Vec (matSize m n) :=
     { toFun := fun dX => vecOfFun (n := matSize m n) fun ip => nrmJvp X ε dX (rowOf ip) (colOf ip)
       map_add' := by
@@ -302,20 +300,20 @@ def nrmJvpCLM (X : Vec (matSize m n)) (ε : ℝ) : Vec (matSize m n) →L[ℝ] V
         simp only [vecOfFun_ofLp, PiLp.smul_apply, smul_eq_mul, RingHom.id_apply, nrmJvp,
           rowMean, mul_assoc, ← Finset.mul_sum]
         ring }
-  exact { toLinearMap := fLin, cont := LinearMap.continuous_of_finiteDimensional fLin }
+  { toLinearMap := fLin, cont := LinearMap.continuous_of_finiteDimensional fLin }
 
-/-- The bundled JVP agrees with the closed-form `nrmJvp` coordinatewise.
-
-Writing the derivative down in closed form and then proving `HasFDerivAt` against it, rather than
-deriving it compositionally, is what keeps the `ε` guard visible: the formula is only the derivative
-because `ε > 0` keeps the denominator away from zero. -/
+/-- The bundled JVP agrees with the closed-form `nrmJvp` coordinatewise. -/
 @[simp] theorem nrmJvpCLM_apply (X : Vec (matSize m n)) (ε : ℝ) (dX : Vec (matSize m n))
     (ip : Fin (matSize m n)) :
     nrmJvpCLM X ε dX ip = nrmJvp X ε dX (rowOf ip) (colOf ip) := by
   simp [nrmJvpCLM]
 
 /-- Row normalization of a flattened matrix is differentiable for positive `ε`, with the
-closed-form JVP as derivative. -/
+closed-form JVP as derivative.
+
+Writing the derivative down in closed form and then proving `HasFDerivAt` against it, rather than
+deriving it compositionally, is what keeps the `ε` guard visible: the formula is only the derivative
+because `ε > 0` keeps the denominator away from zero. -/
 theorem hasFDerivAt_nrmVec (hn : 0 < n) {ε : ℝ} (hε : 0 < ε) (X : Vec (matSize m n)) :
     HasFDerivAt (fun Y : Vec (matSize m n) => nrmVec Y ε) (nrmJvpCLM X ε) X := by
   rw [← hasFDerivWithinAt_univ, hasFDerivWithinAt_euclidean]

@@ -12,5 +12,5 @@ public import NN.API.Data.Text
 /-!
 # Data
 
-Public dataset constructors, file-backed sources, text batches, and checkpoint operations.
+Public dataset constructors, file-backed sources, synthetic grids, and text batches.
 -/

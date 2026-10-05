@@ -66,7 +66,7 @@ def x0PredFromEps (sched : VPSchedule α T) (x_t epsHat : Tensor α s)
 Predict $x_0$ by evaluating the denoiser at time `t / T` and applying `x0PredFromEps`.
 
 Call `x0PredFromEps` directly when another part of the sampler already needs the same denoiser
-output. Both entry points use the same coefficient arithmetic and denominator protection.
+output. Both entry points use the same coefficient arithmetic and additive epsilon shift.
 -/
 def x0Pred (sched : VPSchedule α T) (model : EpsModel α s) (x_t : Tensor α s)
     (t : Fin (T + 1)) : Tensor α s :=
@@ -82,7 +82,8 @@ We index reverse steps by `k : Fin T` corresponding to the transition $t=k+1\to 
 
 Implementation details:
 - time embedding passed to the model is $t/T$ (see `VPSchedule.timeOfIndex`).
-- we use epsilon-protected scalar division in the coefficient formulas to stay total.
+- coefficient divisions add `Context.defaultEpsilon` to the denominator. The shift is part
+  of this sampler's formula and does not guarantee nonzero denominators or finite outputs.
 -/
 def ddpmStep (sched : VPSchedule α T) (model : EpsModel α s)
     (k : Fin T) (x_t : Tensor α s) (z : Tensor α s) : Tensor α s :=
@@ -102,7 +103,7 @@ def ddpmStep (sched : VPSchedule α T) (model : EpsModel α s)
   let mean : Tensor α s :=
     Tensor.scaleSpec (x_t - Tensor.scaleSpec epsHat coeff) inv_sqrt_α_t
 
-  -- Variance for the reverse step: β̃_t = ((1-ᾱ_{t-1})/(1-ᾱ_t)) * β_t.
+  -- Shifted reverse variance: β̃_t = ((1-ᾱ_{t-1})/(1-ᾱ_t+ε)) * β_t.
   let β_tilde : α := safeDiv (1 - αbar_prev) (1 - αbar_t) * β_t
   let σ_t : α := sqrtNonneg β_tilde
   mean + Tensor.scaleSpec z σ_t

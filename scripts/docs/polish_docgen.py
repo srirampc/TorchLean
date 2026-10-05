@@ -2,7 +2,7 @@
 """Polish DocGen output for the public TorchLean website.
 
 DocGen owns the declaration pages. This script only adds a nicer landing page and a thin visual
-layer after `lake build NN:docs` has produced `home_page/docs`.
+layer after `scripts/lake.sh build TorchLeanDocs:docs` and copying its output to `home_page/docs`.
 
 The script keeps DocGen as the source of truth for search data, declaration pages,
 source links, sidebars, and module navigation. The post-processing below is small
@@ -1236,6 +1236,16 @@ body:not(.tl-docs-index) :not(pre) > code {
   overflow-wrap: anywhere;
   word-break: break-word;
   white-space: normal !important;
+}
+
+/* Inline-code wrapping must not collapse line breaks or indentation in examples. */
+body:not(.tl-docs-index) pre code,
+body:not(.tl-docs-index) pre code *,
+body:not(.tl-docs-index) .mod_doc pre code,
+body:not(.tl-docs-index) .mod_doc pre code * {
+  overflow-wrap: normal;
+  word-break: normal;
+  white-space: pre !important;
 }
 
 #kinds {

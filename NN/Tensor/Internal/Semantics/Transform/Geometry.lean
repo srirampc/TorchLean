@@ -208,34 +208,22 @@ theorem repeat_fiber_card (checked : CheckedTransform)
         checked.value.axisLength).prod := by
   let hAxes :=
     checked.valid.normalization.input_axes_subset_output_of_repeat hKind
-  let coordinateFiberEquiv :
-      Fiber (checked.inputCoordinateOfOutput hAxes) inputCoordinate ≃
-        Fiber (AxisTuple.select hAxes)
-          (checked.inputTensorCoordinateEquiv inputCoordinate) :=
-    { toFun := fun outputCoordinate =>
-        ⟨checked.outputTensorCoordinateEquiv outputCoordinate.1, by
-          apply checked.inputTensorCoordinateEquiv.symm.injective
-          simpa only [inputCoordinateOfOutput, Equiv.symm_apply_apply] using
-            outputCoordinate.2⟩
-      invFun := fun outputAxisCoordinate =>
-        ⟨checked.outputTensorCoordinateEquiv.symm outputAxisCoordinate.1, by
-          simp only [inputCoordinateOfOutput, Equiv.apply_symm_apply,
-            outputAxisCoordinate.2, Equiv.symm_apply_apply]⟩
-      left_inv := fun outputCoordinate => by
-        apply Subtype.ext
-        exact checked.outputTensorCoordinateEquiv.symm_apply_apply
-          outputCoordinate.1
-      right_inv := fun outputAxisCoordinate => by
-        apply Subtype.ext
-        exact checked.outputTensorCoordinateEquiv.apply_symm_apply
-          outputAxisCoordinate.1 }
   calc
     Fintype.card
           (Fiber (checked.inputCoordinateOfOutput hAxes) inputCoordinate) =
         Fintype.card
+          (Fiber (checked.inputTensorCoordinateEquiv.symm ∘ AxisTuple.select hAxes)
+            inputCoordinate) := by
+      simpa only [inputCoordinateOfOutput, Function.comp_def,
+        Equiv.apply_symm_apply] using
+        Fiber.card_comp_equiv checked.outputTensorCoordinateEquiv
+          (checked.inputCoordinateOfOutput hAxes) inputCoordinate
+    _ =
+        Fintype.card
           (Fiber (AxisTuple.select hAxes)
             (checked.inputTensorCoordinateEquiv inputCoordinate)) :=
-      Fintype.card_congr coordinateFiberEquiv
+      (Fiber.card_target_equiv checked.inputTensorCoordinateEquiv.symm
+        (AxisTuple.select hAxes) inputCoordinate).symm
     _ =
         ((checked.value.normalized.outputAxes.filter fun axis =>
             !checked.value.normalized.inputAxes.contains axis).map

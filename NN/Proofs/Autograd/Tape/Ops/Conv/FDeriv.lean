@@ -63,8 +63,7 @@ theorem getAtOrZero_channel_eq_sum_indicator {α : Type} [TorchLean.Storage α] 
       ∑ i : MultiIndex dims,
         if indices = i.toList then channelGet x channel i else 0 := by
   rw [show x = Tensor.dim (Tensor.unstack x) from (Tensor.dim_unstack x).symm]
-  rw [getAtOrZero_dim_cons]
-  simp only [channel.isLt, ↓reduceDIte]
+  simp only [get_at_or_zero_dim_cons, channel.isLt, ↓reduceDIte, Tensor.unstack_dim]
   rw [getAtOrZero_eq_sum_indicator]
   apply Finset.sum_congr rfl
   intro i _
@@ -109,12 +108,10 @@ theorem channelGet_convCoreSpec
   intro inCh _
   apply Finset.sum_congr rfl
   intro kIdx _
-  have hWeight := getAtOrZero_toList
-    (dims := outC :: inC :: (Tensor.to kernel (List Nat))) weights (outCh, (inCh, kIdx))
   have hWeight' :
       getAtOrZero weights (outCh.val :: inCh.val :: kIdx.toList) =
-        MultiIndex.get weights (outCh, (inCh, kIdx)) := by
-    simpa only [MultiIndex.toList] using hWeight
+        MultiIndex.get weights (outCh, (inCh, kIdx)) :=
+    getAtOrZero_toList _ weights (outCh, (inCh, kIdx))
   change
     (match mkInputIdx? outIdx.toList kIdx.toList (Tensor.to stride (List Nat))
         (Tensor.to padding (List Nat)) with
@@ -223,13 +220,10 @@ theorem channelPairGet_convKernelDerivSpec
   simp only [zero_add]
   apply Finset.sum_congr rfl
   intro outIdx _
-  have hGrad := getAtOrZero_toList
-    (dims := outC :: (Tensor.to (convOutSpatial inSpatial kernel stride padding) (List Nat)))
-    gradOutput (outCh, outIdx)
   have hGrad' :
       getAtOrZero gradOutput (outCh.val :: outIdx.toList) =
-        MultiIndex.get gradOutput (outCh, outIdx) := by
-    simpa only [MultiIndex.toList] using hGrad
+        MultiIndex.get gradOutput (outCh, outIdx) :=
+    getAtOrZero_toList _ gradOutput (outCh, outIdx)
   change
     (match mkInputIdx? outIdx.toList kIdx.toList (Tensor.to stride (List Nat))
         (Tensor.to padding (List Nat)) with
@@ -244,32 +238,6 @@ theorem channelPairGet_convKernelDerivSpec
   rw [hGrad']
 
 /-- One bias-gradient coordinate is the spatial sum of the output cotangent. -/
-theorem channelGet_convBiasDerivSpec
-    {d inC outC : Nat}
-    {kernel stride padding inSpatial : TorchLean.Tensor Nat [d]}
-    (layer : ConvSpec d inC outC kernel stride padding ℝ)
-    (input : Tensor ℝ (Shape.ofList (inC :: (Tensor.to inSpatial (List Nat)))))
-    (gradOutput : Tensor ℝ
-      (Shape.ofList
-        (outC :: (Tensor.to (convOutSpatial inSpatial kernel stride padding) (List Nat)))))
-    (outCh : Fin outC) :
-    channelGet (dims := []) (convBiasDerivSpec layer input gradOutput) outCh PUnit.unit =
-      ∑ outIdx : MultiIndex (Tensor.to (convOutSpatial inSpatial kernel stride padding) (List Nat)),
-        channelGet gradOutput outCh outIdx := by
-  simp only [channelGet, convBiasDerivSpec]
-  rw [MultiIndex.get_vector_eq_getScalar, TorchLean.Tensor.getScalar_dim]
-  rw [foldlIndices_add]
-  simp only [zero_add]
-  apply Finset.sum_congr rfl
-  intro outIdx _
-  have hGrad := getAtOrZero_toList
-    (dims := outC :: (Tensor.to (convOutSpatial inSpatial kernel stride padding) (List Nat)))
-    gradOutput (outCh, outIdx)
-  change getAtOrZero gradOutput (outCh.val :: outIdx.toList) =
-    MultiIndex.get gradOutput (outCh, outIdx)
-  simpa only [MultiIndex.toList] using hGrad
-
-/-- A bias-gradient coordinate in the ordinary rank-one tensor view. -/
 theorem getScalar_convBiasDerivSpec
     {d inC outC : Nat}
     {kernel stride padding inSpatial : TorchLean.Tensor Nat [d]}
@@ -291,11 +259,7 @@ theorem getScalar_convBiasDerivSpec
     MultiIndex.get (dims := outC ::
       (Tensor.to (convOutSpatial inSpatial kernel stride padding) (List Nat)))
       gradOutput (outCh, outIdx)
-  have hGrad := getAtOrZero_toList
-    (dims := outC :: (Tensor.to (convOutSpatial inSpatial kernel stride padding) (List Nat)))
-    gradOutput (outCh, outIdx)
-  convert hGrad using 1
-  rfl
+  exact getAtOrZero_toList _ gradOutput (outCh, outIdx)
 
 /-- Broadcasting a bias reads the same channel value at every spatial coordinate. -/
 theorem channelGet_convBiasBroadcastSpec
@@ -344,12 +308,10 @@ theorem channelGet_convInputDerivSpec
   intro outCh _
   apply Finset.sum_congr rfl
   intro kIdx _
-  have hWeight := getAtOrZero_toList
-    (dims := outC :: inC :: (Tensor.to kernel (List Nat))) layer.kernel (outCh, (inCh, kIdx))
   have hWeight' :
       getAtOrZero layer.kernel (outCh.val :: inCh.val :: kIdx.toList) =
-        MultiIndex.get layer.kernel (outCh, (inCh, kIdx)) := by
-    simpa only [MultiIndex.toList] using hWeight
+        MultiIndex.get layer.kernel (outCh, (inCh, kIdx)) :=
+    getAtOrZero_toList _ layer.kernel (outCh, (inCh, kIdx))
   split <;> simp_all [channelPairGet]
 
 /-- The implemented input gradient is multiplication by the transposed coefficient matrix. -/

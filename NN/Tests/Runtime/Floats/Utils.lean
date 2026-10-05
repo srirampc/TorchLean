@@ -15,8 +15,7 @@ public import NN.Tests.Utils
 
 Shared helpers for the Float runtime checks.
 
-These helpers keep the curated test files focused on the checked behavior instead of re-declaring
-the same tensor accessors and approximate equality checks.
+These helpers share array comparisons, JSON decoding, dependency checks, and checked tensor lookup.
 -/
 
 @[expose] public section
@@ -29,13 +28,6 @@ open Lean
 namespace Tests
 namespace Floats
 namespace Utils
-
-/-!
-`assertApprox` and `assertFinite` are not defined here. Both are in `Tests.Utils`, which the CUDA
-suites can also reach, and this module's `1e-5` default moved there unchanged, so the `assertApprox`
-calls in this directory mean exactly what they meant before. Files that `open Tests.Floats.Utils`
-for the bare spelling now open `Tests.Utils` alongside it.
--/
 
 /-- Approximate equality for same-length float arrays. -/
 def assertArrayApprox (label : String) (got expected : Array Float) (tol : Float := 2e-5) :
@@ -55,22 +47,10 @@ def jsonFloatArrayField (j : Json) (key : String) : Except String (Array Float) 
     | .num n => pure n.toFloat
     | other => throw s!"field `{key}` contained non-number: {other}"
 
-/-- Whether the active Python environment can import PyTorch. -/
+/-- Check PyTorch availability, failing when required interop checks are enabled. -/
 def pythonHasTorch : IO Bool := do
-  TorchLean.External.Process.pythonCanImport #["torch"]
-
-/-- Read the scalar payload from a scalar tensor. -/
-def scalarVal (t : Tensor Float Shape.scalar) : Float :=
-  t.item
-
-/-- Read one coordinate from a vector tensor. -/
-def vecVal {n : Nat} (t : Tensor Float [n]) (i : Fin n) : Float :=
-  Tensor.getScalar t i
-
-/-- Read one coordinate from a matrix tensor. -/
-def matVal {rows cols : Nat} (t : Tensor Float [rows, cols])
-    (i : Fin rows) (j : Fin cols) : Float :=
-  Tensor.get2 t i j
+  Tests.Utils.checkInteropDependency "torch"
+    (← TorchLean.External.Process.pythonCanImport #["torch"])
 
 /-- Read one scalar coordinate from a tensor of arbitrary rank.
 

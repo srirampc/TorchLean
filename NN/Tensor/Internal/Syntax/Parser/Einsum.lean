@@ -18,11 +18,13 @@ canonical rendering round trip.
 
 namespace TorchLean.Tensor.Internal.Syntax
 
+universe u
+
 open Parser.Impl
 
 namespace Parser.Impl
 
-/-- Split an einsum input token stream at top-level commas. -/
+/-- Split an einsum input token stream at comma tokens. -/
 def splitCommas : List Token → List Token → List (List Token) → List (List Token)
   | [], currentRev, groupsRev => (currentRev.reverse :: groupsRev).reverse
   | token :: rest, currentRev, groupsRev =>
@@ -34,7 +36,7 @@ end Parser.Impl
 
 /-- Intercalating a nonempty group list extended by one group exposes the final separator. -/
 private theorem intercalate_append_singleton
-    {α : Type} (separator : List α) (groups : List (List α))
+    {α : Type u} (separator : List α) (groups : List (List α))
     (last : List α) (hGroups : groups ≠ []) :
     List.intercalate separator (groups ++ [last]) =
       List.intercalate separator groups ++ separator ++ last := by
@@ -50,7 +52,7 @@ private theorem intercalate_append_singleton
 
 /-- Intercalating reversed groups separates the final group exactly when one precedes it. -/
 private theorem intercalate_reverse_cons
-    {α : Type} (separator group : List α)
+    {α : Type u} (separator group : List α)
     (groups : List (List α)) :
     List.intercalate separator (group :: groups).reverse =
       List.intercalate separator groups.reverse ++
@@ -385,7 +387,7 @@ def parseEinsumPattern (source : String)
   let (inputTokens, arrow, outputTokens) ← splitArrow (Span.point whole.stop) tokens []
   let inputs ← parseEinsumInputs policy (splitCommas inputTokens [] []) []
   let outputSpan := Span.between arrow.span.stop whole.stop
-  let output ← parseExpressionTokens policy .einsumOutput outputSpan outputTokens {}
+  let output ← parseExpressionTokens policy .parseShape outputSpan outputTokens {}
   .ok { inputs, arrow := arrow.span, output, span := whole }
 
 /-- Successful component parses assemble into a successful einsum parse. -/
@@ -403,7 +405,7 @@ private theorem parseEinsumPattern_eq_ok_of_components
           (splitCommas inputTokens [] []) [] =
         .ok inputs)
     (hOutput :
-      parseExpressionTokens IdentifierPolicy.pythonUnicode .einsumOutput
+      parseExpressionTokens IdentifierPolicy.pythonUnicode .parseShape
           (Span.between arrow.span.stop (sourceSpan source).stop)
           outputTokens {} =
         .ok output) :
@@ -423,7 +425,7 @@ private theorem parseEinsumPattern_eq_ok_of_components
         parseEinsumInputs IdentifierPolicy.pythonUnicode
           (splitCommas parsedInputTokens [] []) []
       let parsedOutput ←
-        parseExpressionTokens IdentifierPolicy.pythonUnicode .einsumOutput
+        parseExpressionTokens IdentifierPolicy.pythonUnicode .parseShape
           (Span.between parsedArrow.span.stop (sourceSpan source).stop)
           parsedOutputTokens {}
       .ok
@@ -444,7 +446,7 @@ private theorem parseEinsumPattern_eq_ok_of_components
         parseEinsumInputs IdentifierPolicy.pythonUnicode
           (splitCommas inputTokens [] []) []
       let parsedOutput ←
-        parseExpressionTokens IdentifierPolicy.pythonUnicode .einsumOutput
+        parseExpressionTokens IdentifierPolicy.pythonUnicode .parseShape
           (Span.between arrow.span.stop (sourceSpan source).stop)
           outputTokens {}
       .ok
@@ -462,7 +464,7 @@ private theorem parseEinsumPattern_eq_ok_of_components
   change
     (do
       let parsedOutput ←
-        parseExpressionTokens IdentifierPolicy.pythonUnicode .einsumOutput
+        parseExpressionTokens IdentifierPolicy.pythonUnicode .parseShape
           (Span.between arrow.span.stop (sourceSpan source).stop)
           outputTokens {}
       .ok
@@ -493,7 +495,7 @@ private theorem parseEinsumPattern_eq_ok_decomposition
         parseEinsumInputs IdentifierPolicy.pythonUnicode
             (splitCommas sourceInputTokens [] []) [] =
           .ok sourceInputs ∧
-        parseExpressionTokens IdentifierPolicy.pythonUnicode .einsumOutput
+        parseExpressionTokens IdentifierPolicy.pythonUnicode .parseShape
             (Span.between sourceArrow.span.stop (sourceSpan source).stop)
             sourceOutputTokens {} =
           .ok sourceOutput ∧
@@ -518,7 +520,7 @@ private theorem parseEinsumPattern_eq_ok_decomposition
             parseEinsumInputs IdentifierPolicy.pythonUnicode
               (splitCommas parsedInputTokens [] []) []
           let parsedOutput ←
-            parseExpressionTokens IdentifierPolicy.pythonUnicode .einsumOutput
+            parseExpressionTokens IdentifierPolicy.pythonUnicode .parseShape
               (Span.between parsedArrow.span.stop (sourceSpan source).stop)
               parsedOutputTokens {}
           .ok
@@ -547,7 +549,7 @@ private theorem parseEinsumPattern_eq_ok_decomposition
                   (splitCommas sourceInputTokens [] []) []
               let parsedOutput ←
                 parseExpressionTokens IdentifierPolicy.pythonUnicode
-                  .einsumOutput
+                  .parseShape
                   (Span.between sourceArrow.span.stop
                     (sourceSpan source).stop)
                   sourceOutputTokens {}
@@ -573,7 +575,7 @@ private theorem parseEinsumPattern_eq_ok_decomposition
                 (do
                   let parsedOutput ←
                     parseExpressionTokens IdentifierPolicy.pythonUnicode
-                      .einsumOutput
+                      .parseShape
                       (Span.between sourceArrow.span.stop
                         (sourceSpan source).stop)
                       sourceOutputTokens {}
@@ -586,7 +588,7 @@ private theorem parseEinsumPattern_eq_ok_decomposition
                   .ok pattern at hParse
               cases hSourceOutput :
                   parseExpressionTokens IdentifierPolicy.pythonUnicode
-                    .einsumOutput
+                    .parseShape
                     (Span.between sourceArrow.span.stop
                       (sourceSpan source).stop)
                     sourceOutputTokens {} with
@@ -654,7 +656,7 @@ theorem parseEinsumPattern_render_eq_ok (source : String)
   simp at hInputKinds
   have hOutputKinds :=
     tokenKinds_eq_of_parseExpressionTokens_eq_ok
-      IdentifierPolicy.pythonUnicode .einsumOutput
+      IdentifierPolicy.pythonUnicode .parseShape
       (Span.between sourceArrow.span.stop (sourceSpan source).stop)
       sourceOutputTokens {} sourceOutput hSourceOutput
   simp [ExpressionState.tokenKinds] at hOutputKinds
@@ -783,7 +785,7 @@ theorem parseEinsumPattern_render_eq_ok (source : String)
         ⟨rfl, rfl, rfl⟩
       obtain
           ⟨targetOutput, hTargetOutputParse, hTargetOutputExpressionKinds⟩ :=
-        parseExpressionTokens_canonical .einsumOutput
+        parseExpressionTokens_canonical .parseShape
           (Span.between sourceArrow.span.stop (sourceSpan source).stop)
           (Span.between targetArrow.span.stop targetWhole.stop)
           sourceOutputTokens targetOutputTokens {} {} sourceOutput

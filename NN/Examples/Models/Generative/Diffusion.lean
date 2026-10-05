@@ -45,8 +45,8 @@ python3 scripts/datasets/torchlean_data_convert.py image-folder \
 Train on ImageNet64 and save visual artifacts:
 
 ```bash
-lake -R -K cuda=true build
-CUDA_VISIBLE_DEVICES=0 lake -R -K cuda=true exe torchlean diffusion --device cuda \
+scripts/lake.sh -Kcuda=true build
+CUDA_VISIBLE_DEVICES=0 scripts/lake.sh -Kcuda=true exe torchlean diffusion --device cuda \
   --dataset imagenet64 --n-total 800 --steps 1000 --hidden-c 8 --T 100 --beta-end 0.12 \
   --log data/examples/diffusion_trainlog.json \
   --reference-ppm data/examples/diffusion_reference.ppm \
@@ -59,7 +59,7 @@ CIFAR run:
 
 ```bash
 python3 scripts/datasets/download_example_data.py --cifar10
-lake -R -K cuda=true exe torchlean diffusion --device cuda --dataset cifar10 --n-total 1 \
+scripts/lake.sh -Kcuda=true exe torchlean diffusion --device cuda --dataset cifar10 --n-total 1 \
   --steps 1 --hidden-c 2 --T 2
 ```
 -/
@@ -197,20 +197,14 @@ def conditionedPredictor {c h w T : Nat}
         (by simpa [output] using sample) time
   predict conditioned
 
-/--
-Diffusion command-line options after parsing.
-
-The inherited pieces make the CLI shape explicit: ordinary training flags come from `Support`,
-diffusion math lives in `Support.DiffusionScheduleFlags`, visual outputs live in
-`Support.ImageArtifactFlags`, and the epsilon-network width is the model-specific knob.
--/
+/-- Training, schedule, and image-output options for the diffusion example. -/
 structure Options where
   /-- Optimizer, step, batching, and logging controls. -/
   training : CLI.Training.OptimizerOptions
   /-- Diffusion timestep and beta schedule. -/
-  schedule : Support.DiffusionScheduleFlags
+  schedule : Support.Schedule.Options
   /-- Optional generated and reconstructed image paths. -/
-  artifacts : Support.ImageArtifactFlags
+  artifacts : Support.Image.OutputOptions
   /-- Hidden channel width of the epsilon predictor. -/
   hiddenChannels : Nat
 deriving Repr
@@ -250,7 +244,7 @@ def Training.run
       Trainer.RunConfig.forObjective
         (Trainer.RunConfig.fromRuntime runtime
           { optimizer := optim.adam { learningRate := config.training.learningRate } })
-        .meanSquaredError
+        .mse
         (seed := runtime.seed)
   trainer.printSummary
   let curveEvery : Nat := Nat.max 1 (config.training.steps / 50)
@@ -263,9 +257,7 @@ def Training.run
             schedule (by simpa [output] using x0)
             (seed := runtime.seed) (step := step + 1))
     evalSample
-    { steps := config.training.steps
-      cudaMemorySampleEvery := config.training.cudaMemorySampleEvery
-      logDestination := .disabled }
+    (config.training.trainOptions (enableLog := false))
     (curveEvery := curveEvery)
   let curve := trained.curve
   trained.printSummary
@@ -279,9 +271,9 @@ def Training.run
         (seed := runtime.seed) (step := 999)
       let x_t ← diffusion.reverseDdim (conditionedPredictor trained.predict) alphaBars x_T
       Data.Image.writeFirstRgbPpm path (x_t.map fun x => (x + 1.0) / 2.0)
-  match config.artifacts.reconstructPpm? with
-  | none => pure ()
-  | some path => do
+  match config.artifacts.noisyPpm?, config.artifacts.reconstructPpm? with
+  | none, none => pure ()
+  | noisyPath?, reconstructionPath? => do
       let tIdxNat :=
         Nat.min
           (config.artifacts.reconstructStep?.getD (config.schedule.T / 4))
@@ -294,13 +286,16 @@ def Training.run
         (seed := runtime.seed) (step := 1001)
       let noisyImage : Tensor Float (output c h w) :=
         evalX0.scale sqrtAb + eps.scale sqrtOneMinusAb
-      match config.artifacts.noisyPpm? with
+      match noisyPath? with
       | none => pure ()
       | some noisyPath =>
           Data.Image.writeFirstRgbPpm noisyPath (noisyImage.map fun x => (x + 1.0) / 2.0)
-      let x_t ← diffusion.reverseDdimFrom
-        (conditionedPredictor trained.predict) alphaBars tIdx noisyImage
-      Data.Image.writeFirstRgbPpm path (x_t.map fun x => (x + 1.0) / 2.0)
+      match reconstructionPath? with
+      | none => pure ()
+      | some path => do
+          let x_t ← diffusion.reverseDdimFrom
+            (conditionedPredictor trained.predict) alphaBars tIdx noisyImage
+          Data.Image.writeFirstRgbPpm path (x_t.map fun x => (x + 1.0) / 2.0)
   pure curve
 
 /-- Train the diffusion example after rejecting an empty timestep schedule. -/
@@ -319,8 +314,8 @@ namespace Options
 /--
 Parse diffusion-specific training flags after runtime/device flags and dataset flags.
 
-The shared parser handles `--steps`, `--log`, and `--cuda-mem-watch`; this parser handles diffusion
-schedule parameters, model width, and optional PPM artifact paths.
+The shared parser handles `--steps`, `--batch-size`, `--log`, and `--cuda-mem-watch`; this parser
+handles diffusion schedule parameters, model width, and optional PPM artifact paths.
 -/
 def parse (args : List String) :
     Except String (Options × List String) := do
@@ -329,19 +324,13 @@ def parse (args : List String) :
       (defaultSteps := 50) (defaultLearningRate := 1e-3)
   let (hiddenChannels, rest) ←
     CLI.takePositiveNatFlag rest exeName "hidden-c" (default := 16)
-  let (schedule, rest) ← Support.DiffusionScheduleFlags.parse rest
-  let (artifacts, rest) ← Support.ImageArtifactFlags.parse rest
+  let (schedule, rest) ← Support.Schedule.Options.parse rest
+  let (artifacts, rest) ← Support.Image.OutputOptions.parse rest
   pure ({ training := train,
           schedule,
           artifacts,
           hiddenChannels },
         rest)
-
-/-- Dataset/source note fields shared by the CIFAR-10 and ImageNet64 branches. -/
-def sourceNotes
-    (datasetName : String)
-    (data : Support.NpyDataFlags) : Array String :=
-  Support.NpyDataFlags.trainLogNotes data datasetName
 
 /-- TrainLog note fields shared by all diffusion dataset branches. -/
 def logNotes
@@ -354,17 +343,10 @@ def logNotes
       Support.deviceNote runtime,
       s!"lr={config.training.learningRate}",
       s!"hiddenChannels={config.hiddenChannels}"] ++
-    Support.DiffusionScheduleFlags.trainLogNotes config.schedule ++
-    Support.ImageArtifactFlags.trainLogNotes config.artifacts
+    Support.Schedule.Options.logNotes config.schedule ++
+    Support.Image.OutputOptions.logNotes config.artifacts
 
 end Options
-
-/-- Write the diffusion loss curve plus dataset, schedule, model, and artifact metadata. -/
-def writeLog (log : Training.LogDestination) (dataset : String)
-    (sourceNotes : Array String) (config : Options) (runtime : Runtime.Config)
-    (curve : Training.Curve) : IO Unit :=
-  Training.Curve.writeLog curve log "Diffusion training" "loss"
-    (notes := config.logNotes dataset runtime sourceNotes)
 
 /--
 Run one typed diffusion dataset branch.
@@ -377,38 +359,18 @@ same curve log.
 def runDataset {c h w : Nat} [NeZero c] [NeZero h] [NeZero w]
     (runtime : Runtime.Config) (args : List String)
     (datasetName : String)
-    (parseData : List String → Except String (Support.NpyDataFlags × List String))
+    (parseData : List String → Except String (Support.Npy.Options × List String))
     (loadBatches : System.FilePath → System.FilePath → Nat → Nat →
       IO ((count : Nat) × Tensor Float ((output c h w).prependDim count))) : IO Unit := do
   let (data, args) ← CLI.orThrow exeName <| parseData args
   let data := { data with seed := runtime.seed }
   let (config, rest) ← CLI.orThrow exeName <| Options.parse args
   CLI.requireNoArgs exeName rest
-  let sourceNotes := Options.sourceNotes datasetName data
+  let sourceNotes := Support.Npy.Options.logNotes data datasetName
   let load := loadBatches data.xPath data.yPath data.nRows data.seed
   let curve ← train runtime load config
-  writeLog
-    config.training.logDestination datasetName sourceNotes config runtime curve
-
-/-- Run the ImageNet64 branch with shape-specialized model construction. -/
-def runImageNet64 (runtime : Runtime.Config) (args : List String) : IO Unit :=
-  runDataset
-    (c := RealData.imagenet64Channels)
-    (h := RealData.imagenet64Height)
-    (w := RealData.imagenet64Width)
-    runtime args "imagenet64"
-    RealData.NpyDatasets.parseImageNet64
-    loadImageNet64
-
-/-- Run the CIFAR-10 branch with shape-specialized model construction. -/
-def runCifar10 (runtime : Runtime.Config) (args : List String) : IO Unit :=
-  runDataset
-    (c := RealData.cifarChannels)
-    (h := cifarCropHeight)
-    (w := cifarCropWidth)
-    runtime args "cifar10"
-    RealData.NpyDatasets.parseCifar
-    loadCifar
+  Training.Curve.writeLog curve config.training.logDestination "Diffusion training" "loss"
+    (notes := config.logNotes datasetName runtime sourceNotes)
 
 /--
 Executable entrypoint for diffusion training.
@@ -419,7 +381,7 @@ select the dataset branch and diffusion training configuration.
 def main (args : List String) : IO UInt32 := do
   Module.Command.run
     (config := {
-      banner? := some <| Support.bannerWithDevice exeName "diffusion trainer"
+      banner? := some <| Support.banner exeName "diffusion trainer"
       usage? := some <| TrainCommand.optimizerUsage exeName #[
         "  --dataset cifar10|imagenet64",
         "  --x PATH           image NPY file",
@@ -436,9 +398,11 @@ def main (args : List String) : IO UInt32 := do
       printSuccess := true })
     exeName args
     (.native fun runtime rest => do
-      let (choice, rest) ← CLI.orThrow exeName <| Support.ImageDatasetChoice.parse rest
+      let (choice, rest) ← CLI.orThrow exeName <| Support.Image.Dataset.parse rest
       match choice with
-      | .imagenet64 => runImageNet64 runtime rest
-      | .cifar10 => runCifar10 runtime rest)
+      | .imagenet64 =>
+          runDataset runtime rest "imagenet64" RealData.NpyDatasets.parseImageNet64 loadImageNet64
+      | .cifar10 =>
+          runDataset runtime rest "cifar10" RealData.NpyDatasets.parseCifar loadCifar)
 
 end NN.Examples.Models.Generative.Diffusion

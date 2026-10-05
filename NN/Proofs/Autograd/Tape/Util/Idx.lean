@@ -16,11 +16,9 @@ A tape-style graph names its inputs and intermediates by position, so every node
 is that name: a position in the context `Γ` bundled with a proof that the entry sitting there has
 shape `s`.
 
-The type carries no element type, which is why it lives here rather than beside any one soundness
-development. The real-valued tape proofs, the `CommSemiring`-generic ones, and the
-runtime-approximation graphs all index contexts the same way, and they used to do it through three
-byte-identical copies of this structure. One definition means a lemma about indices proved in one
-of those developments is usable in the others.
+The type is independent of tensor elements. The real-valued tape proofs, the
+`CommSemiring`-generic ones, and the runtime-approximation graphs share this context indexing
+and its lemmas.
 
 Alongside the structure are the two operations every graph construction needs:
 
@@ -47,6 +45,14 @@ structure Idx (Γ : List Shape) (s : Shape) where
   i : Fin Γ.length
   /-- Proof that the selected context entry has shape `s`. -/
   h : Γ.get i = s
+
+/-- Two typed indices with the same position are equal. -/
+@[ext] theorem Idx.ext {Γ : List Shape} {s : Shape} {a b : Idx Γ s}
+    (h : a.i = b.i) : a = b := by
+  cases a
+  cases b
+  cases h
+  rfl
 
 /--
 Read a tensor out of a context at a typed index, casting along the shape equality the index
@@ -76,31 +82,6 @@ def getIdx {α : Type} [TorchLean.Storage α] {Γ : List Shape} {s : Shape}
 
 namespace Idx
 
-private theorem get_append_last {α : Type} (l : List α) (a : α) :
-    (l ++ [a]).get ⟨l.length, by simp⟩ = a := by
-  induction l with
-  | nil => simp
-  | cons _ xs ih =>
-      simp [List.length]
-
-private theorem get_append_left {α : Type} (l₁ l₂ : List α) (i : Fin l₁.length) :
-    (l₁ ++ l₂).get ⟨i.1, by
-        -- `i.1 < l₁.length` and `l₁.length ≤ l₁.length + l₂.length`.
-        simpa [List.length_append] using
-          Nat.lt_of_lt_of_le i.2 (Nat.le_add_right l₁.length l₂.length)⟩ =
-      l₁.get i := by
-  induction l₁ with
-  | nil =>
-      cases i with
-      | mk _ hk => cases hk
-  | cons _ tl ih =>
-      classical
-      cases i using Fin.cases with
-      | zero =>
-          simp
-      | succ i =>
-          simp
-
 /--
 Weaken a typed index when the context is extended by appending more shapes.
 
@@ -112,14 +93,7 @@ def weaken {Γ : List Shape} {s : Shape} (idx : Idx Γ s) (rest : List Shape) :
     simpa [List.length_append] using
       Nat.lt_of_lt_of_le idx.i.2 (Nat.le_add_right Γ.length rest.length)⟩
   have hget : (Γ ++ rest).get i' = s := by
-    have hleft := get_append_left (l₁ := Γ) (l₂ := rest) (i := idx.i)
-    have hi' :
-        (⟨idx.i.1, by
-          simpa [List.length_append] using
-            Nat.lt_of_lt_of_le idx.i.2 (Nat.le_add_right Γ.length rest.length)⟩ :
-          Fin (Γ ++ rest).length) = i' := by
-      ext; rfl
-    simpa [hi'] using (hleft.trans idx.h)
+    simpa only [List.get_eq_getElem, i', List.getElem_append_left idx.i.isLt] using idx.h
   ⟨i', hget⟩
 
 /--

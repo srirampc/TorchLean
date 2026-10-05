@@ -6,7 +6,7 @@ Authors: TorchLean Team
 
 module
 
-public import NN.Runtime.Autograd.Engine.Cuda.Tape
+public import NN.Runtime.Autograd.Engine.LibTorch.Tape
 public import NN.Backend.Profile
 public import NN.Spec.Core.Tensor.SomeTensor
 
@@ -146,7 +146,7 @@ def validateForExecution (config : Config) : IO Unit := do
   | .error msg => throw <| IO.userError msg
   match config.device with
   | .cpu => pure ()
-  | .cuda => Runtime.Autograd.Cuda.Buffer.requireNativeRuntime
+  | .cuda => Runtime.Autograd.LibTorch.Buffer.requireNativeRuntime
   | device =>
       throw <| IO.userError
         s!"device `{device.cliName}` has no linked TorchLean execution runtime"
@@ -264,7 +264,7 @@ structure Param (α : Type) [Storage α] (s : Shape) where
   `value` remains the public source for CPU runs and exact/symbolic scalar instantiations.  When a
   caller explicitly reads parameters after CUDA training, the device mirror is copied back here.
   -/
-  cudaValue : IO.Ref (Option Runtime.Autograd.Cuda.AnyBuffer)
+  cudaValue : IO.Ref (Option Runtime.Autograd.LibTorch.AnyBuffer)
   /--
   Whether `value` is known to match `cudaValue`.
 
@@ -280,7 +280,7 @@ def Param.Internal.create {α : Type} [Storage α] {shape : Shape}
     (initial : Tensor α shape) (name : Option String := none) (requiresGrad : Bool := true) :
     IO (Param α shape) := do
   let value ← IO.mkRef initial
-  let cudaValue ← IO.mkRef (none : Option Runtime.Autograd.Cuda.AnyBuffer)
+  let cudaValue ← IO.mkRef (none : Option Runtime.Autograd.LibTorch.AnyBuffer)
   let hostCurrent ← IO.mkRef true
   pure { name, value, cudaValue, hostCurrent, requiresGrad }
 
@@ -306,7 +306,7 @@ structure AnyParam (α : Type) [Storage α] where
   intermediate needs an independent copy or a transfer of that scope's release responsibility before
   installation.
   -/
-  setCuda : Runtime.Autograd.Cuda.AnyBuffer → IO Unit
+  setCuda : Runtime.Autograd.LibTorch.AnyBuffer → IO Unit
 
 namespace AnyParam
 

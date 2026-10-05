@@ -14,8 +14,7 @@ public import NN.Spec.Layers.Loss
 This module contains the shared spec-layer vocabulary for latent generative models:
 
 - continuous latent variables, as used in variational autoencoders (VAEs);
-- discrete codebook latents, as used in vector-quantized VAEs (VQ-VAEs); and
-- small total scalar/tensor helpers that keep model files focused on architecture.
+- discrete codebook latents, as used in vector-quantized VAEs (VQ-VAEs).
 
 The definitions are intentionally **model-agnostic**.  A VAE, VQ-VAE, latent diffusion model, or
 normalizing-flow model can all reuse these primitives without committing to a particular backbone.
@@ -36,14 +35,6 @@ open TorchLean TorchLean.Tensor
 
 variable {α : Type} [TorchLean.Storage α] [Context α]
 
-/-- Elementwise exponential, useful for log-variance parameterizations. -/
-def expTensor {s : Shape} (x : Tensor α s) : Tensor α s :=
-  mapSpec MathFunctions.exp x
-
-/-- Elementwise $\tfrac12x$, written as a tensor helper to make VAE equations readable. -/
-def halfTensor {s : Shape} (x : Tensor α s) : Tensor α s :=
-  scaleSpec x (1 / 2)
-
 /--
 Diagonal-Gaussian reparameterization:
 
@@ -57,7 +48,7 @@ function stays pure and deterministic; runtime examples can supply deterministic
 -/
 def reparameterizeDiag {latent : Shape}
     (mu logvar eps : Tensor α latent) : Tensor α latent :=
-  let std := expTensor (halfTensor logvar)
+  let std := Tensor.expSpec (Tensor.scaleSpec logvar (1 / 2))
   mu + mulSpec std eps
 
 /--
@@ -74,15 +65,14 @@ We return the mean across the latent shape, matching TorchLean's existing loss c
 -/
 def diagonalGaussianKlToStandard
     {latent : Shape} (mu logvar : Tensor α latent) : α :=
-  let var := expTensor logvar
+  let var := Tensor.expSpec logvar
   let mu2 := mulSpec mu mu
   let ones := Tensor.full (α := α) latent (1 : α)
   let per := var + mu2 - ones - logvar
-  (1 / 2) * Spec.meanOver (s := latent) (Spec.toScalarSpec per)
+  (1 / 2) * Spec.meanOver (s := latent) (TorchLean.Tensor.sumSpec per)
 
 /-- A finite codebook for vector-quantized latent models. -/
-structure Codebook (α : Type) (numCodes : Nat) (latent : Shape) [TorchLean.Storage α]
-    [Context α] where
+structure Codebook (α : Type) (numCodes : Nat) (latent : Shape) [TorchLean.Storage α] where
   /-- Embedding vector for each code index. -/
   embedding : Fin numCodes → Tensor α latent
 

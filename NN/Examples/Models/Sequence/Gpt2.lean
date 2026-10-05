@@ -4,19 +4,22 @@ Released under MIT license as described in the file LICENSE.
 Authors: TorchLean Team
 
 CUDA text example:
-  lake -R -K cuda=true exe torchlean gpt2 --device cuda --steps 1 --windows 1 --generate 0
-  lake -R -K cuda=true exe torchlean gpt2 --device cuda --tiny-shakespeare \
+  scripts/lake.sh -Kcuda=true exe torchlean gpt2 --device cuda \
+    --steps 1 --windows 1 --generate 0
+  scripts/lake.sh -Kcuda=true exe torchlean gpt2 --device cuda --tiny-shakespeare \
     --prompt "First Citizen:" --steps 1 \
     --windows 1 --generate 0 --temperature 0.85 --top-k 12 --sample-seed 7
-  lake -R -K cuda=true exe torchlean gpt2 --device cuda --tiny-shakespeare --steps 1 --windows 1 \
+  scripts/lake.sh -Kcuda=true exe torchlean gpt2 --device cuda \
+    --tiny-shakespeare --steps 1 --windows 1 \
     --save-checkpoint data/examples/gpt2_shakespeare.state.json
-  lake -R -K cuda=true exe torchlean gpt2_saved --device cuda \
+  scripts/lake.sh -Kcuda=true exe torchlean gpt2_saved --device cuda \
     --checkpoint data/examples/gpt2_shakespeare.state.json \
     --prompt "First Citizen:" --generate 0
 
 Dataset example:
   python3 scripts/datasets/download_example_data.py --tiny-shakespeare
-  lake -R -K cuda=true exe torchlean gpt2 --device cuda --tiny-shakespeare --steps 1 --windows 1 \
+  scripts/lake.sh -Kcuda=true exe torchlean gpt2 --device cuda \
+    --tiny-shakespeare --steps 1 --windows 1 \
     --generate 0
 
 This is a GPT-2-style *causal* language-model command (byte-level tokens).
@@ -50,7 +53,8 @@ wiring and save/reload loop.
 
 ```bash
 python3 scripts/datasets/download_example_data.py --tiny-shakespeare
-lake -R -K cuda=true exe torchlean gpt2 --device cuda --tiny-shakespeare --steps 1 --windows 1 \
+scripts/lake.sh -Kcuda=true exe torchlean gpt2 --device cuda \
+    --tiny-shakespeare --steps 1 --windows 1 \
   --generate 0
 ```
 -/
@@ -69,7 +73,8 @@ def defaultLogPath : System.FilePath := Support.trainLogPath "gpt2"
 
 /-- Complete command help, including the text and training flags parsed after runtime selection. -/
 def usage : String :=
-  Module.Command.usage s!"lake exe torchlean {exeName}" ++ "\n" ++ String.intercalate "\n"
+  Module.Command.usage s!"scripts/lake.sh exe torchlean {exeName}" ++ "\n" ++
+    String.intercalate "\n"
     [ "Text data:"
     , "  --data-file PATH | --tiny-shakespeare | --tinystories-valid"
     , ""
@@ -149,11 +154,11 @@ structure Options where
   /-- Prompt and token-sampling policy. -/
   generation : text.GenerationOptions
   /-- Number of corpus windows exposed to training. -/
-  window : text.WindowOptions
+  windows : Nat
   /-- Optional checkpoint input and output paths. -/
   checkpoint : text.CheckpointOptions
   /-- Terminal prompt-loop policy. -/
-  interaction : text.InteractiveOptions
+  interactive : Bool
 deriving Repr
 
 namespace Options
@@ -165,7 +170,7 @@ def parse (args : List String) (defaultSteps : Nat) :
     CLI.Training.OptimizerOptions.parse exeName args defaultLogPath
       (defaultSteps := defaultSteps) (defaultLearningRate := 0.001)
       (allowZeroSteps := true)
-  let (window, args) ← text.WindowOptions.parse exeName args 1
+  let (windows, args) ← CLI.takePositiveNatFlag args exeName "windows" (default := 1)
   let (generation, args) ← text.GenerationOptions.parse exeName args
     { prompt := "First Citizen:"
       newTokenCount := 0
@@ -176,8 +181,8 @@ def parse (args : List String) (defaultSteps : Nat) :
       seed := 0
       asciiOnly := false }
   let (checkpoint, args) ← text.CheckpointOptions.parse args
-  let (interactive, args) ← text.InteractiveOptions.parse args
-  pure ({ training, generation, window, checkpoint, interaction := interactive }, args)
+  let (interactive, args) ← CLI.takeBoolFlag args "interactive"
+  pure ({ training, generation, windows, checkpoint, interactive }, args)
 
 end Options
 
@@ -204,7 +209,7 @@ def tokenWindowIds (prompt : String) (offset : Nat) : Tensor Nat [contextLength]
 /-- Print a compact before/after language-model report for the first batch row. -/
 def printPredictionReport (label prompt : String) (logits : Tensor Float output) :
     IO Unit := do
-  let predIds := text.batchArgmaxTokens (α := Float) logits 0
+  let predIds := text.argmaxTokens (α := Float) (logits.get 0)
   IO.println s!"  {label} pred={text.formatByteTokens predIds}"
   IO.println s!"  prompt={text.formatByteTokens (tokenWindowIds prompt 0)}"
   IO.println s!"  target={text.formatByteTokens (tokenWindowIds prompt 1)}"
@@ -212,7 +217,7 @@ def printPredictionReport (label prompt : String) (logits : Tensor Float output)
 /-- Convert byte ids into the typed batched one-hot input tensor used for generation. -/
 def inputTensorFromIds (ids : Tensor Nat [contextLength]) : Tensor Float input :=
   Tensor.repeatAxis 0 batchSize <|
-    Data.CausalLM.oneHotInputs (α := Float) vocabularySize (ids.map byteIndex)
+    Tensor.oneHotIndices (α := Float) vocabularySize (ids.map byteIndex)
 
 /--
 Fitted byte-level GPT predictor.
@@ -224,44 +229,25 @@ abbrev Predictor :=
   Tensor Float input → IO (Tensor Float output)
 
 
-/-- Autoregressively extend byte token ids using a trained byte-level GPT model. -/
-def generateSampledFromIds {promptLength : Nat}
-    (predict : Predictor)
-    (promptTokens : Tensor Nat [promptLength]) (steps : Nat) (temperature : Float)
-    (topK seed repeatWindow : Nat)
-    (repeatPenalty : Float) (asciiOnly : Bool) : IO (Tensor Nat [promptLength + steps]) := do
-  let gen : text.GenerationOptions :=
-    { prompt := ""
-      newTokenCount := steps
-      temperature := temperature
-      topK := topK
-      repeatPenalty := repeatPenalty
-      repeatWindow := repeatWindow
-      seed := seed
-      asciiOnly := asciiOnly }
-  let allowToken := if asciiOnly then text.isPrintableAscii else fun _ => true
-  let ids ←
-    text.autoregressiveTokenIds contextLength 32 promptTokens gen
-      (fun padded predPos => do
-        let logits ← predict (inputTensorFromIds padded)
-        pure (text.batchLogitScoresAt logits 0 predPos))
-      (allowToken := fun i => allowToken i.val)
-  pure ids
+/-- Extend a token context using the selected sampling policy. -/
+def generate {promptLength : Nat}
+    (predict : Predictor) (tokens : Tensor Nat [promptLength])
+    (options : text.GenerationOptions) :
+    IO (Tensor Nat [promptLength + options.newTokenCount]) :=
+  text.autoregressiveTokenIds contextLength 32 tokens options
+    (fun padded position => do
+      let logits ← predict (inputTensorFromIds padded)
+      pure ((logits.get 0).get position))
+    (allowToken := fun i => !options.asciiOnly || text.isPrintableAscii i.val)
 
-/-- Encode a string prompt and autoregressively extend it. -/
-def generateSampled
-    (predict : Predictor)
-    (prompt : String) (steps : Nat) (temperature : Float) (topK seed repeatWindow : Nat)
-    (repeatPenalty : Float) (asciiOnly : Bool) :
-    IO (Tensor Nat [(text.Tokenizer.byte.encode prompt).size + steps]) := do
-  let init := text.Tokenizer.byte.encode prompt
-  generateSampledFromIds predict (Tensor.from init) steps temperature topK seed
-    repeatWindow repeatPenalty asciiOnly
-
-/-- Build a finite training set from approximately evenly spaced corpus windows. -/
+/--
+Tokenize the corpus once and build a finite training set from approximately evenly spaced windows.
+The sample stream retains the token tensor across batch requests.
+-/
 def samplesFromCorpus (corpus : String) (windows : Nat) :
     Data.SampleStream (Sample.Supervised Float input output) :=
   let toks := text.Tokenizer.byte.encode corpus
+  let tokens := Tensor.from toks
   let offs := text.Corpus.evenlySpacedOffsets toks.size contextLength windows
   Data.SampleStream.fromFunction windows (fun index =>
     let off := offs[index]
@@ -270,8 +256,7 @@ def samplesFromCorpus (corpus : String) (windows : Nat) :
         let off' :=
           (off + i.val * (contextLength / 2 + 1)) %
             text.Corpus.usableTokenStarts toks.size contextLength
-        text.tokenWindow text.Tokenizer.byte (contextLength + 1) corpus
-          (offset := off') (paddingTokenId := 32)
+        Tensor.window tokens (contextLength + 1) off' 32
     batchSampleFromTokenIds idsByBatch)
 
 /--
@@ -280,7 +265,7 @@ Interactive prompt loop for the in-memory Float model.
 Each line is appended to the current byte context, decoded through the trained local model, and then
 kept as context for the next prompt unless the user clears it.
 -/
-partial def interactiveLoopFloat
+partial def interactiveLoop
     (predict : Predictor)
     (options : Options) :
     IO Unit := do
@@ -304,10 +289,7 @@ partial def interactiveLoopFloat
       let inputIds :=
         Tensor.concat (Tensor.concat ctx (Tensor.from encoded)) ([10] : Tensor Nat [1])
       let outIds ←
-        generateSampledFromIds predict inputIds options.generation.newTokenCount
-          options.generation.temperature options.generation.topK options.generation.seed
-          options.generation.repeatWindow options.generation.repeatPenalty
-          options.generation.asciiOnly
+        generate predict inputIds options.generation
       let genOnly := Tensor.window outIds options.generation.newTokenCount
         (count + encoded.size + 1) 0
       IO.println s!"  generated={text.formatByteTokens genOnly}"
@@ -323,7 +305,7 @@ the trainer. The command fixes that runtime choice to native execution.
 def trainAndDecode (runtime : Runtime.Config) (corpus : String)
     (options : Options) :
     IO (Float × Float × String) := do
-  let samples := samplesFromCorpus corpus options.window.windowCount
+  let samples := samplesFromCorpus corpus options.windows
   let reportSample :=
     Data.CausalLM.byteBatch
       (α := Float) batchSize contextLength vocabularySize byteIndex options.generation.prompt
@@ -335,10 +317,10 @@ def trainAndDecode (runtime : Runtime.Config) (corpus : String)
   trainer.printSummary
 
   /-
-  The GPT-2 command trains on a bounded, prompt-aware window table.  That makes the training
-  schedule explicit and reproducible, and it lets the public trainer own checkpointing and optimizer
-  state.  The example stays focused on text windows, decoding, and generation instead of runtime
-  module bookkeeping.
+  The GPT-2 command trains on a bounded table of evenly spaced corpus windows. That makes the
+  training schedule explicit and reproducible, and it lets the public trainer own checkpointing and
+  optimizer state. The example stays focused on text windows, decoding, and generation instead of
+  runtime module bookkeeping.
   -/
   let trained ← trainer.train
     (Data.fromStream samples)
@@ -355,10 +337,8 @@ def trainAndDecode (runtime : Runtime.Config) (corpus : String)
   let afterLogits ← trained.predict reportSample.input
   printPredictionReport "after " options.generation.prompt afterLogits
   let generatedIds ←
-    generateSampled trained.predict options.generation.prompt options.generation.newTokenCount
-      options.generation.temperature options.generation.topK options.generation.seed
-      options.generation.repeatWindow options.generation.repeatPenalty
-      options.generation.asciiOnly
+    generate trained.predict
+      (Tensor.from (text.Tokenizer.byte.encode options.generation.prompt)) options.generation
   let generated := text.formatByteTokens generatedIds
   IO.println s!"  generated={generated}"
   IO.println s!"  corpus_bytes={corpus.toByteArray.size} windows={samples.size}"
@@ -366,8 +346,8 @@ def trainAndDecode (runtime : Runtime.Config) (corpus : String)
     options.generation.temperature}, seed={options.generation.seed}"
   IO.println s!"  repetition_penalty={options.generation.repeatPenalty} repeat_window={
     options.generation.repeatWindow}"
-  if options.interaction.interactive then
-    interactiveLoopFloat trained.predict options
+  if options.interactive then
+    interactiveLoop trained.predict options
   let cudaMemorySampleEvery :=
     Trainer.Memory.cadence runtime options.training.steps options.training.cudaMemorySampleEvery
   text.Log.writeGeneration
@@ -375,7 +355,7 @@ def trainAndDecode (runtime : Runtime.Config) (corpus : String)
       "GPT-2 byte prompt training" options.training.steps lossBefore lossAfter
     options.generation generated
     #[Support.deviceNote runtime,
-      s!"windows={options.window.windowCount}",
+      s!"windows={options.windows}",
       s!"cuda_mem_watch={cudaMemorySampleEvery}"]
   pure (lossBefore, lossAfter, generated)
 
@@ -383,7 +363,7 @@ def trainAndDecode (runtime : Runtime.Config) (corpus : String)
 def main (args : List String) : IO UInt32 := do
   Module.Command.run
     (config := {
-      banner? := some <| Support.bannerWithDevice exeName "causal LM training"
+      banner? := some <| Support.banner exeName "causal LM training"
       usage? := some usage
       printSuccess := true })
     exeName args

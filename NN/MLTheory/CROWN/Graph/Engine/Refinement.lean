@@ -112,7 +112,7 @@ def bound (enclose : FlatBox α → Option (FlatBox α)) (input : FlatBox α)
           | some original => (combine? false original hull).or baseline
       | _, _ => baseline
 termination_by budget
- decreasing_by
+decreasing_by
   all_goals have := Nat.div_le_self remaining 2
   all_goals omega
 

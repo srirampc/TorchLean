@@ -31,8 +31,10 @@ namespace Module
 namespace ObjectiveDef
 
 /--
-Instantiate an `ObjectiveDef` by casting Float initializers to `α` and choosing a runtime
-configuration.
+Instantiate an `ObjectiveDef` under a runtime scalar and configuration.
+
+An explicit `initialState?` is used directly, without a `Float` intermediate. Otherwise the model's
+stored Float initializers are converted with `cast`.
 
 This is the most general constructor. The shorter `instantiate` entrypoint chooses standard runtime
 settings before calling this function.
@@ -42,21 +44,21 @@ def instantiateWith {α β : Type} [TorchLean.Storage α] [TorchLean.Storage β]
         [Runtime.Autograd.Torch.TensorTransfer α]
     {stateShapes inputShapes dataInputShapes : List Shape}
     (d : ObjectiveDef β stateShapes inputShapes dataInputShapes)
-    (cast : Float → α) (runtime : Torch.Config) :
+    (cast : Float → α) (runtime : Torch.Config)
+    (initialState? : Option (TorchLean.TensorPack α stateShapes) := none) :
     IO (Objective α β stateShapes inputShapes dataInputShapes) := do
   unless d.requiresGrad.size = stateShapes.length do
     throw <| IO.userError
       s!"objective: expected {stateShapes.length} requiresGrad flags, got {d.requiresGrad.size}"
-  match d.validate with
-  | .error message => throw <| IO.userError message
-  | .ok () => pure ()
+  Runtime.Autograd.okOrThrow (d.validate)
   match d.runtimeInit with
   | some plan =>
-      match plan.validate with
-      | .error message => throw <| IO.userError message
-      | .ok () => pure ()
+      Runtime.Autograd.okOrThrow (plan.validate)
   | none => pure ()
-  let initState : TorchLean.TensorPack α stateShapes := castPack (α := α) cast d.initState
+  let initState : TorchLean.TensorPack α stateShapes :=
+    match initialState? with
+    | some state => state
+    | none => castPack (α := α) cast d.initState
   Objective.create (α := α) (stateShapes := stateShapes) (inputShapes := inputShapes)
     (dataInputShapes := dataInputShapes)
     (runtime := runtime) (requiresGrad := d.requiresGrad)
@@ -69,11 +71,12 @@ def instantiate {α β : Type} [TorchLean.Storage α] [TorchLean.Storage β]
     [Runtime.Autograd.Torch.TensorTransfer α]
     {stateShapes inputShapes dataInputShapes : List Shape}
     (d : ObjectiveDef β stateShapes inputShapes dataInputShapes)
-    (cast : Float → α) (execution : Torch.ExecutionMode := .eager) :
+    (cast : Float → α) (execution : Torch.ExecutionMode := .eager)
+    (initialState? : Option (TorchLean.TensorPack α stateShapes) := none) :
     IO (Objective α β stateShapes inputShapes dataInputShapes) := do
   instantiateWith (α := α) (stateShapes := stateShapes) (inputShapes := inputShapes)
     (dataInputShapes := dataInputShapes)
-    d cast { execution := execution }
+    d cast { execution := execution } initialState?
 
 end ObjectiveDef
 

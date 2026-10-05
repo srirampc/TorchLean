@@ -25,9 +25,9 @@ What is proved here (fully proved):
    $u=w\mathbin{\cdot}x+c$, by scaling each first-layer weight by $w$ and adjusting biases
    accordingly.
 
-What is *not* proved here: the full classical multivariate universal approximation theorem for ReLU
-MLPs. That requires substantially more formalization (e.g. piecewise-linear approximation machinery
-or a functional-analytic Cybenko/Leshno style proof).
+The multivariate compact-set approximation theorem itself is proved downstream in
+`NN.MLTheory.Proofs.ReLU.Approximation.CompactSet`, using these bridge lemmas together with
+Stone–Weierstrass.
 -/
 
 @[expose] public section
@@ -39,13 +39,6 @@ open _root_.Spec _root_.TorchLean
 open Examples
 
 open NN.MLTheory.Proofs.UniversalApproximation
-
-/-- Rewrapping a rank-one tensor by `Tensor.dim` preserves every coordinate. -/
-theorem getScalar_dim_getScalar {n : Nat} (x : Tensor ℝ [n]) :
-    (fun i => (Tensor.dim (fun j : Fin n => Tensor.scalar (x.getScalar j))).getScalar i) =
-      fun i => x.getScalar i := by
-  funext j
-  simp
 
 /-- Dot product $w\mathbin{\cdot}x$ for coordinate weights `w` and a rank-one tensor `x`. -/
 noncomputable def dot {n : Nat} (w : Fin n → ℝ) (x : Tensor ℝ [n]) : ℝ :=
@@ -62,13 +55,8 @@ The identity $\operatorname{ReLU}(u)-\operatorname{ReLU}(-u)=u$, used to represe
 exactly with ReLU.
 -/
 theorem relu_sub_relu_neg (u : ℝ) : relu u - relu (-u) = u := by
-  by_cases h : 0 ≤ u
-  · have hneg : -u ≤ 0 := by linarith
-    simp [relu, Activation.Math.reluSpec_eq_max, max_eq_left h, max_eq_right hneg]
-  · have hu : u ≤ 0 := le_of_not_ge h
-    have hneg : 0 ≤ -u := by linarith
-    -- In this branch, `relu u = 0` and `relu (-u) = -u`.
-    simp [relu, Activation.Math.reluSpec_eq_max, max_eq_right hu, max_eq_left hneg]
+  simp only [relu, Activation.Math.reluSpec_eq_max]
+  exact max_zero_sub_max_neg_zero_eq_self u
 
 /--
 Unfold `mlpForward` as
@@ -89,30 +77,6 @@ theorem mlp_forward_eq_linear_relu_linear
 /-- Extract the unique entry from row `i` of an `(m×1)` tensor interpreted as a matrix. -/
 noncomputable def matDim1Get {m : Nat} (A : Tensor ℝ [m, 1]) (i : Fin m) : ℝ :=
   Spec.get2 A i ⟨0, by decide⟩
-
-/-- Specialized matrix-vector multiplication when the input is a scalar (dimension `1`). -/
-theorem mat_vec_mul_spec_dim1 {m : Nat} (A : Tensor ℝ [m, 1]) (x : ℝ) :
-    Spec.matVecMulSpec A (Tensor.singleton x) =
-      Tensor.dim (fun i : Fin m => Tensor.scalar (matDim1Get A i * x)) := by
-  classical
-  apply Tensor.ext_vector
-  intro i
-  simp [Spec.getScalar_mat_vec_mul_spec, matDim1Get, Tensor.singleton]
-
-/--
-General matrix-vector multiplication for `Tensor.matrix` and a vector written as `Tensor.dim`.
-
-This generalizes the one-row dot-product lemma from `UniversalApproximation.lean` to arbitrary `m`.
--/
-theorem mat_vec_mul_spec_matrix_vector
-    (m n : ℕ) (c : Fin m → Fin n → ℝ) (v : Fin n → ℝ) :
-    Spec.matVecMulSpec (Tensor.matrix (m := m) (n := n) c)
-        (Tensor.dim (fun j => Tensor.scalar (v j))) =
-      Tensor.dim (fun i : Fin m => Tensor.scalar (∑ j : Fin n, c i j * v j)) := by
-  classical
-  apply Tensor.ext_vector
-  intro i
-  simp [Spec.getScalar_mat_vec_mul_spec, Tensor.matrix, Spec.get2]
 
 /--
 First layer for exact affine representability.
@@ -199,7 +163,7 @@ theorem mlp_eval_affine_id {n : Nat} (w : Fin n → ℝ) (b : ℝ) (x : Tensor �
     have h := relu_sub_relu_neg (u := dot w x + b)
     simpa [Tensor.matrix, Spec.get2, Tensor.ofFn, sub_eq_add_neg, neg_add, add_assoc,
       add_comm, add_left_comm, mul_assoc] using h
-  -- Finish: `extract_scalar_output` picks the unique element of `Fin 1`.
+  -- Finish: `extractScalarOutput` picks the unique element of `Fin 1`.
   simp [extractScalarOutput, hy]
 
 /-- Exact representability of coordinate projections $x\mapsto x_i$ by a width-$2$ ReLU MLP. -/
@@ -242,7 +206,7 @@ theorem mlp_eval_lift_from_scalar
     mlpEval (n := n) (hidDim := hidDim) (liftScalarLayer1 (n := n) l1 w c) l2 x =
       mlpEvalScalar hidDim l1 l2 (dot w x + c) := by
   classical
-  -- Expand both sides to `mlp_forward`, then use the `linear ∘ relu ∘ linear` form.
+  -- Expand both sides to `mlpForward`, then use the `linear ∘ relu ∘ linear` form.
   unfold mlpEval mlpEvalScalar
   rw [mlp_forward_eq_linear_relu_linear (n := n) (hidDim := hidDim)
         (l1 := liftScalarLayer1 (n := n) l1 w c) (l2 := l2) (x := x)]

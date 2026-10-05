@@ -24,8 +24,8 @@ This is the key separation of concerns:
 - RuntimeApprox/FP32 proves the rounded runtime output is close to that real-valued output.
 - This file composes the two by uniformly widening the box.
 
-"Float32" and the `_fp32` suffix here mean the rounded-real model
-`TorchLean.Floats.FP32 := NF binaryRadix fexp32 rnd32`. These theorems say nothing about Lean's
+"Float32" here means the rounded-real model
+`TorchLean.Floats.FP32`. These theorems say nothing about Lean's
 `Float32` type or the bit-level `ExecFloat.Binary 8 23` model. Finite binary32 add/mul refinements
 are in
 `NN/Floats/IEEEExec/Bridge/Finite.lean`; further arithmetic refinements are in
@@ -33,6 +33,8 @@ are in
 -/
 
 @[expose] public section
+
+open FloatLib.Floats.Formats.BinaryInterchange (Model FloatFormat)
 
 
 namespace NN.Proofs.RuntimeApprox.FP32
@@ -59,16 +61,8 @@ theorem interval_contains_inflate_of_abs_error {l u y : ℝ} {yR : R} {eps : ℝ
     (hy : l ≤ y ∧ y ≤ u)
     (happrox : abs (toSpec yR - y) ≤ eps) :
     (l - eps ≤ toSpec yR) ∧ (toSpec yR ≤ u + eps) := by
-  constructor
-  · have : toSpec yR ≥ y - eps := by
-      have h' := abs_sub_le_iff.1 (by simpa [abs_sub_comm] using happrox)
-      -- `y - toSpec yR ≤ eps` rearranges to `toSpec yR ≥ y - eps`.
-      linarith
-    linarith [hy.1, this]
-  · have : toSpec yR ≤ y + eps := by
-      have h' := abs_sub_le_iff.1 (by simpa using happrox)
-      linarith
-    linarith [hy.2, this]
+  obtain ⟨hupper, hlower⟩ := abs_sub_le_iff.1 happrox
+  exact ⟨by linarith [hy.1], by linarith [hy.2]⟩
 
 /--
 One-sided upper-margin rule.
@@ -76,13 +70,11 @@ One-sided upper-margin rule.
 If the real value is at least `eps` below threshold `t`, then any FP32 value within `eps` is still
 below `t`.
 -/
-theorem fp32_le_of_real_le_sub_margin {y t : ℝ} {yR : R} {eps : ℝ}
+theorem le_of_real_le_sub_margin {y t : ℝ} {yR : R} {eps : ℝ}
     (h : y ≤ t - eps)
     (happrox : abs (toSpec yR - y) ≤ eps) :
     toSpec yR ≤ t := by
-  have h' := abs_sub_le_iff.1 (by simpa using happrox)
-  have : toSpec yR ≤ y + eps := by linarith [h'.1]
-  linarith
+  linarith [(abs_sub_le_iff.1 happrox).1]
 
 /--
 One-sided lower-margin rule.
@@ -90,13 +82,11 @@ One-sided lower-margin rule.
 If the real value is at least `eps` above threshold `t`, then any FP32 value within `eps` is still
 above `t`.
 -/
-theorem fp32_ge_of_real_ge_add_margin {y t : ℝ} {yR : R} {eps : ℝ}
+theorem ge_of_real_ge_add_margin {y t : ℝ} {yR : R} {eps : ℝ}
     (h : y ≥ t + eps)
     (happrox : abs (toSpec yR - y) ≤ eps) :
     toSpec yR ≥ t := by
-  have h' := abs_sub_le_iff.1 (by simpa [abs_sub_comm] using happrox)
-  have : toSpec yR ≥ y - eps := by linarith [h'.2]
-  linarith
+  linarith [(abs_sub_le_iff.1 happrox).2]
 
 /-! ## Inflating Real Boxes To Cover FP32 Execution -/
 
@@ -108,7 +98,7 @@ Uniformly widen a real-valued `CROWN.Box` by `eps` in every component.
 The lower face moves down by `eps`; the upper face moves up by `eps`. This is kept simple
 and conservative, matching an `L∞`-style output error bound.
 -/
-noncomputable def inflateBoxUniform {s : Shape} (B : Box ℝ s) (eps : ℝ) : Box ℝ s :=
+def inflateBoxUniform {s : Shape} (B : Box ℝ s) (eps : ℝ) : Box ℝ s :=
   { lo := Tensor.subSpec B.lo (Tensor.full (α := ℝ) s eps)
   , hi := Tensor.addSpec B.hi (Tensor.full (α := ℝ) s eps) }
 
@@ -142,7 +132,7 @@ theorem box_contains_inflateUniform_of_approx {s : Shape}
         ih (B := { lo := B.lo.unstack i, hi := B.hi.unstack i })
           (yS := yS.unstack i) (yR := yR.unstack i)
           (hy := hy i)
-          (happrox := approxTensor_dim_get (α := R) (toSpec := toSpec) happrox i)
+          (happrox := approxTensor_unstack (α := R) (toSpec := toSpec) happrox i)
       have hfill :
           TorchLean.Tensor.Internal.Rep.unstack
               (Tensor.full (α := ℝ) (.dim n s) eps) i =
@@ -197,12 +187,12 @@ private theorem crown_forward_eq_linear_relu {inDim hidDim outDim : Nat}
 Float32-sound IBP for a 2-layer ReLU MLP, via uniform output-box inflation:
 
 1. Use the real-spec IBP theorem `NN.MLTheory.CROWN.Theorems.bound_ibp_sound`.
-2. Use `approxTensor` to bound FP32 forward error (`approxTensor_reluTwoLayerMlp_fp32`).
+2. Use `approxTensor` to bound FP32 forward error (`approxTensor_reluTwoLayerMlp`).
 3. Inflate the real IBP box by that error bound.
 
 The result is a real-valued interval that is guaranteed to contain the `FP32` execution result.
 -/
-theorem ibpBound_contains_reluTwoLayerMlp_fp32 {inDim hidDim outDim : Nat}
+theorem ibpBound_contains_reluTwoLayerMlp {inDim hidDim outDim : Nat}
     (netS : NN.MLTheory.CROWN.TwoLayerMLP ℝ inDim hidDim outDim)
     (netR : NN.MLTheory.CROWN.TwoLayerMLP R inDim hidDim outDim)
     (xB : NN.MLTheory.CROWN.Box ℝ (.dim inDim .scalar))
@@ -244,7 +234,7 @@ theorem ibpBound_contains_reluTwoLayerMlp_fp32 {inDim hidDim outDim : Nat}
     { weights := netR.outputWeight, bias := netR.outputBias }
 
   let epsOut := ibpReluTwoLayerErrorBudget netR xR eW1 eb1 eW2 eb2 ex
-  have hOut := approxTensor_reluTwoLayerMlp_fp32
+  have hOut := approxTensor_reluTwoLayerMlp
     (L0S := l1S) (L1S := l2S) (L0R := l1R) (L1R := l2R)
     (xS := xS) (xR := xR)
     (e0W := eW1) (e0b := eb1) (e1W := eW2) (e1b := eb2) (ex := ex)

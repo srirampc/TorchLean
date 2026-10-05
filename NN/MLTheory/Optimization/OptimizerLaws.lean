@@ -164,15 +164,15 @@ def parametersAfter (opt : TensorOptimizer α) {s : Shape}
 theorem stateAfter_append (opt : TensorOptimizer α) {s : Shape}
     (current : Step α s (opt.State s)) (left right : Array (Tensor α s)) :
     opt.stateAfter current (left ++ right) =
-      opt.stateAfter (opt.runSteps current left) right := by
-  exact congrArg Step.optimizerState (opt.runSteps_append current left right)
+      opt.stateAfter (opt.runSteps current left) right :=
+  congrArg Step.optimizerState (opt.runSteps_append current left right)
 
 /-- Parameter projection of `runSteps_append`. -/
 theorem parametersAfter_append (opt : TensorOptimizer α) {s : Shape}
     (current : Step α s (opt.State s)) (left right : Array (Tensor α s)) :
     opt.parametersAfter current (left ++ right) =
-      opt.parametersAfter (opt.runSteps current left) right := by
-  exact congrArg Step.parameters (opt.runSteps_append current left right)
+      opt.parametersAfter (opt.runSteps current left) right :=
+  congrArg Step.parameters (opt.runSteps_append current left right)
 
 end TensorOptimizer
 

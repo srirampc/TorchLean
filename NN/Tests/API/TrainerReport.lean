@@ -88,7 +88,7 @@ def classificationSample (index : Nat) : Sample.Supervised Float [1] [2] :=
       target := ([0.0, 1.0] : Tensor Float [2]) }
 
 def check (arithmetic : Runtime.Arithmetic) : IO Unit := do
-  let trainer := regressionTrainer .meanSquaredError arithmetic
+  let trainer := regressionTrainer .mse arithmetic
   let trained ← trainer.train data
     { steps := 0
       logDestination := .disabled }
@@ -120,7 +120,7 @@ def checkCustomParity : IO Unit := do
       scheduler := some (.step 0.01 1 0.5)
       logDestination := .disabled }
   let builtin ←
-    (regressionTrainer .meanSquaredError).train data options
+    (regressionTrainer .mse).train data options
   let custom ←
     (regressionTrainer (.custom customMse)).train data options
   expect "custom MSE should preserve the requested step count"
@@ -136,16 +136,13 @@ def checkCustomParity : IO Unit := do
     (close builtinPrediction[0] customPrediction[0])
 
 /-- Checkpoints apply uniformly to built-in and custom supervised objectives. -/
-def checkCustomCheckpoint : IO Unit := do
-  let path : System.FilePath := "/tmp/torchlean-trainer-report-custom-state.json"
-  if ← path.pathExists then
-    IO.FS.removeFile path
+def checkCustomCheckpoint : IO Unit := IO.FS.withTempFile fun _ path => do
   let source ←
     (regressionTrainer (.custom customMse) (seed := 31)).train data
       { steps := 1
         saveCheckpoint? := some path
         logDestination := .disabled }
-  expect "custom training should write its requested checkpoint" (← path.pathExists)
+  expect "custom training should write checkpoint contents" (!(← IO.FS.readFile path).isEmpty)
   let restored ←
     (regressionTrainer (.custom customMse) (seed := 999)).train data
       { steps := 0
@@ -156,7 +153,6 @@ def checkCustomCheckpoint : IO Unit := do
   let restoredPrediction ← restored.predict input
   expect "loading a custom-objective checkpoint should restore the trained state"
     (close sourcePrediction[0] restoredPrediction[0])
-  IO.FS.removeFile path
 
 /-- Stream training supports custom and one-hot objectives with one callback per recorded step. -/
 def checkStreamObjectives : IO Unit := do
@@ -202,7 +198,7 @@ def checkStreamObjectives : IO Unit := do
 
 /-- Alternating training reports actual per-model updates and rejects ambiguous shared options. -/
 def checkAlternating : IO Unit := do
-  let first := regressionTrainer .meanSquaredError (seed := 41)
+  let first := regressionTrainer .mse (seed := 41)
   let second := regressionTrainer (.custom customMse) (seed := 43)
   let runtime : Runtime.Config := { execution := .typedGraph }
   let firstSampleAt := streamSample
@@ -267,13 +263,50 @@ def checkRuntimeHyperparameters : IO Unit := do
       { optimizer := optim.adam { learningRate := 0.01, beta1 := 0.999999999 }
         arithmetic }
     expectFailure "optimizer beta rounds to one" invalid.open
-    let valid := regressionTrainer .meanSquaredError arithmetic
+    let valid := regressionTrainer .mse arithmetic
     expectFailure "scheduler rate overflows binary32" <|
       valid.open (scheduler := some (.constant 1e300))
+
+/-- Live and frozen predictions enforce the same selected CPU capsule contract. -/
+def checkSnapshotProfile (capsule : NN.Backend.KernelCapsule) (needle : String) : IO Unit := do
+  let profile := NN.Backend.BackendProfile.checkedCpu.withCapsuleModules
+    #[{ name := "reference", capsules := #[capsule] }]
+  for arithmetic in #[Runtime.Arithmetic.native, .ieee] do
+    let trainer : TorchLean.Trainer [1] [1] :=
+      Trainer.new nn.relu { arithmetic, backendProfile? := some profile }
+    let session ← trainer.open
+    let frozen ← session.finish { before := 0.0, after := 0.0 }
+    let input := ([1.0] : Tensor Float [1])
+    for (label, action) in #[
+        ("live", session.predict input), ("frozen", frozen.predict input)] do
+      let failure ← try
+        let _ ← action
+        pure none
+      catch error => pure (some error.toString)
+      match failure with
+      | none => fail s!"{label} prediction bypassed profile {capsule.name}"
+      | some message =>
+          expect s!"{label} prediction should preserve the profile rejection"
+            (message.contains needle)
+  IO.println s!"  frozen and live CPU profile rejection ({capsule.name}): passed"
+
+/-- Snapshots preserve provider binding and the checked policy's value-contract guard. -/
+def checkSnapshotProfiles : IO Unit := do
+  checkSnapshotProfile
+    { NN.Backend.Reference.relu with name := "mismatched.relu", provider := .torchLean }
+    "no matching executable handler is linked"
+  checkSnapshotProfile
+    { NN.Backend.Reference.relu with
+      name := "trusted_value.relu"
+      valueContract := NN.Backend.ContractDescriptor.trusted (.valueRefinement .relu)
+        "Test-only value contract resting on a trusted boundary."
+        "trainer snapshot profile test" }
+    "rejected `relu`"
 
 def run : IO Unit := do
   checkMetricJsonPrecision
   checkRuntimeHyperparameters
+  checkSnapshotProfiles
   check .native
   check .ieee
   checkCustomParity

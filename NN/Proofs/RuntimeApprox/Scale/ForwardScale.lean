@@ -22,7 +22,6 @@ analysis). Here we make that tracking explicit and compositional at the proof le
 
 @[expose] public section
 
-
 namespace Proofs
 namespace RuntimeApprox
 

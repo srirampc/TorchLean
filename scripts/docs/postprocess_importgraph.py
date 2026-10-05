@@ -24,6 +24,16 @@ LABEL_THRESHOLD_REPLACEMENT = (
     "structure over labels.\n"
     "    labelRenderedSizeThreshold: preferDark ? 1000000000 : 9,"
 )
+RESPONSIVE_CONTROLS = """<style id="torchlean-importgraph-controls">
+    @media (max-width: 700px) {
+      .summary .pause-checkbox, .summary .reverse-checkbox {
+        position: static;
+        display: block;
+        padding: .25em .5em;
+      }
+    }
+  </style>
+"""
 
 
 def postprocess(page: Path) -> None:
@@ -31,6 +41,8 @@ def postprocess(page: Path) -> None:
     html = html.replace('  <link rel="stylesheet" href="style.css" />\n', "")
     html = html.replace(MATHLIB_DOCS_URL, TORCHLEAN_DOCS_URL)
     html = LABEL_THRESHOLD.sub(LABEL_THRESHOLD_REPLACEMENT, html, count=1)
+    if 'id="torchlean-importgraph-controls"' not in html:
+        html = html.replace("</head>", RESPONSIVE_CONTROLS + "</head>", 1)
     page.write_text(html, encoding="utf-8")
 
 

@@ -80,7 +80,7 @@ def exeName : String := "ppo_pong_ram"
 def usage : String :=
   String.intercalate "\n"
     [ "Usage:"
-    , "  lake -R -K cuda=true exe torchlean ppo_pong_ram --device cuda [PPO flags]"
+    , "  scripts/lake.sh -Kcuda=true exe torchlean ppo_pong_ram --device cuda [PPO flags]"
     , ""
     , "PPO flags:"
     , "  --updates N          number of PPO updates"
@@ -196,10 +196,8 @@ def makeKwargs : Array (String × Lean.Json) :=
 /--
 What Lean insists on before it will believe anything the Python environment sends.
 
-Every observation and reward must be finite, and RAM bytes must lie in `[0, 255]`. That last check
-is
-not about the emulator, which cannot produce anything else; it is about the protocol and the adapter
-between them, where a byte-order or dtype mistake would show up as out-of-range values.
+Every observation and reward must be finite, and RAM bytes must lie in `[0, 255]`. The range
+check guards against protocol and adapter mistakes such as incorrect byte order or dtype.
 -/
 def contract : rl.boundary.Contract observation actionCount :=
   { checkObsFinite := true
@@ -237,7 +235,7 @@ def checkEnvOnly : IO Unit := do
 -/
 
 def main (args : List String) : IO UInt32 := do
-  if args.contains "--help" || args.contains "-h" then
+  if CLI.hasHelp args then
     IO.println usage
     return 0
   if args.contains "--check-env-only" then
@@ -245,10 +243,10 @@ def main (args : List String) : IO UInt32 := do
     return ←
       Module.Command.run
         (config := {
-          banner? := some <| Support.bannerWithDeviceDetails
+          banner? := some <| Support.banner
             exeName
             s!"PPO on {envId} (obs=ram, env check only)"
-            "  env: Python Gymnasium subprocess (ALE) + Lean boundary contract"
+            (details := some "  env: Python Gymnasium subprocess (ALE) + Lean boundary contract")
           printSuccess := true })
         exeName args
         (.native fun _opts rest => do
@@ -256,15 +254,15 @@ def main (args : List String) : IO UInt32 := do
           checkEnvOnly)
   Module.Command.run
     (config := {
-      banner? := some <| Support.bannerWithDeviceDetails
+      banner? := some <| Support.banner
         exeName
         s!"PPO on {envId} (obs=ram, horizon={horizon})"
-        "  env: Python Gymnasium subprocess (ALE) + Lean boundary contract"
+        (details := some "  env: Python Gymnasium subprocess (ALE) + Lean boundary contract")
       printSuccess := true })
     exeName args
     (.native fun runtime rest => do
       let (ppo, rest) ← CLI.orThrow exeName <|
-        rl.cli.PPOOptions.parse
+        rl.cli.Options.parse
           exeName rest Runtime.RL.Artifacts.DefaultPaths.ppoPongRamTrainLog
           (defaultUpdateCount := maxUpdates)
           (defaultEvaluationInterval := defaultEvaluationInterval)
@@ -272,10 +270,6 @@ def main (args : List String) : IO UInt32 := do
           (defaultMaximumEvaluationSteps := 10000)
       CLI.orThrow exeName <| CLI.checkNoArgs rest
 
-      let updateCount : Nat := ppo.updateCount
-      let evaluationInterval : Nat := ppo.evaluationInterval
-      let evaluationEpisodes : Nat := ppo.evaluationEpisodes
-      let maximumEvaluationSteps : Nat := ppo.maximumEvaluationSteps
 
       IO.eprintln s!"  starting env: {envId} (obs_type=ram)"
       let gym ←
@@ -333,14 +327,14 @@ def main (args : List String) : IO UInt32 := do
             rl.eval.averageEpisodeTotalReward
               (obsShape := observation) (nActions := actionCount)
               evaluationSessionAt policyLogits0 (baseSeed := 9000)
-              (episodes := evaluationEpisodes)
-              (maxSteps := maximumEvaluationSteps)
+              (episodes := ppo.evaluationEpisodes)
+              (maxSteps := ppo.maximumEvaluationSteps)
           curve := curve.push 0 avg0
           IO.eprintln s!"  eval(step=0) avg_return={avg0}"
 
         curve ← rl.ppo.train discountFactor gaeLambda
-          { updates := updateCount, epochs := updateEpochs,
-            evaluationEvery := evaluationInterval, seed := runtime.seed }
+          { updates := ppo.updateCount, epochs := updateEpochs,
+            evaluationEvery := ppo.evaluationInterval, seed := runtime.seed }
           (fun update rngSeed rngCounter => do
               let psAll ← rl.ppo.state (α := Float) m
               let predictLogits :
@@ -368,8 +362,8 @@ def main (args : List String) : IO UInt32 := do
                 rl.eval.averageEpisodeTotalReward
                   (obsShape := observation) (nActions := actionCount)
                   evaluationSessionAt policyLogits (baseSeed := 9000 + completedUpdates)
-                    (episodes := evaluationEpisodes)
-                  (maxSteps := maximumEvaluationSteps)
+                    (episodes := ppo.evaluationEpisodes)
+                  (maxSteps := ppo.maximumEvaluationSteps)
               IO.eprintln s!"  update={completedUpdates} avg_return={avg}"
               pure (avg, false))
           curve
@@ -386,10 +380,10 @@ def main (args : List String) : IO UInt32 := do
             s!"gamma={discountFactor}",
             s!"lambda={gaeLambda}",
             s!"lr={learningRate}",
-            s!"updates={updateCount}",
-            s!"eval_every={evaluationInterval}",
-            s!"eval_episodes={evaluationEpisodes}",
-            s!"eval_max_steps={maximumEvaluationSteps}",
+            s!"updates={ppo.updateCount}",
+            s!"eval_every={ppo.evaluationInterval}",
+            s!"eval_episodes={ppo.evaluationEpisodes}",
+            s!"eval_max_steps={ppo.maximumEvaluationSteps}",
             Support.deviceNote runtime
           ]
         IO.eprintln s!"{exeName}: done"

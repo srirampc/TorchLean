@@ -65,7 +65,8 @@ structure LogisticRegression (p : ℕ) (α : Type) [TorchLean.Storage α] where
 This lets us represent the affine model `X w + b` as a single matrix-vector product with a
 `(p + 1)`-vector of parameters.
 -/
-def augmentWithOnes {n p : ℕ} (X : Tensor α [n, p]) :
+def augmentWithOnes {α : Type} [TorchLean.Storage α] [One α]
+    {n p : ℕ} (X : Tensor α [n, p]) :
   Tensor α [n, p + 1] :=
   Tensor.dim (fun i =>
     let row := get X ⟨i.val, i.isLt⟩

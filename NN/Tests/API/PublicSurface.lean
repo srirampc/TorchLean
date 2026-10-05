@@ -61,6 +61,48 @@ def reshaped : Tensor Float [3, 2] :=
 def loaded (path : System.FilePath) : IO (Tensor Float [2, 3]) :=
   Tensor.load path
 
+-- Synthetic grids do not require ordering, transcendental functions, or a full model context.
+example {α : Type} [Storage α] [NatCast α] [Add α] [Sub α] [Mul α] [Div α]
+    (lower upper : α) (count : Nat) : Tensor α [count] :=
+  Data.Synthetic.linspace lower upper count
+
+example {α : Type} [Storage α] [NatCast α] [Add α] [Sub α] [Mul α] [Div α]
+    (lower upper : α) (count : Nat) : Tensor α [count * count, 2] :=
+  Data.Synthetic.squareGrid lower upper count
+
+-- Appending a conditioning channel copies values and requires no scalar arithmetic.
+example {α : Type} [Storage α] (batchShape : Shape) {d channels : Nat}
+    (spatial : Tensor Nat [d])
+    (input : Tensor α (diffusion.sampleShape batchShape channels spatial)) (time : α) :
+    Tensor α (diffusion.sampleShape batchShape (channels + 1) spatial) :=
+  diffusion.appendTimeChannel batchShape spatial input time
+
+-- File sources need conversion and, for class labels, the two one-hot constants.
+example {α : Type} [Storage α] [Runtime.FromFloat α]
+    (source : Data.TabularSupervisedSource) :
+    IO (Data.SampleStream (Sample.Supervised α [source.inputWidth] [source.targetWidth])) :=
+  source.load
+
+example {α : Type} [Storage α] [Runtime.FromFloat α] [Zero α] [One α]
+    (source : Data.LabeledSource) :
+    IO (Data.SampleStream (Sample.Supervised α source.input [source.classCount])) :=
+  source.load
+
+-- LoRA addition and application require only additive and multiplicative scalar operations.
+example {α : Type} [Storage α] [Add α] [Mul α] [Zero α]
+    {inputWidth rank outputWidth : Nat} :
+    Tensor α [inputWidth, outputWidth] →
+      Adapters.LoRA.Parameters α inputWidth rank outputWidth → α →
+      Tensor α [inputWidth, outputWidth] :=
+  Adapters.LoRA.effectiveWeight
+
+example {α : Type} [Storage α] [Add α] [Mul α] [Zero α]
+    {batchShape : Shape} {inputWidth rank outputWidth : Nat} :
+    Tensor α (batchShape.appendDim inputWidth) → Tensor α [inputWidth, outputWidth] →
+      Adapters.LoRA.Parameters α inputWidth rank outputWidth → α →
+      Tensor α (batchShape.appendDim outputWidth) :=
+  Adapters.LoRA.linear
+
 def arguments : Arguments Float [[3], [2]] :=
   (Arguments.empty.push vector).push rowSums
 
@@ -76,9 +118,44 @@ def model : nn.Builder (nn.Sequential [2] [1]) :=
 
 def trainer : Trainer [2] [1] :=
   Trainer.new model
-    { objective := .meanSquaredError
+    { objective := .mse
       optimizer := optim.adam { learningRate := 0.01 }
       seed := 7 }
+
+-- Optional batching must preserve positional inputs and expected types for sample literals.
+example {trainer : Trainer [2] [1]} (session : Trainer.Session trainer)
+    (sample : Sample.Supervised Float [2] [1]) : IO Unit :=
+  session.step sample
+
+example {trainer : Trainer [2] [1]} (session : Trainer.Session trainer) : IO Float :=
+  session.step { input := [1.0, 0.0], target := [1.0] } (loss := true)
+
+example {trainer : Trainer [2] [1]} (session : Trainer.Session trainer)
+    (samples : Array (Sample.Supervised Float [2] [1])) : IO Unit :=
+  session.step samples (batch := true)
+
+example {trainer : Trainer [2] [1]} (session : Trainer.Session trainer)
+    (samples : Data.SampleStream (Sample.Supervised Float [2] [1])) : IO Float :=
+  session.loss samples (batch := true)
+
+example {trainer : Trainer [2] [1]} (session : Trainer.Session trainer) : IO Float :=
+  session.loss { input := [1.0, 0.0], target := [1.0] }
+
+example {trainer : Trainer [2] [1]} (session : Trainer.Session trainer) :
+    IO (Tensor Float [1]) :=
+  session.predict ([1.0, 0.0] : Tensor Float [2])
+
+example {trainer : Trainer [2] [1]} (session : Trainer.Session trainer) :
+    Tensor Float [2] → IO (Tensor Float [1]) :=
+  session.predict
+
+example {trainer : Trainer [2] [1]} (session : Trainer.Session trainer)
+    {count : Nat} (inputs : Tensor Float [count, 2]) : IO (Tensor Float [count, 1]) :=
+  session.predict inputs (batch := true) (batchSize := count)
+
+example {trainer : Trainer [2] [1]} (session : Trainer.Session trainer)
+    (inputs : Tensor Float [0, 2]) : IO (Tensor Float [0, 1]) :=
+  session.predict inputs (batch := true) (batchSize := 0)
 
 def tokens : Tensor Nat [8] :=
   text.Tokenizer.byte.encodeFixed 8 "torchlean"
@@ -96,12 +173,12 @@ def moduleCheckpoint {α β : Type} [Storage α] [Storage β] [Context α]
   Checkpoint.load objective path
 
 /-- Native binary64 storage must remain usable through the polymorphic checkpoint API. -/
-def floatModuleCheckpoint
+example
     (objective : Module.Objective Float Float [[1]] [[1]]) (path : System.FilePath) : IO Unit :=
   moduleCheckpoint objective path
 
 /-- Backend-owned optimizer checkpoints also accept native binary32 modules. -/
-def float32OptimizerCheckpoint
+example
     (objective : Module.Objective Float32 Float [[1]] [[1]]) (path : System.FilePath) :
     IO Unit := do
   Checkpoint.Optimizer.save objective path
@@ -118,7 +195,7 @@ def float32OptimizerCheckpoint
 #check nn.State.split
 #check nn.lowerToTypedGraph
 #check nn.conv
-#check nn.multiHeadAttention
+#check nn.attention
 #check nn.transformerEncoderBlock
 #check nn.heads.classifier
 #check nn.models.cnn
@@ -138,7 +215,8 @@ def float32OptimizerCheckpoint
 #check Data.batch
 #check Data.randomSplit
 #check Trainer.Session.step
-#check Trainer.Session.stepBatch
+#check Trainer.Session.loss
+#check Trainer.Session.predict
 #check Checkpoint.State.save
 #check autograd.grad
 #check autograd.vjp

@@ -41,10 +41,7 @@ private def shapeDisplay (shape : Shape) : String :=
 
 /-- User-facing display for an array of tensor shapes. -/
 private def shapeArrayString (shapes : Array Shape) : String :=
-  if shapes.isEmpty then
-    "[]"
-  else
-    "[" ++ String.intercalate ", " (shapes.map shapeDisplay).toList ++ "]"
+  "[" ++ String.intercalate ", " (shapes.map shapeDisplay).toList ++ "]"
 
 /-- Structured per-layer summary derived from a checked sequential model. -/
 structure LayerSummary where
@@ -136,8 +133,9 @@ private def layerSummaries :
       output := τ
       layers := layers
       layerCount := layers.size
-      totalParameterCount := trainableCount (stateShapes model) (requiresGrad model)
-      totalStateElementCount := elementCount (stateShapes model) }
+      totalParameterCount := layers.foldl (fun total layer => total + layer.parameterCount) 0
+      totalStateElementCount :=
+        layers.foldl (fun total layer => total + layer.stateElementCount) 0 }
 
 /--
 Print the structured summary of a checked sequential model.
@@ -147,15 +145,13 @@ Example:
 def model : nn.Sequential [2] [1] :=
   nn.build 0 nn.Sequential![nn.linear 2 8, nn.relu, nn.linear 8 1]
 
--- Prints one row per layer with its kind, shapes, and parameter count, then the totals. The
+-- Prints the totals, then one row per layer with its kind, shapes, and parameter count. The
 -- counterpart of `print(model)` plus `torchinfo.summary`.
 def main : IO Unit := nn.printSummary model
 ```
 -/
 def printSummary {σ τ : Shape} (model : Sequential σ τ) : IO Unit := do
-  match summary model with
-  | .ok details => IO.println details
-  | .error message => throw <| IO.userError message
+  IO.println (← IO.ofExcept (summary model))
 
 end nn
 

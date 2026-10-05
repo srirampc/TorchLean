@@ -1,7 +1,12 @@
 import VersoManual
-import NN.API
+import NN.API.Macros
+import NN.API.Neural
+import NN.API.Optim
 import NN.API.Runtime
+import NN.API.Trainer.Constructor
 import NN.API.Verification.Lowering
+import NN.Backend.LibTorch
+import NN.Runtime.Autograd.Engine.LibTorch.Controls
 import NN.IR
 import NN.Spec.Layers.FlashAttention
 import NN.Proofs.Models.Attention.CausalMask
@@ -20,14 +25,14 @@ tag := "backend-selection"
 file := "Inside-The-Backend-Planner"
 %%%
 
-The previous page selected CPU, CUDA, or an optional provider through the runtime API. A less
+The previous page selected CPU or CUDA through the runtime API. A less
 visible question remains: when a graph asks for matrix multiplication, attention, or a
 reduction, how does TorchLean decide which implementation is allowed to answer?
 
-A device name is not enough. One CUDA build may contain a hand-written kernel, a cuBLAS call, and a
-LibTorch bridge for different operations. Their layouts, numerical behavior, backward support, and
-supporting evidence differ. The backend planner keeps those differences in data and either returns
-an accepted plan or explains why it could not make one.
+A device name is not enough. TorchLean's CUDA attention composes matrix products and softmax in
+Lean over ATen numerical primitives. Its intermediate storage, backward rule, and supporting
+evidence need to be identified. The backend planner keeps those contracts in data and either
+returns an accepted plan or explains why it could not make one.
 
 The path is:
 
@@ -77,10 +82,11 @@ planning pure makes missing coverage visible before data transfer or training be
 
 # Kernel Capsules
 
-Suppose a graph reaches scaled dot-product attention. TorchLean currently knows three maintained
-ways to compute it: a composed TorchLean expression, a native fused CUDA implementation, and a
-LibTorch forward bridge with a TorchLean-owned backward pass. The operation is the same; the
-implementation contract is not.
+Suppose a graph reaches scaled dot-product attention. Its CUDA capsule describes a Lean
+composition of matrix products and softmax, with an explicit local VJP over saved probabilities.
+LibTorch supplies the numerical primitives while TorchLean owns the tape, saved buffers, and
+parameter gradients. The capsule's contract covers this composition; it does not select a fused
+attention implementation or record a LibTorch autograd graph.
 
 A `KernelCapsule` records those differences:
 
@@ -106,8 +112,8 @@ Capsules are declared before the run and registered with the backend. The planne
 only when its device, provider, gradient mode, and trust level fit the requested profile. If no
 capsule fits, planning stops with an error.
 
-Capsules are collected in named `CapsuleModule`s. Built-in attention, native CUDA, portable
-reference, and optional LibTorch code contribute modules to the same registry. A downstream
+Capsules are collected in named `Registry.CapsuleModule`s. Attention, LibTorch primitives, and
+portable reference operations contribute modules to the same registry. A downstream
 provider can prepend another module with `BackendProfile.withCapsuleModules`; it does not add a new
 model class or a branch to the graph walker. The model still lowers to ordinary `BackendOp`s, and
 the planner either finds an admissible capsule for each operation or reports the missing operation.
@@ -117,8 +123,10 @@ The registry rejects duplicate module names:
 ```lean (name := bsModules)
 -- Duplicate module identity is an error even if each module
 -- contains valid capsules.
-#eval Registry.validateModules
-  #[Registry.libTorchModule, Registry.libTorchModule]
+#eval Id.run do
+  let m : Registry.CapsuleModule :=
+    { name := "libtorch", capsules := LibTorch.capsules }
+  return Registry.validateModules #[m, m]
 
 #eval Registry.validateModules Registry.maintainedModules
 ```
@@ -166,7 +174,7 @@ def bsMisfiled : KernelCapsule :=
     name := "demo.misfiled"
     shapeContract :=
       ContractDescriptor.tested
-        (.valueRefinement .scaledDotProductAttention)
+        (.valueRefinement .attention)
         "value test filed as shape evidence" "demo suite" }
 
 #eval (Reference.attention.contractsAligned,
@@ -183,12 +191,12 @@ A misaligned capsule is not merely reported; `KernelCapsule.admissible` requires
 -- The malformed descriptor must prevent selection, not
 -- merely appear in a warning.
 #eval planOp BackendProfile.checkedCpu.policy
-    #[bsMisfiled] .scaledDotProductAttention
+    #[bsMisfiled] .attention
   |>.map fun k => k.capsule.name
 ```
 ```leanOutput bsMisfiledPlan (whitespace := lax)
 Except.error "no admissible kernel capsule for op
-  scaled_dot_product_attention on device cpu"
+  attention on device cpu"
 ```
 
 A value test placed in the shape field is therefore rejected rather than counted as shape evidence,
@@ -201,8 +209,8 @@ and a forward-only capsule cannot describe `.none` as though it were a VJP refin
 - `trustedBoundary reason` names code whose correctness is assumed for the claim;
 - `notApplicable` records an obligation that the capsule intentionally does not provide.
 
-There is no "proved" evidence variant. A capsule cannot claim that a Lean theorem covers its native
-implementation, because no such theorem exists for any registered kernel. What a capsule can say is
+There is no "proved" evidence variant: this descriptor does not carry a Lean proof of native
+implementation correctness. What a capsule can say is
 which guards and tests stand behind it, or that it delegates to code TorchLean does not check. The
 related idea of proof-carrying code {Informal.citep necula1997}[] requires a producer to ship a
 checkable certificate with its binary. A capsule carries a weaker record: a classified claim and
@@ -212,10 +220,10 @@ verifying the kernel.
 `NumericalPolicy` currently has one field,
 `reduction : ReductionPolicy`, with values `fixedLeft`, `implementationDefined`, and
 `notApplicable`. The portable matrix-product capsule records the fixed left fold used by the tensor
-semantics; the CUDA and LibTorch capsules record an implementation-defined reduction. A fixed-left
-range trace therefore cannot be reused for a cuBLAS schedule merely because both capsules implement
-`matmul`. Rounding mode, subnormal handling, and multiply-add contraction are not recorded in the
-capsule, and nothing audits them.
+semantics; the LibTorch CUDA capsules record an implementation-defined reduction. A fixed-left
+range trace therefore cannot be reused for an ATen schedule merely because both capsules implement
+`matmul`. The runtime has precision and deterministic-algorithm controls, but the capsule does not
+audit their readbacks or specify every rounding, subnormal, and multiply-add choice.
 
 Trust has two levels, `checked` and `trustedExternal`. The maintained profiles accept `checked`
 capsules whose evidence is guards and tests. A capsule whose value contract rests on a trusted
@@ -301,50 +309,29 @@ printing the report. Its input is the registered evidence record. A benchmark th
 `checked_cpu` loses these per-operation choices; storing the selected capsules makes later
 changes in preference or registry order inspectable.
 
-## PyTorch Attention Kernel Selection
+## The Implementation Inside An Attention Capsule
 
-PyTorch also chooses among several attention kernels, through a context manager that expresses a
-preference. The difference is when the choice is visible. Requesting the flash kernel for CPU
-tensors succeeds, and the returned tensor carries no record of which kernel produced it:
+Selecting `libtorch.direct_attention` identifies TorchLean's Lean-composed attention route.
+The name is retained for capsule identity; ATen chooses the implementations of its numerical
+primitives, but there is no fused attention provider selection. The public controls in
+{src "NN/Runtime/Autograd/Engine/LibTorch/Controls.lean"}[`LibTorch`] still expose the SDK's
+flash, efficient, math, and cuDNN attention permissions.
 
-```
-# The returned shape does not reveal which attention
-# implementation was selected.
-q = torch.zeros(1, 1, 4, 8)
-with sdpa_kernel([SDPBackend.FLASH_ATTENTION]):
-    out = F.scaled_dot_product_attention(q, q, q)
-print(tuple(out.shape))
-```
+For example, this definition changes the SDK's flash permission when called; it does not change
+TorchLean's attention composition:
 
-```
-(1, 1, 4, 8)
+```lean (name := bsSDPControl)
+def bsDisableFlash : IO Unit :=
+  Runtime.Autograd.LibTorch.setSDPEnabled .flash false
 ```
 
-When no kernel satisfies the request, the call raises an exception and reports the rejected
-conditions:
+`getSDPEnabled` reads that SDK permission. TorchLean's attention calls matrix-product and softmax
+primitives directly, so these permissions do not govern its forward or backward execution.
 
-```
-# This request changes both the device and dtype and may
-# have no eligible kernel.
-q64 = torch.zeros(1, 1, 4, 8, device="cuda", dtype=torch.float64)
-with sdpa_kernel([SDPBackend.FLASH_ATTENTION]):
-    F.scaled_dot_product_attention(q64, q64, q64)
-```
-
-```
-UserWarning: Expected query, key and value to all be of dtype:
-  {Half, BFloat16}. Got Query dtype: double, ...
-RuntimeError: No available kernel. Aborting execution.
-```
-
-These examples expose kernel selection in different forms. PyTorch reports the failure at the
-tensor call site, including the unsupported dtype. TorchLean's planner returns a value before
-execution that tools can store, compare across builds, or attach to a benchmark. Runtime binding
-and hardware checks still follow; a successful plan alone does not establish that a kernel ran.
-
-The failed request uses CUDA double-precision inputs, while the successful request uses CPU
-tensors. These transcripts describe those builds and invocations. To compare providers, we would
-also need to match the dtypes and operation settings.
+The planner can inspect and reject the capsule before data transfer. Its accepted plan does not
+establish that the request fits device memory: attention materializes the full score matrix and
+saves probabilities, using quadratic memory in sequence length.
+{ref "gpu-and-cuda"}[GPU and CUDA] follows those buffers through forward and backward.
 
 # The Attention Specification Theorem
 
@@ -389,7 +376,7 @@ The three standard Lean axioms, and no `sorryAx`. The companion theorem
 `flashAttentionBackward_eq_scaledDotProductAttentionBackward` has the same axiom set for the
 backward pass; both live in {src "NN/Spec/Layers/FlashAttention.lean"}[`FlashAttention.lean`].
 
-Those theorems compare two Lean specifications. The native CUDA capsule records the runtime
+Those theorems compare two Lean specifications. The LibTorch attention capsule records the runtime
 guards, regression tests, source provenance, and `checked` trust level of the actual kernel.
 Connecting PTX or a library call all the way to the specification would require another refinement
 argument over Float32, layout, compiler, and hardware behavior, and no capsule field can stand in
@@ -409,72 +396,35 @@ derivative rule used by the optimizer.
 
 TorchLean distinguishes three VJP modes:
 
-- `none`: no gradient is requested;
-- `torchLeanTape`: TorchLean owns the tape and backward traversal; each capsule declares whether its
-  local VJP is expressed through TorchLean operations or a named backend kernel;
-- `backendVJP`: require capsules whose local VJP is computed by a backend kernel.
+- `none`: a capsule supplies no reverse rule; a profile requests forward execution only;
+- `torchLeanTape`: a capsule composes its local VJP from TorchLean runtime operations;
+- `backendVJP`: a capsule supplies its local VJP through a native bridge routine.
 
-The preferred external-forward design is therefore precise: a provider may compute a fast forward
-value, TorchLean records the same operation on its tape, and TorchLean applies the backward rule.
-This requires enough forward information to be retained for that rule. If the bridge cannot provide
-it, the implementation must fall back or expose a larger trust boundary. Reverse-mode accumulation
-itself is the classical construction {Informal.citep baydin2018}[]; what is being negotiated here is
-only who owns each local rule.
+A profile requesting `torchLeanTape` admits either local VJP implementation while retaining
+TorchLean's tape and backward traversal. A profile requesting `backendVJP` specifically requires
+the native local rule. Attention's capsule uses `torchLeanTape`: Lean computes its matrix products
+and explicit softmax VJP over tape-owned probabilities, then adds the input cotangents to the
+surrounding graph's contributions. There is no LibTorch autograd graph to traverse. Reverse-mode
+accumulation remains the classical construction {Informal.citep baydin2018}[].
 
-The maintained LibTorch-forward profile implements this design for scaled-dot-product attention.
-Selection is per operation. The following profiles differ in provider preference and assurance:
-
-```lean (name := bsPrefer)
--- Change assurance while preserving preference to expose
--- the admissibility filter.
-def bsStrictLibTorch : BackendProfile :=
-  { BackendProfile.libTorchForwardCuda with
-    name := "libtorch_forward_strict"
-    policy :=
-      { BackendProfile.libTorchForwardCuda.policy with
-        assurance := .checked } }
-
-#eval do
-  let attention := #[BackendOp.scaledDotProductAttention]
-  let profiles : List BackendProfile :=
-    [BackendProfile.checkedCuda,
-      BackendProfile.libTorchForwardCuda, bsStrictLibTorch]
-  profiles.forM fun (p : BackendProfile) => do
-    match p.planOps attention with
-    | .error e => IO.println s!"{p.name}: {e}"
-    | .ok plan =>
-      IO.println s!"{p.name}: {plan.capsuleNames}"
-```
-```leanOutput bsPrefer
-checked_cuda: #[torchlean.composed_attention]
-libtorch_forward_cuda: #[libtorch.sdpa_forward]
-libtorch_forward_strict: #[native_cuda.direct_attention]
-```
-
-The third profile asks for LibTorch by preference but keeps the `checked`
-assurance policy, so the LibTorch capsule is not admissible at all, and `chooseCapsuleFor?` falls
-back to the first admissible capsule in catalog order. Preference is a request, and the trust level
-is a filter that a request cannot override. Fallback follows catalog order. A profile that requires
-a particular provider must use `only` rather than a preference.
+GPU attention uses LibTorch automatically. There is no separate composed-attention provider to
+select. The registered `LibTorch.attention` contract records the shape checks, hard-mask
+convention, local VJP, and implementation-defined reduction order.
 
 No-grad sessions request `none` automatically. During training, a differentiable operation cannot
 select a forward-only capsule. Seeded random sources are the deliberate exception: they create
 non-differentiable values, so they do not need a local VJP of their own.
 
-The three selected capsule names make the interaction between preference and assurance visible.
-`checked_cuda` prefers the composed TorchLean route for this request. The external profile admits
-the LibTorch forward boundary and selects it. Tightening assurance while retaining that preference
-forces selection to another admissible implementation. A preference therefore cannot be used as
-a measurement label without checking the result: a run requesting LibTorch may legally select a
-different provider. If the experiment requires LibTorch specifically, provider restriction and
-failure are more informative than fallback.
+Keep the selected capsule names with an experiment. A preference alone does not identify what
+ran, and `libtorch.direct_attention` still leaves the numerical primitives' implementation choices
+to the SDK.
 
 # Boolean Attention Masks
 
 TorchLean gives boolean attention masks one semantics across specifications and runtimes. A blocked
 entry contributes exactly zero to the softmax numerator, as if its score were negative infinity.
-Native CUDA skips blocked entries, while the LibTorch bridge passes a boolean mask directly to
-scaled dot-product attention. Additive score biases remain a separate operation.
+The CUDA composition forms zero numerators for blocked entries and handles fully blocked rows
+explicitly. Additive score biases remain a separate operation.
 {ref "modern-models"}[Modern Models] runs that mask against PyTorch and shows the theorem which
 makes “exactly zero” exact over the reals rather than approximate.
 
@@ -504,7 +454,8 @@ def bsHard : Tensor Float [3, 3] :=
 [[1.000000, 0.000000, 0.000000], [0.622459, 0.377541, 0.000000], [0.333333, 0.333333, 0.333333]]
 ```
 
-Every entry above the diagonal is `0.000000` and every row still sums to one. The first query has
+Every entry above the diagonal prints `0.000000`. In the real specification each nonempty row
+sums to one; the displayed Float entries approximate those normalized weights. The first query has
 only one allowed key, which receives all its mass. The second row normalizes its first two scores.
 The third row is uniform because all three keys are allowed and their scores are equal.
 
@@ -598,9 +549,9 @@ example (i j : Fin 3) (hij : i.val < j.val) :
 `hardMaskedSoftmaxSpec_causal_future_zero` in
 {src "NN/Proofs/Models/Attention/CausalMask.lean"}[`CausalMask.lean`] is stated for every sequence
 length, every score tensor, and every strict-future pair, so the instance above needs no tactic
-block beyond naming it. Its proof is short for a reason: with the numerator defined as `0` rather
-than as $`\exp` of a sentinel, the blocked coordinate reduces to zero definitionally, and the
-lemma is one `unfold` and one `simp`. A
+block beyond naming it. The proof applies the general blocked-coordinate lemma to the causal
+mask. That lemma handles the empty-row branch and simplifies the zero numerator through real
+division; it does not rely on an exponential underflowing. A
 capsule on any provider is then measured against this specification rather than against another
 implementation's tolerance.
 
@@ -632,39 +583,44 @@ The implementation follows one explicit path:
 6. `Report` renders providers, trust levels, VJP modes, reduction policies, and per-obligation
    evidence for logs and benchmark records.
 
-The LibTorch-forward plan illustrates the evidence check. Holding the selected capsule fixed,
-check its obligations under both assurance policies:
+To isolate the evidence check, make a teaching capsule whose forward-value evidence is an
+assumption. Its other descriptors come from the registered matmul capsule. This is a deliberately
+constructed diagnostic plan, not a new provider or an executable selection:
 
 ```lean (name := bsCheck)
--- Hold the selected capsule fixed and inspect which
--- evidence each policy accepts.
+-- Change one evidence field, then hold the plan fixed.
 #eval do
-  let attention := #[BackendOp.scaledDotProductAttention]
-  let profile := BackendProfile.libTorchForwardCuda
-  match profile.planOps attention with
-  | .error e => IO.println s!"planning failed: {e}"
-  | .ok plan =>
-    let policies : List AssurancePolicy :=
-      [AssurancePolicy.checked, AssurancePolicy.external]
-    policies.forM fun (policy : AssurancePolicy) => do
-      match KernelPlan.checkContracts policy plan with
-      | .accepted => IO.println s!"{policy.label}: accepted"
-      | .rejected reports =>
-        for r in reports do
-          IO.println s!"{policy.label}: rejected \
-            {r.capsuleName} {r.obligation.label}"
-          IO.println s!"  {r.evidence.label}"
+  let cap : KernelCapsule :=
+    { LibTorch.matmul with
+      name := "demo.assumed_matmul"
+      valueContract :=
+        { LibTorch.matmul.valueContract with
+          evidence :=
+            .trustedBoundary "demonstration assumption" } }
+  let plan : KernelPlan :=
+    { kernels := #[{ op := .matmul, capsule := cap }] }
+  let policies : List AssurancePolicy :=
+    [AssurancePolicy.checked, AssurancePolicy.external]
+  policies.forM fun (policy : AssurancePolicy) => do
+    match KernelPlan.checkContracts policy plan with
+    | .accepted => IO.println s!"{policy.label}: accepted"
+    | .rejected reports =>
+      for r in reports do
+        IO.println s!"{policy.label}: rejected \
+          {r.capsuleName} {r.obligation.label}"
+        IO.println s!"  {r.evidence.label}"
 ```
 ```leanOutput bsCheck
-checked: rejected libtorch.sdpa_forward value
-  trusted boundary: LibTorch/CUDA SDPA implementation
+checked: rejected demo.assumed_matmul value
+  trusted boundary: demonstration assumption
 external: accepted
 ```
 
-One obligation out of four fails, and the report names which one: the forward value. The capsule's
-shape and layout obligations are runtime guards, its VJP obligation is TorchLean's own rule, and
-only the forward value relies on the named LibTorch boundary. Accepting `external` permits that
-assumption while retaining the other recorded obligations.
+One obligation out of four fails, and the report names which one: the forward value. Shape and
+layout still have runtime guards, and the VJP still names its regression suite. Accepting
+`external` permits the demonstration assumption while retaining those other obligations.
+The registered `LibTorch.matmul` uses test-suite evidence for its forward value; the example
+changed that field specifically to expose the policy boundary.
 
 These are Lean data structures rather than an informal convention between command-line flags. The
 eager runtime consumes the accepted per-operation value, binds it to the implementation it will
@@ -683,9 +639,8 @@ also admits trusted boundaries. The same record decides which capsules the plann
 trust level) and which evidence the selected capsules may rely on (by evidence kind). A profile's
 `acceptGraph` uses its configured policy for both steps. Diagnostic evidence checks, such as
 `bsCheck`, can deliberately compare policies without producing an executable accepted value.
-The `bsPrefer` block above shows both halves
-of that sentence at once: under `checked` the LibTorch capsule was never selected, and under
-`external` it was selected and then accepted.
+Provider preference chooses between admissible implementations. The evidence check is a separate
+filter: asking for a provider cannot override an obligation's rejected evidence.
 
 The evidence check accepts exactly when the filtered
 list of rejected obligations is empty. What it establishes is that every selected capsule rests on
@@ -697,21 +652,20 @@ kernel, and no registered capsule claims a proof. The sources are
 The maintained CUDA wrappers also perform concrete checks at the FFI boundary. Convolution and
 pooling validate rank and dimension conversion, nonzero strides, representable element counts,
 buffer lengths, and operation-specific domains such as finite nonzero smooth-max $`\beta` after
-conversion to Float32. The C/CUDA boundary repeats critical size and overflow checks. These guards
-prevent malformed launches; they complement rather than replace a mathematical value-refinement
+conversion to Float32. The C++ adapter repeats critical size and overflow checks. These guards
+prevent malformed calls; they complement rather than replace a mathematical value-refinement
 argument.
 
 Capsules record reduction order and layout claims but have no scalar-type field. The runtime
 configuration and native conversion checks determine which arithmetic and buffer format actually
 execute; a capsule label alone does not certify their relationship.
 
-The rejected value obligation does not say that the LibTorch answer was numerically wrong.
+The rejected value obligation does not say that a computed answer was numerically wrong.
 It says that the chosen policy does not permit that obligation to rest on an external assumption.
 Likewise, `external: accepted` does not report a numerical comparison; it records agreement
-between the evidence class and the caller's policy. This gives an application a precise way to
-allow an external forward implementation while continuing to require shape guards and a
-TorchLean-owned reverse path. A single unchecked/checked switch for the whole application would
-hide which part of the computation actually relies on that assumption.
+between the evidence class and the caller's policy. No numerical computation ran in this
+example. A per-obligation record lets an application permit an assumption about one part of the
+computation without silently treating that assumption as evidence for all the others.
 
 # Runtime Configuration
 
@@ -726,7 +680,7 @@ def bsModel : nn.Builder (nn.Sequential [4] [1]) :=
 
 def bsTrainer (execution : Runtime.ExecutionMode) :=
   Trainer.new bsModel
-    { objective := .meanSquaredError
+    { objective := .mse
       optimizer := optim.adam { learningRate := 0.01 }
       execution := execution }
 
@@ -810,8 +764,8 @@ weight tensor is data the executor already holds and needs no operation kernel.
 
 Every kernel here came from the `reference.*` family, because `checkedCpu` declares CPU
 availability and the portable module is the only one offering CPU capsules. The same graph under a
-CUDA profile selects native capsules for the same operations, and the audit rows change accordingly
-while the graph does not.
+CUDA profile selects LibTorch capsules for the same operations, and the audit rows change
+accordingly while the graph does not.
 
 The node list exposes how a vector linear layer becomes ordinary tensor operations. A reshape
 introduces a batch axis, a transpose presents the stored weights in matrix-product orientation,
@@ -950,14 +904,16 @@ These statements have different strengths:
 - "the example ran on CUDA" reports an execution path;
 - "CUDA matched the CPU reference on this test suite" reports finite parity evidence;
 - "the fused attention spec equals standard attention" cites a Lean semantic theorem;
-- "the native attention kernel implements the fused spec" requires a native refinement argument;
-- "the LibTorch result is correct" depends on the explicitly named LibTorch boundary unless a
-  stronger checker or theorem covers it.
+- "the Lean composition over ATen primitives implements the attention spec" requires an
+  implementation refinement
+  argument;
+- "this LibTorch build passed the attention tests" reports the tested cases and configuration,
+  while the foreign implementation remains outside the Lean proof.
 
 A backend report records the selected
 provider and the evidence attached to it. Keeping that report beside a benchmark makes “CUDA”
-concrete: readers can see which operations were native or external and which guards and tests stand
-behind each one.
+concrete: readers can see which capsules served the operations and which guards and tests stand
+behind each one. The SDK version and runtime settings identify choices below the capsule level.
 
 For example, a shape guard cannot justify a claim about attention's numerical result. Follow the
 selected capsule's value obligation to its cited test or trusted boundary, then check what that
@@ -974,17 +930,15 @@ the profiles currently wired into the repository.
 
 # References
 
-The framework whose kernel-selection behavior we compare against is
+The framework whose tensor library supplies CUDA execution is
 {Informal.citet pytorch2019}[]; the fused attention algorithm is
 {Informal.citet flashattention2022}[]; reverse-mode accumulation is surveyed by
 {Informal.citet baydin2018}[]; and the proof-carrying-code approach used for comparison is
 {Informal.citet necula1997}[].
 
-- PyTorch,
-  [`torch.compile` reference](https://docs.pytorch.org/docs/stable/generated/torch.compile.html).
 - PyTorch, [C++ and LibTorch API](https://docs.pytorch.org/cppdocs/), and the
   [`torch.nn.attention`](https://docs.pytorch.org/docs/stable/nn.attention.html) backend selector
-  used in the transcripts above.
+  for the SDK permissions exposed by the controls above.
 - NVIDIA, [CUDA C++ Programming Guide](https://docs.nvidia.com/cuda/cuda-c-programming-guide/).
 - Lean, [validating proofs](https://lean-lang.org/doc/reference/latest/ValidatingProofs/), for what
   `#print axioms` is checking.

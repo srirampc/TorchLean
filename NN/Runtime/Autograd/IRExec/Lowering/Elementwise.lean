@@ -14,13 +14,7 @@ public import NN.Runtime.Autograd.IRExec.Lowering.Common
 
 Checked lowering for pointwise arithmetic, unary functions, and activation operations.
 
-Each operation has its own small `lower*` definition. `lowerElementwise` only dispatches on the
-operation kind, and the `lowerElementwise_*` equation lemmas let correctness proofs reduce a
-dispatch to the branch they care about without unfolding the whole dispatcher.
-
-The `.log` closure applies `Tensor.logSpec` to every input. The IR evaluator additionally rejects
-nonpositive inputs, so the end-to-end semantic equivalence theorem carries the `NoRawLog` side
-condition; the lowered closure itself is total and never panics.
+Each operation has a named lowerer, called directly by the exhaustive `lowerNode` dispatch.
 -/
 
 @[expose] public section
@@ -39,272 +33,105 @@ open NN.IR
 
 namespace Internal
 
+/-- Validate one parent at the output shape, then apply its tensor operation at execution time. -/
+@[simp, inline] def lowerUnary {α : Type} [Storage α] [Context α]
+    {Γ : List Shape} (ctx : NodeLoweringContext α Γ) (label : String)
+    (operation : Tensor α ctx.node.outShape → Tensor α ctx.node.outShape) :
+    NodeLoweringResult ctx := do
+  match unaryParent? ctx.node.parents with
+  | some pId =>
+      let ip ← ctx.parentIdx pId ctx.node.outShape
+      pure <| mkForwardNode (fun values => operation (readTensor (xs := values) ip))
+  | none =>
+      throw s!"IRExec: node {ctx.index}: {label} expects 1 parent ({ctx.node.summary})"
+
+/-- Validate the left parent before the right; the right shape may differ, as for `safeLog`. -/
+@[simp, inline] def lowerBinary {α : Type} [Storage α] [Context α]
+    {Γ : List Shape} (ctx : NodeLoweringContext α Γ) (label : String) (rightShape : Shape)
+    (operation : Tensor α ctx.node.outShape → Tensor α rightShape → Tensor α ctx.node.outShape) :
+    NodeLoweringResult ctx := do
+  match binaryParents? ctx.node.parents with
+  | some (aId, bId) =>
+      let ia ← ctx.parentIdx aId ctx.node.outShape
+      let ib ← ctx.parentIdx bId rightShape
+      pure <| mkForwardNode (fun values =>
+        operation (readTensor (xs := values) ia) (readTensor (xs := values) ib))
+  | none =>
+      throw s!"IRExec: node {ctx.index}: {label} expects 2 parents ({ctx.node.summary})"
+
 /-- Checked lowering for `.add`. -/
 def lowerAdd {α : Type} [TorchLean.Storage α] [Context α]
-    {Γ : List Shape} (ctx : NodeLoweringContext α Γ) : NodeLoweringResult ctx := do
-  let i := ctx.index
-  let n := ctx.node
-  let τ : Shape := n.outShape
-  let parentIdx := ctx.parentIdx
-  let fwd (forward : TorchLean.TensorPack α Γ → Tensor α τ) :
-      ForwardNode α Γ τ :=
-    mkForwardNode (α := α) (Γ := Γ) (τ := τ) forward
-  match binaryParents? n.parents with
-  | some (aId, bId) =>
-      let ia ← parentIdx aId τ
-      let ib ← parentIdx bId τ
-      let forward := fun ctx : TorchLean.TensorPack α Γ =>
-        Tensor.addSpec (α := α) (getIdx (α := α) (xs := ctx) ia) (getIdx (α := α) (xs :=
-          ctx) ib)
-      pure <| fwd forward
-  | _ => throw s!"IRExec: node {i}: add expects 2 parents ({n.summary})"
+    {Γ : List Shape} (ctx : NodeLoweringContext α Γ) : NodeLoweringResult ctx :=
+  lowerBinary ctx "add" ctx.node.outShape (Tensor.addSpec)
 
 /-- Checked lowering for `.sub`. -/
 def lowerSub {α : Type} [TorchLean.Storage α] [Context α]
-    {Γ : List Shape} (ctx : NodeLoweringContext α Γ) : NodeLoweringResult ctx := do
-  let i := ctx.index
-  let n := ctx.node
-  let τ : Shape := n.outShape
-  let parentIdx := ctx.parentIdx
-  let fwd (forward : TorchLean.TensorPack α Γ → Tensor α τ) :
-      ForwardNode α Γ τ :=
-    mkForwardNode (α := α) (Γ := Γ) (τ := τ) forward
-  match binaryParents? n.parents with
-  | some (aId, bId) =>
-      let ia ← parentIdx aId τ
-      let ib ← parentIdx bId τ
-      let forward := fun ctx : TorchLean.TensorPack α Γ =>
-        Tensor.subSpec (α := α) (getIdx (α := α) (xs := ctx) ia) (getIdx (α := α) (xs :=
-          ctx) ib)
-      pure <| fwd forward
-  | _ => throw s!"IRExec: node {i}: sub expects 2 parents ({n.summary})"
+    {Γ : List Shape} (ctx : NodeLoweringContext α Γ) : NodeLoweringResult ctx :=
+  lowerBinary ctx "sub" ctx.node.outShape (Tensor.subSpec)
 
 /-- Checked lowering for `.mulElem`. -/
 def lowerMulElem {α : Type} [TorchLean.Storage α] [Context α]
-    {Γ : List Shape} (ctx : NodeLoweringContext α Γ) : NodeLoweringResult ctx := do
-  let i := ctx.index
-  let n := ctx.node
-  let τ : Shape := n.outShape
-  let parentIdx := ctx.parentIdx
-  let fwd (forward : TorchLean.TensorPack α Γ → Tensor α τ) :
-      ForwardNode α Γ τ :=
-    mkForwardNode (α := α) (Γ := Γ) (τ := τ) forward
-  match binaryParents? n.parents with
-  | some (aId, bId) =>
-      let ia ← parentIdx aId τ
-      let ib ← parentIdx bId τ
-      let forward := fun ctx : TorchLean.TensorPack α Γ =>
-        Tensor.mulSpec (α := α) (getIdx (α := α) (xs := ctx) ia) (getIdx (α := α) (xs :=
-          ctx) ib)
-      pure <| fwd forward
-  | _ => throw s!"IRExec: node {i}: mul_elem expects 2 parents ({n.summary})"
+    {Γ : List Shape} (ctx : NodeLoweringContext α Γ) : NodeLoweringResult ctx :=
+  lowerBinary ctx "mul_elem" ctx.node.outShape (Tensor.mulSpec)
 
 /-- Checked lowering for `.abs`. -/
 def lowerAbs {α : Type} [TorchLean.Storage α] [Context α]
-    {Γ : List Shape} (ctx : NodeLoweringContext α Γ) : NodeLoweringResult ctx := do
-  let i := ctx.index
-  let n := ctx.node
-  let τ : Shape := n.outShape
-  let parentIdx := ctx.parentIdx
-  let fwd (forward : TorchLean.TensorPack α Γ → Tensor α τ) :
-      ForwardNode α Γ τ :=
-    mkForwardNode (α := α) (Γ := Γ) (τ := τ) forward
-  match unaryParent? n.parents with
-  | some pId =>
-      let ip ← parentIdx pId τ
-      let forward := fun ctx : TorchLean.TensorPack α Γ =>
-        Tensor.absSpec (α := α) (getIdx (α := α) (xs := ctx) ip)
-      pure <| fwd forward
-  | _ => throw s!"IRExec: node {i}: abs expects 1 parent ({n.summary})"
+    {Γ : List Shape} (ctx : NodeLoweringContext α Γ) : NodeLoweringResult ctx :=
+  lowerUnary ctx "abs" (Tensor.absSpec)
 
 /-- Checked lowering for `.sqrt`. -/
 def lowerSqrt {α : Type} [TorchLean.Storage α] [Context α]
-    {Γ : List Shape} (ctx : NodeLoweringContext α Γ) : NodeLoweringResult ctx := do
-  let i := ctx.index
-  let n := ctx.node
-  let τ : Shape := n.outShape
-  let parentIdx := ctx.parentIdx
-  let fwd (forward : TorchLean.TensorPack α Γ → Tensor α τ) :
-      ForwardNode α Γ τ :=
-    mkForwardNode (α := α) (Γ := Γ) (τ := τ) forward
-  match unaryParent? n.parents with
-  | some pId =>
-      let ip ← parentIdx pId τ
-      let forward := fun ctx : TorchLean.TensorPack α Γ =>
-        Tensor.sqrtSpec (α := α) (getIdx (α := α) (xs := ctx) ip)
-      pure <| fwd forward
-  | _ => throw s!"IRExec: node {i}: sqrt expects 1 parent ({n.summary})"
+    {Γ : List Shape} (ctx : NodeLoweringContext α Γ) : NodeLoweringResult ctx :=
+  lowerUnary ctx "sqrt" (Tensor.sqrtSpec)
 
 /-- Checked lowering for `.inv`. -/
 def lowerInv {α : Type} [TorchLean.Storage α] [Context α]
-    {Γ : List Shape} (ctx : NodeLoweringContext α Γ) : NodeLoweringResult ctx := do
-  let i := ctx.index
-  let n := ctx.node
-  let τ : Shape := n.outShape
-  let parentIdx := ctx.parentIdx
-  let fwd (forward : TorchLean.TensorPack α Γ → Tensor α τ) :
-      ForwardNode α Γ τ :=
-    mkForwardNode (α := α) (Γ := Γ) (τ := τ) forward
-  match unaryParent? n.parents with
-  | some pId =>
-      let ip ← parentIdx pId τ
-      let forward := fun ctx : TorchLean.TensorPack α Γ =>
-        Tensor.invSpec (α := α) (getIdx (α := α) (xs := ctx) ip)
-      pure <| fwd forward
-  | _ => throw s!"IRExec: node {i}: inv expects 1 parent ({n.summary})"
+    {Γ : List Shape} (ctx : NodeLoweringContext α Γ) : NodeLoweringResult ctx :=
+  lowerUnary ctx "inv" (Tensor.invSpec)
 
 /-- Checked lowering for `.maxElem`. -/
 def lowerMaxElem {α : Type} [TorchLean.Storage α] [Context α]
-    {Γ : List Shape} (ctx : NodeLoweringContext α Γ) : NodeLoweringResult ctx := do
-  let i := ctx.index
-  let n := ctx.node
-  let τ : Shape := n.outShape
-  let parentIdx := ctx.parentIdx
-  let fwd (forward : TorchLean.TensorPack α Γ → Tensor α τ) :
-      ForwardNode α Γ τ :=
-    mkForwardNode (α := α) (Γ := Γ) (τ := τ) forward
-  match binaryParents? n.parents with
-  | some (aId, bId) =>
-      let ia ← parentIdx aId τ
-      let ib ← parentIdx bId τ
-      let forward := fun ctx : TorchLean.TensorPack α Γ =>
-        Tensor.maxSpec (α := α) (getIdx (α := α) (xs := ctx) ia) (getIdx (α := α) (xs :=
-          ctx) ib)
-      pure <| fwd forward
-  | _ => throw s!"IRExec: node {i}: max_elem expects 2 parents ({n.summary})"
+    {Γ : List Shape} (ctx : NodeLoweringContext α Γ) : NodeLoweringResult ctx :=
+  lowerBinary ctx "max_elem" ctx.node.outShape (Tensor.maxSpec)
 
 /-- Checked lowering for `.minElem`. -/
 def lowerMinElem {α : Type} [TorchLean.Storage α] [Context α]
-    {Γ : List Shape} (ctx : NodeLoweringContext α Γ) : NodeLoweringResult ctx := do
-  let i := ctx.index
-  let n := ctx.node
-  let τ : Shape := n.outShape
-  let parentIdx := ctx.parentIdx
-  let fwd (forward : TorchLean.TensorPack α Γ → Tensor α τ) :
-      ForwardNode α Γ τ :=
-    mkForwardNode (α := α) (Γ := Γ) (τ := τ) forward
-  match binaryParents? n.parents with
-  | some (aId, bId) =>
-      let ia ← parentIdx aId τ
-      let ib ← parentIdx bId τ
-      let forward := fun ctx : TorchLean.TensorPack α Γ =>
-        Tensor.minSpec (α := α) (getIdx (α := α) (xs := ctx) ia) (getIdx (α := α) (xs :=
-          ctx) ib)
-      pure <| fwd forward
-  | _ => throw s!"IRExec: node {i}: min_elem expects 2 parents ({n.summary})"
+    {Γ : List Shape} (ctx : NodeLoweringContext α Γ) : NodeLoweringResult ctx :=
+  lowerBinary ctx "min_elem" ctx.node.outShape (Tensor.minSpec)
 
 /-- Checked lowering for `.relu`. -/
 def lowerRelu {α : Type} [TorchLean.Storage α] [Context α]
-    {Γ : List Shape} (ctx : NodeLoweringContext α Γ) : NodeLoweringResult ctx := do
-  let i := ctx.index
-  let n := ctx.node
-  let τ : Shape := n.outShape
-  let parentIdx := ctx.parentIdx
-  let fwd (forward : TorchLean.TensorPack α Γ → Tensor α τ) :
-      ForwardNode α Γ τ :=
-    mkForwardNode (α := α) (Γ := Γ) (τ := τ) forward
-  match unaryParent? n.parents with
-  | some pId =>
-      let ip ← parentIdx pId τ
-      let forward := fun ctx : TorchLean.TensorPack α Γ =>
-        Activation.reluSpec (α := α) (getIdx (α := α) (xs := ctx) ip)
-      pure <| fwd forward
-  | _ => throw s!"IRExec: node {i}: relu expects 1 parent ({n.summary})"
+    {Γ : List Shape} (ctx : NodeLoweringContext α Γ) : NodeLoweringResult ctx :=
+  lowerUnary ctx "relu" (Activation.reluSpec)
 
 /-- Checked lowering for `.tanh`. -/
 def lowerTanh {α : Type} [TorchLean.Storage α] [Context α]
-    {Γ : List Shape} (ctx : NodeLoweringContext α Γ) : NodeLoweringResult ctx := do
-  let i := ctx.index
-  let n := ctx.node
-  let τ : Shape := n.outShape
-  let parentIdx := ctx.parentIdx
-  let fwd (forward : TorchLean.TensorPack α Γ → Tensor α τ) :
-      ForwardNode α Γ τ :=
-    mkForwardNode (α := α) (Γ := Γ) (τ := τ) forward
-  match unaryParent? n.parents with
-  | some pId =>
-      let ip ← parentIdx pId τ
-      let forward := fun ctx : TorchLean.TensorPack α Γ =>
-        Activation.tanhSpec (α := α) (getIdx (α := α) (xs := ctx) ip)
-      pure <| fwd forward
-  | _ => throw s!"IRExec: node {i}: tanh expects 1 parent ({n.summary})"
+    {Γ : List Shape} (ctx : NodeLoweringContext α Γ) : NodeLoweringResult ctx :=
+  lowerUnary ctx "tanh" (Activation.tanhSpec)
 
 /-- Checked lowering for `.sigmoid`. -/
 def lowerSigmoid {α : Type} [TorchLean.Storage α] [Context α]
-    {Γ : List Shape} (ctx : NodeLoweringContext α Γ) : NodeLoweringResult ctx := do
-  let i := ctx.index
-  let n := ctx.node
-  let τ : Shape := n.outShape
-  let parentIdx := ctx.parentIdx
-  let fwd (forward : TorchLean.TensorPack α Γ → Tensor α τ) :
-      ForwardNode α Γ τ :=
-    mkForwardNode (α := α) (Γ := Γ) (τ := τ) forward
-  match unaryParent? n.parents with
-  | some pId =>
-      let ip ← parentIdx pId τ
-      let forward := fun ctx : TorchLean.TensorPack α Γ =>
-        Activation.sigmoidSpec (α := α) (getIdx (α := α) (xs := ctx) ip)
-      pure <| fwd forward
-  | _ => throw s!"IRExec: node {i}: sigmoid expects 1 parent ({n.summary})"
+    {Γ : List Shape} (ctx : NodeLoweringContext α Γ) : NodeLoweringResult ctx :=
+  lowerUnary ctx "sigmoid" (Activation.sigmoidSpec)
 
 /-- Lower stable softplus through the scalar specification.
 
 Retaining its sign branch preserves both the finite positive tail and the selected computation
 at zero when the scalar carries first or higher derivatives. -/
 def lowerSoftplus {α : Type} [TorchLean.Storage α] [Context α]
-    {Γ : List Shape} (ctx : NodeLoweringContext α Γ) : NodeLoweringResult ctx := do
-  let i := ctx.index
-  let n := ctx.node
-  let τ : Shape := n.outShape
-  let parentIdx := ctx.parentIdx
-  let fwd (forward : TorchLean.TensorPack α Γ → Tensor α τ) :
-      ForwardNode α Γ τ :=
-    mkForwardNode (α := α) (Γ := Γ) (τ := τ) forward
-  match unaryParent? n.parents with
-  | some pId =>
-      let ip ← parentIdx pId τ
-      let forward := fun ctx : TorchLean.TensorPack α Γ =>
-        Activation.softplusSpec (α := α) (getIdx (α := α) (xs := ctx) ip)
-      pure <| fwd forward
-  | _ => throw s!"IRExec: node {i}: softplus expects 1 parent ({n.summary})"
+    {Γ : List Shape} (ctx : NodeLoweringContext α Γ) : NodeLoweringResult ctx :=
+  lowerUnary ctx "softplus" (Activation.softplusSpec)
 
 /-- Checked lowering for `.safeLog`. -/
 def lowerSafeLog {α : Type} [TorchLean.Storage α] [Context α]
-    {Γ : List Shape} (ctx : NodeLoweringContext α Γ) : NodeLoweringResult ctx := do
-  let i := ctx.index
-  let n := ctx.node
-  let τ : Shape := n.outShape
-  let parentIdx := ctx.parentIdx
-  let fwd (forward : TorchLean.TensorPack α Γ → Tensor α τ) :
-      ForwardNode α Γ τ :=
-    mkForwardNode (α := α) (Γ := Γ) (τ := τ) forward
-  match binaryParents? n.parents with
-  | some (aId, bId) =>
-      let ia ← parentIdx aId τ
-      let ib ← parentIdx bId .scalar
-      let forward := fun ctx : TorchLean.TensorPack α Γ =>
-        Activation.safeLogSpec (α := α) (getIdx (α := α) (xs := ctx) ia) (getIdx (α := α) (xs :=
-          ctx) ib).item
-      pure <| fwd forward
-  | _ => throw s!"IRExec: node {i}: safe_log expects 2 parents ({n.summary})"
+    {Γ : List Shape} (ctx : NodeLoweringContext α Γ) : NodeLoweringResult ctx :=
+  lowerBinary ctx "safe_log" .scalar
+    (fun value epsilon => Activation.safeLogSpec value epsilon.item)
 
 /-- Checked lowering for `.exp`. -/
 def lowerExp {α : Type} [TorchLean.Storage α] [Context α]
-    {Γ : List Shape} (ctx : NodeLoweringContext α Γ) : NodeLoweringResult ctx := do
-  let i := ctx.index
-  let n := ctx.node
-  let τ : Shape := n.outShape
-  let parentIdx := ctx.parentIdx
-  let fwd (forward : TorchLean.TensorPack α Γ → Tensor α τ) :
-      ForwardNode α Γ τ :=
-    mkForwardNode (α := α) (Γ := Γ) (τ := τ) forward
-  match unaryParent? n.parents with
-  | some pId =>
-      let ip ← parentIdx pId τ
-      let forward := fun ctx : TorchLean.TensorPack α Γ =>
-        Tensor.expSpec (α := α) (getIdx (α := α) (xs := ctx) ip)
-      pure <| fwd forward
-  | _ => throw s!"IRExec: node {i}: exp expects 1 parent ({n.summary})"
+    {Γ : List Shape} (ctx : NodeLoweringContext α Γ) : NodeLoweringResult ctx :=
+  lowerUnary ctx "exp" (Tensor.expSpec)
 
 /--
 Checked lowering for `.log`.
@@ -315,59 +142,18 @@ through `NoRawLog`. A positive-input construction can avoid the domain failure, 
 node remains outside that syntactic theorem and requires a separate domain-aware argument.
 -/
 def lowerLog {α : Type} [TorchLean.Storage α] [Context α]
-    {Γ : List Shape} (ctx : NodeLoweringContext α Γ) : NodeLoweringResult ctx := do
-  let i := ctx.index
-  let n := ctx.node
-  let τ : Shape := n.outShape
-  let parentIdx := ctx.parentIdx
-  let fwd (forward : TorchLean.TensorPack α Γ → Tensor α τ) :
-      ForwardNode α Γ τ :=
-    mkForwardNode (α := α) (Γ := Γ) (τ := τ) forward
-  match unaryParent? n.parents with
-  | some pId =>
-      let ip ← parentIdx pId τ
-      let forward := fun ctx : TorchLean.TensorPack α Γ =>
-        Tensor.logSpec (α := α) (getIdx (α := α) (xs := ctx) ip)
-      pure <| fwd forward
-  | _ => throw s!"IRExec: node {i}: log expects 1 parent ({n.summary})"
+    {Γ : List Shape} (ctx : NodeLoweringContext α Γ) : NodeLoweringResult ctx :=
+  lowerUnary ctx "log" (Tensor.logSpec)
 
 /-- Checked lowering for `.sin`. -/
 def lowerSin {α : Type} [TorchLean.Storage α] [Context α]
-    {Γ : List Shape} (ctx : NodeLoweringContext α Γ) : NodeLoweringResult ctx := do
-  let i := ctx.index
-  let n := ctx.node
-  let τ : Shape := n.outShape
-  let parentIdx := ctx.parentIdx
-  let fwd (forward : TorchLean.TensorPack α Γ → Tensor α τ) :
-      ForwardNode α Γ τ :=
-    mkForwardNode (α := α) (Γ := Γ) (τ := τ) forward
-  match unaryParent? n.parents with
-  | some pId =>
-      let ip ← parentIdx pId τ
-      let forward := fun ctx : TorchLean.TensorPack α Γ =>
-        Tensor.mapSpec (α := α) (s := τ) (fun x => MathFunctions.sin x) (getIdx (α := α)
-          (xs := ctx) ip)
-      pure <| fwd forward
-  | _ => throw s!"IRExec: node {i}: sin expects 1 parent ({n.summary})"
+    {Γ : List Shape} (ctx : NodeLoweringContext α Γ) : NodeLoweringResult ctx :=
+  lowerUnary ctx "sin" (Tensor.mapSpec (fun x => MathFunctions.sin x))
 
 /-- Checked lowering for `.cos`. -/
 def lowerCos {α : Type} [TorchLean.Storage α] [Context α]
-    {Γ : List Shape} (ctx : NodeLoweringContext α Γ) : NodeLoweringResult ctx := do
-  let i := ctx.index
-  let n := ctx.node
-  let τ : Shape := n.outShape
-  let parentIdx := ctx.parentIdx
-  let fwd (forward : TorchLean.TensorPack α Γ → Tensor α τ) :
-      ForwardNode α Γ τ :=
-    mkForwardNode (α := α) (Γ := Γ) (τ := τ) forward
-  match unaryParent? n.parents with
-  | some pId =>
-      let ip ← parentIdx pId τ
-      let forward := fun ctx : TorchLean.TensorPack α Γ =>
-        Tensor.mapSpec (α := α) (s := τ) (fun x => MathFunctions.cos x) (getIdx (α := α)
-          (xs := ctx) ip)
-      pure <| fwd forward
-  | _ => throw s!"IRExec: node {i}: cos expects 1 parent ({n.summary})"
+    {Γ : List Shape} (ctx : NodeLoweringContext α Γ) : NodeLoweringResult ctx :=
+  lowerUnary ctx "cos" (Tensor.mapSpec (fun x => MathFunctions.cos x))
 
 /-- Checked lowering for `.softmax axis`. -/
 def lowerSoftmax {α : Type} [TorchLean.Storage α] [Context α]
@@ -376,7 +162,7 @@ def lowerSoftmax {α : Type} [TorchLean.Storage α] [Context α]
   let n := ctx.node
   let τ : Shape := n.outShape
   let parentIdx := ctx.parentIdx
-  let fwd (forward : TorchLean.TensorPack α Γ → Tensor α τ) :
+  let fwd (forward : TensorReader α Γ → Tensor α τ) :
       ForwardNode α Γ τ :=
     mkForwardNode (α := α) (Γ := Γ) (τ := τ) forward
   match unaryParent? n.parents with
@@ -386,9 +172,9 @@ def lowerSoftmax {α : Type} [TorchLean.Storage α] [Context α]
           throw s!"softmax: invalid axis {axis} for rank {Spec.Shape.rank τ}"
       | some h =>
           parentIdx pId τ >>= fun ip =>
-            let forward := fun ctx : TorchLean.TensorPack α Γ =>
+            let forward := fun ctx : TensorReader α Γ =>
               @Activation.softmaxSpec α _ _ τ axis h.down
-                (getIdx (α := α) (xs := ctx) ip)
+                (readTensor (α := α) (xs := ctx) ip)
             pure <| fwd forward
   | _ => throw s!"IRExec: node {i}: softmax expects 1 parent ({n.summary})"
 
@@ -400,7 +186,7 @@ def lowerHardMaskedSoftmax {α : Type} [TorchLean.Storage α] [Context α]
   let n := ctx.node
   let τ : Shape := n.outShape
   let parentIdx := ctx.parentIdx
-  let fwd (forward : TorchLean.TensorPack α Γ → Tensor α τ) :
+  let fwd (forward : TensorReader α Γ → Tensor α τ) :
       ForwardNode α Γ τ :=
     mkForwardNode (α := α) (Γ := Γ) (τ := τ) forward
   match unaryParent? n.parents with
@@ -411,117 +197,12 @@ def lowerHardMaskedSoftmax {α : Type} [TorchLean.Storage α] [Context α]
         | .ok value => pure value
         | .error msg =>
             throw s!"IRExec: node {i}: hard_masked_softmax: {msg} ({n.summary})"
-      let forward := fun ctx : TorchLean.TensorPack α Γ =>
+      let forward := fun ctx : TensorReader α Γ =>
         Spec.hardMaskedSoftmaxSpec
-          (getIdx (α := α) (xs := ctx) ip) allowed
+          (readTensor (α := α) (xs := ctx) ip) allowed
       pure <| fwd forward
   | _ =>
       throw s!"IRExec: node {i}: hard_masked_softmax expects 1 parent ({n.summary})"
-
-/-- Checked lowering for pointwise arithmetic, unary functions, and activation operations. -/
-def lowerElementwise {α : Type} [TorchLean.Storage α] [Context α]
-    {Γ : List Shape} (ctx : NodeLoweringContext α Γ) (kind : OpKind) :
-    NodeLoweringResult ctx :=
-  match kind with
-  | .add => lowerAdd ctx
-  | .sub => lowerSub ctx
-  | .mulElem => lowerMulElem ctx
-  | .abs => lowerAbs ctx
-  | .sqrt => lowerSqrt ctx
-  | .inv => lowerInv ctx
-  | .maxElem => lowerMaxElem ctx
-  | .minElem => lowerMinElem ctx
-  | .relu => lowerRelu ctx
-  | .tanh => lowerTanh ctx
-  | .sigmoid => lowerSigmoid ctx
-  | .softplus => lowerSoftplus ctx
-  | .safeLog => lowerSafeLog ctx
-  | .exp => lowerExp ctx
-  | .log => lowerLog ctx
-  | .sin => lowerSin ctx
-  | .cos => lowerCos ctx
-  | .softmax axis => lowerSoftmax ctx axis
-  | .hardMaskedSoftmax mask => lowerHardMaskedSoftmax ctx mask
-  | _ => throw s!"IRExec: internal error: operation routed to lowerElementwise"
-
-variable {α : Type} [TorchLean.Storage α] [Context α] {Γ : List Shape}
-
-/-- Dispatch equation for `.add`. -/
-@[simp] theorem lowerElementwise_add (ctx : NodeLoweringContext α Γ) :
-    lowerElementwise ctx .add = lowerAdd ctx := rfl
-
-/-- Dispatch equation for `.sub`. -/
-@[simp] theorem lowerElementwise_sub (ctx : NodeLoweringContext α Γ) :
-    lowerElementwise ctx .sub = lowerSub ctx := rfl
-
-/-- Dispatch equation for `.mulElem`. -/
-@[simp] theorem lowerElementwise_mulElem (ctx : NodeLoweringContext α Γ) :
-    lowerElementwise ctx .mulElem = lowerMulElem ctx := rfl
-
-/-- Dispatch equation for `.abs`. -/
-@[simp] theorem lowerElementwise_abs (ctx : NodeLoweringContext α Γ) :
-    lowerElementwise ctx .abs = lowerAbs ctx := rfl
-
-/-- Dispatch equation for `.sqrt`. -/
-@[simp] theorem lowerElementwise_sqrt (ctx : NodeLoweringContext α Γ) :
-    lowerElementwise ctx .sqrt = lowerSqrt ctx := rfl
-
-/-- Dispatch equation for `.inv`. -/
-@[simp] theorem lowerElementwise_inv (ctx : NodeLoweringContext α Γ) :
-    lowerElementwise ctx .inv = lowerInv ctx := rfl
-
-/-- Dispatch equation for `.maxElem`. -/
-@[simp] theorem lowerElementwise_maxElem (ctx : NodeLoweringContext α Γ) :
-    lowerElementwise ctx .maxElem = lowerMaxElem ctx := rfl
-
-/-- Dispatch equation for `.minElem`. -/
-@[simp] theorem lowerElementwise_minElem (ctx : NodeLoweringContext α Γ) :
-    lowerElementwise ctx .minElem = lowerMinElem ctx := rfl
-
-/-- Dispatch equation for `.relu`. -/
-@[simp] theorem lowerElementwise_relu (ctx : NodeLoweringContext α Γ) :
-    lowerElementwise ctx .relu = lowerRelu ctx := rfl
-
-/-- Dispatch equation for `.tanh`. -/
-@[simp] theorem lowerElementwise_tanh (ctx : NodeLoweringContext α Γ) :
-    lowerElementwise ctx .tanh = lowerTanh ctx := rfl
-
-/-- Dispatch equation for `.sigmoid`. -/
-@[simp] theorem lowerElementwise_sigmoid (ctx : NodeLoweringContext α Γ) :
-    lowerElementwise ctx .sigmoid = lowerSigmoid ctx := rfl
-
-/-- Dispatch equation for `.softplus`. -/
-@[simp] theorem lowerElementwise_softplus (ctx : NodeLoweringContext α Γ) :
-    lowerElementwise ctx .softplus = lowerSoftplus ctx := rfl
-
-/-- Dispatch equation for `.safeLog`. -/
-@[simp] theorem lowerElementwise_safeLog (ctx : NodeLoweringContext α Γ) :
-    lowerElementwise ctx .safeLog = lowerSafeLog ctx := rfl
-
-/-- Dispatch equation for `.exp`. -/
-@[simp] theorem lowerElementwise_exp (ctx : NodeLoweringContext α Γ) :
-    lowerElementwise ctx .exp = lowerExp ctx := rfl
-
-/-- Dispatch equation for `.log`. -/
-@[simp] theorem lowerElementwise_log (ctx : NodeLoweringContext α Γ) :
-    lowerElementwise ctx .log = lowerLog ctx := rfl
-
-/-- Dispatch equation for `.sin`. -/
-@[simp] theorem lowerElementwise_sin (ctx : NodeLoweringContext α Γ) :
-    lowerElementwise ctx .sin = lowerSin ctx := rfl
-
-/-- Dispatch equation for `.cos`. -/
-@[simp] theorem lowerElementwise_cos (ctx : NodeLoweringContext α Γ) :
-    lowerElementwise ctx .cos = lowerCos ctx := rfl
-
-/-- Dispatch equation for `.softmax axis`. -/
-@[simp] theorem lowerElementwise_softmax (ctx : NodeLoweringContext α Γ) (axis : Nat) :
-    lowerElementwise ctx (.softmax axis) = lowerSoftmax ctx axis := rfl
-
-/-- Dispatch equation for `.hardMaskedSoftmax mask`. -/
-@[simp] theorem lowerElementwise_hardMaskedSoftmax (ctx : NodeLoweringContext α Γ)
-    (mask : NN.IR.HardMask) :
-    lowerElementwise ctx (.hardMaskedSoftmax mask) = lowerHardMaskedSoftmax ctx mask := rfl
 
 end Internal
 end IRExec

@@ -82,7 +82,7 @@ input vector. Parameter-gradient theorems live at the trainable-parameter/runtim
 def ffnResidualDGraph {dModel dFF : Nat}
     (fc1 : Spec.LinearSpec ℝ dModel dFF)
     (fc2 : Spec.LinearSpec ℝ dFF dModel) :
-    DGraph (ΓFFN dModel) (ssFFNResidual dModel dFF) := by
+    DGraph (ΓFFN dModel) (ssFFNResidual dModel dFF) :=
   let dg0 : DGraph (ΓFFN dModel) [] := DGraph.nil
   let dg1 : DGraph (ΓFFN dModel) [FFNHiddenShape dFF] :=
     DGraph.snoc (dg := dg0)
@@ -111,20 +111,19 @@ def ffnResidualDGraph {dModel dFF : Nat}
         (Γ := ΓFFN dModel ++ [FFNHiddenShape dFF, FFNHiddenShape dFF])
         (inDim := dFF) (outDim := dModel)
         (ffnIdxHiddenAct (dModel := dModel) (dFF := dFF)) fc2)
-  exact
-    DGraph.snoc (dg := dg3)
-      (node := add
-        (Γ := ΓFFN dModel ++ [FFNHiddenShape dFF, FFNHiddenShape dFF, FFNModelShape dModel])
-        (s := FFNModelShape dModel)
-        (ffnIdxX (dModel := dModel)
-          (ss := [FFNHiddenShape dFF, FFNHiddenShape dFF, FFNModelShape dModel]))
-        (ffnIdxProjected (dModel := dModel) (dFF := dFF)))
-      (hn := addFderiv
-        (Γ := ΓFFN dModel ++ [FFNHiddenShape dFF, FFNHiddenShape dFF, FFNModelShape dModel])
-        (s := FFNModelShape dModel)
-        (ffnIdxX (dModel := dModel)
-          (ss := [FFNHiddenShape dFF, FFNHiddenShape dFF, FFNModelShape dModel]))
-        (ffnIdxProjected (dModel := dModel) (dFF := dFF)))
+  DGraph.snoc (dg := dg3)
+    (node := add
+      (Γ := ΓFFN dModel ++ [FFNHiddenShape dFF, FFNHiddenShape dFF, FFNModelShape dModel])
+      (s := FFNModelShape dModel)
+      (ffnIdxX (dModel := dModel)
+        (ss := [FFNHiddenShape dFF, FFNHiddenShape dFF, FFNModelShape dModel]))
+      (ffnIdxProjected (dModel := dModel) (dFF := dFF)))
+    (hn := addFderiv
+      (Γ := ΓFFN dModel ++ [FFNHiddenShape dFF, FFNHiddenShape dFF, FFNModelShape dModel])
+      (s := FFNModelShape dModel)
+      (ffnIdxX (dModel := dModel)
+        (ss := [FFNHiddenShape dFF, FFNHiddenShape dFF, FFNModelShape dModel]))
+      (ffnIdxProjected (dModel := dModel) (dFF := dFF)))
 
 /--
 End-to-end VJP theorem for the residual Transformer feed-forward sublayer.
@@ -221,7 +220,7 @@ def seqFfnResidualDGraph {seqLen dModel dFF : Nat}
       Vec (Spec.Shape.size (SeqFFNHiddenShape seqLen dFF)) →L[ℝ]
         Vec (Spec.Shape.size (SeqFFNModelShape seqLen dModel)))
     (b2 : Vec (Spec.Shape.size (SeqFFNModelShape seqLen dModel))) :
-    DGraph (ΓSeqFFN seqLen dModel) (ssSeqFFNResidual seqLen dModel dFF) := by
+    DGraph (ΓSeqFFN seqLen dModel) (ssSeqFFNResidual seqLen dModel dFF) :=
   let dg0 : DGraph (ΓSeqFFN seqLen dModel) [] := DGraph.nil
   let dg1 : DGraph (ΓSeqFFN seqLen dModel) [SeqFFNHiddenShape seqLen dFF] :=
     DGraph.snoc (dg := dg0)
@@ -262,24 +261,23 @@ def seqFfnResidualDGraph {seqLen dModel dFF : Nat}
         (sIn := SeqFFNHiddenShape seqLen dFF)
         (sOut := SeqFFNModelShape seqLen dModel)
         (seqFfnIdxHiddenAct (seqLen := seqLen) (dModel := dModel) (dFF := dFF)) fc2 b2)
-  exact
-    DGraph.snoc (dg := dg3)
-      (node := add
-        (Γ := ΓSeqFFN seqLen dModel ++ [SeqFFNHiddenShape seqLen dFF,
-          SeqFFNHiddenShape seqLen dFF, SeqFFNModelShape seqLen dModel])
-        (s := SeqFFNModelShape seqLen dModel)
-        (seqFfnIdxX (seqLen := seqLen) (dModel := dModel)
-          (ss := [SeqFFNHiddenShape seqLen dFF, SeqFFNHiddenShape seqLen dFF,
-            SeqFFNModelShape seqLen dModel]))
-        (seqFfnIdxProjected (seqLen := seqLen) (dModel := dModel) (dFF := dFF)))
-      (hn := addFderiv
-        (Γ := ΓSeqFFN seqLen dModel ++ [SeqFFNHiddenShape seqLen dFF,
-          SeqFFNHiddenShape seqLen dFF, SeqFFNModelShape seqLen dModel])
-        (s := SeqFFNModelShape seqLen dModel)
-        (seqFfnIdxX (seqLen := seqLen) (dModel := dModel)
-          (ss := [SeqFFNHiddenShape seqLen dFF, SeqFFNHiddenShape seqLen dFF,
-            SeqFFNModelShape seqLen dModel]))
-        (seqFfnIdxProjected (seqLen := seqLen) (dModel := dModel) (dFF := dFF)))
+  DGraph.snoc (dg := dg3)
+    (node := add
+      (Γ := ΓSeqFFN seqLen dModel ++ [SeqFFNHiddenShape seqLen dFF,
+        SeqFFNHiddenShape seqLen dFF, SeqFFNModelShape seqLen dModel])
+      (s := SeqFFNModelShape seqLen dModel)
+      (seqFfnIdxX (seqLen := seqLen) (dModel := dModel)
+        (ss := [SeqFFNHiddenShape seqLen dFF, SeqFFNHiddenShape seqLen dFF,
+          SeqFFNModelShape seqLen dModel]))
+      (seqFfnIdxProjected (seqLen := seqLen) (dModel := dModel) (dFF := dFF)))
+    (hn := addFderiv
+      (Γ := ΓSeqFFN seqLen dModel ++ [SeqFFNHiddenShape seqLen dFF,
+        SeqFFNHiddenShape seqLen dFF, SeqFFNModelShape seqLen dModel])
+      (s := SeqFFNModelShape seqLen dModel)
+      (seqFfnIdxX (seqLen := seqLen) (dModel := dModel)
+        (ss := [SeqFFNHiddenShape seqLen dFF, SeqFFNHiddenShape seqLen dFF,
+          SeqFFNModelShape seqLen dModel]))
+      (seqFfnIdxProjected (seqLen := seqLen) (dModel := dModel) (dFF := dFF)))
 
 /-- End-to-end VJP theorem for the sequence-shaped residual FFN. -/
 theorem seqFfnResidual_backpropVec_eq_adjoint_fderiv

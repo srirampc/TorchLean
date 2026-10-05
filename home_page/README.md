@@ -66,9 +66,13 @@ repository root.
 
 ### API Reference (DocGen4)
 
+Finish other builds before running this recipe. The first command selects the CPU build directory
+before clearing its generated documentation; `.lake/build` may otherwise still point at CUDA output.
+
 ```bash
+scripts/lake.sh -Kcuda=false build
 rm -rf .lake/build/doc .lake/build/doc-data .lake/build/api-docs.db
-DISABLE_EQUATIONS=1 scripts/lake.sh build TorchLeanDocs:docs
+DISABLE_EQUATIONS=1 scripts/lake.sh -Kcuda=false -Kenv=dev build TorchLeanDocs:docs
 rm -rf home_page/docs
 cp -r .lake/build/doc home_page/docs
 find home_page/docs -name "*.trace" -delete
@@ -77,7 +81,7 @@ python3 scripts/docs/polish_docgen.py --docs home_page/docs
 ```
 
 Native CUDA/C source notes are documented by the Lean module
-`NN.Runtime.Autograd.Engine.Cuda.Trusted`, so they are generated as part of `/docs/`.
+`NN.Runtime.Autograd.Engine.LibTorch.Trusted`, so they are generated as part of `/docs/`.
 
 `scripts/docs/polish_docgen.py` keeps the generated docs focused on TorchLean's `NN` modules. It
 removes local copies of Lean, Std, Mathlib, and other dependency pages, then rewrites dependency

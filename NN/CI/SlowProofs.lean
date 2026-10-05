@@ -12,7 +12,7 @@ import NN.Runtime.Autograd.IRExec.Correctness.SemanticEquivalence
 # Slow Proof CI Target
 
 This target elaborates the end-to-end typed graph IR semantic-equivalence theorem. The documentation
-workflow typechecks it before DocGen; locally, use `lake build NNSlowProofs`.
+workflow typechecks it before DocGen; locally, use `scripts/lake.sh build NNSlowProofs`.
 -/
 
 @[expose] public section

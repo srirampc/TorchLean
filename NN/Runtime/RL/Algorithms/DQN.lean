@@ -6,6 +6,7 @@ Authors: TorchLean Team
 
 module
 
+public import NN.Runtime.BatchInput
 public import NN.Runtime.RL.Algorithms.ValueLearning
 
 /-!
@@ -41,69 +42,36 @@ open TorchLean TorchLean.Tensor
 
 variable {α : Type} [TorchLean.Storage α] [Context α]
 
-/-- One-transition DQN squared TD loss from online and target Q-functions. -/
-def transitionMSELoss {obsShape : Shape} {nActions : Nat}
-    (onlineQ targetQ : Tensor α obsShape → Tensor α [nActions])
-    (gamma : α)
-    (tr : Core.Transition α obsShape nActions) : α :=
-  ValueLearning.dqnMSELoss (α := α)
-    (qPred := onlineQ tr.state)
-    (action := tr.action)
-    (reward := tr.reward)
-    (gamma := gamma)
-    (done := tr.done)
-    (nextQTarget := targetQ tr.nextState)
+/-- DQN loss for one transition, or the mean loss of a replay batch (`batch := true`).
 
-/-- One-transition DQN Huber TD loss from online and target Q-functions. -/
-def transitionHuberLoss {obsShape : Shape} {nActions : Nat}
-    (onlineQ targetQ : Tensor α obsShape → Tensor α [nActions])
-    (gamma : α) (delta : α := 1)
-    (tr : Core.Transition α obsShape nActions) : α :=
-  ValueLearning.dqnHuberLoss (α := α)
-    (qPred := onlineQ tr.state)
-    (action := tr.action)
-    (reward := tr.reward)
-    (gamma := gamma)
-    (done := tr.done)
-    (nextQTarget := targetQ tr.nextState)
-    (delta := delta)
-
-/-- One-transition Double-DQN Huber TD loss. -/
-def transitionDoubleHuberLoss {obsShape : Shape} {nActions : Nat}
-    (onlineQ targetQ : Tensor α obsShape → Tensor α [nActions])
-    (gamma : α) (delta : α := 1)
-    (tr : Core.Transition α obsShape nActions) : α :=
-  let qPred := onlineQ tr.state
-  let nextOnline := onlineQ tr.nextState
-  let nextTarget := targetQ tr.nextState
-  let target := ValueLearning.doubleDqnTarget (α := α)
-    (reward := tr.reward) (gamma := gamma) (done := tr.done)
-    (nextQOnline := nextOnline) (nextQTarget := nextTarget)
-  Core.huberLoss (α := α) (ValueLearning.chosenActionValue qPred tr.action) target delta
-
-/-- Mean DQN squared TD loss over a replay minibatch. -/
-def minibatchMSELoss {obsShape : Shape} {nActions : Nat}
-    (onlineQ targetQ : Tensor α obsShape → Tensor α [nActions])
-    (gamma : α)
-    (batch : Array (Core.Transition α obsShape nActions)) : α :=
-  (Tensor.ofFn fun index : Fin batch.size =>
-    transitionMSELoss (α := α) onlineQ targetQ gamma batch[index]).mean
-
-/-- Mean DQN Huber TD loss over a replay minibatch. -/
-def minibatchHuberLoss {obsShape : Shape} {nActions : Nat}
-    (onlineQ targetQ : Tensor α obsShape → Tensor α [nActions])
-    (gamma : α) (delta : α := 1)
-    (batch : Array (Core.Transition α obsShape nActions)) : α :=
-  (Tensor.ofFn fun index : Fin batch.size =>
-    transitionHuberLoss (α := α) onlineQ targetQ gamma delta batch[index]).mean
-
-/-- Mean Double-DQN Huber TD loss over a replay minibatch. -/
-def minibatchDoubleHuberLoss {obsShape : Shape} {nActions : Nat}
-    (onlineQ targetQ : Tensor α obsShape → Tensor α [nActions])
-    (gamma : α) (delta : α := 1)
-    (batch : Array (Core.Transition α obsShape nActions)) : α :=
-  (Tensor.ofFn fun index : Fin batch.size =>
-    transitionDoubleHuberLoss (α := α) onlineQ targetQ gamma delta batch[index]).mean
+`double := true` selects actions with the online network and evaluates them with the target
+network. `error` defaults to squared error; pass a scalar loss such as `Core.huberLoss` to change
+it. Batch reduction uses `Tensor.mean`, including its empty-batch convention.
+-/
+def loss {obsShape : Shape} {nActions : Nat}
+    {Input : Type}
+    (onlineQ targetQ : Tensor α obsShape → Tensor α [nActions]) (gamma : α)
+    (input : Input) (batch : Bool := false)
+    (double : Bool := false)
+    (error : α → α → α := Core.squaredError)
+    [TorchLean.Internal.BatchInput (Core.Transition α obsShape nActions)
+      (Array (Core.Transition α obsShape nActions)) batch Input] : α := by
+  have inputType := TorchLean.Internal.BatchInput.type_eq
+    (single := Core.Transition α obsShape nActions)
+    (many := Array (Core.Transition α obsShape nActions)) (batch := batch)
+  subst Input
+  let evaluate := fun tr : Core.Transition α obsShape nActions =>
+    let prediction := ValueLearning.chosenActionValue (onlineQ tr.state) tr.action
+    let target := if double then
+        ValueLearning.doubleDqnTarget tr.reward gamma tr.done
+          (onlineQ tr.nextState) (targetQ tr.nextState)
+      else ValueLearning.dqnTarget tr.reward gamma tr.done (targetQ tr.nextState)
+    error prediction target
+  cases batch with
+  | false => exact evaluate input
+  | true =>
+      let inputs : Array (Core.Transition α obsShape nActions) := input
+      exact (Tensor.ofFn fun index : Fin inputs.size => evaluate inputs[index]).mean
 
 /--
 Soft target-network update for a single scalar:

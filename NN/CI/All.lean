@@ -19,6 +19,6 @@ This CI-only umbrella imports maintained library modules that are intentionally 
 downstream `NN` umbrella. Examples, tests, and the end-to-end IR proof have their own Lake targets.
 
 ```bash
-lake build NN.CI.All
+scripts/lake.sh build NN.CI.All
 ```
 -/

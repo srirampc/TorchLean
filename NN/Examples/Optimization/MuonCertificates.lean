@@ -26,8 +26,8 @@ is sufficient for this one buffer; it does not orthogonalize arbitrary inputs. T
 Newton–Schulz examples show which additional backend hypotheses a general application must supply.
 None of these step certificates proves convergence, lower loss, speed, or agreement with CUDA.
 
-Build with `lake build NN.Examples.Optimization`. This is a proof tutorial, with no CLI or training
-run. Runtime configuration uses `TorchLean.optim.muon.optimizer`; theorem statements use
+Build with `scripts/lake.sh build NN.Examples.Optimization`. This is a proof tutorial, with no CLI
+or training run. Runtime configuration uses `TorchLean.optim.muon.optimizer`; theorem statements use
 `Optim.Muon`.
 -/
 

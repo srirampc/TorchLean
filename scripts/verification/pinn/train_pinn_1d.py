@@ -29,7 +29,7 @@ Example (viscous Burgers):
         --out-json _external/pinn/checkpoints/pinn1d.json
 
 Then verify in Lean (mapping t→y in the PDE DSL):
-    lake exe verify -- pinn-cli --weights=_external/pinn/checkpoints/pinn1d.json \
+    scripts/lake.sh exe verify -- pinn-cli --weights=_external/pinn/checkpoints/pinn1d.json \
         "u_y + u*u_x - 0.01*u_xx" 0.0 0.5 0.01
 
 Notes:
@@ -54,10 +54,14 @@ from pinn_common import (
     parse_const_flags,
     parse_hidden_widths,
     torch,
+    validate_training_args,
 )
 
 
 def train(args):
+    validate_training_args(args)
+    constants = {"nu": args.nu}
+    constants.update(parse_const_flags(args.const or []))
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     x_lo, x_hi = -1.0, 1.0
@@ -70,9 +74,6 @@ def train(args):
     N_i = args.initial_points
     N_b = args.boundary_points
     N_d = args.data_points
-
-    constants = {"nu": args.nu}
-    constants.update(parse_const_flags(args.const or []))
 
     dataset: Optional[PinnDataset] = None
     if args.dataset_json:
@@ -170,6 +171,8 @@ def train(args):
             "uyx": u_tx,
             "u_yx": u_tx,
             "uxt": u_xt,
+            "u_xt": u_xt,
+            "utx": u_tx,
             "u_tx": u_tx,
             "x": x_c,
             "t": t_c,

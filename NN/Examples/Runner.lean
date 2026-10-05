@@ -223,7 +223,7 @@ def usage : String :=
     [ ""
     , "Runtime flags:"
     , "  --choose                         ask for a device when the example supports --device"
-    , "  --device auto|cpu|cuda|rocm|metal|wasm|tpu|trainium|custom|external"
+    , "  --device auto|cpu|gpu|cuda|rocm|metal|wasm|tpu|trainium|custom|external"
     , "  --arithmetic native|ieee|complex"
     , "      arithmetic availability depends on the example; check its --help"
     , "  --execution eager|typed-graph"
@@ -295,16 +295,12 @@ partial def askDevice : IO (List String) := do
       askDevice
 
 /-- Strip top-level runner flags that are not meant for individual examples. -/
-def stripFlag (flag : String) : List String → List String
-  | .nil => []
-  | a :: rest =>
-      if a == flag then stripFlag flag rest else a :: stripFlag flag rest
+def stripFlag (flag : String) (args : List String) : List String :=
+  args.filter (· != flag)
 
 /-- Look up a subcommand inside a single group. -/
-def findCommandIn (name : String) : List Command → Option Command
-  | .nil => none
-  | command :: rest =>
-      if command.name == name then some command else findCommandIn name rest
+def findCommandIn (name : String) (commands : List Command) : Option Command :=
+  commands.find? (·.name == name)
 
 /-- Look up a subcommand across every group, taking the first match. -/
 def findCommand (name : String) : List CommandGroup → Option Command
@@ -319,7 +315,7 @@ def findCommand (name : String) : List CommandGroup → Option Command
 Explicit device flags, including a missing value, are left to the command's normal parser.
 -/
 def needsDeviceChoice (args : List String) : Bool :=
-  if args.contains "--help" || args.contains "-h" || hasDeviceFlag args then
+  if CLI.hasHelp args || hasDeviceFlag args then
     false
   else
     match splitCommandArgs? args with
@@ -358,7 +354,7 @@ Handles the runner's own flags (`--help`, `--list`, `--choose`) and otherwise fo
 arguments untouched, so an example's own flag parsing never sees runner flags. -/
 def main (args : List String) : IO UInt32 := do
   let args := CLI.dropDashDash args
-  let choose := args.contains "--choose" && !(args.contains "--help") && !(args.contains "-h")
+  let choose := args.contains "--choose" && !CLI.hasHelp args
   let args := NN.Examples.Runner.stripFlag "--choose" args
   match args with
   | .nil =>
@@ -381,7 +377,7 @@ def main (args : List String) : IO UInt32 := do
           IO.eprintln NN.Examples.Runner.usage
           pure 1
       | some (pref, cmd, commandArgs) =>
-          if pref.contains "--help" || pref.contains "-h" then
+          if CLI.hasHelp pref then
             IO.println NN.Examples.Runner.usage
             pure 0
           else

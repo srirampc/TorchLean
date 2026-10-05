@@ -8,7 +8,6 @@ module
 
 public import NN.Runtime.RL.Boundary.Core
 public import NN.Runtime.PyTorch.Import.Core
-public import NN.Tensor.Internal.Elab.TensorLiteral
 
 /-!
 # RL Trust Boundary JSON Loader
@@ -72,8 +71,10 @@ to convert errors into `IO.userError`.
 /--
 Parse a JSON number as a nonnegative integer.
 
-This is *strict*: it rejects non-integers (e.g. `1.5`) and rejects numbers not exactly
-representable as an integer when converted through `Float`.
+This is *strict*: the original decimal value must equal the integer returned by the existing
+`Float`/`UInt64` conversion and round-trip check. This includes `UInt64`'s maximum value, where
+conversion saturates to that same integer. Fractional inputs and integers changed by conversion
+are rejected; acceptance does not require an exact intermediate `Float` representation.
 -/
 def parseNatStrict (j : Json) : Except String Nat :=
   match j with
@@ -85,7 +86,8 @@ def parseNatStrict (j : Json) : Except String Nat :=
         .error s!"RL boundary: expected nonnegative integer, got {f}."
       else
         let u := f.toUInt64
-        if (Float.ofNat u.toNat) == f then
+        if (Float.ofNat u.toNat) == f &&
+            n.normalize == (JsonNumber.fromNat u.toNat).normalize then
           .ok (u.toNat)
         else
           .error s!"RL boundary: expected integer JSON number, got {f}."
@@ -158,11 +160,8 @@ def parseTransitionJson {obsShape : Shape} {nActions : Nat}
   checkTransition (obsShape := obsShape) (nActions := nActions) c obs nextObs action reward
     terminated truncated
 
-/-- Load and validate a rollout file, returning an array of typed transitions. -/
-def loadRollout {obsShape : Shape} {nActions : Nat}
-    (path : String)
-    (c : Contract obsShape nActions) :
-    IO (Array (Transition obsShape nActions)) := do
+/-- Read the common rollout envelope before either transition-validation policy runs. -/
+def Internal.readRolloutTransitions (path : String) : IO (Array Json) := do
   let jsonStr ← IO.FS.readFile path
   let j ←
     match Json.parse jsonStr with
@@ -177,16 +176,20 @@ def loadRollout {obsShape : Shape} {nActions : Nat}
     match o.get? "transitions" with
     | some v => pure v
     | none => throw <| IO.userError "RL boundary: missing required field `transitions`"
-  let transitionsArr ←
-    match transitionsJ with
-    | .arr xs => pure xs
-    | _ => throw <| IO.userError "RL boundary: field `transitions` must be an array"
+  match transitionsJ with
+  | .arr xs => pure xs
+  | _ => throw <| IO.userError "RL boundary: field `transitions` must be an array"
 
+/-- Load and validate a rollout file, returning an array of typed transitions. -/
+def loadRollout {obsShape : Shape} {nActions : Nat}
+    (path : String)
+    (c : Contract obsShape nActions) :
+    IO (Array (Transition obsShape nActions)) := do
+  let transitionsArr ← Internal.readRolloutTransitions path
   let mut out : Array (Transition obsShape nActions) := #[]
   for tj in transitionsArr do
-    match parseTransitionJson (obsShape := obsShape) (nActions := nActions) c tj with
-    | .ok t => out := out.push t
-    | .error e => throw <| IO.userError e
+    let t ← IO.ofExcept (parseTransitionJson (obsShape := obsShape) (nActions := nActions) c tj)
+    out := out.push t
   pure out
 
 /--
@@ -205,25 +208,7 @@ def loadRolloutAll {obsShape : Shape} {nActions : Nat}
     (path : String)
     (c : Contract obsShape nActions) :
     IO (Array (Except String (Transition obsShape nActions))) := do
-  let jsonStr ← IO.FS.readFile path
-  let j ←
-    match Json.parse jsonStr with
-    | .ok j => pure j
-    | .error msg => throw <| IO.userError s!"RL boundary: bad JSON: {msg}"
-  let o ←
-    match j.getObj? with
-    | .ok o => pure o
-    | .error msg => throw <| IO.userError s!"RL boundary: top-level JSON must be an object: {msg}"
-
-  let transitionsJ ←
-    match o.get? "transitions" with
-    | some v => pure v
-    | none => throw <| IO.userError "RL boundary: missing required field `transitions`"
-  let transitionsArr ←
-    match transitionsJ with
-    | .arr xs => pure xs
-    | _ => throw <| IO.userError "RL boundary: field `transitions` must be an array"
-
+  let transitionsArr ← Internal.readRolloutTransitions path
   let mut out : Array (Except String (Transition obsShape nActions)) := #[]
   for tj in transitionsArr do
     out := out.push (parseTransitionJson (obsShape := obsShape) (nActions := nActions) c tj)

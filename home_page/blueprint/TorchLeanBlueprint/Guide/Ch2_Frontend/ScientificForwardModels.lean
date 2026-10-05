@@ -24,11 +24,9 @@ the build. Closed-form calculations and separate PyTorch snippets provide compar
 
 # Vegetation Attenuation Model
 
-The model is the canopy term of a soil-moisture retrieval that
-combines SMAP (Soil Moisture Active Passive) radiometry with NISAR (NASA-ISRO Synthetic Aperture
-Radar) backscatter. Two-way transmittance through vegetation decays exponentially with
-attenuation. We isolate that term and an additive surface offset, with fixed coefficients so
-that each derivative can be calculated explicitly:
+Consider a simplified vegetation-attenuation law: an exponential term represents transmission,
+and an additive offset represents a surface contribution. This illustrative model fixes its
+coefficients so that each derivative can be calculated explicitly:
 
 $$`f(x)=\tfrac12 e^{-2x}+\tfrac1{10}.`
 
@@ -130,8 +128,8 @@ and reverse mode one per output direction. A PDE residual may need derivatives w
 only a few coordinates; a scalar training loss may depend on millions of parameters. Those
 dimensions guide the choice of mode, as surveyed by {Informal.citet baydin2018}[].
 
-The PyTorch program is the same shape, and this is the transcript from the same machine
-(float64; the displayed values also reproduce with PyTorch 2.11):
+The corresponding PyTorch program uses float64. Its recorded transcript gives the same displayed
+values:
 
 ```
 # Use float64 to compare the same scalar formula and
@@ -329,7 +327,8 @@ gradient. Only one product-rule contribution remains because the second factor i
 
 {src "NN/Examples/Functional/Transcendentals.lean"}[`Transcendentals.lean`] checks the exponential
 rule, an affine slope, and the negative factor in a composed exponential. The command
-`lake exe torchlean transcendentals` runs these controls; the named block also runs them during
+`scripts/lake.sh exe torchlean transcendentals` runs these controls; the named block also runs
+them during
 the guide build:
 
 ```lean (name := sfmControls)
@@ -527,10 +526,12 @@ node, including gradient-only calls. The failure is catchable:
 ```
 
 ```leanOutput sfmLogBad (whitespace := lax)
-at -1.000000: autograd: log: input contains values <= 0 (or NaN);
-use `safe_log` if you want epsilon protection
-at 0.000000: autograd: log: input contains values <= 0 (or NaN);
-use `safe_log` if you want epsilon protection
+at -1.000000: autograd: log: input contains values <= 0
+(or NaN); `safe_log` computes log(softplus(x) + eps)
+and accepts every input
+at 0.000000: autograd: log: input contains values <= 0
+(or NaN); `safe_log` computes log(softplus(x) + eps)
+and accepts every input
 ```
 
 PyTorch instead applies the registered $`1/x` backward formula even on these invalid forward inputs:
@@ -837,8 +838,8 @@ For any fixed observed target, these three parameter vectors give the same resid
 same least-squares loss. The
 last line is the local version of the same fact: the gradient is $`-e^{-bx}(x,b)`, the tangent to
 the level curve at $`(b,x)` is $`(b,-x)`, and their inner product is $`-e^{-bx}(xb-bx)`, which is
-zero on paper and zero in Float here because the two products cancel before rounding can separate
-them.
+zero on paper and zero in Float here because the two products cancel with matching finite
+power-of-two scalings in this example.
 
 Additional information is needed. If a nonzero $`x` is known, one noiseless observation
 $`y=e^{-bx}>0` already determines $`b=-\log(y)/x`. If both coordinates remain unknown, more
@@ -888,8 +889,8 @@ the objective and optimizing it require derivatives with respect to different va
 
 The input-coordinate part is a function transform on a small map, exactly what `jacfwd` and
 `hessian` above compute. Here is a residual that can be checked by hand. The transport equation
-$`u_t+2u_x=0` has the travelling-wave solution $`u(x,t)=e^{x-2t}`, so a correct pair of input
-derivatives must cancel exactly:
+$`u_t+2u_x=0` has the travelling-wave solution $`u(x,t)=e^{x-2t}`, so the real input
+derivatives cancel exactly:
 
 ```lean (name := sfmPinn)
 -- Read spatial and temporal coordinates in the same order
@@ -960,6 +961,11 @@ The cost of that Hessian is one Hessian-vector product per input coordinate, whi
 why input-coordinate derivatives stay cheap for a two-dimensional domain while parameter-space
 second derivatives do not.
 
+Its off-diagonal entries agree because both mixed derivatives of this smooth exponential equal
+`-2u`. Selecting `[0][0]` extracts `u_xx`; selecting another entry would define a different residual
+even though all entries have the same scalar type. The coordinate ordering established when the
+input is unpacked must therefore remain consistent when the differential operator is assembled.
+
 A residual that vanishes at sampled points leaves the behavior between those points unestablished;
 a PDE solution also has to meet its initial and boundary conditions.
 {ref "scientific-ml-verification"}[The scientific ML verification
@@ -988,14 +994,9 @@ scripts/lake.sh exe torchlean pinn
 Its loss is half the mean squared equation residual plus half the mean squared boundary residual.
 For each equation term, the pullback seed is the residual divided by the collocation count.
 The returned parameter gradients are added to the boundary gradients and passed to `nn.sgdStep`.
-The checked 1,500-step CPU run reduced this loss from `2.244093` to `0.006179`.
+The recorded 1,500-step CPU run reduced this loss from `2.244093` to `0.006179`.
 The exact solution $`1-x^2` appears only in the final comparison; it does not supply training data.
 As before, these sampled residuals do not establish a uniform PDE guarantee.
-
-Its off-diagonal entries agree because both mixed derivatives of this smooth exponential equal
-`-2u`. Selecting `[0][0]` extracts `u_xx`; selecting another entry would define a different residual
-even though all entries have the same scalar type. The coordinate ordering established when the
-input is unpacked must therefore remain consistent when the differential operator is assembled.
 
 # Floating-Point Transcendentals
 

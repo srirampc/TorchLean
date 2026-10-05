@@ -17,8 +17,8 @@ From the repository root:
 
 ```bash
 python3 NN/Examples/Interop/PyTorch/CNN/train_cnn.py
-lake exe torchlean pytorch_roundtrip --model cnn --action import
-lake exe torchlean pytorch_roundtrip --model cnn --action export
+scripts/lake.sh exe torchlean pytorch_roundtrip --model cnn --action import
+scripts/lake.sh exe torchlean pytorch_roundtrip --model cnn --action export
 ```
 
 `NN/Runtime/PyTorch/Import/CNN.lean` checks tensor shapes. The driver loads them into an executable CPU `nn` module and

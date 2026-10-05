@@ -38,7 +38,7 @@ def objective {α : Type} [Storage α] [Context α] [Atan2 α]
   for z in inputs do
     let prediction := nn.TypedGraphModel.forward graph state (Tensor.full [1] z)
     let target := (⟨2, -1⟩ : Complex α) * z + ⟨1 / 2, 3 / 4⟩
-    let residual := prediction.getScalar ⟨0, by decide⟩ - target
+    let residual := prediction[0] - target
     loss := loss + residual.normSq / 8
   pure loss
 
@@ -57,7 +57,7 @@ def run (steps : Nat := 50) (checkpoint : Option System.FilePath := none) : IO U
   let graph ← nn.lowerToTypedGraph model (α := Complex Float32)
   let probe : Complex Float32 := ⟨2, 3⟩
   let predicted := nn.TypedGraphModel.forward graph state (Tensor.full [1] probe)
-  IO.println s!"held-out input {probe}: {predicted.getScalar ⟨0, by decide⟩}"
+  IO.println s!"held-out input {probe}: {predicted[0]}"
   IO.println "expected: (7.5 + 4.75i)"
   if let some path := checkpoint then
     Checkpoint.State.save model state path

@@ -18,5 +18,6 @@ importing a competing declaration named `main`.
 
 @[expose] public section
 
+/-- Run the selected example and convert uncaught errors to a failing process status. -/
 def main (args : List String) : IO UInt32 :=
   TorchLean.CLI.exitOnError (NN.Examples.Runner.main args)

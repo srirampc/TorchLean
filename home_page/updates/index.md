@@ -3,6 +3,7 @@ title: Updates
 ---
 
 <nav class="timeline-nav" aria-label="TorchLean update timeline">
+  <a href="#september-2026-libtorch">LibTorch backend</a>
   <a href="#september-2026-floatlib">FloatLib and precision</a>
   <a href="#september-2026-proof-refactor">Proof refactor</a>
   <a href="#august-2026-tensor-overhaul">Tensor overhaul</a>
@@ -20,6 +21,70 @@ title: Updates
 
 <div class="updates-timeline">
 
+<article class="update-card" id="september-2026-libtorch" markdown="1">
+  <div class="update-date">September 2026</div>
+  <div class="update-body" markdown="1">
+
+## Running CUDA Through LibTorch
+
+We moved to LibTorch because maintaining CUDA kernels by hand was becoming cumbersome.
+Matrix products, convolutions, pooling, and reductions already have implementations in the
+PyTorch infrastructure. It makes more sense for us to reuse that work and spend our time on
+TorchLean's models, differentiation, and proofs. LibTorch gives us access to those tensor
+operations from C++, while we keep the model definitions and autograd tape in Lean.
+
+The CUDA backend now calls ATen through a LibTorch SDK instead of TorchLean's own kernels.
+TorchLean retains its runtime tape and owns differentiation. Attention and spectral model
+composition live in Lean, using numerical primitives through the buffer API. About 7,000 lines of
+hand-written CUDA (elementwise, reduction, convolution, pooling, tensor, attention and DGEMM
+kernels) are gone, replaced by one shared C++ adapter, `csrc/libtorch/torchlean.cpp`, calling the corresponding
+ATen operations under a no-grad guard. The per-kernel CPU stub files went with them. A build
+without LibTorch now links one file, `unavailable.c`, which exports every symbol and fails each
+call with a message that says how to rebuild.
+
+Select the SDK with `-Klibtorch_home=PATH` or `TORCHLEAN_LIBTORCH_HOME`; a CUDA-enabled pip
+PyTorch installation works as the SDK root. The [SDK notes](https://github.com/lean-dojo/TorchLean/blob/main/csrc/libtorch/README.md#tested-sdk-versions)
+record the tested versions and GPU checks; other SDK versions need their own CUDA suite results.
+Attention composes matrix products and softmax in
+Lean, including its local VJP, and the tape owns Q/K/V and saved probabilities. It uses full score
+matrices with quadratic sequence memory and no fused-attention selection.
+LibTorch is the standard backend for CUDA execution
+(`-Kcuda=true`, then `--device cuda`); the default CPU build needs no SDK or toolkit.
+
+We renamed the Lean adapter to `NN.Runtime.Autograd.Engine.LibTorch` so the implementation
+isn't confused with the device. `.gpu` and `--device gpu` select the supported GPU target
+(currently CUDA), without falling back to CPU. Explicit `.cuda` still works.
+
+The Burgers example now uses the general FNO constructor and shared trainer on both devices.
+We removed its separate real-FFT training loop. New runs share one full-spectrum parameter
+layout; weights from the old GPU-only retained-bin model need a conversion before reuse.
+
+Several native features were removed rather than ported:
+
+| Removed | Use instead |
+| --- | --- |
+| `Buffer.setDeterministicReductions` | `Runtime.Autograd.LibTorch.setDeterministic` |
+| `TORCHLEAN_CUDA_CACHE_CAP_BYTES`, `AllocatorStats.cacheBytes` and `cacheCapBytes` | `AllocatorStats.allocatedBytes` and `reservedBytes`, with `Runtime.Autograd.LibTorch.setMemoryFraction` and `Runtime.Autograd.LibTorch.emptyCache`. The limit is now a fraction of device memory, not a byte cap. |
+| `flashAttentionFwd`/`Bwd` and native attention contexts | `Buffer.attentionForward`/`attentionBackward`, composed in Lean with tape-owned saved buffers |
+| `broadcastRowToRows`, `gatherVec`, `reduceSumByColumn` | The corresponding ATen operations behind the existing buffer API |
+| Fused FNO forward/backward externs | Lean composition of FFT, frequency mixing, and inverse FFT using numerical primitives |
+| `matmulCublas`, `matmulCublas32`, `matmulCublas64`, `CublasPrecision` | Ordinary `matmul`; LibTorch chooses the BLAS call |
+| `nn.geluTanh` | `nn.gelu`, which is the same tanh approximation |
+
+The fused LayerNorm and GELU kernels and the transpose-free matrix backward described in the August
+notes below are part of what was removed. ATen supplies its own implementations. We have not
+measured the end-to-end effect on training speed, so this entry makes no performance claim either
+way.
+
+Convolution layers built through GraphSpec now start from different initial weights. They take
+their initialization seed from the layer's position, the same way linear layers do, where they
+used to take twice that value. A model with a convolution therefore trains from a different
+starting point than before, even with the same seed. Linear layers and the zero or one
+initializations of biases and normalization parameters are unchanged.
+
+  </div>
+</article>
+
 <article class="update-card" id="september-2026-floatlib" markdown="1">
   <div class="update-date">September 2026</div>
   <div class="update-body" markdown="1">
@@ -36,9 +101,13 @@ can retain $1+2^{-100}$, while binary64 rounds it to 1. The
 [tensor chapter]({{ '/blueprint/Building-Models/Tensors-That-Remember-Their-Shapes/' | relative_url }})
 constructs that parameter directly from a rational, keeps it through a typed affine model,
 and compares its forward value, input derivatives and `nn.sgdStep` update with an elementary
-calculation. This uses software arithmetic on the typed CPU path. The supervised trainer retains
-`Float` data, report and checkpoint boundaries; its `.ieee` option remains fixed to binary32.
-CUDA kernels support binary32 and binary64, not the configured arbitrary-precision CPU path.
+calculation. This uses software arithmetic on the typed CPU path. `trainer.openTyped` also retains
+the chosen scalar in supervised samples, predictions, loss, reports, and checkpoints. These typed
+sessions run on CPU, reject custom backend profiles, and do not expose `Result.verify`.
+Initialization and optimizer settings still enter through `Float`. The ordinary trainer's `.ieee`
+option remains fixed to binary32.
+The eager LibTorch CUDA backend uses binary32 buffers; the separate matrix-product interface uses
+binary64. Configurable FloatLib precision runs on the typed CPU path.
 
 The numerical proofs distinguish rounded trees from exact accumulation followed by one final
 rounding. Their intermediate values can differ, so an error theorem for one does not justify the
@@ -170,8 +239,8 @@ Smaller renames from the same pass: `Tensor.tensorFoldlSpec` lost its stuttering
 `inferNodeOutShape` is `nodeOutShape`, and `TextCorpusOptions` is `CorpusFileOptions`. Two naming
 rules came out of this and are written down in `docs/CONTRIBUTING.md` so the next reader does not have to
 guess: the smart constructor of a sealed structure is `create` inside that structure's own
-`Internal` namespace, and a batched variant is the unbatched name with a `batch` prefix, which is
-why `logitScoresAt` has `batchLogitScoresAt` beside it.
+`Internal` namespace, and batched variants use a `batch` prefix when a separate operation is needed.
+Logit row selection now uses `Tensor.get` directly, without separate text-specific indexing helpers.
 
 The repository lint now enforces 100-column lines and prose without em-dashes outside
 `NN/Floats`, and `omega` is allowed again.
@@ -191,9 +260,11 @@ API harder to guess and left us maintaining several routes to the same tensor op
 
 Convolution was the biggest example. `nn.conv`, `nn.convTranspose`, `nn.maxPool`, and `nn.avgPool`
 now take a spatial rank `d` together with `Tensor Nat [d]` values for their geometry. One definition
-covers lines, images, volumes, and higher-dimensional grids. Batch, sequence, and other outer axes
-are passed in `leading : List Nat` and preserved by the operation. `nn.ConvGeometry.samePadding`
-works at any spatial rank and comes with a proof that it preserves positive spatial extents.
+covers lines, images, volumes, and higher-dimensional mathematical specifications. Batch, sequence,
+and other outer axes are passed in `leading : List Nat` and preserved by the operation.
+`nn.ConvGeometry.samePadding` works at any spatial rank and comes with a proof that it preserves
+positive spatial extents. The LibTorch execution path follows PyTorch's one-, two-, and
+three-dimensional convolution and pooling families.
 
 We made the same change to normalization and shape operations. `nn.batchNorm` and
 `nn.instanceNorm` preserve any leading and spatial axes. `permute` and `transpose` take explicit
@@ -221,11 +292,12 @@ is now just `mlpEval`; its scalar-input version is `mlpEvalScalar`. Grouped conv
 geometry say so in their names, the pooling implementation lives under `Pooling.Spatial`, and the
 tensor-input Stone–Weierstrass result lives in `Universal.StoneWeierstrass`.
 
-We followed the change all the way down through the specification, typed graph, IR evaluator, shape
-inference, eager runtime, CUDA dispatch, and reverse-mode rules. Convolution now has general input,
-kernel, bias, and transpose-convolution derivatives. BatchNorm has the matching adjointness theorem
-for its input, scale, and bias gradients at any spatial rank. The rounded-real proofs follow the
-implementation's actual accumulation order.
+We followed the change through the specification, typed graph, IR evaluator, shape inference, eager
+runtime, CUDA dispatch, and reverse-mode rules. The CUDA adapter accepts the spatial ranks LibTorch
+implements instead of maintaining a separate higher-rank numerical kernel. Convolution has general
+input, kernel, bias, and transpose-convolution derivatives. BatchNorm has the matching adjointness
+theorem for its input, scale, and bias gradients at any spatial rank. The rounded-real proofs follow
+the implementation's actual accumulation order.
 
 The smaller tensor details got cleaned up too. Proofs can use `Tensor.map_scalar`, `Tensor.map_dim`,
 and `Tensor.getScalar_map` instead of reopening the shape recursion themselves. Classifier and
@@ -640,13 +712,13 @@ only when later correctness proofs actually use them.
 Convolution, transposed convolution, fixed-window pooling, and adaptive pooling now share
 channel-first contracts parameterized by spatial rank. Their public APIs take vectors of kernel,
 stride, padding, and output dimensions; the same definitions therefore cover lines, images,
-volumes, and higher-dimensional grids. The IR, eager runtime, CUDA path, and shape inference use
-these contracts without separate rank-named wrappers. A semantic-preservation theorem connects
-typed convolution lowering to forward IR evaluation. The exact derivative theorem covers the same
-rank-polymorphic operation and proves the input, kernel, and bias reverse rules. Rounded-real
-theorems bound every forward and backward coordinate using the implementation's actual accumulation
-order. BatchNorm now has the corresponding arbitrary-spatial-rank adjointness theorem for its input,
-scale, and bias gradients.
+volumes, and higher-dimensional specifications. The IR, eager runtime, and shape inference use
+these contracts without separate rank-named wrappers; the LibTorch adapter uses PyTorch's spatial
+ranks one through three. A semantic-preservation theorem connects typed convolution lowering to
+forward IR evaluation. The exact derivative theorem covers the same rank-polymorphic operation and
+proves the input, kernel, and bias reverse rules. Rounded-real theorems bound every forward and
+backward coordinate using the implementation's actual accumulation order. BatchNorm now has the
+corresponding arbitrary-spatial-rank adjointness theorem for its input, scale, and bias gradients.
 
 PyTorch graph import now preserves every leading dimension of a linear layer. In particular, a
 batched input of shape `[3, 4]` passed through `Linear(4, 1)` is imported with output shape `[3, 1]`

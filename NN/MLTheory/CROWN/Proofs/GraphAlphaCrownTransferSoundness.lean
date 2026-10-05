@@ -26,5 +26,5 @@ interface used by the generic graph certificate soundness theorem.
 `EndToEnd` discharges their `IBPEnclosesVals` hypothesis from the IBP soundness theorem and states
 the fully composed enclosure corollaries
 (`AlphaCrownTransferSoundness.alphaCrown_cert_encloses_semantics`,
-`AlphaCrownTransferSoundness.alphaBetaCrown_cert_encloses_semantics'`).
+`AlphaCrownTransferSoundness.alphaBetaCrown_cert_encloses_semantics`).
 -/

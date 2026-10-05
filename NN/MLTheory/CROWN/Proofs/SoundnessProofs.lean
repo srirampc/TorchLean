@@ -16,12 +16,14 @@ public import NN.MLTheory.CROWN.Models.Mlp
 This file proves basic inequalities and compositional lemmas used by affine-relaxation bound
 propagation (LiRPA) methods, in particular the CROWN/DeepPoly family.
 
-The main result in this file is an end-to-end soundness statement for a small MLP, assembled from:
+This file records the scalar inequalities behind the relaxations:
 
-- soundness of affine images of scalar intervals,
-- soundness of the ReLU triangular upper relaxation,
-- soundness of affine composition through linear layers,
-- an IBP-style fallback used by `boundAffine` (so the end-to-end theorem is sound but not tight).
+- soundness of affine images of scalar intervals (`affine_scalar_interval_sound`),
+- soundness of the ReLU triangular upper relaxation (`relu_affine_upper_bound_sound`).
+
+The end-to-end statement for the two-layer MLP is `NN.MLTheory.CROWN.Theorems.bound_affine_sound`
+in `NN.MLTheory.CROWN.Models.Mlp`; `boundAffine` falls back to IBP there, so that theorem is sound
+but not tight.
 
 For certificate-checking theorems over the graph dialect (the form used by TorchLean verification
 examples), see:
@@ -43,12 +45,6 @@ examples), see:
 
 
 namespace NN.MLTheory.CROWN.Soundness
-
-open Spec TorchLean
-open TorchLean.Tensor
-open NN.MLTheory.CROWN
-
-variable {α : Type} [TorchLean.Storage α] [Context α]
 
 /--
 If $x\in[\ell,h]$, then the affine function $f(x)=ax+b$ satisfies
@@ -155,34 +151,8 @@ theorem relu_affine_upper_bound_sound (z l u : ℝ) (hz : l ≤ z ∧ z ≤ u) :
         -- This is equivalent to z*(u-l) ≤ u*z - l*u
         have eq : u / (u - l) * z + -l * u / (u - l) = (u * z - l * u) / (u - l) := by
           field_simp; ring
-        rw [eq]
-        -- Show z ≤ (u*z - l*u)/(u-l) using that z*(u-l) ≤ u*z - l*u
-        have expand : z * (u - l) = z * u - z * l := by ring
-        have key : z * u - z * l ≤ u * z - l * u := by
-          have : -z * l ≤ -l * u := by
-            have : l * u ≤ l * z := mul_le_mul_of_nonpos_left hz.2 (le_of_lt hl)
-            linarith
-          linarith
-        calc z = z * (u - l) / (u - l) := by rw [mul_div_cancel_right₀]; linarith
-             _ = (z * u - z * l) / (u - l) := by rw [expand]
-             _ ≤ (u * z - l * u) / (u - l) := by apply div_le_div_of_nonneg_right key; linarith
-
-/--
-Main theorem: CROWN affine bounds are sound for two-layer MLPs.
-If $x\in x_B$, then
-$\operatorname{forward}(\mathrm{net},x)\in\operatorname{boundAffine}(\mathrm{net},x_B)$.
-
-This is the key soundness theorem for CROWN: it shows that the affine relaxation
-computed by `boundAffine` is indeed an overapproximation of the true network output.
--/
-theorem crown_affine_twoLayerMlp_sound {inDim hidDim outDim : Nat}
-    (net : TwoLayerMLP ℝ inDim hidDim outDim)
-    (xB : Box ℝ (.dim inDim .scalar))
-    (x : Tensor ℝ [inDim])
-    (hx : Box.contains xB x) :
-    Box.contains (boundAffine net xB) (forward net x) := by
-  -- `bound_affine` falls back to pure IBP bounds.
-  simpa [boundAffine] using NN.MLTheory.CROWN.Theorems.bound_ibp_sound (net := net) (xB := xB) (x
-    := x) hx
+        -- Clearing the positive denominator leaves `l * u ≤ l * z`, from `l < 0` and `z ≤ u`.
+        rw [eq, le_div_iff₀ h_ul_pos]
+        linarith [mul_le_mul_of_nonpos_left hz.2 (le_of_lt hl)]
 
 end NN.MLTheory.CROWN.Soundness

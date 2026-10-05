@@ -5,6 +5,8 @@ Authors: TorchLean contributors
 -/
 module
 
+public import Mathlib.Algebra.BigOperators.Ring.List
+public import Mathlib.Algebra.GroupWithZero.Nat
 public import Mathlib.Data.Fintype.Prod
 public import Mathlib.Logic.Equiv.Fin.Basic
 
@@ -45,9 +47,8 @@ abbrev Shape := List Nat
 namespace Shape
 
 /-- The number of scalar entries in a shape. The empty product is one. -/
-def size : Shape → Nat
-  | [] => 1
-  | n :: s => n * size s
+def size (s : Shape) : Nat :=
+  s.prod
 
 /-- The number of axes in a shape. -/
 def rank (s : Shape) : Nat :=
@@ -67,25 +68,15 @@ def rank (s : Shape) : Nat :=
   simp [rank]
 
 /-- Shape size is the ordinary product of its dimension list. -/
-theorem size_eq_prod (s : Shape) : size s = s.prod := by
-  induction s with
-  | nil => rfl
-  | cons dimension shape ih =>
-      simp only [size_cons, List.prod_cons, ih]
+theorem size_eq_prod (s : Shape) : size s = s.prod := rfl
 
 /-- Concatenating shapes multiplies their numbers of entries. -/
-@[simp] theorem size_append (s t : Shape) : size (s ++ t) = size s * size t := by
-  induction s with
-  | nil => simp
-  | cons n s ih => simp [ih, Nat.mul_assoc]
+@[simp] theorem size_append (s t : Shape) : size (s ++ t) = size s * size t :=
+  List.prod_append
 
 /-- A shape has no entries exactly when one of its axes has length zero. -/
 theorem size_eq_zero_iff {s : Shape} : size s = 0 ↔ 0 ∈ s := by
-  induction s with
-  | nil => simp
-  | cons n s ih =>
-      rw [size_cons, List.mem_cons, Nat.mul_eq_zero, ih]
-      exact or_congr eq_comm Iff.rfl
+  simpa only [size] using (List.prod_eq_zero_iff (l := s))
 
 end Shape
 
@@ -187,6 +178,100 @@ theorem linearize_cons_val {n : Nat} {s : Shape}
     (linearize (s := n :: s) (i, j)).val =
       (linearize j).val + Shape.size s * i.val := by
   simp only [linearize_cons, finProdFinEquiv_apply_val]
+
+/-- Horner-form row-major index: the result is `acc * size s` plus the index of the coordinate. -/
+def linearizeAux : (s : Shape) → Nat → Coord s → Nat
+  | [], acc, _ => acc
+  | n :: s, acc, coordinate => linearizeAux s (acc * n + coordinate.1.val) coordinate.2
+
+/-- The Horner accumulator adds `acc * size s` to the row-major index. -/
+theorem linearizeAux_eq :
+    (s : Shape) → (acc : Nat) → (coordinate : Coord s) →
+      linearizeAux s acc coordinate = acc * Shape.size s + (linearize coordinate).val
+  | [], acc, coordinate => by
+      have h : (linearize (s := []) coordinate).val = 0 := by
+        have := (linearize (s := []) coordinate).isLt
+        simp only [Shape.size_nil] at this
+        omega
+      simp [linearizeAux, h]
+  | n :: s, acc, (i, j) => by
+      rw [linearizeAux, linearizeAux_eq s, linearize_cons_val, Shape.size_cons]
+      simp only [Nat.add_mul, Nat.mul_assoc]
+      rw [Nat.mul_comm i.val (Shape.size s)]
+      omega
+
+/--
+Arithmetic row-major index of a coordinate.
+
+This is `linearize` without the equivalence structures that `equivFin` builds at every level, and
+it replaces `linearize` in compiled code.
+-/
+def linearizeFast {s : Shape} (coordinate : Coord s) : Fin (Shape.size s) :=
+  ⟨linearizeAux s 0 coordinate, by
+    rw [linearizeAux_eq, Nat.zero_mul, Nat.zero_add]
+    exact (linearize coordinate).isLt⟩
+
+/-- Compiled code runs `linearizeFast` in place of `linearize`. -/
+@[csimp] theorem linearize_eq_linearizeFast : @linearize = @linearizeFast := by
+  funext s coordinate
+  apply Fin.ext
+  simp [linearizeFast, linearizeAux_eq]
+
+/-- Arithmetic inverse of the row-major index: divide by the tail size and recurse on the rest. -/
+def unlinearizeAux : (s : Shape) → Fin (Shape.size s) → Coord s
+  | [], _ => PUnit.unit
+  | n :: s, index =>
+      have h : index.val < n * Shape.size s := index.isLt
+      have hTail : 0 < Shape.size s :=
+        Nat.pos_of_ne_zero fun hZero => by simp [hZero] at h
+      (⟨index.val / Shape.size s, (Nat.div_lt_iff_lt_mul hTail).2 h⟩,
+        unlinearizeAux s ⟨index.val % Shape.size s, Nat.mod_lt _ hTail⟩)
+
+/-- The arithmetic inverse is a right inverse of `linearize`. -/
+theorem linearize_unlinearizeAux :
+    (s : Shape) → (index : Fin (Shape.size s)) → linearize (unlinearizeAux s index) = index
+  | [], index => by
+      apply Fin.ext
+      have h1 : index.val < 1 := index.isLt
+      have h2 : (linearize (s := []) (unlinearizeAux [] index)).val < 1 :=
+        (linearize (s := []) (unlinearizeAux [] index)).isLt
+      omega
+  | n :: s, index => by
+      apply Fin.ext
+      rw [unlinearizeAux, linearize_cons_val, linearize_unlinearizeAux s]
+      exact Nat.mod_add_div _ _
+
+/-- Arithmetic `unlinearize`, which replaces it in compiled code. -/
+def unlinearizeFast {s : Shape} (index : Fin (Shape.size s)) : Coord s :=
+  unlinearizeAux s index
+
+/-- Compiled code runs `unlinearizeFast` in place of `unlinearize`. -/
+@[csimp] theorem unlinearize_eq_unlinearizeFast : @unlinearize = @unlinearizeFast := by
+  funext s index
+  rw [unlinearizeFast, ← linearize_unlinearizeAux s index, unlinearize_linearize,
+    linearize_unlinearizeAux]
+
+/--
+The row-major equivalence built from the arithmetic index maps. Compiled code uses it in place of
+`equivFin`, whose `trans` and `prodCongr` layers are otherwise rebuilt at every application.
+-/
+def equivFinFast (s : Shape) : Coord s ≃ Fin (Shape.size s) where
+  toFun := linearizeFast
+  invFun := unlinearizeFast
+  left_inv coordinate := by
+    rw [← linearize_eq_linearizeFast, ← unlinearize_eq_unlinearizeFast]
+    exact unlinearize_linearize coordinate
+  right_inv index := by
+    rw [← linearize_eq_linearizeFast, ← unlinearize_eq_unlinearizeFast]
+    exact linearize_unlinearize index
+
+/-- Compiled code runs `equivFinFast` in place of `equivFin`. -/
+@[csimp] theorem equivFin_eq_equivFinFast : @equivFin = @equivFinFast := by
+  funext s
+  apply Equiv.ext
+  intro coordinate
+  change linearize coordinate = linearizeFast coordinate
+  rw [linearize_eq_linearizeFast]
 
 /--
 Project a coordinate from a dimensionwise broadcast target to its source.

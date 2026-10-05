@@ -9,7 +9,6 @@ module
 public import NN.Runtime.External.Julia
 public import NN.API.CLI
 public import NN.Verification.Splines.PiecewisePolyCert
-import Mathlib.Analysis.SpecialFunctions.Trigonometric.DerivHyp
 
 /-!
 # Piecewise-linear spline certificate CLI
@@ -95,25 +94,16 @@ def main (args : List String) : IO Unit := do
     IO.println usage
     return
 
-  let (regen, args) ←
-    match TorchLean.CLI.takeBoolFlag args "regen" with
-    | .ok result => pure result
-    | .error e => throw <| IO.userError s!"{e}\n\n{usage}"
-  let (arithmetic, args) ←
-    match TorchLean.CLI.takeParsedFlag args "arithmetic" (default := "exact") parseArithmetic with
-    | .ok result => pure result
-    | .error e => throw <| IO.userError s!"{e}\n\n{usage}"
-  let (scriptPath, args) ←
-    match TorchLean.CLI.takeFlagValue args "script" (default := defaultJuliaScript) with
-    | .ok result => pure result
-    | .error e => throw <| IO.userError s!"{e}\n\n{usage}"
-  let (certPath, args) ←
-    match TorchLean.CLI.takePositional args (default := defaultCertPath) with
-    | .ok result => pure result
-    | .error e => throw <| IO.userError s!"{e}\n\n{usage}"
-  match TorchLean.CLI.checkNoArgs args with
-  | .ok () => pure ()
-  | .error e => throw <| IO.userError s!"{e}\n\n{usage}"
+  -- Every flag error is followed by the usage text.
+  let orUsage {β : Type} (result : Except String β) : IO β :=
+    IO.ofExcept <| result.mapError fun e => s!"{e}\n\n{usage}"
+  let (regen, args) ← orUsage <| TorchLean.CLI.takeBoolFlag args "regen"
+  let (arithmetic, args) ← orUsage <|
+    TorchLean.CLI.takeParsedFlag args "arithmetic" (default := "exact") parseArithmetic
+  let (scriptPath, args) ← orUsage <|
+    TorchLean.CLI.takeFlagValue args "script" (default := defaultJuliaScript)
+  let (certPath, args) ← orUsage <| TorchLean.CLI.takePositional args (default := defaultCertPath)
+  orUsage <| TorchLean.CLI.checkNoArgs args
   let check :=
     match arithmetic with
     | .exact => NN.Verification.Splines.PiecewisePolyCert.checkJson

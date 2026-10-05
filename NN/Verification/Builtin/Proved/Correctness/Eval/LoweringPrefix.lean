@@ -28,6 +28,30 @@ namespace Correctness
 
 open NN.Verification.Builtin
 
+/-- The lowering accumulator after appending the lowering of one node at the fresh id. -/
+def lowerStep
+    {α : Type} [TorchLean.Storage α] [Context α]
+    {paramShapes : List Shape} {inShape : Shape} {ss : List Shape} {mid : Shape}
+    (node : Node α paramShapes inShape ss mid) (params : TorchLean.TensorPack α paramShapes)
+    (c : NN.Verification.Builtin.LoweredIR α) : NN.Verification.Builtin.LoweredIR α :=
+  let res := lowerNode (α := α) c.graph.nodes.size node params c.ps
+  { c with
+      graph := { nodes := c.graph.nodes.push res.1 }
+      ps := res.2
+      outputId := c.graph.nodes.size }
+
+/-- Lowering a `let1` chain lowers the head node and continues from the extended accumulator. -/
+theorem lowerForwardLetChain_let1
+    {α : Type} [TorchLean.Storage α] [Context α]
+    {paramShapes : List Shape} {inShape : Shape} {ss : List Shape} {mid out : Shape}
+    (node : Node α paramShapes inShape ss mid)
+    (gNext : ForwardLetChain α paramShapes inShape (ss ++ [mid]) out)
+    (params : TorchLean.TensorPack α paramShapes) (c : NN.Verification.Builtin.LoweredIR α) :
+    lowerForwardLetChain (α := α) (ForwardLetChain.let1 node gNext) params c =
+      lowerForwardLetChain (α := α) gNext params (lowerStep node params c) := by
+  rfl
+
+
 /--
 Generic prefix-preservation argument for `ParamStore` lookups.
 
@@ -56,37 +80,15 @@ private theorem lowerForwardLetChain_ps_lookup_get?_lt
         (lowerForwardLetChain (α := α) (paramShapes := paramShapes) (inShape := inShape)
           (ss := ss) (out := out) g params c).ps k =
       read c.ps k := by
-  classical
   induction g generalizing c with
   | ret y =>
       simp [lowerForwardLetChain]
   | @let1 ss₀ mid₀ out₀ node gNext ih =>
-      let id := c.graph.nodes.size
-      have hk' : k < id := by simpa [id] using hk
-      have hk_succ : k < id + 1 := Nat.lt_succ_of_lt hk'
-      let res :=
-        lowerNode (α := α) (paramShapes := paramShapes) (inShape := inShape) (ss := ss₀)
-          (out := mid₀) id node params c.ps
-      let n : NN.IR.Node := res.1
-      let ps' : NN.MLTheory.CROWN.Graph.ParamStore α := res.2
-      let c' : NN.Verification.Builtin.LoweredIR α :=
-        { c with graph := { nodes := c.graph.nodes.push n }, ps := ps', outputId := id }
-      have hps' : read ps' k = read c.ps k := by
-        simpa [res, ps'] using hStep (id := id) (k := k) (params := params) (ps := c.ps) hk'
-      have hIH :=
-        ih (c := c') (hk := by simpa [c', Array.size_push, id] using hk_succ)
-      have : read
-          (lowerForwardLetChain (α := α) (paramShapes := paramShapes) (inShape := inShape)
-            (ss := ss₀ ++ [mid₀]) (out := out₀) gNext params c').ps k =
-          read c.ps k := by
-        calc
-          read
-              (lowerForwardLetChain (α := α) (paramShapes := paramShapes) (inShape := inShape)
-                (ss := ss₀ ++ [mid₀]) (out := out₀) gNext params c').ps k
-              =
-            read c'.ps k := hIH
-          _ = read c.ps k := by simpa [c'] using hps'
-      simpa [lowerForwardLetChain, c', id, res] using this
+      rw [lowerForwardLetChain_let1]
+      refine (ih (lowerStep node params c)
+        (by simpa [lowerStep] using Nat.lt_succ_of_lt hk)).trans ?_
+      simpa [lowerStep] using
+        hStep (id := c.graph.nodes.size) (k := k) (params := params) (ps := c.ps) hk
 
 /--
 Lowering a let-chain does not change `ps.constVals` entries for keys `< c.graph.nodes.size`.
@@ -101,14 +103,13 @@ theorem lowerForwardLetChain_ps_constVals_get?_lt
     {k : Nat} (hk : k < c.graph.nodes.size) :
     (lowerForwardLetChain (α := α) (paramShapes := paramShapes) (inShape := inShape) (ss := ss)
       (out := out) g params c).ps.constVals.get? k = c.ps.constVals.get? k := by
-  classical
   exact
     lowerForwardLetChain_ps_lookup_get?_lt
       (α := α) (β := NN.MLTheory.CROWN.Graph.FlatTensor α)
       (read := fun ps k => ps.constVals.get? k)
       (hStep := by
         intro ss₀ mid₀ node id k params ps hk
-        have hidk : id ≠ k := (ne_comm).1 hk.ne
+        have hidk : id ≠ k := Nat.ne_of_gt hk
         cases node <;>
           simp [lowerNode, Std.HashMap.getElem?_insert, beq_eq_false_iff_ne.mpr hidk])
       g params c hk
@@ -126,14 +127,13 @@ theorem lowerForwardLetChain_ps_linearWB_get?_lt
     {k : Nat} (hk : k < c.graph.nodes.size) :
     (lowerForwardLetChain (α := α) (paramShapes := paramShapes) (inShape := inShape) (ss := ss)
       (out := out) g params c).ps.linearWB.get? k = c.ps.linearWB.get? k := by
-  classical
   exact
     lowerForwardLetChain_ps_lookup_get?_lt
       (α := α) (β := NN.MLTheory.CROWN.Graph.LinParams α)
       (read := fun ps k => ps.linearWB.get? k)
       (hStep := by
         intro ss₀ mid₀ node id k params ps hk
-        have hidk : id ≠ k := (ne_comm).1 hk.ne
+        have hidk : id ≠ k := Nat.ne_of_gt hk
         cases node <;>
           simp [lowerNode, Std.HashMap.getElem?_insert, beq_eq_false_iff_ne.mpr hidk])
       g params c hk
@@ -151,14 +151,13 @@ theorem lowerForwardLetChain_ps_convCfg_get?_lt
     {k : Nat} (hk : k < c.graph.nodes.size) :
     (lowerForwardLetChain (α := α) (paramShapes := paramShapes) (inShape := inShape) (ss := ss)
       (out := out) g params c).ps.convCfg.get? k = c.ps.convCfg.get? k := by
-  classical
   exact
     lowerForwardLetChain_ps_lookup_get?_lt
       (α := α) (β := NN.IR.ConvParams α)
       (read := fun ps k => ps.convCfg.get? k)
       (hStep := by
         intro ss₀ mid₀ node id k params ps hk
-        have hidk : id ≠ k := (ne_comm).1 hk.ne
+        have hidk : id ≠ k := Nat.ne_of_gt hk
         cases node <;>
           simp [lowerNode, Std.HashMap.getElem?_insert, beq_eq_false_iff_ne.mpr hidk])
       g params c hk
@@ -178,7 +177,6 @@ theorem lowerForwardLetChain_ps_batchNormEval_get?_lt
     (lowerForwardLetChain (α := α) (paramShapes := paramShapes) (inShape := inShape) (ss := ss)
       (out := out) g params c).ps.batchNormEval.get? k =
       c.ps.batchNormEval.get? k := by
-  classical
   exact
     lowerForwardLetChain_ps_lookup_get?_lt
       (α := α) (β := NN.IR.BatchNormEvalParams α)
@@ -203,14 +201,13 @@ theorem lowerForwardLetChain_ps_layerNorm_get?_lt
     {k : Nat} (hk : k < c.graph.nodes.size) :
     (lowerForwardLetChain (α := α) (paramShapes := paramShapes) (inShape := inShape)
       (ss := ss) (out := out) g params c).ps.layerNorm.get? k = c.ps.layerNorm.get? k := by
-  classical
   exact
     lowerForwardLetChain_ps_lookup_get?_lt
       (α := α) (β := NN.IR.LayerNormParams α)
       (read := fun ps k => ps.layerNorm.get? k)
       (hStep := by
         intro ss₀ mid₀ node id k params ps hk
-        have hidk : id ≠ k := (ne_comm).1 hk.ne
+        have hidk : id ≠ k := Nat.ne_of_gt hk
         cases node <;>
           simp [lowerNode, Std.HashMap.getElem?_erase, beq_eq_false_iff_ne.mpr hidk])
       g params c hk
@@ -231,33 +228,15 @@ theorem lowerForwardLetChain_getNode_lt
         (ss := ss) (out := out) g params c).graph) i)
       =
     NN.IR.Graph.getNode (g := c.graph) i := by
-  classical
   induction g generalizing c with
   | ret y =>
       simp [lowerForwardLetChain]
   | @let1 ss₀ mid₀ out₀ node gNext ih =>
-      let id := c.graph.nodes.size
-      let res :=
-        lowerNode (α := α) (paramShapes := paramShapes) (inShape := inShape) (ss := ss₀)
-          (out := mid₀) id node params c.ps
-      let n : NN.IR.Node := res.1
-      let ps' : NN.MLTheory.CROWN.Graph.ParamStore α := res.2
-      let c' : NN.Verification.Builtin.LoweredIR α :=
-        { c with graph := { nodes := c.graph.nodes.push n }, ps := ps', outputId := id }
-      have hi' : i < c'.graph.nodes.size := by
-        simpa [c', Array.size_push] using Nat.lt_succ_of_lt hi
-      have hNext :
-          NN.IR.Graph.getNode
-              (g := (lowerForwardLetChain (α := α) (paramShapes := paramShapes)
-                (inShape := inShape) (ss := ss₀ ++ [mid₀]) (out := out₀)
-                gNext params c').graph) i
-            =
-          NN.IR.Graph.getNode (g := c'.graph) i :=
-        ih (c := c') (hi := hi')
-      have hPush :
-          NN.IR.Graph.getNode (g := c'.graph) i = NN.IR.Graph.getNode (g := c.graph) i := by
-        simpa [c', res, id] using getNode_push_lt (g := c.graph) (n := n) (hi := hi)
-      simpa [lowerForwardLetChain, c', id, res] using Eq.trans hNext hPush
+      rw [lowerForwardLetChain_let1]
+      exact (ih (lowerStep node params c)
+        (by simpa [lowerStep] using Nat.lt_succ_of_lt hi)).trans
+          (by simpa [lowerStep] using getNode_push_lt (g := c.graph)
+                (n := (lowerNode c.graph.nodes.size node params c.ps).1) hi)
 
 /-- `lowerForwardLetChain` is monotone in `graph.nodes.size` (it only appends nodes). -/
 theorem lowerForwardLetChain_nodesSize_le
@@ -269,26 +248,12 @@ theorem lowerForwardLetChain_nodesSize_le
     c.graph.nodes.size ≤
       (lowerForwardLetChain (α := α) (paramShapes := paramShapes) (inShape := inShape) (ss := ss)
         (out := out) g params c).graph.nodes.size := by
-  classical
   induction g generalizing c with
   | ret y =>
       simp [lowerForwardLetChain]
   | @let1 ss₀ mid₀ out₀ node gNext ih =>
-      let id := c.graph.nodes.size
-      let res :=
-        lowerNode (α := α) (paramShapes := paramShapes) (inShape := inShape) (ss := ss₀)
-          (out := mid₀) id node params c.ps
-      let n : NN.IR.Node := res.1
-      let ps' : NN.MLTheory.CROWN.Graph.ParamStore α := res.2
-      let c' : NN.Verification.Builtin.LoweredIR α :=
-        { c with graph := { nodes := c.graph.nodes.push n }, ps := ps', outputId := id }
-      have h1 : c.graph.nodes.size ≤ c'.graph.nodes.size := by
-        simp [c', Array.size_push]
-      have h2 : c'.graph.nodes.size ≤
-          (lowerForwardLetChain (α := α) (paramShapes := paramShapes) (inShape := inShape)
-            (ss := ss₀ ++ [mid₀]) (out := out₀) gNext params c').graph.nodes.size := by
-        exact ih (c := c')
-      simpa [lowerForwardLetChain, c', id, res] using Nat.le_trans h1 h2
+      rw [lowerForwardLetChain_let1]
+      exact Nat.le_trans (by simp [lowerStep]) (ih (lowerStep node params c))
 
 end Correctness
 

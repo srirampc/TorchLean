@@ -11,8 +11,8 @@ public import NN.Spec.Core.TensorOps
 /-!
 # Positional encodings (spec layer)
 
-This file provides the simplest positional encoding definition: a **learnable** per-position
-embedding that is added to token embeddings.
+This file provides learnable and sinusoidal positional embeddings, added to token embeddings,
+and RoPE rotations of query/key head vectors.
 
 PyTorch analogy:
 
@@ -26,9 +26,8 @@ Why learnable positional encodings show up a lot in practice:
 - they keep the spec algebraic: there is no trigonometry, complex numbers, or special casing for
   even/odd dimensions.
 
-If you want sinusoidal encodings (Transformer) or RoPE/rotary encodings, those can be defined as
-pure functions that produce a tensor of shape `(seqLen, embedDim)` and then reused with the same
-`addPositionalEncodingSpec` below.
+The sinusoidal helpers below construct fixed additive embeddings. The RoPE helpers instead combine
+each head vector with its pairwise rotation using position-dependent cosine and sine factors.
 
 Reference (sinusoidal): "Attention Is All You Need" (Vaswani et al., 2017):
   https://arxiv.org/abs/1706.03762
@@ -77,17 +76,8 @@ So the adjoint is just:
 - `δx   = δy`
 - `δpos = δy`
 
-This is trivial, but having it as a named spec makes higher-level models (e.g. ViT) easier to
-wire up without re-deriving the same one-liner everywhere.
+The same upstream tensor supplies both gradients.
 -/
-
-/-- Backward/VJP for `addPositionalEncodingSpec`. -/
-def addPositionalEncodingBackwardSpec {seqLen embedDim : Nat}
-    (_pe : PositionalEncodingSpec seqLen embedDim α)
-    (gradOutput : Tensor α [seqLen, embedDim]) :
-    (Tensor α [seqLen, embedDim] ×  -- ∂L/∂pos
-     Tensor α [seqLen, embedDim]) := -- ∂L/∂x
-  (gradOutput, gradOutput)
 
 /-!
 ## Sinusoidal positional encodings (pure functions)
@@ -219,8 +209,8 @@ def ropeCosVectorSpec (pos headDim : Nat) : Tensor α [headDim] :=
 /--
 Broadcast RoPE `sin(θ)` factors to a full `(headDim)` vector for one position.
 
-For an odd width, the final unpaired coordinate receives sine factor `0`, so applying RoPE leaves
-that coordinate unchanged.
+For an odd width, the final unpaired coordinate receives sine factor `0`. Together with its cosine
+factor `1`, `ropeApplySpec` evaluates that coordinate as `x * 1 + x * 0`.
 -/
 def ropeSinVectorSpec (pos headDim : Nat) : Tensor α [headDim] :=
   Tensor.dim (fun (j : Fin headDim) =>
@@ -241,7 +231,9 @@ Implementation matches the standard identity:
 where `cos` and `sin` are position-dependent vectors broadcast across the last dimension.
 
 `startPos` is an absolute-position offset (useful for KV-cache decoding).
-When `headDim` is odd, the final unpaired coordinate is preserved.
+When `headDim` is odd, the final unpaired coordinate evaluates to `x * 1 + x * 0`. This is an
+identity over the reals. IEEE arithmetic still performs both products and the addition: an infinite
+entry produces NaN through `∞ * 0`, and a NaN entry remains NaN.
 -/
 def ropeApplySpec {seqLen headDim : Nat}
     (x : Tensor α [seqLen, headDim])

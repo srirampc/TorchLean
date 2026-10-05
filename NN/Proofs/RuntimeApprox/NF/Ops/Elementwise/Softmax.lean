@@ -224,8 +224,7 @@ theorem approxTensor_softmax_spec {s : Shape} :
         approxTensor (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd))
           (mapSpec (s := s) (Activation.Math.logisticSpec (α := ℝ)) xS)
           (mapSpec (s := s) (Activation.Math.logisticSpec (α := R)) xR)
-          (linfNorm (softmaxBoundTensor (β := β) (fexp := fexp) (rnd := rnd) (s := s) eps xR)) :=
-    by
+          (linfNorm (softmaxBoundTensor (β := β) (fexp := fexp) (rnd := rnd) (s := s) eps xR)) := by
   intro xS xR eps hx
   have h :=
     approxTensor_map_spec_of_runtime_scalar_bound
@@ -239,6 +238,7 @@ theorem approxTensor_softmax_spec {s : Shape} :
         intro x xR hxScalar
         exact approx_logistic_nf (β := β) (fexp := fexp) (rnd := rnd) hxScalar)
   simpa [softmaxBoundTensor] using h
+
 end NFBackend
 
 end

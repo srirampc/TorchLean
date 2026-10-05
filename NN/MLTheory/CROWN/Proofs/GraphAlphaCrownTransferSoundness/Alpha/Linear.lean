@@ -36,7 +36,7 @@ theorem enclosesAtInput_linearBoundsFromAffine {ctx : AffineCtx} {x : Tensor ℝ
     (hout : xin.outDim = n) (hvIn : vp.n = n)
     (hpar : EnclosesAtInput (α := ℝ) ctx x xin vp) :
     EnclosesAtInput (α := ℝ) ctx x
-      (Cert.linearBoundsFromAffine (α := ℝ) (inDim := xin.inDim) (n := n) (m := m) W bv xin hout)
+      (Graph.propagateLinearBounds (α := ℝ) (n := n) (m := m) W bv xin hout)
       { n := m
         v := Spec.linearSpec (α := ℝ) { weights := W, bias := bv }
           (castDimScalar (α := ℝ) hvIn vp.v) } := by

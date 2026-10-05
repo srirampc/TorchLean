@@ -9,7 +9,6 @@ module
 
 public import NN.Runtime.Autograd.Engine.Core.Base
 public import NN.Tensor.Conversion
-public import NN.Spec.Layers.Conv
 public import NN.Spec.Layers.Pooling.Spatial
 
 /-!
@@ -35,7 +34,8 @@ N-D convolution for channels-first tensors `(inC, spatial...)` (no batch axis).
 
 The spatial rank and every geometric parameter are encoded by vectors of the same length.
 -/
-def conv {α : Type} [TorchLean.Storage α] [Context α] [DecidableRel ((· > ·) : α → α → Prop)]
+@[inline] def conv {α : Type} [TorchLean.Storage α] [Context α]
+  [DecidableRel ((· > ·) : α → α → Prop)]
   {d inC outC : Nat}
   {kernel stride padding : TorchLean.Tensor Nat [d]}
   {inSpatial : TorchLean.Tensor Nat [d]}
@@ -54,7 +54,10 @@ def conv {α : Type} [TorchLean.Storage α] [Context α] [DecidableRel ((· > ·
   let node : Node α :=
     { name := some name
       value := Spec.SomeTensor.ofTensor y
-      requiresGrad := true
+      requiresGrad :=
+        (t.getNode? kernelId).any (·.requiresGrad) ||
+        (t.getNode? biasId).any (·.requiresGrad) ||
+        (t.getNode? inputId).any (·.requiresGrad)
       parents := #[kernelId, biasId, inputId]
       backward := fun dLdyAny => do
         let dLdy ← requireGrad (α := α) (τ := outSh) dLdyAny
@@ -75,7 +78,7 @@ Kernel layout matches the spec/PyTorch convention `(inC, outC, kernel[0], ..., k
 PyTorch comparison: `torch.nn.functional.conv_transpose{d}d` specialized to a single sample
 (no batch axis).
 -/
-def convTranspose {α : Type} [TorchLean.Storage α] [Context α]
+@[inline] def convTranspose {α : Type} [TorchLean.Storage α] [Context α]
   [DecidableRel ((· > ·) : α → α → Prop)]
   {d inC outC : Nat}
   {kernel stride padding : TorchLean.Tensor Nat [d]}
@@ -97,7 +100,10 @@ def convTranspose {α : Type} [TorchLean.Storage α] [Context α]
   let node : Node α :=
     { name := some name
       value := Spec.SomeTensor.ofTensor y
-      requiresGrad := true
+      requiresGrad :=
+        (t.getNode? kernelId).any (·.requiresGrad) ||
+        (t.getNode? biasId).any (·.requiresGrad) ||
+        (t.getNode? inputId).any (·.requiresGrad)
       parents := #[kernelId, biasId, inputId]
       backward := fun dLdyAny => do
         let dLdy ← requireGrad (α := α) (τ := outSh) dLdyAny
@@ -116,7 +122,7 @@ N-D max pooling for channels-first tensors `(C, spatial...)` (no batch axis).
 Padding is symmetric per-axis and uses zeros. To model unpadded pooling, pass `padding := 0` on
 every axis.
 -/
-def maxPool {α : Type} [TorchLean.Storage α] [Context α]
+@[inline] def maxPool {α : Type} [TorchLean.Storage α] [Context α]
   {d C : Nat} {inSpatial kernel stride padding : TorchLean.Tensor Nat [d]}
   (t : Tape α) (xId : Nat) : Result (Tape α × Nat) := do
   let x ← requireValue (α:=α) (t:=t)
@@ -130,7 +136,7 @@ def maxPool {α : Type} [TorchLean.Storage α] [Context α]
       let node : Node α :=
         { name := some "max_pool"
           value := Spec.SomeTensor.ofTensor y
-          requiresGrad := true
+          requiresGrad := (t.getNode? xId).any (·.requiresGrad)
           parents := #[xId]
           backward := fun dLdyAny => do
             let dLdy ← requireGrad (α := α) (τ := outSh) dLdyAny
@@ -149,7 +155,7 @@ N-D average pooling for channels-first tensors `(C, spatial...)` (no batch axis)
 
 Padding is symmetric per-axis and uses zeros; pooling uses `count_include_pad=true` semantics.
 -/
-def avgPool {α : Type} [TorchLean.Storage α] [Context α]
+@[inline] def avgPool {α : Type} [TorchLean.Storage α] [Context α]
   {d C : Nat} {inSpatial kernel stride padding : TorchLean.Tensor Nat [d]}
   (t : Tape α) (xId : Nat) : Result (Tape α × Nat) := do
   let x ← requireValue (α:=α) (t:=t)
@@ -163,7 +169,7 @@ def avgPool {α : Type} [TorchLean.Storage α] [Context α]
       let node : Node α :=
         { name := some "avg_pool"
           value := Spec.SomeTensor.ofTensor y
-          requiresGrad := true
+          requiresGrad := (t.getNode? xId).any (·.requiresGrad)
           parents := #[xId]
           backward := fun dLdyAny => do
             let dLdy ← requireGrad (α := α) (τ := outSh) dLdyAny
@@ -183,7 +189,7 @@ The executable tape requires a finite, nonzero `beta`. Finiteness is checked thr
 arithmetic contract: finite scalar backends satisfy `beta - beta == 0`, whereas IEEE NaN and
 infinity do not. At least one spatial dimension is required, matching the native runtime contract.
 -/
-def smoothMaxPool {α : Type} [TorchLean.Storage α] [Context α] [DecidableEq α]
+@[inline] def smoothMaxPool {α : Type} [TorchLean.Storage α] [Context α] [DecidableEq α]
   {d C : Nat} {inSpatial kernel stride padding : TorchLean.Tensor Nat [d]}
   (t : Tape α) (xId : Nat) (beta : α) : Result (Tape α × Nat) := do
   if beta == 0 then
@@ -204,7 +210,7 @@ def smoothMaxPool {α : Type} [TorchLean.Storage α] [Context α] [DecidableEq �
         let node : Node α :=
           { name := some "smooth_max_pool"
             value := Spec.SomeTensor.ofTensor y
-            requiresGrad := true
+            requiresGrad := (t.getNode? xId).any (·.requiresGrad)
             parents := #[xId]
             backward := fun dLdyAny => do
               let dLdy ← requireGrad (α := α) (τ := outSh) dLdyAny

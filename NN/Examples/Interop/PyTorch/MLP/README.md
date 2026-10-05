@@ -16,8 +16,8 @@ From the repository root:
 
 ```bash
 python3 NN/Examples/Interop/PyTorch/MLP/train_mlp.py
-lake exe torchlean pytorch_roundtrip --model mlp --action import
-lake exe torchlean pytorch_roundtrip --model mlp --action export
+scripts/lake.sh exe torchlean pytorch_roundtrip --model mlp --action import
+scripts/lake.sh exe torchlean pytorch_roundtrip --model mlp --action export
 ```
 
 Import prints the Lean output for `[0.5, 0.8]`. Export writes `TestMLP_PyTorch.py` and, when JSON

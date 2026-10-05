@@ -77,23 +77,30 @@ def hmmSequence {seqLen nStates nObservations : Nat}
   pythonExpr := "UnsupportedLayer(\"HMMSequence\", \"torch.distributions.Categorical\")"
 }
 
-/-- Sequence module: compute prefix likelihoods `p(o₀:t)` for each timestep `t`. -/
+/-- Sequence module: compute prefix likelihoods `p(o₀:t)` for each timestep `t`.
+
+The scaled forward trace is computed once. Each prefix multiplies its scale factors in sequence
+order, starting from `1`, as in `hmmForwardSpec` for a nonempty sequence.
+-/
 def hmmPrefixLikelihoods {seqLen nStates nObservations : Nat}
   (hObservations : nObservations > 0) (m : HMMSpec α nStates nObservations) :
   Spec.Module α ([seqLen, nObservations]) ([seqLen]) :=
 {
   forward := fun scores =>
     let observations := decodeObservations hObservations scores
-    Tensor.dim (fun t =>
-      let prefixObservations : ObservationSeq nObservations (t.val + 1) :=
-        Tensor.ofFn fun i => observations.getScalar ⟨i.val, by grind⟩
-      Tensor.scalar (hmmForwardSpec (α := α) m prefixObservations)
-    ),
+    let steps := hmmForwardScaled (α := α) m observations
+    (Sequence.mapAccum seqLen (1 : α) fun t total =>
+      let next := total * (steps.getScalar t).scale
+      (next, next)).2,
   kind := "HMMPrefixLikelihoods",
   pythonExpr := "UnsupportedLayer(\"HMMPrefixLikelihoods\", \"torch.distributions.Categorical\")"
 }
 
-/-- Sequence module: normalized state probabilities at each timestep. -/
+/-- Sequence module: normalize each scaled forward message again by its computed total.
+
+Rounded messages need not sum to exactly `1`. This second pass divides each entry by that total;
+`hmmSequence` exposes the original messages without this extra division.
+-/
 def hmmStateProbabilities {seqLen nStates nObservations : Nat}
   (hObservations : nObservations > 0) (m : HMMSpec α nStates nObservations) :
   Spec.Module α ([seqLen, nObservations]) ([seqLen, nStates]) :=

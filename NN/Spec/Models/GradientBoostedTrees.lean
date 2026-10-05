@@ -135,7 +135,9 @@ def decisionTreeForwardLeadingSpec (leading : Shape) {maxDepth nFeatures : Nat}
 /--
 Forward pass for a gradient boosted ensemble on a single input.
 
-This computes `initialPrediction + learningRate * sum(tree_i(x))`.
+Starting at `initialPrediction`, visit trees in index order and update
+`acc := acc + learningRate * tree_i(x)`. Shrinkage is applied before each addition; rounded
+arithmetic does not in general permit factoring it out of the sum.
 -/
 def gradientBoostedTreesForwardSpec {nTrees maxDepth nFeatures : Nat}
   (model : GradientBoostedTreesSpec α nFeatures nTrees maxDepth)
@@ -158,53 +160,6 @@ def gradientBoostedTreesForwardLeadingSpec (leading : Shape)
   (input : Tensor α (leading.concat [nFeatures])) :
   Tensor α (leading.concat .scalar) :=
   Tensor.mapLeading leading (gradientBoostedTreesForwardSpec model) input
-
-/--
-"Gradient" w.r.t. a tree's prediction.
-
-Decision trees are piecewise-constant in the inputs, so we do not attempt to define meaningful
-derivatives through their internal decisions here. For boosting, this convention makes the intended
-dataflow explicit: gradient information is used to fit subsequent trees, not to differentiate
-through split predicates.
--/
-def treePredictionGradSpec {maxDepth nFeatures : Nat}
-  (_tree : DecisionTreeSpec α nFeatures maxDepth)
-  (_input : Tensor α [nFeatures])
-  (gradOutput : α) :
-  α :=
-  -- For decision trees, the gradient is the gradient of the output
-  -- since trees are piecewise constant functions
-  gradOutput
-
-/--
-Approximate gradient w.r.t. input features for a tree.
-
-In this spec we return `0` gradients (trees are treated as non-differentiable).
--/
-def treeInputGradSpec {maxDepth nFeatures : Nat}
-  (_tree : DecisionTreeSpec α nFeatures maxDepth)
-  (_input : Tensor α [nFeatures])
-  (_grad_output : α) :
-  Tensor α [nFeatures] :=
-  -- For decision trees, gradients w.r.t. inputs are typically zero
-  -- since trees are piecewise constant. We return zero gradients.
-  Tensor.full (.dim nFeatures .scalar) 0
-
-/--
-Zero input-gradient convention for the ensemble.
-
-This file treats boosted trees as a classical model: we do not backpropagate through tree
-structure. Instead, residuals/gradients are used to fit *new* trees. This helper is intentionally
-not wired into an `OpSpec`; callers should not mistake it for a differentiable surrogate.
--/
-def gradientBoostedTreesZeroInputGradForNondiffTrees {nTrees maxDepth nFeatures : Nat}
-  (_model : GradientBoostedTreesSpec α nFeatures nTrees maxDepth)
-  (_input : Tensor α [nFeatures])
-  (_grad_output : α) :
-  Tensor α [nFeatures] :=
-  -- For gradient boosting, we typically don't backprop through the trees
-  -- Instead, we use the gradients to fit new trees
-  Tensor.full (.dim nFeatures .scalar) 0
 
 /-!
 ## Classical training: CART-style regression trees (MSE)
@@ -235,16 +190,13 @@ structure RegressionExample (nFeatures : Nat) where
 
 namespace GradientBoostedTrees.Internal
 
-/-- Sum all elements of an array. -/
-def arraySum (xs : Array α) : α :=
-  xs.foldl (fun acc x => acc + x) 0
-
 /-- Mean of an array, with `0` as a convenient default for an empty sample. -/
 def meanOrZero (xs : Array α) : α :=
   if xs.isEmpty then
     0
   else
-    (arraySum xs) / (xs.size : α)
+    -- `Array.sum` is a right fold; retain the zero-seeded left-to-right arithmetic here.
+    xs.foldl (fun acc x => acc + x) 0 / (xs.size : α)
 
 /-- Sum of squared deviations from the mean (SSE). -/
 def sse (ys : Array α) : α :=
@@ -256,18 +208,11 @@ def sse (ys : Array α) : α :=
       let d := y - μ
       acc + d * d) 0
 
-/-- Decide whether a sample goes to the *right* branch for a `(feature, threshold)` split. -/
-def goesRight {nFeatures : Nat} (feature : Fin nFeatures) (threshold : α)
-  (ex : RegressionExample (α := α) nFeatures) : Bool :=
-  decide (ex.x.getScalar feature > threshold)
-
 /-- Partition samples into `(left, right)` for a given split. -/
 def partitionBySplit {nFeatures : Nat}
   (feature : Fin nFeatures) (threshold : α) (xs : Array (RegressionExample (α := α) nFeatures)) :
   Array (RegressionExample (α := α) nFeatures) × Array (RegressionExample (α := α) nFeatures) :=
-  xs.foldl (fun (left, right) ex =>
-      if goesRight feature threshold ex then (left, right.push ex) else (left.push ex, right))
-    (#[], #[])
+  xs.partition (fun ex => !decide (ex.x.getScalar feature > threshold))
 
 /-- Extract the regression targets from an array of examples. -/
 def targets {nFeatures : Nat} (xs : Array (RegressionExample (α := α) nFeatures)) : Array α :=
@@ -428,7 +373,7 @@ namespace GradientBoostedTrees.Internal
 
 /-- Count how many times `lbl` appears in `ys`. -/
 def countEq {β : Type} [DecidableEq β] (lbl : β) (ys : Array β) : Nat :=
-  ys.foldl (fun acc y => if y = lbl then acc + 1 else acc) 0
+  ys.countP (fun y => decide (y = lbl))
 
 /-- Remove repeated labels while preserving their first-occurrence order. -/
 def distinct {β : Type} [DecidableEq β] (ys : Array β) : Array β :=
@@ -486,20 +431,13 @@ def classTargets {nFeatures : Nat} {β : Type} (xs : Array (ClassificationExampl
   β)) : Array β :=
   xs.map (fun ex => ex.y)
 
-/-- Decide whether a classification sample goes right for a `(feature, threshold)` split. -/
-def goesRightC {nFeatures : Nat} {β : Type} (feature : Fin nFeatures) (threshold : α)
-  (ex : ClassificationExample (α := α) nFeatures β) : Bool :=
-  decide (ex.x.getScalar feature > threshold)
-
 /-- Partition classification samples into `(left, right)` for a candidate split. -/
 def partitionBySplitC {nFeatures : Nat} {β : Type}
   (feature : Fin nFeatures) (threshold : α)
   (xs : Array (ClassificationExample (α := α) nFeatures β)) :
   Array (ClassificationExample (α := α) nFeatures β) ×
     Array (ClassificationExample (α := α) nFeatures β) :=
-  xs.foldl (fun (left, right) ex =>
-      if goesRightC feature threshold ex then (left, right.push ex) else (left.push ex, right))
-    (#[], #[])
+  xs.partition (fun ex => !decide (ex.x.getScalar feature > threshold))
 
 namespace GradientBoostedTrees.Internal
 
@@ -693,14 +631,11 @@ def gradientBoostedTreesTrainStepFitSpec {batch nTrees maxDepth nFeatures : Nat}
   (target : Tensor α [batch])
   (h : batch ≠ 0) :
   (Tensor α .scalar × GradientBoostedTreesSpec α nFeatures (nTrees + 1) maxDepth) :=
-  let loss := gbtMseLossSpec model input target h
   let residuals := computeResidualsSpec model input target
   let newTree :=
     decisionTreeFitRegressionMseSpec (α := α) (batch := batch) (maxDepth := maxDepth)
       (nFeatures := nFeatures) input residuals
-  let newTrees := concatAxisSpec .scalar model.trees (Tensor.dim (fun _ => Tensor.scalar newTree))
-  let updatedModel := { model with trees := newTrees }
-  (loss, updatedModel)
+  gradientBoostedTreesTrainStepSpec model input target newTree h
 
 namespace GradientBoostedTrees.Internal
 
@@ -799,30 +734,5 @@ def gbtRmseSpec {batch nTrees maxDepth nFeatures : Nat}
     apply Shape.hasNonemptyAxisZeroOfNe h
   let mse := reduceMean 0 squaredErrors inst.proof
   sqrtSpec mse
-
-/-- Adjust the ensemble learning rate (shrinkage) while keeping the same trees. -/
-def adjustLearningRateSpec {nFeatures nTrees maxDepth : Nat}
-  (model : GradientBoostedTreesSpec α nFeatures nTrees maxDepth)
-  (newRate : α) :
-  GradientBoostedTreesSpec α nFeatures nTrees maxDepth :=
-  { model with learningRate := newRate }
-
-/--
-Select the first `newBatch` paired input rows and targets.
-
-The requested row count is explicit; no random sampling or ratio-based rounding is performed.
--/
-def prefixSubsampleDataSpec {batch newBatch nFeatures : Nat}
-  (input : Tensor α [batch, nFeatures])
-  (target : Tensor α [batch])
-  (hNewBatch : newBatch ≤ batch) :
-  (Tensor α [newBatch, nFeatures] × Tensor α [newBatch]) :=
-  let subsampledInput := Tensor.dim (fun i =>
-    have h : i.val < batch := Nat.lt_of_lt_of_le i.isLt hNewBatch
-    get input ⟨i.val, h⟩)
-  let subsampledTarget := Tensor.dim (fun i =>
-    have h : i.val < batch := Nat.lt_of_lt_of_le i.isLt hNewBatch
-    get target ⟨i.val, h⟩)
-  (subsampledInput, subsampledTarget)
 
 end Spec

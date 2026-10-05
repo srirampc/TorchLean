@@ -128,13 +128,10 @@ namespace Internal
 /--
 Apply a repetition penalty by subtracting
 $\mathrm{repeatPenalty}\,\mathrm{count}(\mathrm{token})$ for tokens
-appearing in `recent`.
+appearing in `recentTokens`.
 
-This is a local sampling heuristic; it is not the same as the presence or frequency penalties used
-by hosted APIs, but it gives examples a deterministic way to discourage immediate repetition.
-
-Internal on purpose: `chooseNextToken` applies it for you, and calling it out of order (after the
-softmax rather than on the logits) would silently change the sampling distribution.
+`chooseNextToken` validates the penalty and applies it to the logits before greedy selection or
+temperature scaling.
 -/
 def penalizeRepeats
     {vocabularySize recentCount : Nat}
@@ -153,12 +150,7 @@ def penalizeRepeats
 
 end Internal
 
-/--
-True for byte tokens that a terminal can print: the printable ASCII range plus newline.
-
-Named with the `is` prefix that Lean core uses for `Char.isAlpha` and friends, so that reading
-`if isPrintableAscii token` at a call site tells you a `Bool` comes back.
--/
+/-- True for byte tokens in the printable ASCII range, plus newline. -/
 def isPrintableAscii (token : Nat) : Bool :=
   token = 10 || (32 ≤ token && token ≤ 126)
 
@@ -275,10 +267,7 @@ def chooseNextToken {vocabularySize recentCount : Nat} (scores : Tensor Float [v
     (options : GenerationOptions) (counter : Nat) (recentTokens : Tensor Nat [recentCount])
     (allowToken : Fin vocabularySize → Bool := fun _ => true) :
     Except String (Fin vocabularySize) := do
-  unless options.repeatPenalty.isFinite && 0.0 <= options.repeatPenalty do
-    throw "generation repeat penalty must be finite and nonnegative"
-  unless options.topK = 1 || (options.temperature.isFinite && 0.0 < options.temperature) do
-    throw "generation temperature must be finite and positive"
+  options.validate
   let scores := Internal.penalizeRepeats scores recentTokens options.repeatPenalty
   let selected? :=
     if options.topK = 1 then
@@ -347,29 +336,6 @@ def autoregressiveTokenIds {vocabularySize promptLength : Nat}
       tokens := Tensor.set tokens (outputIndex, PUnit.unit) nextToken.val
     return tokens
 
-/-!
-The next six declarations come in three pairs: an operation on `(sequenceLength × vocabularySize)`
-logits, and the same operation on a batch, which takes an extra `batchIndex` and works on one row.
-The batched member of a pair is the unbatched name with a `batch` prefix, always in that position,
-so knowing one spelling gives you the other.
--/
-
-/-- Extract the vocabulary-score row at one statically valid sequence position. -/
-def logitScoresAt {α : Type} [TorchLean.Storage α] {sequenceLength vocabularySize : Nat}
-    (logits : Tensor α [sequenceLength, vocabularySize])
-    (position : Fin sequenceLength) : Tensor α [vocabularySize] :=
-  Tensor.get logits position
-
-/-- Extract a vocabulary-score row from batched logits. -/
-def batchLogitScoresAt
-    {α : Type} [TorchLean.Storage α]
-    {batchSize sequenceLength vocabularySize : Nat}
-    (logits : Tensor α [batchSize, sequenceLength, vocabularySize])
-    (batchIndex : Fin batchSize)
-    (position : Fin sequenceLength) :
-    Tensor α [vocabularySize] :=
-  logitScoresAt (Tensor.get logits batchIndex) position
-
 /--
 Decode a matrix of token logits by taking `argmax` independently at each sequence position.
 
@@ -393,15 +359,6 @@ def decodeArgmaxLogits {α : Type} [TorchLean.Storage α] [LT α]
     (logits : Tensor α [sequenceLength, vocabularySize]) :
     String :=
   tokenizer.decode ((argmaxTokens (α := α) logits).to (Array Nat))
-
-/-- Extract `batchIndex` from batched logits and return the per-position argmax token ids. -/
-def batchArgmaxTokens {α : Type} [TorchLean.Storage α] [LT α]
-    [DecidableRel ((· > ·) : α → α → Prop)]
-    {batchSize sequenceLength vocabularySize : Nat}
-    (logits : Tensor α [batchSize, sequenceLength, vocabularySize])
-    (batchIndex : Fin batchSize) :
-    Tensor Nat [sequenceLength] :=
-  argmaxTokens (α := α) (Tensor.get logits batchIndex)
 
 end text
 end TorchLean

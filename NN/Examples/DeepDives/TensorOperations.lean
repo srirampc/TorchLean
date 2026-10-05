@@ -15,7 +15,7 @@ This example continues after `NN.Examples.Quickstart.TensorBasics`. It shows ind
 batch axes, reshaping, elementwise operations, and editor widgets on the same shape-indexed tensor
 type used by models and specifications.
 
-Build with `lake build NN.Examples.DeepDives.TensorOperations`, then inspect the
+Build with `scripts/lake.sh build NN.Examples.DeepDives.TensorOperations`, then inspect the
 `#tensor_view` commands in the editor. This module has no command-line entry point.
 -/
 

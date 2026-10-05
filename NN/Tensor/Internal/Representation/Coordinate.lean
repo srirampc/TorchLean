@@ -356,26 +356,7 @@ theorem select_select {ι : Type u} [BEq ι] [LawfulBEq ι]
     (hTargetSource : ∀ axis, axis ∈ target → axis ∈ source)
     (coordinate : AxisTuple length target) :
     select hTargetSource (select hSourceTarget coordinate) = coordinate := by
-  funext targetIndex
-  let sourceIndex : Fin source.length :=
-    ⟨source.idxOf (target.get targetIndex),
-      List.idxOf_lt_length_iff.mpr
-        (hTargetSource _ (List.get_mem target targetIndex))⟩
-  let selectedTargetIndex : Fin target.length :=
-    ⟨target.idxOf (source.get sourceIndex),
-      List.idxOf_lt_length_iff.mpr
-        (hSourceTarget _ (List.get_mem source sourceIndex))⟩
-  have hSourceIndex :
-      source.get sourceIndex = target.get targetIndex :=
-    List.idxOf_get sourceIndex.isLt
-  have hTargetIndex : selectedTargetIndex = targetIndex := by
-    apply Fin.ext
-    change target.idxOf (source.get sourceIndex) = targetIndex.val
-    rw [hSourceIndex]
-    exact List.get_idxOf hTarget targetIndex
-  apply Fin.ext
-  change (coordinate selectedTargetIndex).val = (coordinate targetIndex).val
-  exact congrArg (fun index => (coordinate index).val) hTargetIndex
+  rw [select_comp, select_self hTarget]
 
 /--
 Reordering between duplicate-free axis lists containing the same axes is an

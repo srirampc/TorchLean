@@ -99,7 +99,8 @@ structure Options where
   - `ibp`: IBP only (fast, loose)
   - `crown`: forward CROWN (still produces just an output box)
   - `crownobj`: backward objective pass for each spec row
-  - `crownobj-alpha`: objective pass with precomputed ReLU slopes (`--alphas`)
+  - `crownobj-alpha`: objective pass with precomputed ReLU slopes (`--alphas`); the directed Float
+    backend rejects imported slopes
   -/
   mode    : Mode := .ibp
   /-- Path to exported alpha slopes JSON (required for `mode = crownobj-alpha`). -/
@@ -139,11 +140,9 @@ def parseArgs (args : List String) : Except String Options := do
 /--
 Fail early with a helpful message when an external artifact is missing.
 
-Why not `Data.requireFile`? Two reasons, and both are worth writing down because this looks like a
-copy. First, the policies differ: this one always appends the full `usage` text, because a missing
-VNN-COMP snapshot is almost always a "you have not exported the artifacts yet" mistake rather than a
-typo. Second, `Data.requireFile` lives in `NN.API.Data.Sources`, and importing that here would put
-the CSV/`.npy` loader stack on this checker's import path for the sake of four lines.
+Unlike `Data.requireFile`, this appends the full `usage` text, since a missing VNN-COMP snapshot
+usually means the artifacts were never exported. It also keeps `NN.API.Data.Sources` and its
+CSV/`.npy` loader stack off this checker's import path.
 -/
 def requireArtifact (label path : String) : IO Unit := do
   unless (← (path : System.FilePath).pathExists) do
@@ -169,14 +168,6 @@ structure LayerWB where
 def keysForLayer (i : Nat) : (String × String) :=
   (s!"layers.{i}.weight", s!"layers.{i}.bias")
 
-/-- Deduplicate a sorted list of natural numbers (used to normalize layer indices discovered from
-  JSON keys). -/
-def dedupSortedNat (xs : Array Nat) : Array Nat :=
-  xs.foldl (init := #[]) (fun acc x =>
-    match acc[acc.size - 1]? with
-    | some y => if y = x then acc else acc.push x
-    | none => acc.push x)
-
 /--
 Load an exported MNIST-FC model from JSON weights.
 
@@ -194,29 +185,24 @@ def loadWeights (path : String) : IO (Array LayerWB) := do
       match Import.PyTorch.parseIndexedKey "layers." ".weight" k with
       | some i => acc.push i
       | none => acc)
-  let layerIdxsSorted := dedupSortedNat (layerIdxs.qsort (· < ·))
+  let layerIdxsSorted := (layerIdxs.qsort (· < ·)).eraseReps
   if layerIdxsSorted.isEmpty then
     throw <| IO.userError "No keys of the form layers.<i>.weight found"
 
   let mut layers : Array LayerWB := #[]
   for i in layerIdxsSorted do
     let (kW, kB) := keysForLayer i
-    let wJ ←
-      match sd.get? kW with
-      | some v => pure v
-      | none => throw <| IO.userError s!"Missing key: {kW}"
-    let bJ ←
-      match sd.get? kB with
-      | some v => pure v
-      | none => throw <| IO.userError s!"Missing key: {kB}"
+    let some wJ := sd.get? kW
+      | throw <| IO.userError s!"Missing key: {kW}"
+    let some bJ := sd.get? kB
+      | throw <| IO.userError s!"Missing key: {kB}"
     let some (rows, cols) := Import.PyTorch.inferMatrixDims wJ
       | throw <| IO.userError s!"Bad matrix for {kW}"
     let wArr ← NN.Verification.Json.expectFiniteFloatMatrix wJ kW
     let some w := NN.Verification.Util.Tensor.matOfArray rows cols wArr
       | throw <| IO.userError s!"Bad matrix shape for {kW} (expected {rows}x{cols})"
     let bArr ← NN.Verification.Json.expectFiniteFloatArray bJ kB
-    let some bT := NN.Verification.Util.Tensor.vecOfArray rows bArr
-      | throw <| IO.userError s!"Bad bias shape for {kB} (expected length {rows})"
+    let bT ← NN.Verification.Util.Tensor.requireVecOfArray kB rows bArr
     layers := layers.push { inDim := cols, outDim := rows, w := w, b := bT }
 
   for i in [0:layers.size - 1] do
@@ -273,14 +259,10 @@ and return the graph plus the inferred `inDim`, `outDim`, and output node id.
 -/
 def buildGraphAndParams (layers : Array LayerWB) : IO (Graph × ParamStore Float × Nat × Nat × Nat)
   := do
-  let first ←
-    match layers[0]? with
-    | none => throw <| IO.userError "Empty layer array"
-    | some layer => pure layer
-  let last ←
-    match layers[layers.size - 1]? with
-    | none => throw <| IO.userError "Empty layer array"
-    | some layer => pure layer
+  let some first := layers[0]?
+    | throw <| IO.userError "Empty layer array"
+  let some last := layers.back?
+    | throw <| IO.userError "Empty layer array"
   let inDim := first.inDim
   let outDim := last.outDim
 
@@ -318,24 +300,16 @@ def buildGraphAndParams (layers : Array LayerWB) : IO (Graph × ParamStore Float
   pure (g, ps, inDim, outDim, outId)
 
 /-- Compute an output interval box using IBP (fast, loose). -/
-def outputBoxIBP (g : Graph) (ps : ParamStore Float) (outId : Nat) : IO (FlatBox Float)
-  := do
+def outputBoxIBP (g : Graph) (ps : ParamStore Float) (outId : Nat) : IO (FlatBox Float) :=
   let ibp := runIBP (α := Float) g ps
-  let outB ←
-    match NN.MLTheory.CROWN.Graph.outputBox? ibp outId with
-    | .ok outB => pure outB
-    | .error msg => throw <| IO.userError s!"IBP produced no output box: {msg}"
-  pure outB
+  IO.ofExcept <| (NN.MLTheory.CROWN.Graph.outputBox? ibp outId).mapError
+    fun msg => s!"IBP produced no output box: {msg}"
 
 /-- Compute an output interval box by running forward CROWN and evaluating the affine bounds on the
   input box. -/
 def outputBoxCROWN (g : Graph) (ps : ParamStore Float) (xB : FlatBox Float)
-    (inId outId inDim : Nat) : IO (FlatBox Float) := do
-  let outB ←
-    match NN.MLTheory.CROWN.Graph.outputBoxCROWN? g ps xB inId outId inDim with
-    | .ok outB => pure outB
-    | .error msg => throw <| IO.userError msg
-  pure outB
+    (inId outId inDim : Nat) : IO (FlatBox Float) :=
+  IO.ofExcept (NN.MLTheory.CROWN.Graph.outputBoxCROWN? g ps xB inId outId inDim)
 
 /--
 Compute per-node interval boxes to be used by the backward objective pass.
@@ -368,32 +342,18 @@ def boxesForObjective (g : Graph) (ps : ParamStore Float) (xB : FlatBox Float)
         match node.kind with
         | .relu | .exp | .log | .inv | .sigmoid | .tanh | .softmax _ | .layernorm _ => true
         | _ => false
-      if isUnaryRelax then
-        if hp : p1 < g.nodes.size then
-          need := need.set! p1 true
-        else
-          pure ()
-      else
-        pure ()
+      if isUnaryRelax && p1 < g.nodes.size then
+        need := need.set! p1 true
     | none => pure ()
 
   for p in List.finRange g.nodes.size do
     if (need[p.val]?).getD false then
-      match crown[p.val]? with
-      | none => pure ()
-      | some none => pure ()
-      | some (some b) =>
+      if let some (some b) := crown[p.val]? then
         if hXB : xB.dim = inDim then
           if hIn : b.inDim = inDim then
-            let outB := b.evalOnFlatBox xB (by simpa [hXB] using hIn.symm)
+            let outB := b.evalOnFlatBox xB (hXB.trans hIn.symm)
             let newB : FlatBox Float := { dim := b.outDim, lo := outB.lo, hi := outB.hi }
             out := out.set! p.val (some newB)
-          else
-            pure ()
-        else
-          pure ()
-    else
-      pure ()
   pure out
 
 /--
@@ -406,12 +366,9 @@ strictly greater than `rhs`, then the constraint `rowᵀ y <= rhs` cannot hold.
 def refutesRowByCROWNObjective
     (g : Graph) (ps : ParamStore Float) (xB : FlatBox Float)
     (ibp : Array (Option (FlatBox Float))) (ctx : AffineCtx)
-    (outId _inDim outDim : Nat) (row : Tensor Float [outDim]) (rhs : Float) : IO Bool := do
+    (outId outDim : Nat) (row : Tensor Float [outDim]) (rhs : Float) : IO Bool := do
   let obj : FlatTensor Float := { n := outDim, v := row }
-  let outB ←
-    match backwardObjectiveBox? (α := Float) g ps ctx ibp xB outId obj with
-    | .ok outB => pure outB
-    | .error msg => throw <| IO.userError msg
+  let outB ← IO.ofExcept (backwardObjectiveBox? (α := Float) g ps ctx ibp xB outId obj)
   let lo := getAtOrZero outB.lo [0]
   pure (lo > rhs)
 
@@ -430,7 +387,9 @@ def refutesRowByCROWNObjectiveWithReluAlpha
   let ctx : AffineCtx := { inputId := inId, inputDim := inDim }
   let some loAff := runCROWNBackwardObjectiveLowerWithReluAlpha (α := Float) g ps ctx ibp outId obj
     reluAlpha
-    | throw <| IO.userError "CROWN backward objective (alpha) failed"
+    | throw <| IO.userError <|
+        "crownobj-alpha: the Float backend's directed CROWN pass has no ReLU relaxation, so " ++
+        "imported slopes cannot be used; run with --mode=crownobj"
   if hXB : xB.dim = inDim then
     let loBox := loAff.evalOnFlatBox xB hXB
     let lo := getAtOrZero loBox.lo [0]
@@ -455,7 +414,7 @@ def vnnlibRefutedByCROWNObjectives
       for i in List.finRange term.rows do
         let row : Tensor Float [outDim] := hCols ▸ term.mat.unstack i
         let rhsVal := term.rhs.getScalar i
-        let ok ← refutesRowByCROWNObjective g ps xB ibp ctx outId inDim outDim row rhsVal
+        let ok ← refutesRowByCROWNObjective g ps xB ibp ctx outId outDim row rhsVal
         if ok then
           termRefuted := true
           break
@@ -480,7 +439,7 @@ def vnnlibRefutedByCROWNObjectivesAlpha
   for termIdx in List.finRange spec.size do
     let term := spec[termIdx.val]'termIdx.isLt
     if hCols : term.cols = outDim then
-    -- Build per-node α vector for this disjunct term (objective index = termIdx).
+      -- Build per-node α vector for this disjunct term (objective index = termIdx).
       let a2Row? := alphas.alpha2[termIdx.val]?
       let a4Row? := alphas.alpha4[termIdx.val]?
       let mut reluAlpha : Array (Option (FlatTensor Float)) := Array.replicate g.nodes.size none
@@ -522,17 +481,11 @@ CLI entry point.
 This is wired into `lake exe verify -- vnncomp-mnistfc`.
 -/
 def main (args : List String) : IO Unit := do
-  let args :=
-    match args with
-    | "--" :: rest => rest
-    | _ => args
+  let args := TorchLean.CLI.dropDashDash args
   if TorchLean.CLI.hasHelp args then
     IO.println usage
     return
-  let options ←
-    match parseArgs args with
-    | .ok o => pure o
-    | .error msg => throw <| IO.userError msg
+  let options ← IO.ofExcept (parseArgs args)
   requireArtifact "weights JSON" options.weights
   requireArtifact "suite JSON" options.suite
   if options.mode = .crownObjAlpha then
@@ -566,12 +519,7 @@ def main (args : List String) : IO Unit := do
       else if options.mode = .crownObjAlpha then
         let some alphaDB := alphaDB?
           | throw <| IO.userError "internal: alphaDB missing"
-        let entry? : Option AlphaEntry :=
-          alphaDB.foldl (init := none) (fun acc e =>
-            match acc with
-            | some _ => acc
-            | none => if e.id = inst.id then some e else none)
-        let some entry := entry?
+        let some entry := alphaDB.find? (fun e => e.id = inst.id)
           | throw <| IO.userError s!"No alpha entry for instance id {inst.id}"
         let (hid1, hid2) ←
           match layers[0]?, layers[1]? with

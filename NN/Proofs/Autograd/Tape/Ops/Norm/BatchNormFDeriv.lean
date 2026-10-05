@@ -57,13 +57,6 @@ theorem reshapeSpec_mapSpec {s₁ s₂ : Shape} (f : ℝ → ℝ) (a : Tensor �
   intro c
   simp [reshapeSpec, mapSpec, Tensor.map]
 
-/-- Reshaping a filled tensor fills the target shape. -/
-theorem reshapeSpec_full {s₁ s₂ : Shape} (v : ℝ) (h : s₁.size = s₂.size) :
-    reshapeSpec (Tensor.full s₁ v) h = Tensor.full s₂ v := by
-  apply TorchLean.Tensor.Internal.Rep.ext
-  intro c
-  simp [reshapeSpec, Tensor.full]
-
 /-- Reshaping back and forth is the identity, for any proofs of the size equalities. -/
 theorem reshapeSpec_reshapeSpec {s₁ s₂ : Shape} (t : Tensor ℝ s₁) (h : s₁.size = s₂.size)
     (h' : s₂.size = s₁.size) :
@@ -114,14 +107,6 @@ theorem get2_sqrtSpec {m n : Nat} (a : Tensor ℝ [m, n]) (i : Fin m) (j : Fin n
   simp [sqrtSpec]
   rfl
 
-/-- Row means when the axis is written as `rank - 1`, as in the spec. -/
-theorem getScalar_reduceMean_rank {m n : Nat} (x : Tensor ℝ [m, n])
-    (h : Shape.NonemptyAxis (Spec.Shape.rank (.dim m (.dim n .scalar)) - 1)
-      (.dim m (.dim n .scalar))) (i : Fin m) :
-    getScalar (reduceMean (Spec.Shape.rank (.dim m (.dim n .scalar)) - 1) x h) i =
-      (∑ j : Fin n, Spec.get2 x i j) / n :=
-  getScalar_reduceMean_one x h i
-
 /-! ## The flattened matrix form -/
 
 variable {channels : Nat} {sSpatial : Shape}
@@ -144,23 +129,23 @@ theorem positions_pos (channels : Nat) [Shape.WellFormed (.dim channels sSpatial
 def flat (x : Tensor ℝ (.dim channels sSpatial)) : Tensor ℝ [channels, positions sSpatial] :=
   reshapeSpec x (size_flat channels sSpatial)
 
-/-- Row broadcast of a channel vector to the flattened matrix shape. -/
-abbrev bAS (v : Tensor ℝ [channels]) : Tensor ℝ [channels, positions sSpatial] :=
-  broadcastAfterSum (.dim channels (.dim (positions sSpatial) .scalar)) 1 v
-
 /-- `Spec.batchNorm` with its axis and reshape evidence spelled out. -/
 def batchNormExplicit (x : Tensor ℝ (.dim channels sSpatial)) (gamma beta : Tensor ℝ [channels])
     (ε : ℝ) (hP : 0 < positions sSpatial) : Tensor ℝ (.dim channels sSpatial) :=
   let mean : Tensor ℝ [channels] := reduceMean 1 (flat x) (nonemptyAxis_one hP)
-  let centered := subSpec (flat x) (bAS (sSpatial := sSpatial) mean)
+  let centered := subSpec (flat x) (rowBroadcast mean)
   let variance :=
     maxSpec (reduceMean 1 (mulSpec centered centered) (nonemptyAxis_one hP))
       (Tensor.full (.dim channels .scalar) 0)
-  let meanB := reshapeSpec (bAS (sSpatial := sSpatial) mean) (size_flat channels sSpatial).symm
+  let meanB :=
+    reshapeSpec (rowBroadcast (n := positions sSpatial) mean) (size_flat channels sSpatial).symm
   let varianceB :=
-    reshapeSpec (bAS (sSpatial := sSpatial) variance) (size_flat channels sSpatial).symm
-  let gammaB := reshapeSpec (bAS (sSpatial := sSpatial) gamma) (size_flat channels sSpatial).symm
-  let betaB := reshapeSpec (bAS (sSpatial := sSpatial) beta) (size_flat channels sSpatial).symm
+    reshapeSpec (rowBroadcast (n := positions sSpatial) variance)
+      (size_flat channels sSpatial).symm
+  let gammaB :=
+    reshapeSpec (rowBroadcast (n := positions sSpatial) gamma) (size_flat channels sSpatial).symm
+  let betaB :=
+    reshapeSpec (rowBroadcast (n := positions sSpatial) beta) (size_flat channels sSpatial).symm
   addSpec
     (mulSpec
       (divSpec (subSpec x meanB)
@@ -186,10 +171,10 @@ theorem get2_flat_batchNorm [Shape.WellFormed (.dim channels sSpatial)]
   rw [batchNorm_eq_explicit]
   simp only [batchNormExplicit]
   rw [reshapeSpec_addSpec, reshapeSpec_mulSpec, reshapeSpec_divSpec, reshapeSpec_subSpec,
-    reshapeSpec_sqrtSpec, reshapeSpec_addSpec, reshapeSpec_full, reshapeSpec_reshapeSpec,
+    reshapeSpec_sqrtSpec, reshapeSpec_addSpec, Spec.reshapeSpec_full, reshapeSpec_reshapeSpec,
     reshapeSpec_reshapeSpec, reshapeSpec_reshapeSpec, reshapeSpec_reshapeSpec]
   simp only [get2_addSpec, get2_mulSpec, get2_divSpec, get2_subSpec, get2_sqrtSpec, get2_full,
-    get2_broadcastAfterSum_one, getScalar_maxSpec, Norm.getScalar_full, getScalar_reduceMean_one,
+    get2_broadcastAfterSum_one, getScalar_maxSpec, getScalar_full, getScalar_reduceMean_one,
     flat, rowMeanE, rowVarE]
 
 /-- `Spec.batchNormJvp` with its axis and reshape evidence spelled out. -/
@@ -197,14 +182,14 @@ def batchNormJvpExplicit (x dx : Tensor ℝ (.dim channels sSpatial))
     (gamma dgamma dbeta : Tensor ℝ [channels]) (ε : ℝ) (hP : 0 < positions sSpatial) :
     Tensor ℝ (.dim channels sSpatial) :=
   let mean : Tensor ℝ [channels] := reduceMean 1 (flat x) (nonemptyAxis_one hP)
-  let centered := subSpec (flat x) (bAS (sSpatial := sSpatial) mean)
+  let centered := subSpec (flat x) (rowBroadcast mean)
   let variance :=
     maxSpec (reduceMean 1 (mulSpec centered centered) (nonemptyAxis_one hP))
       (Tensor.full (.dim channels .scalar) 0)
   let invStd :=
     divSpec (Tensor.full (.dim channels .scalar) 1)
       (sqrtSpec (addSpec variance (Tensor.full (.dim channels .scalar) ε)))
-  let xHat := mulSpec centered (bAS (sSpatial := sSpatial) invStd)
+  let xHat := mulSpec centered (rowBroadcast invStd)
   reshapeSpec (Spec.BatchNorm.normalizedJvp hP (flat dx) xHat invStd gamma dgamma dbeta)
     (size_flat channels sSpatial).symm
 
@@ -269,7 +254,7 @@ theorem get2_flat (t : Tensor ℝ (.dim channels sSpatial)) (c : Fin channels)
     (p : Fin (positions sSpatial)) :
     Spec.get2 (flat t) c p =
       matVec (tensorToVec t) (idxMN (m := channels) (n := positions sSpatial) c p) := by
-  rw [← tensorToVec_idxMN, flat, tensorToVec_reshapeSpec, matVec, castVec_apply]
+  rw [← Norm.tensorToVec_idxMN, flat, tensorToVec_reshapeSpec, matVec, castVec_apply]
 
 /-- Entries of the flattened input tensor are coordinates of `matVec`. -/
 theorem get2_flat_vecToTensor (v : Vec (Spec.Shape.size (.dim channels sSpatial)))
@@ -315,18 +300,13 @@ theorem bnVec_eq_bnClosed [Shape.WellFormed (.dim channels sSpatial)] {ε : ℝ}
             (vecToTensor (s := .dim channels .scalar) q.2.2) ε)
           (size_flat channels sSpatial))
         (rowIdx k) (colIdx k) := by
-    rw [← tensorToVec_idxMN, ← cast_eq_idxMN, tensorToVec_reshapeSpec]
+    rw [← Norm.tensorToVec_idxMN, ← cast_eq_idxMN, tensorToVec_reshapeSpec]
     rfl
   rw [hL, get2_flat_batchNorm, get2_flat_vecToTensor, rowMeanE_flat, rowVarE_flat,
     tensorToVec_vecToTensor, getScalar_chan, getScalar_chan, tensorToVec_vecToTensor,
     tensorToVec_vecToTensor, max_eq_left (rowVar_nonneg (matVec q.1) (rowIdx k)),
     max_eq_left (rowVar_add_pos hε (matVec q.1) (rowIdx k)).le]
   simp only [bnClosed, vecOfFun_ofLp, nrm, centered, invStd, chanIdx, div_eq_mul_inv]
-
-/-- `Graph.castCLM` acts by `castVec`. -/
-theorem castCLM_apply {a b : Nat} (h : a = b) (v : Vec a) :
-    Graph.castCLM (h := h) v = castVec h v :=
-  rfl
 
 /-- Derivative of the closed form at `(X, g, _)`, as a continuous linear map. -/
 def bnD (X : Vec (matSize channels (positions sSpatial))) (g : Vec (vecSize channels)) (ε : ℝ) :
@@ -408,7 +388,7 @@ theorem hasFDerivAt_bnClosed (hP : 0 < positions sSpatial) {ε : ℝ} (hε : 0 <
   simp only [ContinuousLinearMap.comp_apply, _root_.add_apply, smul_apply, smul_eq_mul,
     PiLp.proj_apply,
     ContinuousLinearMap.coe_fst', ContinuousLinearMap.coe_snd', bnD_apply, nrmJvpCLM_apply,
-    rowOf_idxMN, colOf_idxMN, nrmD_apply hP hε, castCLM_apply, matVec, Function.comp_def]
+    rowOf_idxMN, colOf_idxMN, nrmD_apply hP hε, Graph.castCLM_apply, matVec, Function.comp_def]
   ring
 
 /-! ## Main theorems -/
@@ -445,8 +425,8 @@ theorem get2_flat_batchNormJvp [Shape.WellFormed (.dim channels sSpatial)] {ε :
   simp only [rowVar, centered, rowMean] at hV hVε
   rw [batchNormJvp_eq_explicit]
   simp only [batchNormJvpExplicit, reshapeSpec_reshapeSpec, get2_normalizedJvp, get2_mulSpec,
-    get2_subSpec, get2_broadcastAfterSum_one, getScalar_divSpec, Norm.getScalar_full,
-    getScalar_sqrtSpec, getScalar_addSpec', getScalar_maxSpec, getScalar_reduceMean_one, get2_flat]
+    get2_subSpec, get2_broadcastAfterSum_one, getScalar_divSpec, getScalar_full,
+    getScalar_sqrtSpec, getScalar_addSpec, getScalar_maxSpec, getScalar_reduceMean_one, get2_flat]
   rw [hV, hVε]
   simp only [nrmJvp, nrm, centered, invStd, rowMean, rowVar, one_div]
 
@@ -462,7 +442,7 @@ theorem bnD_tensors [Shape.WellFormed (.dim channels sSpatial)] {ε : ℝ} (hε 
       Spec.get2
         (reshapeSpec (Spec.batchNormJvp x dx gamma dgamma beta dbeta ε)
           (size_flat channels sSpatial)) (rowIdx k) (colIdx k) := by
-    rw [← tensorToVec_idxMN, ← cast_eq_idxMN, tensorToVec_reshapeSpec]
+    rw [← Norm.tensorToVec_idxMN, ← cast_eq_idxMN, tensorToVec_reshapeSpec]
     rfl
   rw [hRHS, get2_flat_batchNormJvp hε, bnD_apply, nrmJvpCLM_apply, rowOf_idxMN, colOf_idxMN,
     getScalar_chan, getScalar_chan, getScalar_chan]

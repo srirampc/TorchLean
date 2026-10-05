@@ -6,8 +6,6 @@ Authors: TorchLean Team
 
 module
 
-public import Mathlib.Analysis.SpecialFunctions.Trigonometric.Arctan
-import Mathlib.Tactic.Measurability.Init
 public import NN.MLTheory.CROWN.BoundOps.Lawful
 public import NN.MLTheory.CROWN.Graph.Engine.Base
 
@@ -43,7 +41,7 @@ whenever parents are missing.
 
 /-- Safe lookup of the interval box recorded for node id `pid`, `none` when out of range. -/
 def getBox? (cert : Array (Option (FlatBox ℝ))) (pid : Nat) : Option (FlatBox ℝ) :=
-  if _h : pid < cert.size then cert[pid]! else none
+  (cert[pid]?).join
 
 /--
 Safe per-node IBP step for the checker semantics.
@@ -107,7 +105,7 @@ def certStepNode? (nodes : Array Node) (ps : ParamStore ℝ) (cert : Array (Opti
       | some p1 =>
           match getBox? cert p1 with
           | some Xin =>
-              let yB := NN.MLTheory.CROWN.Runtime.Ops.IBP.tanh (α := ℝ) (n := Xin.dim) (ofFlatBox (α
+              let yB := NN.MLTheory.CROWN.Runtime.Ops.IBP.tanh (α := ℝ) (ofFlatBox (α
                 := ℝ) Xin)
               some (toFlatBox (α := ℝ) Xin.dim yB)
           | none => none
@@ -117,7 +115,7 @@ def certStepNode? (nodes : Array Node) (ps : ParamStore ℝ) (cert : Array (Opti
       | some p1 =>
           match getBox? cert p1 with
           | some Xin =>
-              let yB := NN.MLTheory.CROWN.Runtime.Ops.IBP.sigmoid (α := ℝ) (n := Xin.dim) (ofFlatBox
+              let yB := NN.MLTheory.CROWN.Runtime.Ops.IBP.sigmoid (α := ℝ) (ofFlatBox
                 (α := ℝ) Xin)
               some (toFlatBox (α := ℝ) Xin.dim yB)
           | none => none
@@ -127,7 +125,7 @@ def certStepNode? (nodes : Array Node) (ps : ParamStore ℝ) (cert : Array (Opti
       | some p1 =>
           match getBox? cert p1 with
           | some Xin =>
-              let yB := NN.MLTheory.CROWN.Runtime.Ops.IBP.sin (α := ℝ) (n := Xin.dim) (ofFlatBox (α
+              let yB := NN.MLTheory.CROWN.Runtime.Ops.IBP.sin (α := ℝ) (ofFlatBox (α
                 := ℝ) Xin)
               some (toFlatBox (α := ℝ) Xin.dim yB)
           | none => none
@@ -151,7 +149,7 @@ def certStepNode? (nodes : Array Node) (ps : ParamStore ℝ) (cert : Array (Opti
       | some p1 =>
           match getBox? cert p1 with
           | some Xin =>
-              let yB := NN.MLTheory.CROWN.Runtime.Ops.IBP.cos (α := ℝ) (n := Xin.dim) (ofFlatBox (α
+              let yB := NN.MLTheory.CROWN.Runtime.Ops.IBP.cos (α := ℝ) (ofFlatBox (α
                 := ℝ) Xin)
               some (toFlatBox (α := ℝ) Xin.dim yB)
           | none => none
@@ -169,7 +167,23 @@ def certStepNode? (nodes : Array Node) (ps : ParamStore ℝ) (cert : Array (Opti
           match getBox? cert p1 with
           | some Xin => ibpMatmul (α := ℝ) id ps Xin
           | none => none
-      | none => none
+      | none =>
+          match NN.IR.binaryParents? node.parents with
+          | some (p1, p2) =>
+              match getBox? cert p1, getBox? cert p2 with
+              | some left, some right =>
+                  ibpBinaryMatmul? nodes[p1]!.outShape nodes[p2]!.outShape left right
+              | _, _ => none
+          | none => none
+  | .conv configuration => do
+      let parent ← NN.IR.unaryParent? node.parents
+      let parentNode ← nodes[parent]?
+      let input ← getBox? cert parent
+      ibpConvNode configuration parentNode.outShape node.outShape id ps input
+  | .concat axis => do
+      let layout ← concatNodeLayout? nodes node axis
+      let parents ← node.parents.mapM (getBox? cert)
+      concatFlatBoxes? layout parents
   | _ =>
       none
 

@@ -13,7 +13,7 @@ open Verso.Genre Manual
 open Verso.Genre.Manual.InlineLean
 open TorchLean
 open Import.PyTorch (StateDict parseTensor)
-open Import.PyTorch (loadStateDict? unwrapParams getTensor?)
+open Import.PyTorch (unwrapParams getTensor?)
 
 #doc (Manual) "PyTorch Interop" =>
 %%%
@@ -91,7 +91,7 @@ repository root:
 ```terminal
 # Generate the MLP family files expected by the companion
 # Python script.
-lake exe torchlean pytorch_roundtrip --model mlp --action export
+scripts/lake.sh exe torchlean pytorch_roundtrip --model mlp --action export
 ```
 
 ```
@@ -137,7 +137,7 @@ Step five reads the file back:
 ```terminal
 # Load the exported parameter values into the expected Lean
 # MLP family.
-lake exe torchlean pytorch_roundtrip --model mlp --action import
+scripts/lake.sh exe torchlean pytorch_roundtrip --model mlp --action import
 ```
 
 ```terminal +output
@@ -207,9 +207,10 @@ The checks actually performed are:
 - every nested array has exactly the length required by the expected Lean shape.
 
 JSON object order is irrelevant: the importer looks up names and constructs a fixed typed record.
-The family loaders validate a supplied `meta.dtype` or per-tensor dtype metadata as float32.
-`meta.format` is not an architecture proof, and extra parameter keys are ignored. Absent dtype
-metadata is accepted for the older bare-payload format. Imported
+For a `params` wrapper, the family loaders validate a supplied `meta.dtype` or per-tensor dtype
+metadata as float32.
+`meta.format` is not an architecture proof, and extra parameter keys are ignored. An absent
+`meta` is accepted; the older bare-payload format bypasses this wrapper metadata check. Imported
 numbers become host `Float` values, so this format does not preserve exact binary32 payload bits.
 
 ## Parser Examples
@@ -249,7 +250,8 @@ def ptrPayload : String :=
 
 def ptrDict : Option StateDict := do
   let json ← (Lean.Json.parse ptrPayload).toOption
-  return unwrapParams (← loadStateDict? json)
+  let .obj dict := json | none
+  return unwrapParams dict
 ```
 
 `unwrapParams` is what lets both accepted layouts work: a bare object of tensors, or an object with
@@ -507,9 +509,9 @@ can be compared directly with the Python `state_dict` and Lean family record:
 ```terminal
 # Run the complete MLP exchange using one family-specific
 # schema.
-lake exe torchlean pytorch_roundtrip --model mlp --action export
+scripts/lake.sh exe torchlean pytorch_roundtrip --model mlp --action export
 python3 NN/Examples/Interop/PyTorch/MLP/train_mlp.py
-lake exe torchlean pytorch_roundtrip --model mlp --action import
+scripts/lake.sh exe torchlean pytorch_roundtrip --model mlp --action import
 ```
 
 Its forward pass runs on native tensor operations, which is why the import transcript above says
@@ -524,9 +526,9 @@ elements does not establish that agreement.
 ```terminal
 # Exercise convolutional parameter layouts through the CNN
 # exchange.
-lake exe torchlean pytorch_roundtrip --model cnn --action export
+scripts/lake.sh exe torchlean pytorch_roundtrip --model cnn --action export
 python3 NN/Examples/Interop/PyTorch/CNN/train_cnn.py
-lake exe torchlean pytorch_roundtrip --model cnn --action import
+scripts/lake.sh exe torchlean pytorch_roundtrip --model cnn --action import
 ```
 
 ```terminal +output
@@ -555,9 +557,9 @@ The importer must know the name and orientation of each tensor
 ```terminal
 # Exchange the encoder projections and normalization
 # parameters.
-lake exe torchlean pytorch_roundtrip --model transformer --action export
+scripts/lake.sh exe torchlean pytorch_roundtrip --model transformer --action export
 python3 NN/Examples/Interop/PyTorch/Transformer/train_transformer.py
-lake exe torchlean pytorch_roundtrip --model transformer --action import
+scripts/lake.sh exe torchlean pytorch_roundtrip --model transformer --action import
 ```
 
 ```terminal +output
@@ -589,7 +591,8 @@ def ptrColMajor : String :=
 def ptrReadW (s : String) :
     Option (Tensor Float [2, 2]) := do
   let json ← (Lean.Json.parse s).toOption
-  let dict := unwrapParams (← loadStateDict? json)
+  let .obj object := json | none
+  let dict := unwrapParams object
   getTensor? dict "w" [2, 2]
 
 -- Both parse. Shape checking cannot tell them apart.
@@ -638,7 +641,7 @@ PyTorch code for a curated set of architectures: `linear`, `mlp`, `sum`, `autoen
 ```terminal
 # Emit a standalone Python program for the seeded IR
 # example.
-lake exe torchlean torch_ir_pytorch --arch mlp > exported_model.py
+scripts/lake.sh exe torchlean torch_ir_pytorch --arch mlp > exported_model.py
 python3 exported_model.py
 ```
 
@@ -703,7 +706,7 @@ which exercises forward, backward, and an optimizer step. In the excerpt, weight
 `nn.Parameter`s while the zero biases become registered buffers. A matching forward value
 therefore does not establish that subsequent training updates the same set of parameters.
 A CPU run
-(`CUDA_VISIBLE_DEVICES=\"\" python3 exported_model.py`) reports:
+(`CUDA_VISIBLE_DEVICES="" python3 exported_model.py`) reports:
 
 ```
 loss 3.9950685501098633
@@ -875,7 +878,8 @@ def ptrTrained : String :=
 
 def ptrTrainedDict : Option StateDict := do
   let json ← (Lean.Json.parse ptrTrained).toOption
-  return unwrapParams (← loadStateDict? json)
+  let .obj dict := json | none
+  return unwrapParams dict
 
 def ptrImported : Option (Tensor Float [1]) := do
   let d ← ptrTrainedDict
@@ -918,7 +922,7 @@ the end. Bounding such precision differences requires the operation hypotheses a
 {ref "fp32-soundness"}[the FP32 soundness chapter].
 
 This bit equality is a result for one run. Even a three-term dot product can be sensitive to
-cancellation, and a reference Lean loop, a NumPy BLAS call, and a fused CUDA kernel may accumulate
+cancellation, and a reference Lean loop, a NumPy BLAS call, and a LibTorch operation may accumulate
 in different orders. {ref "spec-layer"}[The specification chapter] shows four numbers whose
 sum already depends on that choice. The importer checks names and shapes and parses decimal numbers.
 Bit preservation, finite-range
@@ -1017,7 +1021,8 @@ keep these limits in view:
 
 - arbitrary PyTorch training needs its own semantic or artifact bridge;
 - the importer covers the supported artifact formats rather than the full PyTorch ecosystem;
-- dtype metadata is validated when supplied, but architecture metadata, optimizer state, unlisted
+- dtype metadata on a `params` wrapper is validated when supplied, but architecture metadata,
+  optimizer state, unlisted
   buffers, extra keys, and exact float bit patterns are not certified by these family loaders;
 - malformed required tensors are rejected without a localized diagnostic, because the loader uses
   `Option`;

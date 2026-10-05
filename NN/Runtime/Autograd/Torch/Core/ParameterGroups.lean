@@ -37,10 +37,10 @@ gradient addition. The first leaf remains the optimizer key, preserving ordered 
 Entries inserted directly into the internal parameter map without a storage descriptor stay
 separate, because there is no sound alias test for an arbitrary `AnyParam` closure.
 -/
-def parameterGroups {α : Type} [Storage α] (session : EagerSession α) :
+def groupParameterRegistrations {α : Type} [Storage α]
+    (parameters : Std.HashMap Nat (AnyParam α))
+    (storages : Std.HashMap Nat (ParameterStorage α)) :
     IO (Array (ParameterGroup α)) := do
-  let parameters ← session.paramsByLeaf.get
-  let storages ← session.parameterStorageByLeaf.get
   let ordered := ((parameters.toList.filter fun entry => entry.2.requiresGrad).mergeSort
     (fun left right => left.1 ≤ right.1)).toArray
   let descriptors ← ordered.mapM fun (id, parameter) => do
@@ -75,6 +75,11 @@ def parameterGroups {α : Type} [Storage α] (session : EagerSession α) :
         groups := groups.push { id, parameter, leaves := #[id], storage? := none }
   pure groups
 
+/-- Group the current eager recording using the shared storage-identity contract. -/
+def parameterGroups {α : Type} [Storage α] (session : EagerSession α) :
+    IO (Array (ParameterGroup α)) := do
+  groupParameterRegistrations (← session.paramsByLeaf.get) (← session.parameterStorageByLeaf.get)
+
 /-- Recover the typed storage view used by the parameter synchronization helpers. -/
 def parameterOfStorage {α : Type} [Storage α] (storage : ParameterStorage α) :
     Param α storage.shape :=
@@ -100,7 +105,7 @@ An internal registration without a storage descriptor supplies its current host 
 `AnyParam.get`. Its custom getter must honor that contract; a tape leaf is not a substitute.
 -/
 def ParameterGroup.currentCudaValue {α : Type} [Storage α] [TensorTransfer α]
-    (group : ParameterGroup α) : IO Runtime.Autograd.Cuda.AnyBuffer := do
+    (group : ParameterGroup α) : IO Runtime.Autograd.LibTorch.AnyBuffer := do
   let value ← match group.storage? with
     | some storage => getParamCudaValue (parameterOfStorage storage)
     | none => do
@@ -138,21 +143,21 @@ both success and failure; the optimizer action must not retain that temporary gr
 -/
 def withCudaGroupGradient {α β : Type} [Storage α]
     (group : ParameterGroup α) (gradients : CudaGradMap)
-    (action : Runtime.Autograd.Cuda.AnyBuffer → IO β) : IO β := do
+    (action : Runtime.Autograd.LibTorch.AnyBuffer → IO β) : IO β := do
   let first ← match gradients.get? group.id with
     | some gradient => pure gradient
     | none => throw <| IO.userError "torch: missing CUDA gradient during grouped update"
   if group.leaves.size == 1 then
     action first
   else
-    let owned ← IO.mkRef (none : Option Runtime.Autograd.Cuda.AnyBuffer)
+    let owned ← IO.mkRef (none : Option Runtime.Autograd.LibTorch.AnyBuffer)
     try
       let mut total := first
       for id in group.leaves.toList.drop 1 do
         let gradient ← match gradients.get? id with
           | some gradient => pure gradient
           | none => throw <| IO.userError "torch: missing shared CUDA gradient"
-        let next ← okOrThrow <| Runtime.Autograd.Cuda.AnyBuffer.add total gradient
+        let next ← okOrThrow <| Runtime.Autograd.LibTorch.AnyBuffer.add total gradient
         let previous ← owned.swap (some next)
         if let some previous := previous then
           releaseCudaAnyBuffer previous

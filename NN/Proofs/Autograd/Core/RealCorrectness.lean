@@ -7,9 +7,6 @@ Authors: TorchLean Team
 module
 
 public import NN.Spec.Autograd.Ops
-public import Mathlib.Analysis.SpecialFunctions.Pow.NNReal
-public import Mathlib.Data.Sym.Sym2.Init
-import Mathlib.Tactic.NormNum.GCD
 public import NN.Proofs.Tensor.Basic.Algebra
 public import NN.Proofs.Tensor.Basic.BoundsNorms
 
@@ -150,9 +147,8 @@ private theorem dot_elemwise_adjoint {s : Shape}
   (dx df δ : Tensor ℝ s) :
   dot (mulSpec dx df) δ = dot dx (mulSpec df δ) := by
   unfold dot
-  -- Reduce to associativity of elementwise multiplication.
-  -- `mul_spec_assoc` is provided by the tensor proof layer imported from
-  -- `NN/Proofs/Tensor/Basic.lean`.
+  -- Reduce to associativity of elementwise multiplication (`mul_spec_assoc`,
+  -- `NN/Proofs/Tensor/Basic/Folds.lean`).
   simp [mul_spec_assoc]
 
 -- Primitive operation correctness lemmas for the real-valued autograd semantics.
@@ -170,7 +166,7 @@ def reluCorrect {s : Shape} :
   correct := by
     intro x dx δ
     -- VJP is `relu'(x) ⊙ δ`; JVP is `dx ⊙ relu'(x)`.
-    simpa [Spec.reluOp, Spec.liftElementwiseBackward, Spec.liftElementwise,
+    simpa [Spec.reluOp, Spec.liftElementwiseBackward,
       Activation.reluDerivSpec] using (dot_elemwise_adjoint (dx:=dx)
         (df:=Activation.reluDerivSpec (α:=ℝ) (s:=s) x) (δ:=δ))
 }
@@ -187,7 +183,7 @@ def sigmoidCorrect {s : Shape} :
   jvp := fun x dx => mulSpec dx (Activation.sigmoidDerivSpec (α:=ℝ) (s:=s) x)
   correct := by
     intro x dx δ
-    simpa [Spec.sigmoidOp, Spec.liftElementwiseBackward, Spec.liftElementwise,
+    simpa [Spec.sigmoidOp, Spec.liftElementwiseBackward,
       Activation.sigmoidDerivSpec] using (dot_elemwise_adjoint (dx:=dx)
         (df:=Activation.sigmoidDerivSpec (α:=ℝ) (s:=s) x) (δ:=δ))
 }
@@ -204,7 +200,7 @@ def tanhCorrect {s : Shape} :
   jvp := fun x dx => mulSpec dx (Activation.tanhDerivSpec (α:=ℝ) (s:=s) x)
   correct := by
     intro x dx δ
-    simpa [Spec.tanhOp, Spec.liftElementwiseBackward, Spec.liftElementwise,
+    simpa [Spec.tanhOp, Spec.liftElementwiseBackward,
       Activation.tanhDerivSpec] using (dot_elemwise_adjoint (dx:=dx)
         (df:=Activation.tanhDerivSpec (α:=ℝ) (s:=s) x) (δ:=δ))
 }
@@ -221,7 +217,7 @@ def softplusCorrect {s : Shape} :
   jvp := fun x dx => mulSpec dx (Activation.softplusDerivSpec (α:=ℝ) (s:=s) x)
   correct := by
     intro x dx δ
-    simpa [Spec.softplusOp, Spec.liftElementwiseBackward, Spec.liftElementwise,
+    simpa [Spec.softplusOp, Spec.liftElementwiseBackward,
       Activation.softplusDerivSpec] using (dot_elemwise_adjoint (dx:=dx)
         (df:=Activation.softplusDerivSpec (α:=ℝ) (s:=s) x) (δ:=δ))
 }
@@ -276,7 +272,7 @@ def safeLogCorrect {s : Shape} (ε : ℝ := Context.defaultEpsilon) :
   jvp := fun x dx => mulSpec dx (Activation.safeLogDerivSpec (α:=ℝ) (s:=s) x ε)
   correct := by
     intro x dx δ
-    simpa [Spec.safeLogOp, Spec.liftElementwiseBackward, Spec.liftElementwise,
+    simpa [Spec.safeLogOp, Spec.liftElementwiseBackward,
       Activation.safeLogDerivSpec] using (dot_elemwise_adjoint (dx:=dx)
         (df:=Activation.safeLogDerivSpec (α:=ℝ) (s:=s) x ε) (δ:=δ))
 }
@@ -293,7 +289,7 @@ def smoothAbsCorrect {s : Shape} (ε : ℝ := Context.defaultEpsilon) :
   jvp := fun x dx => mulSpec dx (Activation.smoothAbsDerivSpec (α:=ℝ) (s:=s) x ε)
   correct := by
     intro x dx δ
-    simpa [Spec.smoothAbsOp, Spec.liftElementwiseBackward, Spec.liftElementwise,
+    simpa [Spec.smoothAbsOp, Spec.liftElementwiseBackward,
       Activation.smoothAbsDerivSpec] using (dot_elemwise_adjoint (dx:=dx)
         (df:=Activation.smoothAbsDerivSpec (α:=ℝ) (s:=s) x ε) (δ:=δ))
 }
@@ -412,10 +408,8 @@ def linearCorrect {inDim outDim : Nat}
   jvp := fun _x dx => matVecMulSpec m.weights dx
   correct := by
     intro x dx δ
-    -- `linear_op.backward` ignores the input `x`, so the proof is purely linear-algebraic.
-    -- Use the adjoint lemma from the tensor proof layer imported from
-    -- `NN/Proofs/Tensor/Basic.lean`.
-    -- Our goal has dot with the arguments flipped compared to the lemma; use `dot_comm`.
+    -- `linear_op.backward` ignores the input `x`, so the proof is purely linear-algebraic:
+    -- `dot_mat_linear_adjoint` (`NN/Proofs/Tensor/Basic/LinearAlgebra.lean`) up to `dot_comm`.
     classical
     have hadj :=
       dot_mat_linear_adjoint (W := m.weights) (dLdy := δ) (dx := dx)
@@ -453,8 +447,8 @@ def sumCorrect {s : Shape} : OpSpecCorrect s Shape.scalar :=
       apply TorchLean.Tensor.Internal.Rep.ext
       intro coordinate
       simp [scaleSpec, mapSpec, Tensor.map]
-      -- Reduce both sides using `dot_scale_left` and the fact that the all-ones tensor is the
-      -- multiplicative identity.
+    -- Reduce both sides using `dot_scale_left` and the fact that the all-ones tensor is the
+    -- multiplicative identity.
     calc
       dot (Tensor.scalar (sumSpec (α:=ℝ) (s:=s) dx)) (Tensor.scalar g)
           = (sumSpec (α:=ℝ) (s:=s) dx) * g := by

@@ -50,7 +50,7 @@ should not force a choice the caller has not made yet.
 -/
 def predict {α : Type} (forest : Forest α) (decisionFn : String → Bool)
     (aggregateFn : Array α → α) : α :=
-  aggregateFn (forest.trees.map fun tree => evaluate tree decisionFn)
+  aggregateFn (forest.trees.map fun tree => tree.evaluate decisionFn)
 
 /--
 Majority vote: the most frequent prediction, or `none` for an empty forest.
@@ -80,7 +80,7 @@ def majorityVote {α : Type} [Ord α] (predictions : Array α) : Option α :=
 /--
 Arithmetic mean of the predictions, and `0` for an empty forest.
 
-The empty-array result matches the convention used by `regressionForestForwardSpec`.
+The empty-array result matches the convention used by `Numeric.RegressionForestSpec.forward`.
 -/
 def average {α : Type} [Zero α] [Add α] [Div α] [NatCast α] (predictions : Array α) : α :=
   if predictions.isEmpty then
@@ -193,7 +193,7 @@ structure RegressionForestSpec (α : Type) (nTrees maxDepth nFeatures : Nat) whe
 
 This corresponds to `RandomForestRegressor.predict` (mean over tree outputs).
 -/
-def regressionForestForwardSpec {nTrees maxDepth nFeatures : Nat}
+def RegressionForestSpec.forward {nTrees maxDepth nFeatures : Nat}
   (model : RegressionForestSpec α nTrees maxDepth nFeatures)
   (x : Tensor α [nFeatures]) : Tensor α .scalar :=
   if _h0 : nTrees = 0 then
@@ -220,7 +220,7 @@ The default seed is `0`, and the default feature budget is the full input width.
 samples a fresh subset at every node; `0` gives leaf-only trees. Repeating a call with the same
 data, seed and scalar backend reproduces its forest.
 -/
-def regressionForestFitRegressionMseSpec {batch nTrees maxDepth nFeatures : Nat}
+def RegressionForestSpec.fit {batch nTrees maxDepth nFeatures : Nat}
   (x : Tensor α [batch, nFeatures])
   (y : Tensor α [batch])
   (hBatch : batch ≠ 0) (seed : Nat := 0) (maxFeatures : Nat := nFeatures) :
@@ -243,28 +243,6 @@ def regressionForestFitRegressionMseSpec {batch nTrees maxDepth nFeatures : Nat}
 This mirrors the regression forest, but uses the classifier-tree type from
 `NN/Spec/Models/GradientBoostedTrees.lean` so leaf values can be arbitrary labels (`β`).
 -/
-
-/-- Count how many times label `lbl` appears in a fixed-size prediction tensor. -/
-private def countEq {β : Type} [TorchLean.Storage β] [DecidableEq β]
-    {n : Nat} (lbl : β)
-    (ys : Tensor β [n]) : Nat :=
-  (Array.finRange n).foldl
-    (fun acc i => if ys.getScalar i = lbl then acc + 1 else acc) 0
-
-/-- Deterministic majority label of a fixed-size prediction tensor.
-
-Tie-breaking: we keep the first label that attains the maximal count.
--/
-private def majorityLabel {β : Type} [TorchLean.Storage β]
-    [DecidableEq β] [Inhabited β] {n : Nat}
-    (ys : Tensor β [n]) : β :=
-  if hn : n = 0 then
-    default
-  else
-    let first : Fin n := ⟨0, Nat.pos_of_ne_zero hn⟩
-    (Array.finRange n).foldl (fun best i =>
-      let label := ys.getScalar i
-      if countEq label ys > countEq best ys then label else best) (ys.getScalar first)
 
 /-- Grow a classifier using the shared Gini split search on each sampled feature subset. -/
 private def fitClassificationNode {β : Type} [DecidableEq β] [Inhabited β]
@@ -298,7 +276,7 @@ structure ClassificationForestSpec (α β : Type) (nTrees maxDepth nFeatures : N
 
 An empty forest returns `default`.
 -/
-def classificationForestPredictSpec {β : Type} [TorchLean.Storage β]
+def ClassificationForestSpec.predict {β : Type} [TorchLean.Storage β]
   [DecidableEq β] [Inhabited β]
   {nTrees maxDepth nFeatures : Nat}
   (model : ClassificationForestSpec α β nTrees maxDepth nFeatures)
@@ -311,15 +289,15 @@ def classificationForestPredictSpec {β : Type} [TorchLean.Storage β]
         let t := model.trees.getScalar i
         Spec.decisionTreeClassifyForwardSpec (α := α) (β := β)
           (maxDepth := maxDepth) (nFeatures := nFeatures) t x)
-    majorityLabel (β := β) preds
+    Spec.majorityLabel (Array.ofFn preds.getScalar)
 
 /-- Fit a classification forest with seeded bootstrap samples and Gini-based CART trees.
 
-Sampling and feature/threshold ties follow `regressionForestFitRegressionMseSpec`. Leaf votes keep
+Sampling and feature/threshold ties follow `RegressionForestSpec.fit`. Leaf votes keep
 the first tied label in that node's bootstrap row order. The default seed is `0`; all features are
 candidates unless `maxFeatures` requests a smaller subset at each node.
 -/
-def classificationForestFitClassificationGiniSpec {β : Type}
+def ClassificationForestSpec.fit {β : Type}
   [TorchLean.Storage β] [DecidableEq β] [Inhabited β]
   {batch nTrees maxDepth nFeatures : Nat}
   (x : Tensor α [batch, nFeatures])

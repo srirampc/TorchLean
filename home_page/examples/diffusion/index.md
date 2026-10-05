@@ -2,36 +2,38 @@
 title: Diffusion Walkthrough
 ---
 
-`NN.Examples.Models.Generative.Diffusion` follows data through noising, denoiser training, sampling,
-and a saved image artifact. The model, sampler, and specification-level diffusion definitions are
-all Lean code.
+In this example, we'll add noise to images and train a small network to predict the noise we
+added. Then we'll use its predictions to reconstruct or generate an image. We'll work in Lean
+for the model, training code, sampler, and mathematical definitions.
 
 <div class="media-slab">
-  <img src="{{ '/assets/media/examples/diffusion_imagenette64_real_vs_generated_plot.png' | relative_url }}" alt="Real, noisy, and generated diffusion images"/>
+  <img src="{{ '/assets/media/examples/diffusion_imagenette64_real_vs_generated_plot.png' | relative_url }}" alt="Real Imagenette image, diffusion-generated sample, and diffusion reconstruction"/>
 </div>
 
 ## Run It First
 
-For a short runtime check, use the CUDA path with a tiny model:
-
-```bash
-lake -R -K cuda=true exe torchlean diffusion --device cuda --dataset cifar10 --n-total 1 --steps 1 --hidden-c 1 --T 2
-```
-
-For a more informative local run, use CUDA if available. The command writes a JSON loss log and a PPM
-image artifact for inspecting both numbers and pixels:
+Let's run a small version first, then go through how it works. We'll prepare the CIFAR-10 arrays
+and train a tiny model for one step. The CUDA commands require
+a compatible LibTorch SDK and GPU, as described in the
+[installation guide]({{ '/installation/' | relative_url }}):
 
 ```bash
 python3 scripts/datasets/download_example_data.py --cifar10
+scripts/lake.sh -Kcuda=true exe torchlean diffusion --device cuda \
+  --dataset cifar10 --n-total 1 --steps 1 --hidden-c 1 --T 2
+```
 
-lake -R -K cuda=true exe torchlean diffusion --device cuda \
+For a longer CUDA run, use 800 images and 50 training steps. This command saves the loss history
+as JSON and a generated image as a PPM file:
+
+```bash
+python3 scripts/datasets/download_example_data.py --cifar10 --cifar10-limit-train 800
+
+scripts/lake.sh -Kcuda=true exe torchlean diffusion --device cuda \
   --dataset cifar10 --n-total 800 --steps 50 --hidden-c 8 \
   --log data/examples/diffusion_trainlog.json \
   --sample-ppm data/examples/diffusion_sample.ppm
 ```
-
-The command is small enough to run locally, but it still exercises the full path: data conversion,
-typed tensors, runtime model, sampler, and saved artifacts.
 
 ## Data: Where Images Come From
 
@@ -44,19 +46,18 @@ layout convention for the dataset, not a separate image tensor type.
 
 The two dataset modes in `NN.Examples.Models.Generative.Diffusion` are:
 
-- CIFAR-10 as $(N,3,32,32)$ arrays.
+- CIFAR-10 as $(N,3,32,32)$ arrays, cropped to $4\times4$ patches by this compact example.
 - ImageNet-style folders converted to $(N,3,64,64)$ arrays (Imagenette, Tiny-ImageNet, or any
   folder with class subdirectories).
 
-Inside the example, the loader path is straightforward:
+To prepare a batch for training, we:
 
 1. Build a labeled source over `.npy` files.
 2. Load it into a dataset.
 3. Create a shuffled batch loader.
 4. Map pixel values from $[0,1]$ into the diffusion range $[-1,1]$.
 
-That last step is a single call in the example code, applied to the typed minibatch after
-cropping:
+For the last step, we rescale the cropped minibatch with one call:
 
 ```lean
 pure (diffusion.unitToSignedUnit unitImage)
@@ -65,24 +66,24 @@ pure (diffusion.unitToSignedUnit unitImage)
 `diffusion.unitToSignedUnit` keeps the tensor shape and only rescales values from $[0,1]$ to
 $[-1,1]$.
 
-## The Spec Layer: What We Mean By “Diffusion”
+## The diffusion equations
 
-TorchLean keeps diffusion vocabulary in `NN.Spec.Generative.Diffusion.*`, so training code, sampler
-code, and proof modules talk about the same objects.
-
-The DDPM picture is simple enough to state before the formulas: add noise to an image at timestep
+The definitions in `NN.Spec.Generative.Diffusion.*` describe denoising diffusion probabilistic
+models (DDPMs). We add noise to an image at timestep
 $t$, train a model to predict the noise that was added, then run reverse steps that use the model’s
-noise prediction to move back toward a clean image. TorchLean gives each component a named
-definition so the runtime command and proof modules use the same vocabulary.
+noise prediction to move back toward a clean image.
 
-At the center is an interface for an epsilon-prediction denoiser:
+The following excerpts use the `Generative.Diffusion` namespace, with `open Spec TorchLean`.
+The arithmetic definitions assume `[Storage α] [Context α]` and take `T` and `s` as implicit
+parameters. `EpsModel` describes a denoiser that takes a noisy tensor and a timestep and predicts
+the noise:
 
 ```lean
-structure EpsModel (α : Type) (s : Shape) [TorchLean.Storage α] [Context α] where
+structure EpsModel (α : Type) (s : Shape) [TorchLean.Storage α] where
   eps : Tensor α s → α → Tensor α s
 ```
 
-The forward noising process is the standard DDPM formula, but written as a total tensor definition:
+We add noise with the standard DDPM formula, expressed here as a total tensor definition:
 
 ```lean
 def qSample (sched : VPSchedule α T)
@@ -94,7 +95,7 @@ def qSample (sched : VPSchedule α T)
   Tensor.scaleSpec x0 c0 + Tensor.scaleSpec eps c1
 ```
 
-The training objective is also named at the spec level:
+To measure how well our denoiser predicts the added noise, we use mean squared error:
 
 ```lean
 def epsPredLoss (sched : VPSchedule α T) (model : EpsModel α s)
@@ -114,24 +115,22 @@ Then the surrounding spec modules define:
   - DDPM: a stochastic reverse step with explicit per-step noise inputs,
   - DDIM ($\eta=0$): a deterministic reverse step that reuses the same denoiser but drops the noise.
 
-There are also “hooks” that let diffusion samplers plug into the generic dynamical-system API. For
-example, the DDIM spec exposes `ddimStepSystem` and proves the step definition by `rfl` so other
-theory can rewrite it safely.
+`ddimStepSystem` expresses the DDIM sampler as a discrete dynamical system, so its steps can be
+used with the corresponding dynamical-system definitions and theorems.
 
 ## The Runtime Layer: The Model That Runs
 
 The runnable diffusion command does not work directly with `EpsModel`. It instantiates a concrete
 neural network and then uses the public data API to build training samples.
 
-Two choices matter in the example:
+For our model, we'll make two choices:
 
 1. The epsilon predictor is a residual CNN that preserves resolution
-   (`nn.models.Diffusion.NoisePredictor.residual`). The training, sampling, and visualization
-   path stays easy to run on a local checkout.
+   (`nn.models.Diffusion.NoisePredictor.residual`).
 2. Time is fed to the model as an extra channel: when the data has $c$ channels, the input has
    $c+1$ channels. The last channel is the normalized timestep broadcast across spatial positions.
 
-That “append time as a channel” trick is defined once in the public API. Callers provide the
+To append the time channel, provide the
 leading dimensions and spatial extents; the helper returns a tensor with one additional channel:
 
 ```lean
@@ -139,9 +138,8 @@ let modelInput :=
   diffusion.appendTimeChannel [batchSize] ([h, w] : Tensor Nat [2]) x_t tNorm
 ```
 
-The model is a same-resolution residual CNN sized to run as an example. The example fixes a
-configuration for one image size and hands it to the public constructor, which owns the
-convolution geometry, residual blocks, and seeded initialization:
+We'll set the image size and hidden channel count below. The constructor builds
+the convolutions and residual blocks and initializes their parameters from a seed:
 
 ```lean
 def config (c h w hiddenChannels : Nat) :
@@ -152,21 +150,24 @@ def config (c h w hiddenChannels : Nat) :
     kernelRadius := [1, 1] }
 
 def model (c h w hiddenChannels : Nat) :
-    nn.Builder (nn.Sequential (input c h w) (output c h w)) :=
-  nn.models.Diffusion.NoisePredictor.residual
+    nn.Builder (nn.Sequential (input c h w) (output c h w)) := by
+  let built := nn.models.Diffusion.NoisePredictor.residual
     (config c h w hiddenChannels) (batchShape := [batchSize])
+  rw [nn.models.Diffusion.NoisePredictor.Config.inputShape,
+    nn.models.Diffusion.NoisePredictor.Config.outputShape] at built
+  simpa [input, output, config, Shape.ofList, Shape.concat] using built
 ```
 
 The `2` is the spatial rank, and a kernel radius of one means every convolution is a `3 x 3`
 same-padding kernel. The contract is dimension-general: the input has arbitrary leading axes, one
 channel axis, and any number of spatial axes. The runnable image example instantiates this with
 batch, channel, height, and width axes. Its output predicts noise with the original data shape.
-The source wraps the call in a short `rw`/`simpa` step so that the constructor's computed shapes
+The `rw`/`simpa` step makes the constructor's computed shapes
 line up with the example's `input` and `output` abbreviations.
 
 ## Training: What Gets Optimized
 
-Training is classic DDPM-style $\varepsilon$-prediction. Each step:
+We're training the model to predict $\varepsilon$, the noise added to the image. At each step, we:
 
 1. pick a real image batch $x_0$,
 2. pick a timestep $t$,
@@ -193,15 +194,16 @@ let sampleFromNoise :=
 
 The schedule length is part of the type. A `Schedule T` for `T` diffusion steps cannot be used
 with a different timestep count, and the runnable command rejects `T = 0` before constructing its
-first sample. The noise seed controls only the sampled noise; the `step` argument selects the
+first sample. The `(seed, step)` pair determines the sampled noise; `step` also selects the
 schedule coefficient.
 
 ## Sampling: DDIM Replay In Lean
 
-The example uses deterministic DDIM because it is easy to audit and stable at small scale.
+Now we can use the denoiser to sample an image. We'll use deterministic DDIM, so the starting
+noise and denoiser determine the reverse path.
 
-The reverse update used by the runnable example is `TorchLean.diffusion.ddimPrev`. It does the usual
-“predict x0, clip, remix” step:
+The reverse update used by the runnable example is `TorchLean.diffusion.ddimPrev`. Its default
+step is:
 
 - estimate $\hat{x}_0$ from $x_t$ and $\hat{\varepsilon}$,
 - clamp it to $[-1,1]$,
@@ -213,6 +215,24 @@ The public helper takes the current sample, predicted noise, and adjacent schedu
 let previous := diffusion.ddimPrev abPrev ab x_t epsHat
 ```
 
+The optional `postprocess` argument changes the operation applied to the estimated clean image
+before remixing; it must preserve the tensor shape. For an unclipped reconstruction:
+
+```lean
+let previous := diffusion.ddimPrev abPrev ab x_t epsHat
+  (postprocess := fun reconstructed => reconstructed)
+  (denominatorFloor := 1e-12)
+```
+
+The denominator uses $\sqrt{\bar\alpha_t}$ when that value is strictly greater than
+`denominatorFloor`, and the floor otherwise. Its default is `1e-12`. `reverseDdimFrom` and
+`reverseDdim` pass both choices through each step. A different postprocessor or floor changes
+the sampler's function, even when the model and schedule are unchanged.
+
+`Generative.Diffusion.ImageDDIM.ddimPrev_eq_stepFromEps` relates this API update to
+the image-DDIM specification with the same postprocessor and floor. It preserves the written
+floating-point expression order; it is not a claim about denoiser accuracy or sample quality.
+
 The sampler also produces the “three pictures” view:
 
 - a reference image (the real $x_0$),
@@ -221,9 +241,9 @@ The sampler also produces the “three pictures” view:
 
 ## What To Look At After A Run
 
-Diffusion runs are easy to misread from terminal loss alone, so the example pushes you toward
-artifacts: images on disk and a JSON curve log. Those files give you something concrete to compare across
-CPU/CUDA, fast-kernel switches, schedule tweaks, or model width changes.
+Once the run finishes, let's look at the saved images as well as the loss log. A lower noise-prediction loss does not by itself
+tell you whether the generated images look better. Keep both outputs when comparing sampling
+settings, noise schedules, or model widths.
 
 For interactive inspection, open `NN.Examples.Models.Generative.Diffusion` in VS Code with the Lean
 Infoview enabled. The widgets can display tensor summaries, graph and shape views, and saved JSON

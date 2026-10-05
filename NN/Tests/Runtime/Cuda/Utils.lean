@@ -7,8 +7,8 @@ Authors: TorchLean Team
 module
 
 public import NN.Runtime.Autograd.Engine.Core
-public import NN.Runtime.Autograd.Engine.Cuda.Tape
-public import NN.Runtime.Autograd.Engine.Cuda.Convert
+public import NN.Runtime.Autograd.Engine.LibTorch.Tape
+public import NN.Runtime.Autograd.Engine.LibTorch.Convert
 public import NN.Tests.Utils
 
 /-!
@@ -18,10 +18,10 @@ Small helpers for CUDA kernel-coverage tests.
 
 These tests compare:
 - CPU eager tape results (`Runtime.Autograd.Tape`, `Float`), against
-- CUDA eager tape results (`Runtime.Autograd.Cuda.Tape`, float32 buffers).
+- CUDA eager tape results (`Runtime.Autograd.LibTorch.Tape`, float32 buffers).
 
-When TorchLean is built without CUDA (`lake build` default), the CUDA externs run via CPU stub
-implementations, so these tests still run on CI without a GPU.
+The curated runner skips this GPU suite in the default build, which does not link LibTorch;
+native coverage requires a CUDA build and a visible device.
 -/
 
 @[expose] public section
@@ -62,24 +62,26 @@ def assertFloatArrayApprox (msg : String) (a b : FloatArray) (tol : Float) : IO 
     Tests.Utils.assertApprox s!"{msg}[{i}]" (a.get! i) (b.get! i) tol
 
 /-- Convert a spec tensor to a CUDA buffer (row-major, cast to float32). -/
-def tensorToBuffer {s : Shape} (t : Tensor Float s) : Runtime.Autograd.Cuda.Buffer :=
-  Runtime.Autograd.Cuda.Buffer.ofFloatArray (Runtime.Autograd.Cuda.Convert.flattenFloat (s := s) t)
+def tensorToBuffer {s : Shape} (t : Tensor Float s) : Runtime.Autograd.LibTorch.Buffer :=
+  Runtime.Autograd.LibTorch.Buffer.ofFloatArray
+    (Runtime.Autograd.LibTorch.Convert.flattenFloat (s := s) t)
 
 /-- Convert a spec tensor to a CUDA `AnyBuffer` wrapper. -/
-def tensorToAnyBuffer {s : Shape} (t : Tensor Float s) : Runtime.Autograd.Cuda.AnyBuffer :=
+def tensorToAnyBuffer {s : Shape} (t : Tensor Float s) : Runtime.Autograd.LibTorch.AnyBuffer :=
   { s := s, buf := tensorToBuffer (s := s) t }
 
 /-- Convert a CUDA buffer back to a spec tensor (checks size matches `s`). -/
-def bufferToTensor {s : Shape} (b : Runtime.Autograd.Cuda.Buffer) : IO (Tensor Float s) := do
-  let a := Runtime.Autograd.Cuda.Buffer.toFloatArray b
-  match Runtime.Autograd.Cuda.Convert.unflattenFloat? (s := s) a with
+def bufferToTensor {s : Shape} (b : Runtime.Autograd.LibTorch.Buffer) : IO (Tensor Float s) := do
+  let a := Runtime.Autograd.LibTorch.Buffer.toFloatArray b
+  match Runtime.Autograd.LibTorch.Convert.unflattenFloat? (s := s) a with
   | some t => pure t
   | none =>
       throw <| IO.userError
         s!"cuda test: buffer size mismatch (expected {Spec.Shape.size s} elements, got {a.size})"
 
 /-- Convert a CUDA `AnyBuffer` back to a typed spec tensor (checks shape + size). -/
-def anyBufferToTensor {s : Shape} (ab : Runtime.Autograd.Cuda.AnyBuffer) : IO (Tensor Float s) := do
+def anyBufferToTensor {s : Shape} (ab : Runtime.Autograd.LibTorch.AnyBuffer) : IO (Tensor
+  Float s) := do
   if _h : ab.s = s then
     bufferToTensor (s := s) ab.buf
   else
@@ -90,8 +92,9 @@ def cpuValue {s : Shape} (t : Runtime.Autograd.Tape Float) (id : Nat) : IO (Tens
   okOrThrow (Runtime.Autograd.Tape.requireValue (α := Float) (t := t) (s := s) id)
 
 /-- Read a typed CUDA tape value from an id. -/
-def cudaValue {s : Shape} (t : Runtime.Autograd.Cuda.Tape) (id : Nat) : IO (Tensor Float s) := do
-  let b ← okOrThrow (Runtime.Autograd.Cuda.Tape.requireValue (t := t) id s)
+def cudaValue {s : Shape} (t : Runtime.Autograd.LibTorch.Tape) (id : Nat) : IO (Tensor
+  Float s) := do
+  let b ← okOrThrow (Runtime.Autograd.LibTorch.Tape.requireValue (t := t) id s)
   bufferToTensor (s := s) b
 
 /-- Extract a typed gradient tensor from the CPU dense-grad array (with a shape check). -/
@@ -106,7 +109,7 @@ def cpuGrad {s : Shape} (grads : Array (Spec.SomeTensor Float)) (id : Nat) :
     throw <| IO.userError s!"cuda test: CPU grad shape mismatch at id {id}"
 
 /-- Extract a typed gradient tensor from the CUDA dense-grad array (with a shape check). -/
-def cudaGrad {s : Shape} (grads : Array Runtime.Autograd.Cuda.AnyBuffer) (id : Nat) :
+def cudaGrad {s : Shape} (grads : Array Runtime.Autograd.LibTorch.AnyBuffer) (id : Nat) :
     IO (Tensor Float s) := do
   let g ← match grads[id]? with
     | some g => pure g
@@ -120,8 +123,8 @@ This compares the numeric results rather than the representation.
 -/
 def assertTensorApprox {s : Shape} (msg : String) (x y : Tensor Float s) (tol : Float := 1e-3) :
     IO Unit := do
-  let ax := Runtime.Autograd.Cuda.Convert.flattenFloat (s := s) x
-  let ay := Runtime.Autograd.Cuda.Convert.flattenFloat (s := s) y
+  let ax := Runtime.Autograd.LibTorch.Convert.flattenFloat (s := s) x
+  let ay := Runtime.Autograd.LibTorch.Convert.flattenFloat (s := s) y
   if ax.size != ay.size then
     throw <| IO.userError s!"{msg}: size mismatch ({ax.size} vs {ay.size})"
   for i in [:ax.size] do

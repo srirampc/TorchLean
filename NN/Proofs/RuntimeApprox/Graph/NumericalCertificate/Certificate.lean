@@ -38,10 +38,15 @@ The audit field records the data selected by kernel selection. The checker repla
 trust level, or evidence classification.
 -/
 structure GraphNumericalCertificate where
+  /-- Backend profile the artifact claims to have been planned under. -/
   profileName : String
+  /-- Numerical operation registry the artifact claims produced its range rows. -/
   registryName : String
+  /-- Interval assumptions on the graph's external sources. -/
   sources : Array SourceRange
+  /-- Claimed node-by-node range rows; the checker replays and compares them. -/
   ranges : Array NodeRange
+  /-- Claimed kernel-plan audit; the checker replans the graph and compares it. -/
   audit : KernelPlanAudit
 
 instance : Repr GraphNumericalCertificate where
@@ -78,8 +83,11 @@ instance : Repr RegistryCheckedCertificate where
 /-- Result of executing the canonical IR with bit-level binary32 semantics and checking every
 intermediate value against a registry-replayed range trace. -/
 structure RangeCheckedExecution where
+  /-- The registry-checked certificate the replay was checked against. -/
   certificate : RegistryCheckedCertificate
+  /-- Bit-level binary32 node values produced by replaying the certificate's graph. -/
   values : Array (Spec.SomeTensor (ExecFloat.Binary 8 23))
+  /-- Proof that every replayed value lies in its checked range row. -/
   withinRanges : executionWithinRanges certificate.ranges values = true
 
 /-- Convert an accepted kernel plan and checked range trace into raw certificate data. -/
@@ -157,12 +165,6 @@ def generateChecked (profile : BackendProfile) (graph : Graph) (sources : Array 
     Except String RegistryCheckedCertificate := do
   let raw <- generate profile graph sources
   check profile graph raw
-
-/-- Generate and immediately check with one explicit registry. -/
-def generateCheckedWith (registry : GraphRangeRegistry) (profile : BackendProfile)
-    (graph : Graph) (sources : Array SourceRange) : Except String RegistryCheckedCertificate := do
-  let raw <- generateWith registry profile graph sources
-  checkWith registry profile graph raw
 
 /-- Execute a graph under `ExecFloat.Binary 8 23` and check all intermediate tensors against the
 certificate.

@@ -204,7 +204,7 @@ private def mkPos? {width height : Nat} (row col : Nat) : Option (GridWorld.Stat
 private def twoUp (a b : ProofWidgets.Html) : ProofWidgets.Html :=
   <div style={styleObj [
     ("display", "grid"),
-    ("grid-template-columns", "repeat(auto-fit, minmax(340px, 1fr))"),
+    ("grid-template-columns", "repeat(auto-fit, minmax(min(100%, 340px), 1fr))"),
     ("gap", "10px")
   ]}>
     <div>{a}</div>
@@ -230,22 +230,26 @@ def gridworldPolicyDiffHtml {width height : Nat}
       warns1
   let warns3 :=
     if diff.before.size != expected then
-      warns2.push s!"before length mismatch (file={diff.before.size}, expected={expected})"
+      warns2.push (s!"before length mismatch (file={diff.before.size}, expected={expected}); " ++
+        "missing actions display as up, excess actions are ignored")
     else
       warns2
   let warns4 :=
     if diff.after.size != expected then
-      warns3.push s!"after length mismatch (file={diff.after.size}, expected={expected})"
+      warns3.push (s!"after length mismatch (file={diff.after.size}, expected={expected}); " ++
+        "missing actions display as up, excess actions are ignored")
     else
       warns3
   let warns5 :=
     if !(diff.before.all (fun a => a < 4)) then
-      warns4.push "before contains an out-of-range action (expected 0..3)"
+      warns4.push ("before contains an out-of-range action (expected 0..3); " ++
+        "invalid actions display as up")
     else
       warns4
   let warns :=
     if !(diff.after.all (fun a => a < 4)) then
-      warns5.push "after contains an out-of-range action (expected 0..3)"
+      warns5.push ("after contains an out-of-range action (expected 0..3); " ++
+        "invalid actions display as up")
     else
       warns5
 
@@ -316,12 +320,14 @@ def gridworldPathDiffHtml {width height : Nat}
     diff.after.filterMap (fun p => mkPos? (width := width) (height := height) p.1 p.2)
   let warns :=
     if beforePath.size != diff.before.size then
-      warns.push "before path contained out-of-bounds positions (dropped)"
+      warns.push ("before path contained out-of-bounds positions " ++
+        "(dropped; visit indices use the filtered path)")
     else
       warns
   let warns :=
     if afterPath.size != diff.after.size then
-      warns.push "after path contained out-of-bounds positions (dropped)"
+      warns.push ("after path contained out-of-bounds positions " ++
+        "(dropped; visit indices use the filtered path)")
     else
       warns
   ;
@@ -349,8 +355,9 @@ syntax (name := gridworldViewCmd) "#gridworld_view " term ", " term : command
 /--
 Render a greedy-policy map for a GridWorld in the infoview.
 
-Usage: `#gridworld_policy_view gw, policy`, where `policy` is a flattened row-major array of
-action indices (`0..3`).
+Usage: `#gridworld_policy_view gw, policy`, where
+`policy : GridWorld.State width height → GridWorld.Action`.
+Saved row-major action arrays are decoded by `#gridworld_policy_file_view`.
 -/
 syntax (name := gridworldPolicyViewCmd) "#gridworld_policy_view " term ", " term : command
 

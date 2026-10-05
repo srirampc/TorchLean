@@ -6,8 +6,8 @@ import NN.IR.Semantics
 import NN.Tensor
 import NN.Runtime.PyTorch.Import.TorchExport
 import NN.Verification.Util.Json
-import NN.Runtime.Autograd.Engine.Cuda.Buffer
-import NN.Runtime.Autograd.Engine.Cuda.Tape
+import NN.Runtime.Autograd.Engine.LibTorch.Buffer
+import NN.Runtime.Autograd.Engine.LibTorch.Tape
 import TorchLeanBlueprint.Bib
 import TorchLeanBlueprint.Roles
 
@@ -48,13 +48,13 @@ The common process helper is small:
 ```
 -- Require a successful process and one complete JSON
 -- document on stdout.
-def runJsonStdoutChecked
+def runJson
     (ctx : String)
     (cmd : String)
     (args : Array String)
     (cwd : Option String := some ".") :
     IO Json := do
-  let stdout ← runStdoutChecked ctx cmd args cwd
+  let stdout ← run ctx cmd args cwd
   match Json.parse stdout with
   | .ok value => pure value
   | .error message =>
@@ -62,8 +62,8 @@ def runJsonStdoutChecked
         s!"{ctx}: JSON parse error: {message}\nstdout:\n{stdout}"
 ```
 
-`runStdoutChecked` starts the process, captures its streams, and rejects a nonzero exit code with
-the command, arguments, status, and standard error in the diagnostic. `runJsonStdoutChecked` then
+`run` starts the process, captures its streams, and rejects a nonzero exit code with
+the command, arguments, status, and standard error in the diagnostic. `runJson` then
 requires all of standard output to be one JSON document.
 
 Suppose Python prints:
@@ -241,7 +241,7 @@ Run:
 ```terminal
 # Capture the maintained Python probes and validate their
 # exported IR documents.
-lake exe pytorch_export_check
+scripts/lake.sh exe pytorch_export_check
 ```
 
 The command asks Python and `torch.export` to capture several small `nn.Module`s
@@ -424,7 +424,8 @@ accepted, output = 1.820822
 ```
 
 In the first graph, ReLU turns the input into `[[1, 0, 3, 0]]`, whose sum is `4`. In the second,
-sigmoid maps each entry into `(0,1)` before the sum, giving the displayed `1.820822`. Both
+sigmoid maps these four finite inputs into `(0,1)` before the sum, giving the displayed
+`1.820822`. Both
 elementwise operations preserve `[1,4]`, so both documents pass `parseGraph` and satisfy
 `parseGraph_wellShaped`. Distinguishing which graph represents the intended Python module requires
 a statement relating capture to the module's semantics. The structural theorem does not supply
@@ -514,7 +515,7 @@ Run:
 ```terminal
 # Generate the default family artifacts for joint inspection
 # of model and payload.
-lake exe torchlean pytorch_roundtrip
+scripts/lake.sh exe torchlean pytorch_roundtrip
 ```
 
 This writes the generated MLP PyTorch artifacts under
@@ -554,11 +555,12 @@ because its input, activation, and sum require no stored parameters.
 # ONNX Import
 
 `NN.Runtime.PyTorch.Export.ONNX` emits a Python adapter for a conservative static-shape ONNX
-fragment. The producer handles elementwise operations, rank-two and limited batched matmul,
-reductions, softmax, reshape and flatten, concat, selected transposes, `Gemm`, inference BatchNorm,
-and ungrouped, undilated convolution with the layouts represented by the current IR. It writes the
-same `torchlean.ir.v1` document consumed by `parseGraph`, so both producers use the same Lean
-parser and structural checks.
+fragment. The producer handles elementwise operations, vector and broadcast matmul, reductions,
+softmax, reshape and flatten, concat, transposes, `Gemm`, and inference BatchNorm. Convolution
+records groups, dilation, stride, and explicit asymmetric padding. Its importer accepts a
+channels-first sample or a batch of one; larger batches still need producer support even though
+the IR convolution contract can represent them. It writes the same `torchlean.ir.v1` document
+consumed by `parseGraph`, so both producers use the same Lean parser and structural checks.
 
 ONNX protobuf parsing and shape inference therefore remain outside Lean. Lean checks the smaller IR
 artifact it receives. Graph initializers and payload-backed nodes still need a matching payload
@@ -571,7 +573,8 @@ that native code can allocate, mutate, alias, or free. Parsing cannot establish 
 allocation remains live.
 
 The CUDA buffer boundary in
-{src "NN/Runtime/Autograd/Engine/Cuda/Buffer.lean"}[`Buffer.lean`] contains declarations such as:
+{src "NN/Runtime/Autograd/Engine/LibTorch/Buffer.lean"}[`Buffer.lean`] contains
+declarations such as:
 
 ```
 -- These declarations expose native ownership operations
@@ -601,7 +604,7 @@ native code must not consume the borrowed reference. Retaining it beyond the cal
 its own reference, with the matching release later. Getting this wrong produces a
 use-after-free or a leak that no type in the Lean source mentions. Native translation units also
 repeat critical length and geometry checks. The file-to-symbol map in
-`NN.Runtime.Autograd.Engine.Cuda.Trusted` identifies the native implementations behind these
+`NN.Runtime.Autograd.Engine.LibTorch.Trusted` identifies the native implementations behind these
 declarations.
 
 `never_extract` prevents closed-term extraction and common-subexpression elimination for calls
@@ -616,7 +619,7 @@ buffer as separate fields, so nothing structural forces them to agree, and the c
 ```lean (name := ffiValidate)
 -- Check the native allocation length against the
 -- shape-erased metadata.
-open Runtime.Autograd.Cuda in
+open Runtime.Autograd.LibTorch in
 #check @AnyBuffer.validate
 ```
 ```leanOutput ffiValidate
@@ -652,9 +655,9 @@ pure primitive with the checked `IO` entry point for the same host upload:
 ```lean (name := ffiToken)
 -- Compare the pure allocation primitive with the checked
 -- IO upload.
-open Runtime.Autograd.Cuda in
+open Runtime.Autograd.LibTorch in
 #check @Buffer.ofFloatArray
-open Runtime.Autograd.Cuda in
+open Runtime.Autograd.LibTorch in
 #check @Buffer.ofFloatArrayIO
 ```
 ```leanOutput ffiToken
@@ -684,18 +687,18 @@ surrounding `IO` sequence. Executing it again with the same host array allocates
 The allocation effect belongs to this native call, rather than to a pure upload evaluated inside
 `pure`. The borrowed host array remains available to the caller.
 
-Failure is also part of the call's result. When device allocation runs out of memory, the allocator
-releases unused cached blocks and retries. If that retry also runs out of memory, the action throws
-`IO.Error.resourceExhausted`, which the caller can handle through the usual `IO` exception
-mechanism.
+Failure is also part of the call's result. LibTorch owns the device allocator's retry policy.
+Native allocation failures return `IO.Error.resourceExhausted`, which the caller can handle
+through the usual `IO` exception mechanism.
 The call has returned no new buffer, and the caller retains its host array and existing device
 buffers. This is the checked upload contract; the `IO` type makes sequencing and failure visible,
 while correct allocation and ownership still depend on the native implementation.
 
-The release wrapper `releaseIO` still uses a token. It is
-called only at an ownership boundary where no alias will be used again; session caches atomically
-remove their published alias before calling it, and the native finalizer stays safe after explicit
-release because the implementation nulls the pointer.
+The release wrapper `releaseIO` still uses a token. It is called only at an ownership boundary
+where no alias will be used again. Removing a cache entry is insufficient if a tape still retains
+the same buffer. Parameter mirrors and their recorded snapshots therefore use ordinary Lean
+reference counting. After explicit release, the native finalizer stays safe because the
+implementation nulls the pointer.
 
 Both upload entry points copy the same host values, rounding each element to float32. The checked
 `IO` entry point additionally exposes when allocation happens and how allocation failure returns
@@ -705,8 +708,9 @@ copyable.
 
 After explicit release, every alias still refers to the native object whose payload was retired.
 Copying a Lean reference does not bring the allocation back. The index in `Tensor α s` constrains
-rank and dimensions, so it cannot detect use of a stale cached handle. Session code must remove
-that handle before release, and consumers must respect the same lifetime.
+rank and dimensions, so it cannot detect use of a stale handle. Explicit release must retire all
+usable aliases, including those retained by a tape; reference-counted snapshots instead keep the
+allocation alive until their last owner is gone.
 
 # Workspaces And Backward
 
@@ -727,9 +731,9 @@ threaded through a value that is still used:
 ```lean (name := ffiWorkspace)
 -- The returned keep buffer makes cleanup part of a used
 -- result dependency.
-open Runtime.Autograd.Cuda in
+open Runtime.Autograd.LibTorch in
 #check @Buffer.WithWorkspace.releaseWorkspaceThen
-open Runtime.Autograd.Cuda in
+open Runtime.Autograd.LibTorch in
 #check @Buffer.WithWorkspace.releaseAllThen
 ```
 ```leanOutput ffiWorkspace (whitespace := lax)
@@ -752,8 +756,10 @@ For long training runs this prevents two forms of growth:
 - GPU allocations waiting for Lean external-object finalizers;
 - tape closures retaining workspaces after their VJP has run.
 
-Allocator counters report live and peak bytes, allocation and free counts, wrapper counts, and
-device free memory. These measurements help test the cleanup protocol: for example, live bytes
+Allocator counters report logical live and peak payload bytes, payload ownership counts, wrapper
+counts, native allocated and reserved bytes, and driver free memory. Logical payload bytes can
+count shared tensor storage more than once and need not include native temporaries. These
+measurements help test the cleanup protocol: for example, live bytes
 should not grow indefinitely when a fixed workload repeatedly releases its temporaries. The
 measurements describe that run and do not prove the absence of native leaks.
 
@@ -847,8 +853,8 @@ call, run:
 ```terminal
 # Exercise external graph capture and a separately
 # configured CUDA runtime call.
-lake exe pytorch_export_check
-lake -R -K cuda=true exe torchlean quickstart_mlp \
+scripts/lake.sh exe pytorch_export_check
+scripts/lake.sh -Kcuda=true exe torchlean quickstart_mlp \
   --device cuda --steps 2 --show-backend
 ```
 
@@ -856,9 +862,9 @@ Then deliberately break one condition:
 
 1. add an unsupported PyTorch operation and observe import rejection;
 2. change a JSON shape and observe `checkShapes` reject it;
-3. request CUDA from a stub build and observe runtime availability rejection;
-4. pass a wrong-size Q buffer to the LibTorch SDPA test and observe the Lean and native guard reject
-   it.
+3. request CUDA from a build without LibTorch and observe runtime availability rejection;
+4. pass a wrong-size Q buffer to the LibTorch attention test and observe the Lean composition's
+   size guard reject it before matrix multiplication.
 
 The live blocks illustrate the first two rejection paths using JSON strings. The last two depend
 on the build configuration and native library: availability is checked when the CUDA session is

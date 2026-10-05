@@ -17,13 +17,12 @@ Convenience constructors for algebraic tape nodes/graphs.
 This is the "approach (a)" authoring layer: you build an SSA/DAG graph out of local nodes,
 then lower it to a runtime tape via `NN/Proofs/Autograd/Runtime/Link.lean`.
 
-This file focuses on *unary* nodes that depend on a single context entry (an `Idx`).
-That is enough to build many fixed-parameter inference graphs (e.g. MLP forward + input gradients).
-Extending to multi-parent nodes (e.g. weight gradients) is intended, but left incremental.
+The nodes here are a unary adapter for any `OpSpecCorrect` and a binary addition node. Both read
+their parents through typed context indices (`Idx`) and scatter their VJPs into the context with
+`TensorPack.single`.
 -/
 
 @[expose] public section
-
 
 namespace Proofs
 namespace Autograd
@@ -36,18 +35,6 @@ open TensorAlgebra
 noncomputable section
 
 namespace NodeData
-
-/-- Build an executable unary node from a spec `OpSpec`, storing the VJP in a sparse
-`TorchLean.TensorPack`. -/
-def ofOpSpec {α : Type} {Δ : Type} [TorchLean.Storage α] [Zero α]
-    {Γ : List Shape} {σ τ : Shape}
-    (idx : Idx Γ σ) (op : Spec.OpSpec α σ τ) : NodeData α Δ Γ τ :=
-  { forward := fun ctx _d => op.forward (getIdx (xs := ctx) idx)
-    -- This executable node uses only its stored VJP. The zero tangent keeps the unused JVP field
-    -- total; `NodeData` does not claim that either map is a derivative of `forward`.
-    jvp := fun _ctx _dctx _d => Tensor.full τ (0 : α)
-    vjp := fun ctx _d δ =>
-      TensorPack.single (α := α) (Γ := Γ) idx (op.backward (getIdx (xs := ctx) idx) δ) }
 
 /-- Executable binary add node (two parents of the same shape). -/
 def add {α : Type} {Δ : Type} [TorchLean.Storage α] [Zero α] [Add α]
@@ -102,7 +89,7 @@ def add {α : Type} {Δ : Type} [TorchLean.Storage α] [CommSemiring α]
       let db := getIdx (xs := dctx) b
       have hsplit :
           dot (α := α) (addSpec da db) δ = dot (α := α) da δ + dot (α := α) db δ := by
-        simpa [da, db] using TensorAlgebra.dot_add_left (α := α) (a := da) (b := db) (c := δ)
+        exact TensorAlgebra.dot_add_left da db δ
       have hsingleA :
           TensorPack.dotList (α := α) dctx (TensorPack.single (α := α) (Γ := Γ) a δ) =
             dot (α := α) da δ := by
@@ -125,7 +112,6 @@ def add {α : Type} {Δ : Type} [TorchLean.Storage α] [CommSemiring α]
           (TensorPack.dotList_add_right (α := α) (ss := Γ) (x := dctx)
             (y := TensorPack.single (α := α) (Γ := Γ) a δ)
             (z := TensorPack.single (α := α) (Γ := Γ) b δ))
-      -- Finish.
       calc
         dot (α := α) (NodeData.add (α := α) (Δ := Δ) (Γ := Γ) (s := s) a b |>.jvp ctx dctx d) δ
             = dot (α := α) (addSpec da db) δ := by
@@ -139,34 +125,6 @@ def add {α : Type} {Δ : Type} [TorchLean.Storage α] [CommSemiring α]
                 simp [NodeData.add, hadd] }
 
 end Node
-
-namespace GraphData
-
-variable {α : Type} [TorchLean.Storage α]
-variable {Δ : Type}
-variable {Γ : List Shape}
-
-/-- Append a unary node built from an `OpSpec` (executable-only). -/
-def snocOpSpec [Zero α] {ss : List Shape} {σ τ : Shape}
-    (g : GraphData α Δ Γ ss) (idx : Idx (Γ ++ ss) σ) (op : Spec.OpSpec α σ τ) :
-    GraphData α Δ Γ (ss ++ [τ]) :=
-  GraphData.snoc g (NodeData.ofOpSpec (α := α) (Δ := Δ) (Γ := Γ ++ ss) idx op)
-
-end GraphData
-
-namespace Graph
-
-variable {α : Type} [TorchLean.Storage α] [CommSemiring α]
-variable {Δ : Type}
-variable {Γ : List Shape}
-
-/-- Append a unary node built from an `OpSpecCorrect` (proof-carrying). -/
-def snocOpSpecCorrect {ss : List Shape} {σ τ : Shape}
-    (g : Graph (α := α) Δ Γ ss) (idx : Idx (Γ ++ ss) σ) (op : OpSpecCorrect (α := α) σ τ) :
-    Graph (α := α) Δ Γ (ss ++ [τ]) :=
-  Graph.snoc g (Node.ofOpSpecCorrect (α := α) (Δ := Δ) (Γ := Γ ++ ss) idx op)
-
-end Graph
 
 end
 end Algebra

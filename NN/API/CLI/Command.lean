@@ -33,21 +33,6 @@ def orThrow {α : Type} (exeName : String) : Except String α → IO α
       let label := s!"{exeName}: "
       throw <| IO.userError (if label.isPrefixOf message then message else label ++ message)
 
-/-- Parse `--seed N`, returning the selected seed and remaining arguments. -/
-def seed (exeName : String) (arguments : List String) (default : Nat := 0) :
-    IO (Nat × List String) :=
-  orThrow exeName <| takeSeed arguments (default := default)
-
-/-- Parse a positive natural-number flag, using `default` when it is absent. -/
-def positiveNatFlag
-    (exeName : String)
-    (arguments : List String)
-    (name : String)
-    (default : Nat) :
-    IO (Nat × List String) :=
-  orThrow exeName <|
-    takePositiveNatFlag arguments exeName name (default := default)
-
 /-- Fail when command-specific arguments remain after parsing. -/
 def requireNoArgs (exeName : String) (arguments : List String) : IO Unit :=
   orThrow exeName <| checkNoArgs arguments

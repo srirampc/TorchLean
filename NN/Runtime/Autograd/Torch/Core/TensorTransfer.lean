@@ -43,18 +43,6 @@ class TensorTransfer (α : Type) [TorchLean.Storage α] where
   /-- Read a tensor for host-side inspection without claiming a native storage representation. -/
   readFloatTensor : {s : Shape} → Tensor α s → IO (Tensor Float s) := toFloatTensor
 
-/-- Encode every tensor element with the supplied scalar conversion. -/
-def TensorTransfer.toFloatTensorWith {α : Type} [TorchLean.Storage α]
-    (encode : α → Float) {s : Shape}
-    (tensor : Tensor α s) : IO (Tensor Float s) :=
-  pure <| TorchLean.Tensor.map encode tensor
-
-/-- Decode every tensor element with the supplied scalar conversion. -/
-def TensorTransfer.ofFloatTensorWith {α : Type} [TorchLean.Storage α]
-    (decode : Float → α) {s : Shape}
-    (tensor : Tensor Float s) : IO (Tensor α s) :=
-  pure <| TorchLean.Tensor.map decode tensor
-
 /-- `Float` transfers preserve the runtime's host representation. -/
 instance (priority := 1000) : TensorTransfer Float where
   toFloatTensor := fun tensor => pure tensor
@@ -63,8 +51,8 @@ instance (priority := 1000) : TensorTransfer Float where
 
 /-- Native binary32 transfers preserve the runtime's float32 wire representation. -/
 instance (priority := 1000) : TensorTransfer Float32 where
-  toFloatTensor := TensorTransfer.toFloatTensorWith Float32.toFloat
-  ofFloatTensor := TensorTransfer.ofFloatTensorWith Float.toFloat32
+  toFloatTensor := fun tensor => pure (TorchLean.Tensor.map Float32.toFloat tensor)
+  ofFloatTensor := fun tensor => pure (TorchLean.Tensor.map Float.toFloat32 tensor)
   toFloat := fun x => pure x.toFloat
 
 /--
@@ -83,8 +71,8 @@ instance (priority := 1000) :
     throw <| IO.userError
       "torch: configured binary32 supports host readback; select native arithmetic for CUDA"
   toFloat := fun x => pure (ExecFloat.Binary.toFloat32 x).toFloat
-  readFloatTensor := TensorTransfer.toFloatTensorWith
-    (fun x => (ExecFloat.Binary.toFloat32 x).toFloat)
+  readFloatTensor := fun tensor => pure <|
+    TorchLean.Tensor.map (fun x => (ExecFloat.Binary.toFloat32 x).toFloat) tensor
 
 /--
 CPU-preserving fallback for scalar types without a native tensor representation.
@@ -95,15 +83,15 @@ encoding. CPU execution does not invoke these failing transfer operations.
 instance (priority := 10) (α : Type) [TorchLean.Storage α] : TensorTransfer α where
   toFloatTensor := fun {_s} _ =>
     throw <| IO.userError <|
-      "torch: this scalar type has no TensorTransfer tensor encoding; " ++
+      "torch: this scalar type cannot be converted to a native tensor; " ++
         "use Float for native execution or run this scalar on CPU"
   ofFloatTensor := fun {_s} _ =>
     throw <| IO.userError <|
-      "torch: this scalar type has no TensorTransfer tensor decoding; " ++
+      "torch: native tensors cannot be converted to this scalar type; " ++
         "use Float for native execution or run this scalar on CPU"
   toFloat := fun _ =>
     throw <| IO.userError <|
-      "torch: this scalar type has no TensorTransfer scalar conversion; " ++
+      "torch: this scalar type cannot be converted to a native scalar; " ++
         "use Float for native execution or run this scalar on CPU"
 
 end Torch

@@ -45,28 +45,30 @@ def plot_one(path: Path, out_dir: Path | None, dpi: int) -> Path:
         raise ValueError(f"{path}: expected nonempty `steps` and `series` arrays")
 
     fig, ax = plt.subplots(figsize=(7.2, 4.2))
-    for item in series:
-        name = item.get("name", "metric")
-        values = item.get("values", [])
-        color = item.get("color", None)
-        if len(values) != len(steps):
-            raise ValueError(
-                f"{path}: series `{name}` has {len(values)} values but {len(steps)} steps"
-            )
-        ax.plot(steps, values, marker="o", linewidth=2.0, label=name, color=color)
+    try:
+        for item in series:
+            name = item.get("name", "metric")
+            values = item.get("values", [])
+            color = item.get("color", None)
+            if len(values) != len(steps):
+                raise ValueError(
+                    f"{path}: series `{name}` has {len(values)} values but {len(steps)} steps"
+                )
+            ax.plot(steps, values, marker="o", linewidth=2.0, label=name, color=color)
 
-    ax.set_title(log.get("title", path.stem))
-    ax.set_xlabel("step")
-    ax.set_ylabel("metric")
-    ax.grid(True, alpha=0.25)
-    ax.legend()
-    fig.tight_layout()
+        ax.set_title(log.get("title", path.stem))
+        ax.set_xlabel("step")
+        ax.set_ylabel("metric")
+        ax.grid(True, alpha=0.25)
+        ax.legend()
+        fig.tight_layout()
 
-    dest_dir = out_dir or path.parent
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    out = dest_dir / f"{path.stem}.png"
-    fig.savefig(out, dpi=dpi)
-    plt.close(fig)
+        dest_dir = out_dir or path.parent
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        out = dest_dir / f"{path.stem}.png"
+        fig.savefig(out, dpi=dpi)
+    finally:
+        plt.close(fig)
     return out
 
 

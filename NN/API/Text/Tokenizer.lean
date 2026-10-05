@@ -24,11 +24,9 @@ examples can instead use one-hot tensors of shape
 `(batchSize × sequenceLength × vocabularySize)`. Both representations
 remain separate from floating-point model parameters at the API boundary.
 
-This module provides:
-- a tokenizer interface (with a byte-level tokenizer),
-- helpers to turn token streams into one-hot tensors,
-- “next-token prediction” sample builders used by GPT-style examples,
-- display helpers for turning model logits back into readable token predictions.
+This module provides byte and character tokenizers, fixed-length token windows, corpus readers,
+and deterministic window sampling. Next-token sample construction lives in `NN.API.Data.Text`;
+generation and logit selection live in `NN.API.Text.Generation`.
 -/
 
 @[expose] public section
@@ -165,28 +163,6 @@ end Tokenizer
 
 /-! ## Byte-Corpus Windows -/
 
-namespace Internal
-
-/--
-Read one byte token from a raw corpus, returning `paddingTokenId` past the end.
-
-This is byte-level rather than BPE-level: examples can train causal language models directly from a
-text file without depending on an external tokenizer artifact. GPT-2 BPE support lives in
-`NN.API.Text.Bpe`.
-
-Lives in `Internal` on purpose: `byteTokenWindow` below is the only caller, and a padded
-single-byte read is not something a user of `text` should have to reason about. (`private` is not an
-option here. Every API module is inside `@[expose] public section`, so a private helper cannot be
-named from an exposed body; a nested `Internal` namespace is how the rest of the codebase says
-"plumbing".)
--/
-def byteAtOrPad (bytes : ByteArray) (index : Nat) (paddingTokenId : Nat := 0) : Nat :=
-  match bytes[index]? with
-  | some b => b.toNat
-  | none => paddingTokenId
-
-end Internal
-
 /--
 Extract a fixed-length byte-token window from a raw corpus.
 
@@ -200,7 +176,9 @@ def byteTokenWindow
     (paddingTokenId : Nat := 0) :
     Tensor Nat [length] :=
   TorchLean.Tensor.ofFn fun index =>
-    Internal.byteAtOrPad bytes (offset + index.val) paddingTokenId
+    match bytes[offset + index.val]? with
+    | some byte => byte.toNat
+    | none => paddingTokenId
 
 /-! ## Corpus Helpers -/
 
@@ -330,10 +308,10 @@ def randomTokenBatch {β : Type} [TorchLean.Storage β] {tokenCount : Nat}
     Tensor.window tokens (sequenceLength + 1) offsetAt[batchIndex] paddingTokenId
 
 /--
-Choose training-window offsets, biased toward a prompt occurrence when the corpus contains it.
+Choose training-window offsets around a supplied prompt occurrence.
 
-If the prompt is present in the corpus, a portion of the sampled windows covers nearby text. That
-keeps generation reports tied to text the model actually saw during training.
+A supplied offset selects consecutive starts beginning up to `windowCount / 4` tokens before the
+prompt, wrapping over the usable starts. Without an offset, starts are approximately evenly spaced.
 -/
 def promptAwareOffsets
     (tokenCount sequenceLength windowCount : Nat)

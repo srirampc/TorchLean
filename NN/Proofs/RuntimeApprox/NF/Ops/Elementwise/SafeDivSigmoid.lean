@@ -71,7 +71,7 @@ Forward approximation bound for `safeDiv` in `NF`.
 
 `safeDiv ε x y = x / max y ε` clamps the denominator away from 0. For `ε > 0`, this yields an
 unconditional bound with explicit `(1/ε)` and `(1/ε^2)` sensitivity terms plus one rounding-ULP
-  term.
+term.
 -/
 theorem approx_safeDiv_nf {x y : ℝ} {xR yR : R} {epsx epsy ε : ℝ}
     (hε : 0 < ε)
@@ -97,24 +97,18 @@ theorem approx_safeDiv_nf {x y : ℝ} {xR yR : R} {epsx epsy ε : ℝ}
   have uhat_pos : 0 < uhat := lt_of_lt_of_le hε uhat_ge
   have u_pos : 0 < u := lt_of_lt_of_le hε u_ge
 
-  have hx' : abs (xhat - x) ≤ epsx := by
-    simpa [xhat, abs_sub_comm] using hx
-  have hy' : abs (yhat - y) ≤ epsy := by
-    simpa [yhat, abs_sub_comm] using hy
+  have hx' : abs (xhat - x) ≤ epsx := hx
+  have hy' : abs (yhat - y) ≤ epsy := hy
 
+  -- Reverse triangle inequality: `|x| - |x̂| ≤ |x̂ - x| ≤ epsx`.
   have hx_abs : abs x ≤ abs xhat + epsx := by
-    have h0 : abs x ≤ abs (x - xhat) + abs xhat := by
-      simpa using (abs_sub_le x xhat 0)
-    have h1 : abs (x - xhat) = abs (xhat - x) := by simp [abs_sub_comm]
-    have h2 : abs (x - xhat) ≤ epsx := by simpa [h1] using hx'
-    have := le_trans h0 (by
-      simpa [add_assoc, add_left_comm, add_comm] using add_le_add_right h2 (abs xhat))
-    simpa [add_assoc, add_left_comm, add_comm] using this
+    have h := abs_sub_abs_le_abs_sub x xhat
+    rw [abs_sub_comm] at h
+    linarith
 
-  have hmax : abs (uhat - u) ≤ epsy := by
-    have hLip : abs (max yhat ε - max y ε) ≤ abs (yhat - y) := by
-      simpa [abs_sub_comm] using (abs_max_sub_max_le_abs yhat y ε)
-    exact le_trans (by simpa [uhat, u, abs_sub_comm] using hLip) hy'
+  -- `max · ε` is 1-Lipschitz.
+  have hmax : abs (uhat - u) ≤ epsy :=
+    le_trans (abs_max_sub_max_le_abs yhat y ε) hy'
 
   have hround :
       abs
@@ -133,10 +127,8 @@ theorem approx_safeDiv_nf {x y : ℝ} {xR yR : R} {epsx epsy ε : ℝ}
         (1 / ε) * epsx + (abs xhat + epsx) * (epsy / (ε * ε)) := by
     -- Split numerator and denominator effects.
     have hsplit :
-        abs (xhat / uhat - x / u) ≤ abs (xhat / uhat - x / uhat) + abs (x / uhat - x / u) := by
-      -- `|a-c| ≤ |a-b| + |b-c|` with `b = x/uhat`.
-      simpa [sub_eq_add_neg, add_assoc] using
-        abs_sub_le (xhat / uhat) (x / uhat) (x / u)
+        abs (xhat / uhat - x / u) ≤ abs (xhat / uhat - x / uhat) + abs (x / uhat - x / u) :=
+      abs_sub_le _ _ _
 
     have hnum :
         abs (xhat / uhat - x / uhat) ≤ (1 / ε) * epsx := by
@@ -168,10 +160,8 @@ theorem approx_safeDiv_nf {x y : ℝ} {xR yR : R} {epsx epsy ε : ℝ}
         have hiden :
             (1 : ℝ) / uhat - (1 : ℝ) / u = (u - uhat) / (uhat * u) := by
           field_simp [hu0, hv0]
-        have hprod_ge : (ε * ε) ≤ uhat * u := by
-          have : ε ≤ uhat := uhat_ge
-          have : ε ≤ u := u_ge
-          nlinarith
+        have hprod_ge : (ε * ε) ≤ uhat * u :=
+          mul_le_mul uhat_ge u_ge hε.le uhat_pos.le
         have hprod_pos : 0 < uhat * u := mul_pos uhat_pos u_pos
         have hprod_inv :
             (1 : ℝ) / (uhat * u) ≤ (1 : ℝ) / (ε * ε) := by
@@ -209,16 +199,8 @@ theorem approx_safeDiv_nf {x y : ℝ} {xR yR : R} {epsx epsy ε : ℝ}
               have hsum_nonneg : 0 ≤ abs xhat + epsx := add_nonneg (abs_nonneg _) epsx_nonneg
               exact mul_le_mul_of_nonneg_left h_inv hsum_nonneg
 
-    -- Combine.
-    have hadd :=
-      calc
-        abs (xhat / uhat - x / u)
-            ≤ abs (xhat / uhat - x / uhat) + abs (x / uhat - x / u) := hsplit
-        _ ≤ (1 / ε) * epsx + (abs xhat + epsx) * (epsy / (ε * ε)) := by
-              exact add_le_add hnum hden
-        _ = (1 / ε) * epsx + (abs xhat + epsx) * (epsy / (ε * ε)) := by rfl
-    -- Rewrite `safeDiv`.
-    simpa [safeDiv, uhat, u] using hadd
+    -- Combine the two contributions and rewrite `safeDiv`.
+    simpa [safeDiv, uhat, u] using le_trans hsplit (add_le_add hnum hden)
 
   -- Final triangle inequality: rounding + input sensitivity.
   have :=
@@ -232,17 +214,10 @@ theorem approx_safeDiv_nf {x y : ℝ} {xR yR : R} {epsx epsy ε : ℝ}
             (toSpec (β := β) (fexp := fexp) (rnd := rnd)
                 (safeDivR (β := β) (fexp := fexp) (rnd := rnd) ε xR yR) -
               safeDiv (ε := ε) xhat yhat) +
-          abs (safeDiv (ε := ε) xhat yhat - safeDiv (ε := ε) x y) := by
-            simpa [sub_eq_add_neg, add_assoc] using
-              abs_sub_le
-                (toSpec (β := β) (fexp := fexp) (rnd := rnd)
-                  (safeDivR (β := β) (fexp := fexp) (rnd := rnd) ε xR yR))
-                (safeDiv (ε := ε) xhat yhat)
-                (safeDiv (ε := ε) x y)
+          abs (safeDiv (ε := ε) xhat yhat - safeDiv (ε := ε) x y) := abs_sub_le _ _ _
       _ ≤
         ulp β fexp (safeDiv (ε := ε) xhat yhat) / 2 +
-          ((1 / ε) * epsx + (abs xhat + epsx) * (epsy / (ε * ε))) := by
-            exact add_le_add hround hdiff
+          ((1 / ε) * epsx + (abs xhat + epsx) * (epsy / (ε * ε))) := add_le_add hround hdiff
       _ = (1 / ε) * epsx + (abs xhat + epsx) * (epsy / (ε * ε)) +
         ulp β fexp (safeDiv (ε := ε) xhat yhat) / 2 := by
             ring
@@ -414,22 +389,22 @@ theorem approxTensor_div_spec_of_pos_lb {s : Shape} (η : ℝ) :
       let bound := linfNorm
         (divPosBoundTensor (β := β) (fexp := fexp) (rnd := rnd)
           (s := .dim n inner) η epsx epsy xR yR)
-      have hbound : 0 ≤ bound := linf_norm_nonneg _
+      have hbound : 0 ≤ bound := linfNorm_nonneg _
       refine approxTensor_dim_of_forall
         (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd))
         (xS := divSpec xS yS) (xR := divSpec xR yR)
         (eps := bound) hbound ?_
       intro i
-      have hxI := approxTensor_dim_get (α := R)
+      have hxI := approxTensor_unstack (α := R)
         (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd)) hx i
-      have hyI := approxTensor_dim_get (α := R)
+      have hyI := approxTensor_unstack (α := R)
         (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd)) hy i
       have hlocal := ih hxI hyI (by simpa using hdom i) hmargin
       have hle :
           linfNorm
               (divPosBoundTensor (β := β) (fexp := fexp) (rnd := rnd)
                 (s := inner) η epsx epsy (xR.unstack i) (yR.unstack i)) ≤ bound := by
-        have h := linf_norm_le_get_dim
+        have h := linfNorm_unstack_le
           (t := divPosBoundTensor (β := β) (fexp := fexp) (rnd := rnd)
             (s := .dim n inner) η epsx epsy xR yR) i
         simpa [bound, divPosBoundTensor, tensorToSpec, map2Spec, mapSpec,
@@ -444,7 +419,7 @@ theorem approxTensor_div_spec_of_pos_lb {s : Shape} (η : ℝ) :
 `approxTensor` bound for `safeDiv` lifted to arbitrary tensor shapes.
 
 This is the tensor-level wrapper around `approx_safeDiv_nf`, built via
-  `approxTensor_map2_spec_of_scalar_bound`.
+`approxTensor_map2_spec_of_scalar_bound`.
 -/
 theorem approxTensor_safeDiv_spec {s : Shape} (ε : ℝ) (hε : 0 < ε) :
     ∀ {xS yS : SpecTensor s} {xR yR : Tensor R s} {epsx epsy : ℝ},
@@ -475,25 +450,6 @@ theorem approxTensor_safeDiv_spec {s : Shape} (ε : ℝ) (hε : 0 < ε) :
   simpa [safeDivBoundTensor] using h
 
 -- Sigmoid (elementwise logistic) bounds.
-
-/-- The rounded constant `1 : NF` is within `oneEps` of the real `1`. -/
-theorem abs_toSpec_one_sub_one_le :
-    abs (toSpec (β := β) (fexp := fexp) (rnd := rnd) (1 : R) - (1 : ℝ)) ≤
-      oneEps (β := β) (fexp := fexp) := by
-  change
-    abs ((NF.ofReal (β := β) (fexp := fexp) (rnd := rnd)
-      (1 : ℝ)).val - (1 : ℝ)) ≤ oneEps (β := β) (fexp := fexp)
-  simpa [oneEps, NFBackend.toSpec, NF.toReal,
-    Proofs.RuntimeRoundingApprox.roundR, NF.roundR,
-    NF.ofReal] using
-    (Proofs.RuntimeRoundingApprox.roundR_abs_error
-      (β := β) (fexp := fexp) (rnd := rnd) (1 : ℝ))
-
-/-- `oneEps` is a half ulp, hence nonnegative. -/
-theorem oneEps_nonneg : 0 ≤ oneEps (β := β) (fexp := fexp) := by
-  unfold oneEps
-  have := ulp.nonneg β fexp (1 : ℝ)
-  linarith
 
 /-- `expErrorBound` is nonnegative whenever the propagated input error is. -/
 theorem expErrorBound_nonneg (a : ℝ) {eps : ℝ} (heps : 0 ≤ eps) :
@@ -579,7 +535,7 @@ theorem approx_reciprocal_sigmoid_denom_nf {x : ℝ} {xR : R} {eps : ℝ}
   have hadd := approx_add_nf (β := β) (fexp := fexp) (rnd := rnd) hone hexp
   simpa only [reciprocalSigmoidDenomR, reciprocalSigmoidDenomError] using hadd
 
-/-- Scalar certificate for the reciprocal sequence and its shape-generic lifting theorem. -/
+/-- Scalar certificate for the reciprocal sequence, used by its shape-generic lifting theorem. -/
 private theorem approx_reciprocal_sigmoid_nf {x : ℝ} {xR : R} {eps : ℝ}
     (hx : abs (toSpec (β := β) (fexp := fexp) (rnd := rnd) xR - x) ≤ eps) :
     abs (toSpec (β := β) (fexp := fexp) (rnd := rnd)
@@ -598,12 +554,8 @@ private theorem approx_reciprocal_sigmoid_nf {x : ℝ} {xR : R} {eps : ℝ}
   split_ifs with hcert
   · rw [hspecR, hspec]
     exact approx_div_nf_of_pos_lb (β := β) (fexp := fexp) (rnd := rnd) (η := 1) hy hcert hone hden
-  · have hpos : 0 < Activation.Math.sigmoidSpec (α := ℝ) x := by
-      rw [hspec]
-      positivity
-    have hle : Activation.Math.sigmoidSpec (α := ℝ) x ≤ 1 := by
-      rw [hspec]
-      exact div_le_one_of_le₀ hy (by positivity)
+  · have hnonneg := sigmoid_spec_nonneg x
+    have hle := sigmoid_spec_le_one x
     calc
       abs (toSpec (β := β) (fexp := fexp) (rnd := rnd)
             (reciprocalSigmoidR (β := β) (fexp := fexp) (rnd := rnd) xR) -
@@ -613,7 +565,7 @@ private theorem approx_reciprocal_sigmoid_nf {x : ℝ} {xR : R} {eps : ℝ}
             abs (Activation.Math.sigmoidSpec (α := ℝ) x) := abs_sub _ _
       _ ≤ abs (toSpec (β := β) (fexp := fexp) (rnd := rnd)
               (reciprocalSigmoidR (β := β) (fexp := fexp) (rnd := rnd) xR)) + 1 := by
-            rw [abs_of_pos hpos]
+            rw [abs_of_nonneg hnonneg]
             linarith
 
 omit [ValidRndToNearest rnd] in
@@ -688,8 +640,7 @@ theorem approxTensor_reciprocal_sigmoid_spec {s : Shape} :
           (mapSpec (s := s) (Activation.Math.sigmoidSpec (α := ℝ)) xS)
           (mapSpec (s := s) (reciprocalSigmoidR (β := β) (fexp := fexp) (rnd := rnd)) xR)
           (linfNorm (reciprocalSigmoidBoundTensor
-            (β := β) (fexp := fexp) (rnd := rnd) (s := s) eps xR)) :=
-    by
+            (β := β) (fexp := fexp) (rnd := rnd) (s := s) eps xR)) := by
   intro xS xR eps hx
   have h :=
     approxTensor_map_spec_of_runtime_scalar_bound
@@ -766,19 +717,15 @@ theorem approx_exp_ratio_sigmoid_nf {x : ℝ} {xR : R} {eps : ℝ}
   · rw [Proofs.sigmoid_eq_exp_div]
     exact approx_div_nf_of_pos_lb (β := β) (fexp := fexp) (rnd := rnd)
       (η := 1) hy hcert hnum hden
-  · have hpos : 0 < Activation.Math.sigmoidSpec (α := ℝ) x := by
-      rw [Proofs.sigmoid_eq_exp_div]
-      positivity
-    have hle : Activation.Math.sigmoidSpec (α := ℝ) x ≤ 1 := by
-      rw [Proofs.sigmoid_eq_exp_div]
-      exact div_le_one_of_le₀ (by linarith) (by positivity)
+  · have hnonneg := sigmoid_spec_nonneg x
+    have hle := sigmoid_spec_le_one x
     calc
       abs (toSpec (β := β) (fexp := fexp) (rnd := rnd) (expRatioSigmoidR xR) -
           Activation.Math.sigmoidSpec (α := ℝ) x)
           ≤ abs (toSpec (β := β) (fexp := fexp) (rnd := rnd) (expRatioSigmoidR xR)) +
             abs (Activation.Math.sigmoidSpec (α := ℝ) x) := abs_sub _ _
       _ ≤ abs (toSpec (β := β) (fexp := fexp) (rnd := rnd) (expRatioSigmoidR xR)) + 1 := by
-          rw [abs_of_pos hpos]
+          rw [abs_of_nonneg hnonneg]
           exact add_le_add le_rfl hle
 
 /-- NF error budget for the public sigmoid, selecting the certificate for its actual evaluation

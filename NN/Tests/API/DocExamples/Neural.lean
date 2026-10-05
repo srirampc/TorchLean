@@ -155,19 +155,19 @@ def model : nn.IndexedModel [16] [16, 32] (Fin 256) :=
 
 end Embedding
 
--- doc-example: NN/API/Seeded.lean :: def multiHeadAttention
+-- doc-example: NN/API/Seeded.lean :: def attention
 namespace MultiHeadAttention
 
 -- Two heads of width 4 give an internal attention width of 8, which here happens to match the
 -- model width; the two are independent, so `headCount * headWidth` may differ from it.
 def model : nn.Builder (nn.Sequential [4, 8] [4, 8]) :=
-  nn.multiHeadAttention { headCount := 2, headWidth := 4 }
+  nn.attention { headCount := 2, headWidth := 4 }
     (sequenceLength := 4) (modelWidth := 8)
 
 -- Causal masking is a separate argument rather than a config field, because the mask is a value
 -- with the sequence length in its type.
 def causal : nn.Builder (nn.Sequential [4, 8] [4, 8]) :=
-  nn.multiHeadAttention { headCount := 2, headWidth := 4 }
+  nn.attention { headCount := 2, headWidth := 4 }
     (mask := some (Spec.causalMask 4)) (sequenceLength := 4) (modelWidth := 8)
 
 end MultiHeadAttention
@@ -215,7 +215,7 @@ namespace PrintSummary
 def model : nn.Sequential [2] [1] :=
   nn.build 0 nn.Sequential![nn.linear 2 8, nn.relu, nn.linear 8 1]
 
--- Prints one row per layer with its kind, shapes, and parameter count, then the totals. The
+-- Prints the totals, then one row per layer with its kind, shapes, and parameter count. The
 -- counterpart of `print(model)` plus `torchinfo.summary`.
 def main : IO Unit := nn.printSummary model
 

@@ -26,8 +26,6 @@ namespace NN.MLTheory.CROWN.Graph
 
 open Spec TorchLean
 open TorchLean.Tensor
-open scoped BigOperators
-open Proofs.TensorAlgebra
 
 open NN.MLTheory.CROWN
 open NN.MLTheory.CROWN.Cert
@@ -38,48 +36,6 @@ noncomputable section
 
 open CrownCertSoundness
 open CertSoundness
-
-/-! ## Safe lookups -/
-
-/-- A successful `Cert.getAff?` lookup is an in-bounds array read. -/
-theorem getElem!_of_getAff?_eq_some {cert : Array (Option (FlatAffineBounds ℝ))} {p : Nat}
-    {xin : FlatAffineBounds ℝ} (h : NN.MLTheory.CROWN.Cert.getAff? (α := ℝ) cert p = some xin) :
-    cert[p]! = some xin := by
-  by_cases hlt : p < cert.size
-  · simpa [NN.MLTheory.CROWN.Cert.getAff?, hlt] using h
-  · simp [NN.MLTheory.CROWN.Cert.getAff?, hlt] at h
-
-/-!
-`getElem!_of_getVal?_eq_some` is `CertSoundness`'s lemma, opened at the top of this file. Two files
-in this directory carried their own copy of it, proved with `by_cases` where the original uses
-`unfold` and `split`; the statements were the same, so the copies are gone.
--/
-/-- A successful `getAlpha?` lookup is an in-bounds array read. -/
-theorem getElem!_of_getAlpha?_eq_some {alpha : Array (Option (FlatTensor ℝ))} {id : Nat}
-    {αv : FlatTensor ℝ} (h : NN.MLTheory.CROWN.Cert.getAlpha? (α := ℝ) alpha id = some αv) :
-    id < alpha.size ∧ alpha[id]! = some αv := by
-  by_cases hlt : id < alpha.size
-  · exact ⟨hlt, by simpa [NN.MLTheory.CROWN.Cert.getAlpha?, hlt] using h⟩
-  · simp [NN.MLTheory.CROWN.Cert.getAlpha?, hlt] at h
-
-/-! ## α vector range -/
-
-/-- Under `AlphaOK`, an α vector read by `getAlpha?` has every entry in `[0, 1]`. -/
-theorem getAlpha?_unit_range {alpha : Array (Option (FlatTensor ℝ))} {id : Nat}
-    {αv : FlatTensor ℝ} (halpha : AlphaOK (alpha := alpha))
-    (h : NN.MLTheory.CROWN.Cert.getAlpha? (α := ℝ) alpha id = some αv) :
-    ∀ i : Fin αv.n, (0 : ℝ) ≤ getScalar αv.v i ∧ getScalar αv.v i ≤ (1 : ℝ) := by
-  obtain ⟨hlt, hentry⟩ := getElem!_of_getAlpha?_eq_some h
-  simpa [hentry] using halpha id hlt
-
-/-- Casting the dimension of a tensor preserves the unit-interval range of its entries. -/
-theorem castDimScalar_unit_range {n n' : Nat} (h : n = n') (t : Tensor ℝ [n])
-    (hr : ∀ i : Fin n, (0 : ℝ) ≤ getScalar t i ∧ getScalar t i ≤ (1 : ℝ)) :
-    ∀ i : Fin n', (0 : ℝ) ≤ getScalar (castDimScalar (α := ℝ) h t) i ∧
-      getScalar (castDimScalar (α := ℝ) h t) i ≤ (1 : ℝ) := by
-  intro i
-  rw [getScalar_castDimScalar]
-  exact hr _
 
 /-! ## Reduction to α-CROWN -/
 

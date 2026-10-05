@@ -110,6 +110,8 @@ structure Node (α : Type) [TorchLean.Storage α] where
   Whether reverse-mode propagation should visit this node.
 
   If `false`, reverse-mode traversal skips this node and does not accumulate gradients into it.
+  Eager operations inherit the disjunction of their differentiable parents' flags; leaves retain
+  the caller's explicit flag.
   -/
   requiresGrad : Bool := true
   /-- Parent node ids (dependencies) in the tape. -/
@@ -236,10 +238,10 @@ You provide:
 - `forward : Tensor α σ → Tensor α τ`
 - `backward : Tensor α σ → Tensor α τ → Tensor α σ` (a VJP rule; note it may depend on the input)
 
-The returned node stores the forward value and a backward closure that checks the upstream
-gradient's shape and returns the parent contribution.
+The returned node inherits the parent's gradient flag and stores the forward value and a backward
+closure that checks the upstream gradient's shape and returns the parent contribution.
 -/
-def unary {α : Type} [TorchLean.Storage α] {σ τ : Shape}
+@[inline] def unary {α : Type} [TorchLean.Storage α] {σ τ : Shape}
   (t : Tape α) (opName : String) (xId : Nat)
   (forward : Tensor α σ → Tensor α τ)
   (backward : Tensor α σ → Tensor α τ → Tensor α σ) :
@@ -249,11 +251,37 @@ def unary {α : Type} [TorchLean.Storage α] {σ τ : Shape}
   let node : Node α :=
     { name := some opName
       value := Spec.SomeTensor.ofTensor y
-      requiresGrad := true
+      requiresGrad := (t.getNode? xId).any (·.requiresGrad)
       parents := #[xId]
       backward := fun dLdyAny => do
         let dLdy ← requireGrad (α := α) (τ := τ) dLdyAny
         let dLdx : Tensor α σ := backward x dLdy
         pure #[(xId, Spec.SomeTensor.ofTensor dLdx)]
     }
+  pure (t.addNode node)
+
+/--
+Record a binary operation with typed inputs and cotangents.
+
+Input lookup, parent metadata, and backward contributions all follow the order `a`, then `b`.
+The backward function runs after the upstream shape check and receives both saved inputs.
+-/
+@[inline] def binary {α : Type} [TorchLean.Storage α] {σ₁ σ₂ τ : Shape}
+    (t : Tape α) (opName : String) (aId bId : Nat)
+    (forward : Tensor α σ₁ → Tensor α σ₂ → Tensor α τ)
+    (backward : Tensor α σ₁ → Tensor α σ₂ → Tensor α τ →
+      Tensor α σ₁ × Tensor α σ₂) : Result (Tape α × Nat) := do
+  let a ← requireValue (α := α) (t := t) (s := σ₁) aId
+  let b ← requireValue (α := α) (t := t) (s := σ₂) bId
+  let y := forward a b
+  let node : Node α :=
+    { name := some opName
+      value := Spec.SomeTensor.ofTensor y
+      requiresGrad :=
+        (t.getNode? aId).any (·.requiresGrad) || (t.getNode? bId).any (·.requiresGrad)
+      parents := #[aId, bId]
+      backward := fun dLdyAny => do
+        let dLdy ← requireGrad (α := α) (τ := τ) dLdyAny
+        let (da, db) := backward a b dLdy
+        pure #[(aId, Spec.SomeTensor.ofTensor da), (bId, Spec.SomeTensor.ofTensor db)] }
   pure (t.addNode node)

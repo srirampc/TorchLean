@@ -29,15 +29,15 @@ namespace Interp
 def spec
     {ps : List Shape} {σ τ : Shape}
     (g : Chain ps σ τ)
-    {α : Type 0} [TorchLean.Storage α] [Context α] :
-    TorchLean.TensorPack α ps → TorchLean.Tensor α σ → TorchLean.Tensor α τ :=
+    {α : Type 0} [Storage α] [Context α] :
+    TensorPack α ps → Tensor α σ → Tensor α τ :=
   fun params x =>
     match g with
     | .id _ => x
     | .prim p => p.specFwd (α := α) params x
     | .seq (ps₁ := ps₁) (ps₂ := ps₂) g₁ g₂ =>
         let (params₁, params₂) :=
-          TorchLean.TensorPack.split (α := α) (ss₁ := ps₁) (ss₂ := ps₂) params
+          TensorPack.split (α := α) (ss₁ := ps₁) (ss₂ := ps₂) params
         let y := spec (α := α) g₁ params₁ x
         spec (α := α) g₂ params₂ y
 

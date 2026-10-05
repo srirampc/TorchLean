@@ -10,7 +10,7 @@ module
 # Learning-Rate Schedules
 
 Pure learning-rate schedules used by TorchLean training loops and examples. A `Config` describes a
-schedule, and `learningRateAt` evaluates it at an optimizer step.
+schedule, and `Config.rate` evaluates it at an optimizer step.
 
 ## References
 
@@ -29,7 +29,7 @@ namespace Scheduler
 Small learning-rate scheduler surface for higher-level training code.
 
 This file keeps the interface compact: a `Config` is just a description of a schedule,
-and `learningRateAt config stepIndex` computes the learning rate at that optimizer step or epoch.
+and `config.rate stepIndex` computes the learning rate at that optimizer step or epoch.
 
 ### PyTorch mapping
 
@@ -44,36 +44,21 @@ inductive Config where
   | constant (learningRate : Float)
   | step (baseLearningRate : Float) (stepSize : Nat) (decayFactor : Float := 0.1)
   | exponential (baseLearningRate : Float) (decayFactor : Float)
+  /--
+  Linearly warm up to `peakLearningRate`, then follow a cosine curve down to
+  `minimumLearningRate`.
+
+  `warmupSteps` counts optimizer updates. The first update uses
+  `peakLearningRate / warmupSteps`, and the last warm-up update reaches `peakLearningRate`. Once
+  `totalSteps` updates have been scheduled, the learning rate remains at `minimumLearningRate`.
+  A warm-up longer than the run is clamped to `totalSteps`. When `totalSteps = 0`, no update belongs
+  to the schedule and `Config.rate` returns `minimumLearningRate`.
+  -/
   | warmupCosine
       (peakLearningRate minimumLearningRate : Float) (warmupSteps totalSteps : Nat)
   deriving Repr
 
-/-- Constant learning-rate schedule. -/
-def constant (learningRate : Float) : Config := .constant learningRate
-
-/-- Step decay learning-rate schedule. -/
-def step
-    (baseLearningRate : Float) (stepSize : Nat) (decayFactor : Float := 0.1) : Config :=
-  .step baseLearningRate stepSize decayFactor
-
-/-- Exponential learning-rate schedule. -/
-def exponential (baseLearningRate : Float) (decayFactor : Float) : Config :=
-  .exponential baseLearningRate decayFactor
-
-/--
-Linearly warm up to `peakLearningRate`, then follow a cosine curve down to
-`minimumLearningRate`.
-
-`warmupSteps` counts optimizer updates. The first update uses
-`peakLearningRate / warmupSteps`, and the last warm-up update reaches `peakLearningRate`. Once
-`totalSteps` updates have been scheduled, the learning rate remains at `minimumLearningRate`.
-A warm-up longer than the run is clamped to `totalSteps`. When `totalSteps = 0`, no update belongs
-to the schedule and `learningRateAt` returns `minimumLearningRate`.
--/
-def warmupCosine
-    (peakLearningRate minimumLearningRate : Float)
-    (warmupSteps totalSteps : Nat) : Config :=
-  .warmupCosine peakLearningRate minimumLearningRate warmupSteps totalSteps
+export Config (constant step exponential warmupCosine)
 
 namespace Internal
 
@@ -97,7 +82,7 @@ The checks keep every scheduled rate finite and nonnegative. Step and exponentia
 decay factors in `[0, 1]`; a zero step size is rejected instead of silently changing the schedule
 to a constant rate.
 -/
-def validate : Config → Except String Unit
+def Internal.validate : Config → Except String Unit
   | .constant learningRate =>
       Internal.requireRate "learning rate" learningRate
   | .step baseLearningRate stepSize decayFactor => do
@@ -114,18 +99,26 @@ def validate : Config → Except String Unit
       unless minimumLearningRate <= peakLearningRate do
         throw "scheduler: minimum learning rate must not exceed peak learning rate"
 
-/-- Also check that the largest scheduled rate remains finite in binary32 training. -/
-def validateFloat32 (config : Config) : Except String Unit := do
-  validate config
+/--
+Validate a schedule, optionally checking its largest rate after scalar conversion.
+
+`round` reports the converted value in binary64. Its default leaves rates unchanged; a runtime
+supplies its scalar conversion to catch overflow before training. Schedule arithmetic remains
+binary64; each resulting rate is converted when the optimizer state is updated.
+-/
+def Config.validate (config : Config) (round : Float → Float := id) :
+    Except String Unit := do
+  Internal.validate config
   let maximumRate := match config with
     | .constant rate => rate
     | .step rate _ _ => rate
     | .exponential rate _ => rate
     | .warmupCosine peak _ _ _ => peak
-  Internal.requireRate "learning rate after conversion to binary32" maximumRate.toFloat32.toFloat
+  Internal.requireRate "learning rate after conversion to the runtime scalar"
+    (round maximumRate)
 
 /-- Learning rate at a given step or epoch index. -/
-def learningRateAt : Config → Nat → Float
+def Config.rate : Config → Nat → Float
   | .constant learningRate, _ => learningRate
   | .step baseLearningRate stepSize decayFactor, stepIndex =>
       if stepSize = 0 then

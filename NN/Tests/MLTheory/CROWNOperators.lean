@@ -10,6 +10,7 @@ public import NN.MLTheory.CROWN.Operators.Arithmetic
 public import NN.MLTheory.CROWN.Operators.Activations
 public import NN.MLTheory.CROWN.Operators.BatchNorm
 public import NN.MLTheory.CROWN.Operators.Trigonometric
+public import NN.Tests.Utils
 
 /-!
 # CROWN Operator Regressions
@@ -26,9 +27,9 @@ namespace NN.Tests.MLTheory.CROWNOperators
 open NN.MLTheory.CROWN.Operators
 open Spec TorchLean
 
-def expectApprox (name : String) (actual expected : Float) (tol : Float := 1e-6) : IO Unit := do
-  unless Float.abs (actual - expected) <= tol do
-    throw <| IO.userError s!"{name}: expected {expected}, got {actual}"
+/-- Finite absolute-tolerance assertion with this suite's default tolerance. -/
+def expectApprox (name : String) (actual expected : Float) (tol : Float := 1e-6) : IO Unit :=
+  Tests.Utils.assertApprox name actual expected tol
 
 def singletonTensor (x : Float) : Tensor Float [1] :=
   Tensor.ofFn fun _ => x
@@ -62,8 +63,8 @@ def run : IO Unit := do
 
   let bnParams : BatchNorm.BatchNormParams Float :=
     { dim := 1
-      running_mean := singletonTensor 1.0
-      running_var := singletonTensor (-4.0)
+      runningMean := singletonTensor 1.0
+      runningVar := singletonTensor (-4.0)
       gamma := singletonTensor 2.0
       beta := singletonTensor 3.0
       eps := 1.0 }

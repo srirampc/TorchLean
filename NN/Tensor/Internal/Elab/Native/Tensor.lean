@@ -94,9 +94,9 @@ storage performs raw scalar-buffer reads and writes.
     fun index hIndex => by
       simpa only [source.size_eq] using hSourceIndices index hIndex
   Rep.mk
-    (nativeBufferGather source.buffer (Shape.size outputShape)
+    (storage.gather source.buffer (Shape.size outputShape)
       bound hBound sourceIndices hBufferIndices)
-    (nativeBufferGather_size source.buffer (Shape.size outputShape)
+    (Storage.size_gather source.buffer (Shape.size outputShape)
       bound hBound sourceIndices hBufferIndices)
 
 /-- A physical tensor gather equals its coordinate-level flat function. -/
@@ -120,7 +120,7 @@ theorem nativeTensorGather_correct
         values hValues =
       Rep.ofFlatFn values := by
   apply Rep.mk_eq_ofFlatFn values
-  exact nativeBufferGather_toArray source.buffer
+  exact Storage.toArray_gather source.buffer
     (Shape.size outputShape) bound hBound sourceIndices
     (fun index hIndex => by
       simpa only [source.size_eq] using hSourceIndices index hIndex)

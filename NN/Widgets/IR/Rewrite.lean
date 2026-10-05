@@ -27,8 +27,8 @@ Main command:
 
 ## Main definitions
 
-- `diffRows`: align nodes by id for before/after comparison.
-- `graphRewriteHtml`: side-by-side graph panels plus id-wise diff table.
+- `diffRows`: align nodes by array position for before/after comparison.
+- `graphRewriteHtml`: side-by-side graph panels plus a structural diff table.
 - `#graph_rewrite_view`: command entry point.
 -/
 
@@ -41,27 +41,27 @@ namespace NN.Widgets
 open NN.IR
 open UI
 
-/-- One aligned row of a two-graph diff, holding whichever side has a node at this id. -/
+/-- One aligned row of a two-graph diff, holding whichever side has a node at this position. -/
 private structure DiffRow where
-  /-- Node id both sides are aligned on. -/
-  id : Nat
-  /-- Node at this id in the left graph, if it has one. -/
+  /-- Array position, equal to the node id in a well-formed graph. -/
+  index : Nat
+  /-- Node at this position in the left graph, if it has one. -/
   left? : Option Node
-  /-- Node at this id in the right graph, if it has one. -/
+  /-- Node at this position in the right graph, if it has one. -/
   right? : Option Node
 
-/-- Build aligned per-id rows for two graphs, clipped to `maxNodes`. -/
+/-- Build rows aligned by array position for two graphs, clipped to `maxNodes`. -/
 private def diffRows (g₁ g₂ : Graph) (maxNodes : Nat := 400) : Array DiffRow :=
   let n := min (max g₁.size g₂.size) maxNodes
   (Array.range n).map (fun i =>
-    { id := i, left? := g₁.nodes[i]?, right? := g₂.nodes[i]? })
+    { index := i, left? := g₁.nodes[i]?, right? := g₂.nodes[i]? })
 
-/-- Produce a compact structural signature for change detection. -/
+/-- Display the fields compared for structural changes, including the node's declared id. -/
 private def nodeSig (n : Node) : String :=
   let operation := match n.kind with
     | .hardMaskedSoftmax mask => s!"{n.kind.describe} allowed={mask.allowed}"
     | kind => kind.describe
-  s!"{operation} parents={n.parents} out={Spec.Shape.pretty n.outShape}"
+  s!"id={n.id} {operation} parents={n.parents} out={Spec.Shape.pretty n.outShape}"
 
 /-- Render one diff row, badged `same`, `changed`, `added`, or `removed`. -/
 private def diffRowHtml (r : DiffRow) : ProofWidgets.Html :=
@@ -80,7 +80,7 @@ private def diffRowHtml (r : DiffRow) : ProofWidgets.Html :=
   ;
   <tr>
     <td style={json% {"padding": "6px 8px", "border-bottom":
-      "1px solid rgba(127,127,127,0.18)"}}>{monospace (toString r.id)}</td>
+      "1px solid rgba(127,127,127,0.18)"}}>{monospace (toString r.index)}</td>
     <td style={json% {"padding": "6px 8px", "border-bottom":
       "1px solid rgba(127,127,127,0.18)"}}>{status}</td>
     <td style={json% {"padding": "6px 8px", "border-bottom":
@@ -118,14 +118,14 @@ def graphRewriteHtml (g₁ g₂ : Graph) : ProofWidgets.Html :=
       </div>
     </div>
     <details «open»={false}>
-      <summary>{.text "Diff table (per node id)"}</summary>
+      <summary>{.text "Diff table (per array position)"}</summary>
       <div style={json% {"margin-top": "8px", "overflow": "auto", "max-height": "420px",
         "border": "1px solid var(--vscode-panel-border, #e5e5e5)", "border-radius": "10px"}}>
         <table style={json% {"border-collapse": "collapse", "width": "100%"}}>
           <thead>
             <tr>
               <th style={json% {"text-align": "left", "padding": "6px 8px", "border-bottom":
-                "1px solid var(--vscode-panel-border, #e5e5e5)"}}>{.text "id"}</th>
+                "1px solid var(--vscode-panel-border, #e5e5e5)"}}>{.text "position"}</th>
               <th style={json% {"text-align": "left", "padding": "6px 8px", "border-bottom":
                 "1px solid var(--vscode-panel-border, #e5e5e5)"}}>{.text "status"}</th>
               <th style={json% {"text-align": "left", "padding": "6px 8px", "border-bottom":

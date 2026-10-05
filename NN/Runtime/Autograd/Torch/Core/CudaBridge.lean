@@ -6,8 +6,8 @@ Authors: TorchLean Team
 
 module
 
-public import NN.Runtime.Autograd.Engine.Cuda.Convert
-public import NN.Runtime.Autograd.Engine.Cuda.Tape
+public import NN.Runtime.Autograd.Engine.LibTorch.Convert
+public import NN.Runtime.Autograd.Engine.LibTorch.Tape
 public import NN.Runtime.Autograd.Torch.Core.TensorTransfer
 public import NN.Spec.Core.Tensor.SomeTensor
 
@@ -31,17 +31,17 @@ namespace CudaBridge
 
 /-- Upload a tensor to CUDA float32 storage through its runtime transfer representation. -/
 def toAnyBuffer {α : Type} [TorchLean.Storage α] [TensorTransfer α] {s : Shape}
-    (tensor : Tensor α s) : IO Runtime.Autograd.Cuda.AnyBuffer := do
+    (tensor : Tensor α s) : IO Runtime.Autograd.LibTorch.AnyBuffer := do
   let host ← TensorTransfer.toFloatTensor tensor
-  let values := Runtime.Autograd.Cuda.Convert.flattenFloat host
-  let buffer ← Runtime.Autograd.Cuda.Buffer.ofFloatArrayIO values
+  let values := Runtime.Autograd.LibTorch.Convert.flattenFloat host
+  let buffer ← Runtime.Autograd.LibTorch.Buffer.ofFloatArrayIO values
   pure { s := s, buf := buffer }
 
 /-- Download a buffer with the requested shape, checking its element count. -/
 def ofBuffer {α : Type} [TorchLean.Storage α] [TensorTransfer α] {s : Shape}
-    (buffer : Runtime.Autograd.Cuda.Buffer) : IO (Tensor α s) := do
-  let values := Runtime.Autograd.Cuda.Buffer.toFloatArray buffer
-  match Runtime.Autograd.Cuda.Convert.unflattenFloat? (s := s) values with
+    (buffer : Runtime.Autograd.LibTorch.Buffer) : IO (Tensor α s) := do
+  let values := Runtime.Autograd.LibTorch.Buffer.toFloatArray buffer
+  match Runtime.Autograd.LibTorch.Convert.unflattenFloat? (s := s) values with
   | some tensor =>
       TensorTransfer.ofFloatTensor tensor
   | none =>
@@ -51,7 +51,7 @@ def ofBuffer {α : Type} [TorchLean.Storage α] [TensorTransfer α] {s : Shape}
 
 /-- Download a shape-erased buffer through the scalar type's runtime transfer representation. -/
 def ofAnyBuffer {α : Type} [TorchLean.Storage α] [TensorTransfer α]
-    (stored : Runtime.Autograd.Cuda.AnyBuffer) : IO (Spec.SomeTensor α) := do
+    (stored : Runtime.Autograd.LibTorch.AnyBuffer) : IO (Spec.SomeTensor α) := do
   pure <| Spec.SomeTensor.ofTensor (← ofBuffer (α := α) (s := stored.s) stored.buf)
 
 end CudaBridge

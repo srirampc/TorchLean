@@ -31,17 +31,13 @@ namespace ExpressionConfig
 def transformation : ExpressionConfig :=
   {}
 
-/-- Rules used by `parse_shape`. -/
+/-- Permit ignored `_` axes in `parse_shape` and einsum output expressions. -/
 def parseShape : ExpressionConfig :=
   { allowUnderscore := true }
 
 /-- Rules used by an einsum input expression. -/
 def einsumInput : ExpressionConfig :=
   { allowUnderscore := true, allowDuplicates := true }
-
-/-- Rules used by an einsum output expression. -/
-def einsumOutput : ExpressionConfig :=
-  { allowUnderscore := true }
 
 end ExpressionConfig
 

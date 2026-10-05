@@ -47,8 +47,6 @@ inductive DiagnosticCode where
   | unknownEinsumOutputAxis
   /-- An einsum output named the same logical axis more than once. -/
   | duplicateEinsumOutputAxis
-  /-- The reference-compatible einsum front end exceeded its 52-label limit. -/
-  | tooManyEinsumAxes
   /-- Repeated occurrences of an einsum label in one operand had unequal lengths. -/
   | repeatedEinsumDimensionMismatch
   /-- Non-singleton occurrences of an einsum axis had incompatible lengths. -/

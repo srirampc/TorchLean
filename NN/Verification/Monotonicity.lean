@@ -9,7 +9,6 @@ module
 public import NN.Proofs.Tensor.Algebra
 public import NN.Spec.Module.Activation
 public import NN.Spec.Module.Linear
-public import NN.Spec.Core.Context.Rational
 public import NN.Spec.Core.Context.Real
 
 /-!
@@ -28,8 +27,6 @@ CROWN certificate. It does not enumerate activation regions.
 namespace NN.Verification.Monotonicity
 
 open _root_.Spec TorchLean TorchLean.Tensor
-open scoped BigOperators
-open scoped Spec.RationalAlgebraic
 
 /-- Componentwise order preservation for a tensor map. -/
 def PreservesOrder {α : Type} [Storage α] [LE α] {s t : Shape}
@@ -74,19 +71,18 @@ private theorem vector_order_iff {α : Type} [Storage α] [LE α] {n : Nat} (x y
     Tensor.Forall₂ (· ≤ ·) x y ↔ ∀ i, x.getScalar i ≤ y.getScalar i := by
   rfl
 
-private theorem scalar_add {α : Type} [Storage α] [Add α] {n : Nat}
-    (x y : Tensor α [n]) (i : Fin n) :
-    (Tensor.addSpec x y).getScalar i = x.getScalar i + y.getScalar i := by
-  simp [Tensor.addSpec]
+/-- A successful exact weight check certifies that every rational entry is nonnegative. -/
+theorem checkWeights_nonneg {n m : Nat} {weights : Tensor ℚ [m, n]}
+    (h : checkWeights weights = true) (i : Fin m) (j : Fin n) : 0 ≤ get2 weights i j := by
+  simp only [checkWeights, List.all_eq_true] at h
+  exact of_decide_eq_true (h i (List.mem_finRange i) j (List.mem_finRange j))
 
 /-- A successful exact weight check supplies nonnegativity over the real interpretation. -/
 theorem checkWeights_sound {n m : Nat} {weights : Tensor ℚ [m, n]}
     (h : checkWeights weights = true) (i : Fin m) (j : Fin n) :
     0 ≤ get2 (Tensor.map (fun q : ℚ => (q : ℝ)) weights) i j := by
-  simp only [checkWeights, List.all_eq_true] at h
-  have hq : 0 ≤ get2 weights i j :=
-    of_decide_eq_true (h i (List.mem_finRange i) j (List.mem_finRange j))
-  have hr : (0 : ℝ) ≤ ((get2 weights i j : ℚ) : ℝ) := by exact_mod_cast hq
+  have hr : (0 : ℝ) ≤ ((get2 weights i j : ℚ) : ℝ) := by
+    exact_mod_cast checkWeights_nonneg h i j
   simpa [get2_eq_getScalar_get, Spec.get, Tensor.unstack_map] using hr
 
 /-- A linear module with nonnegative weights preserves componentwise real order. -/
@@ -97,7 +93,8 @@ theorem linear_preserves_order {α : Type} [Storage α] [CommRing α] [LinearOrd
   intro x y hxy
   apply (vector_order_iff _ _).mpr
   intro i
-  simp only [Spec.linearSpec, scalar_add, Proofs.TensorAlgebra.getScalar_mat_vec_mul_spec]
+  simp only [Spec.linearSpec, Tensor.addSpec, Tensor.getScalar_map2Spec,
+    Proofs.TensorAlgebra.getScalar_mat_vec_mul_spec]
   refine add_le_add ?_ le_rfl
   exact Finset.sum_le_sum fun j _ =>
     mul_le_mul_of_nonneg_left ((vector_order_iff x y).mp hxy j) (hw i j)
@@ -131,11 +128,7 @@ theorem check_sound {s t : Shape} (cert : Certificate s t)
 theorem check_sound_rat {s t : Shape} (cert : Certificate s t)
     (h : check cert = true) : PreservesOrder cert.rationalModel.forward := by
   induction cert with
-  | linear layer =>
-      apply linear_preserves_order layer
-      intro i j
-      simp only [check, checkWeights, List.all_eq_true] at h
-      exact of_decide_eq_true (h i (List.mem_finRange i) j (List.mem_finRange j))
+  | linear layer => exact linear_preserves_order layer (checkWeights_nonneg h)
   | relu s => exact relu_preserves_order s
   | comp a b ha hb =>
       simp only [check, Bool.and_eq_true] at h

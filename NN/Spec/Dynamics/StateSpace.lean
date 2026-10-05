@@ -28,7 +28,7 @@ This file starts with the diagonal/channelwise version because it is:
 
 The definitions reuse `DynamicalSystem` / `DrivenSystem` from
 `NN/Spec/Dynamics/System.lean`, so existing notions such as `iterate`, `trajectory`,
-`IsFixedPoint`, and `isContractive` apply immediately.
+`Function.IsFixedPt`, and `isContractive` apply immediately.
 -/
 
 @[expose] public section
@@ -109,7 +109,7 @@ View a scalar-specialized diagonal SSM recurrence as a `DrivenSystem`.
 `DrivenSystem` uses TorchLean's default `SpecScalar`, while the reusable SSM record
 above is polymorphic over scalar backends.  This adapter is the bridge to the existing dynamics API.
 -/
-def DiagonalSSM.drivenSystemSpecScalar {dim : Nat}
+def DiagonalSSM.drivenSystem {dim : Nat}
     (m : DiagonalSSM SpecScalar dim) : DrivenSystem (.dim dim .scalar) (.dim dim .scalar) where
   step := fun h x => m.step h x
 
@@ -117,10 +117,10 @@ def DiagonalSSM.drivenSystemSpecScalar {dim : Nat}
 
 The wrapper exists so the dynamics theorems apply to the layer; this is the `rfl` that says the
 wrapper carries no extra content, so a bound proved about the system holds of the layer. -/
-@[simp] theorem DiagonalSSM.drivenSystemSpecScalar_step {dim : Nat}
+@[simp] theorem DiagonalSSM.drivenSystem_step {dim : Nat}
     (m : DiagonalSSM SpecScalar dim)
     (h x : Tensor SpecScalar [dim]) :
-    (m.drivenSystemSpecScalar).step h x = m.step h x := by
+    (m.drivenSystem).step h x = m.step h x := by
   rfl
 
 end Spec.Dynamics

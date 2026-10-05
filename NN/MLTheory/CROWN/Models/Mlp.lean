@@ -7,6 +7,7 @@ Authors: TorchLean Team
 module
 
 public import NN.MLTheory.CROWN.Operators.Activations
+public import NN.MLTheory.CROWN.Proofs.ReLUUpperBound
 public import NN.MLTheory.CROWN.Graph.Engine.BackwardObjective
 public import NN.Spec.Layers.Linear
 import NN.Proofs.Tensor.Algebra
@@ -24,7 +25,7 @@ This file is a compact implementation that sits on top of:
 What is implemented:
 - Per-neuron ReLU linear relaxations derived from pre-activation bounds using the canonical
   `Runtime.Ops.ReLU.relaxScalar` and `Runtime.Ops.ReLU.relaxScalarLower` definitions.
-- IBP forward rules for ReLU, sigmoid, tanh, and Leaky ReLU.
+- The IBP forward rule for ReLU; other activations use `Runtime.Ops.IBP` directly.
 - A two-layer ReLU MLP wrapper `TwoLayerMLP` with a simple end-to-end bounding API.
 
 Scope boundaries in this MLP-focused module:
@@ -65,16 +66,6 @@ def matColScaleSpec
   (v : Tensor α [n]) : Tensor α [m, n] :=
   Tensor.matrix (fun i j => get2 A i j * Tensor.getScalar v j)
 
-/-- Elementwise positive part of a matrix: replace negative entries by `0`. -/
-abbrev matPosSpec {m n : Nat}
-  (A : Tensor α [m, n]) : Tensor α [m, n] :=
-  IBP.matPos A
-
-/-- Elementwise negative part of a matrix: replace positive entries by `0`. -/
-abbrev matNegSpec {m n : Nat}
-  (A : Tensor α [m, n]) : Tensor α [m, n] :=
-  IBP.matNeg A
-
 /-- Extract the slope vector from a tensor of ReLU relaxations. -/
 def reluRelaxSlopeVec {n : Nat}
   (relax : Tensor (ReLURelax α) [n]) : Tensor α [n] :=
@@ -89,10 +80,10 @@ def reluRelaxBiasVec {n : Nat}
 namespace IBP
 
 /-!
-Interval Bound Propagation (IBP) utilities for vector-shaped activations.
+Interval Bound Propagation (IBP) for the vector-shaped ReLU used by `TwoLayerMLP`.
 
-These are executable transfer functions. Their soundness theorems instantiate the scalar type with
-`ℝ` and use the corresponding monotonicity or activation-specific proof.
+This is an executable transfer function. Its soundness theorem instantiates the scalar type with
+`ℝ`.
 
 The linear-layer bound helper `IBP.linear` lives in `NN.MLTheory.CROWN.Core`.
 -/
@@ -106,31 +97,6 @@ This is the standard elementwise interval evaluation:
 def relu {n : Nat} (xB : Box α (.dim n .scalar)) : Box α (.dim n .scalar) :=
   { lo := Tensor.map (fun l => if l > 0 then l else 0) xB.lo
     hi := Tensor.map (fun u => if u > 0 then u else 0) xB.hi }
-
-/--
-Re-export of the runtime-only monotone-activation IBP helper.
-
-We keep this file compact and Mathlib-friendly for proofs, but we do not want to
-maintain two copies of the same computational rule. Canonical implementation lives in:
-`NN.MLTheory.CROWN.Runtime.Ops.IBP.mapMinmax`.
-
-Semantics (per component): given an interval `[l,u]`, this returns
-`[min(f(l), f(u)), max(f(l), f(u))]` (intended for monotone `f`).
--/
-abbrev mapMinmax {n : Nat} (f : α → α) (xB : Box α (.dim n .scalar)) : Box α (.dim n .scalar) :=
-  Runtime.Ops.IBP.mapMinmax (α := α) f xB
-
-/-- Interval bounds for `sigmoid`. -/
-abbrev sigmoid {n : Nat} (xB : Box α (.dim n .scalar)) : Box α (.dim n .scalar) :=
-  Runtime.Ops.IBP.sigmoid (α := α) xB
-
-/-- Interval bounds for `tanh`. -/
-abbrev tanh {n : Nat} (xB : Box α (.dim n .scalar)) : Box α (.dim n .scalar) :=
-  Runtime.Ops.IBP.tanh (α := α) xB
-
-/-- Interval bounds for leaky ReLU, including the zero kink on crossing intervals. -/
-def leakyRelu {n : Nat} (αₗ : α) (xB : Box α (.dim n .scalar)) : Box α (.dim n .scalar) :=
-  Operators.Activations.ibpLeakyRelu n αₗ xB
 
 end IBP
 
@@ -192,8 +158,11 @@ def boundIbp {inDim hidDim outDim : Nat} [BoundOps α]
 The lower and upper affine CROWN forms for this two-layer ReLU MLP.
 
 The returned pair is `(lower, upper)`. `boundAffineCrown` evaluates these forms on the input box and
-takes the lower and upper endpoints. Exact backends use the two-layer algebraic formula;
-rounded backends share the graph engine's directed coefficient propagation.
+takes the lower and upper endpoints. Exact backends use the two-layer algebraic formula.
+Rounded backends share the graph engine's directed coefficient propagation, which has no
+coefficient transfer for ReLU: the hidden layer is consumed through its IBP box, so the input
+coefficients are zero and the result is the IBP bound of the output layer. No theorem covers the
+rounded branch.
 -/
 def affineCrownForms {inDim hidDim outDim : Nat} [BoundOps α]
   (net : TwoLayerMLP α inDim hidDim outDim)
@@ -238,8 +207,8 @@ def affineCrownForms {inDim hidDim outDim : Nat} [BoundOps α]
     let slopeL := reluRelaxSlopeVec (α:=α) (n:=hidDim) relaxL
     let biasL  := reluRelaxBiasVec  (α:=α) (n:=hidDim) relaxL
 
-    let W2pos := matPosSpec (α:=α) (m:=outDim) (n:=hidDim) net.outputWeight
-    let W2neg := matNegSpec (α:=α) (m:=outDim) (n:=hidDim) net.outputWeight
+    let W2pos := IBP.matPos (α:=α) net.outputWeight
+    let W2neg := IBP.matNeg (α:=α) net.outputWeight
 
     -- Upper affine: W2pos uses ReLU upper, W2neg uses ReLU lower.
     let W2posU := matColScaleSpec (α:=α) (m:=outDim) (n:=hidDim) W2pos slopeU
@@ -288,8 +257,8 @@ def boundAffineCrown {inDim hidDim outDim : Nat} [BoundOps α]
 End-to-end bound API exposed by this file.
 
 This API returns the IBP bound. Its enclosure guarantee depends on the selected `BoundOps`
-implementation; `boundAffineCrown` additionally retains affine dependence on exact backends
-and uses directed graph propagation on rounded backends.
+implementation; `boundAffineCrown` additionally retains affine dependence on exact backends.
+On rounded backends it uses directed graph propagation, which reduces to IBP at the ReLU.
 -/
 def boundAffine {inDim hidDim outDim : Nat} [BoundOps α]
   (net : TwoLayerMLP α inDim hidDim outDim)
@@ -309,79 +278,9 @@ namespace Theorems
 open NN.MLTheory.CROWN
 
 /--
-Scalar ReLU relaxation soundness over `ℝ` (upper bound).
-
-If `x ∈ [l, u]` and `rp := ReLU.relax_scalar l u`, then:
-`relu(x) <= rp.slope * x + rp.bias`.
-
-This is the standard CROWN/DeepPoly upper chord construction (arXiv:1811.00866).
--/
-theorem relu_relax_scalar_upper_real
-  (l u x : ℝ)
-  (hlx : l ≤ x) (hxu : x ≤ u) :
-  let rp := ReLU.relaxScalar (α:=ℝ) l u
-  Activation.Math.reluSpec (α:=ℝ) x ≤ rp.slope * x + rp.bias := by
-  -- Work by cases on signs of l,u (standard CROWN cases)
-  unfold ReLU.relaxScalar
-  by_cases hu : u > 0
-  · by_cases hlpos : l > 0
-    · -- both positive: rp.slope = 1, rp.bias = 0, relu(x)=x
-      have hxpos : 0 < x := lt_of_lt_of_le hlpos hlx
-      have hxnonneg : 0 ≤ x := le_of_lt hxpos
-      simp [hu, hlpos, Activation.Math.reluSpec_eq_max, max_eq_left hxnonneg]
-    · -- crossing: l ≤ 0 < u, rp.slope = u/(u-l), rp.bias = -(u/(u-l)*l)
-      have hle0 : l ≤ 0 := le_of_not_gt hlpos
-      have hden : 0 < (u - l) := by linarith
-      have hne : (u - l) ≠ 0 := ne_of_gt hden
-      simp only [hu, hlpos, ite_true, ite_false]
-      -- two subcases depending on x sign
-      by_cases hxpos : 0 < x
-      · -- 0 < x ≤ u: relu x = x. Show x ≤ (u/(u-l))*x - (u/(u-l))*l
-        have hxnonneg : 0 ≤ x := le_of_lt hxpos
-        simp [Activation.Math.reluSpec_eq_max, max_eq_left hxnonneg]
-        -- It suffices to prove: x ≤ (u/(u-l)) * (x - l)
-        have hx_to_goal : x ≤ u / (u - l) * (x - l) := by
-          -- Show (u - l) * x ≤ u * (x - l), then cancel (u - l) > 0
-          have hrewrite : (u - l) * x - u * (x - l) = l * (u - x) := by
-            ring
-          have hxux : 0 ≤ u - x := sub_nonneg.mpr hxu
-          have hxmul_le : l * (u - x) ≤ 0 := mul_nonpos_of_nonpos_of_nonneg hle0 hxux
-          have hmul_goal : (u - l) * x ≤ u * (x - l) := by
-            have : (u - l) * x - u * (x - l) ≤ 0 := by
-              simpa [hrewrite] using hxmul_le
-            exact sub_nonpos.mp this
-          -- Divide both sides by (u - l) > 0 using le_div_iff₀ (group-with-zero variant)
-          have hx_to_goal' : x ≤ (u * (x - l)) / (u - l) := by
-            -- turn (u - l) * x ≤ u * (x - l) into x * (u - l) ≤ u * (x - l)
-            have : x * (u - l) ≤ u * (x - l) := by simpa [mul_comm] using hmul_goal
-            exact (le_div_iff₀ (G₀ := ℝ) hden).mpr this
-          simpa [div_eq_mul_inv, mul_comm, mul_left_comm, mul_assoc]
-            using hx_to_goal'
-        -- Turn the RHS back into the original affine form
-        have h2 : u / (u - l) * (x - l) = u / (u - l) * x + -(u / (u - l)) * l := by
-          ring
-        simpa [h2]
-          using hx_to_goal
-      · -- x ≤ 0: relu x = 0 and RHS = u/(u-l) * x + (-(u/(u-l) * l))
-        have hxle : x ≤ 0 := le_of_not_gt hxpos
-        -- ReLU x = 0 in this branch
-        have h1 : u / (u - l) * x + -(u / (u - l) * l) = u / (u - l) * (x - l) := by
-          ring
-        have : 0 ≤ u / (u - l) * (x - l) := by
-          apply mul_nonneg
-          · exact div_nonneg (le_of_lt hu) (le_of_lt hden)
-          · linarith
-        simpa [Activation.Math.reluSpec_eq_max, max_eq_right hxle, h1]
-          using this
-  · -- u ≤ 0: relu x = 0 and rp.slope = 0, rp.bias = 0
-    have hule : u ≤ 0 := le_of_not_gt hu
-    have hxle0 : x ≤ 0 := le_trans hxu hule
-    simp [hu, Activation.Math.reluSpec_eq_max, hxle0]
-
-/--
 Vectorized ReLU relaxation (pointwise upper bound) over `ℝ`.
 
-If `x ∈ [lo, hi]` and `rp := ReLU.relax_vector lo hi`, then for every component `i` we have
+If `x ∈ [lo, hi]` and `rp := ReLU.relaxScalar loᵢ hiᵢ`, then for every component `i` we have
 `relu(xᵢ) ≤ rpᵢ.slope * xᵢ + rpᵢ.bias`.
 -/
 theorem relu_relax_vector_pointwise_upper_real {n : Nat}
@@ -392,15 +291,13 @@ theorem relu_relax_vector_pointwise_upper_real {n : Nat}
     let ui := Tensor.getScalar hi i
     let xi := Tensor.getScalar x i
     let rp := ReLU.relaxScalar (α:=ℝ) li ui
-    Activation.Math.reluSpec (α:=ℝ) xi ≤ rp.slope * xi + rp.bias :=
-  by
+    Activation.Math.reluSpec (α:=ℝ) xi ≤ rp.slope * xi + rp.bias := by
   intro i
   have hcoord := hIn i
-  exact relu_relax_scalar_upper_real
+  exact NN.MLTheory.CROWN.Proofs.relu_relax_scalar_upper_real_runtime
     (l := Tensor.getScalar lo i) (u := Tensor.getScalar hi i)
     (x := Tensor.getScalar x i) hcoord.1 hcoord.2
 
-/- Pure IBP soundness for the 2-layer MLP. -/
 /--
 Soundness of `IBP.linear` over `ℝ`.
 
@@ -429,14 +326,6 @@ theorem ibp_linear_sound_real {m n : Nat}
         simp [getScalar_eq_apply, addSpec, map2Spec]]
   rw [Proofs.TensorAlgebra.getScalar_mat_vec_mul_spec]
   simp only [BoundOps.addDown, BoundOps.addUp, BoundOps.mulDown, BoundOps.mulUp]
-  have min2_eq_min (a c : ℝ) : BoundOps.min2 a c = min a c := by
-    by_cases h : a > c
-    · simp [BoundOps.min2, h, min_eq_right (le_of_lt h)]
-    · simp [BoundOps.min2, h, min_eq_left (le_of_not_gt h)]
-  have max2_eq_max (a c : ℝ) : BoundOps.max2 a c = max a c := by
-    by_cases h : a > c
-    · simp [BoundOps.max2, h, max_eq_left (le_of_lt h)]
-    · simp [BoundOps.max2, h, max_eq_right (le_of_not_gt h)]
   let lower : Fin n → ℝ := fun j =>
     min (get2 W i j * getScalar xB.lo j) (get2 W i j * getScalar xB.hi j)
   let middle : Fin n → ℝ := fun j => get2 W i j * getScalar x j
@@ -458,45 +347,23 @@ theorem ibp_linear_sound_real {m n : Nat}
           (mul_le_mul_of_nonpos_left hj.2 hw'),
         le_trans (mul_le_mul_of_nonpos_left hj.1 hw')
           (le_max_left _ _)⟩
-  have foldLower :
-      ∀ (indices : List (Fin n)) (a c : ℝ), a ≤ c →
-        indices.foldl (fun acc j => acc + lower j) a ≤
-          indices.foldl (fun acc j => acc + middle j) c := by
-    intro indices
-    induction indices with
-    | nil => simp
-    | cons j js ih =>
-        intro a c hac
-        apply ih
-        exact add_le_add hac (termBounds j).1
-  have foldUpper :
-      ∀ (indices : List (Fin n)) (a c : ℝ), a ≤ c →
-        indices.foldl (fun acc j => acc + middle j) a ≤
-          indices.foldl (fun acc j => acc + upper j) c := by
-    intro indices
-    induction indices with
-    | nil => simp
-    | cons j js ih =>
-        intro a c hac
-        apply ih
-        exact add_le_add hac (termBounds j).2
   have hLower :
       (List.finRange n).foldl (fun acc j => acc + lower j) 0 ≤
         ∑ j : Fin n, middle j := by
-    rw [← List.finRange_foldl_add_eq_finset_sum]
-    exact foldLower _ _ _ le_rfl
+    rw [List.finRange_foldl_add_eq_finset_sum]
+    exact Finset.sum_le_sum fun j _ => (termBounds j).1
   have hUpper :
       (∑ j : Fin n, middle j) ≤
         (List.finRange n).foldl (fun acc j => acc + upper j) 0 := by
-    rw [← List.finRange_foldl_add_eq_finset_sum]
-    exact foldUpper _ _ _ le_rfl
+    rw [List.finRange_foldl_add_eq_finset_sum]
+    exact Finset.sum_le_sum fun j _ => (termBounds j).2
   have hbI := hb i
   change getScalar bB.lo i ≤ getScalar b i ∧
     getScalar b i ≤ getScalar bB.hi i at hbI
   simpa [lower, middle, upper, min2_eq_min, max2_eq_max] using
     And.intro (add_le_add hLower hbI.1) (add_le_add hUpper hbI.2)
 
-/- Helper: soundness of IBP.relu over ℝ -/
+/-- Soundness of `IBP.relu` over `ℝ`. -/
 private theorem ibp_relu_sound_real {n : Nat}
   (zB : Box ℝ (.dim n .scalar))
   (z : Tensor ℝ [n])
@@ -527,10 +394,7 @@ theorem bound_ibp_sound {inDim hidDim outDim : Nat}
   (hx : Box.contains (α:=ℝ) xB x) :
   Box.contains (α:=ℝ) (boundIbp (α:=ℝ) net xB) (forward (α:=ℝ) net x) := by
   classical
-  -- Unfold bound_ibp and forward
-  -- Step 1: z1 ∈ IBP.linear(hiddenWeight, xB, hiddenBias)
-  -- Bias box is dirac at hiddenBias
-  -- pointwise containment is trivial when lo=hi=b
+  -- Each bias box is the point box at the bias, which contains the bias.
   have hb1 : Box.contains (α:=ℝ) { lo := net.hiddenBias, hi := net.hiddenBias } net.hiddenBias := by
     intro i
     exact ⟨le_rfl, le_rfl⟩
@@ -548,7 +412,6 @@ theorem bound_ibp_sound {inDim hidDim outDim : Nat}
         (Spec.linearSpec (α:=ℝ) { weights := net.hiddenWeight, bias := net.hiddenBias } x)) := by
     exact ibp_relu_sound_real _ _ hz1
   -- Step 3: y ∈ IBP.linear(outputWeight, a1B, outputBias)
-  -- Build a1B and b2B as in bound_ibp
   have hb2 : Box.contains (α:=ℝ) { lo := net.outputBias, hi := net.outputBias } net.outputBias := by
     intro i
     exact ⟨le_rfl, le_rfl⟩
@@ -568,8 +431,7 @@ theorem bound_ibp_sound {inDim hidDim outDim : Nat}
         (Spec.linearSpec (α:=ℝ) { weights := net.hiddenWeight, bias := net.hiddenBias } x))
       net.outputBias
       ha1 hb2
-  -- Combine: bound_ibp is exactly the composition of the above boxes
-  -- Unfold bound_ibp and forward to match hy
+  -- `boundIbp` and `forward` are exactly the compositions bounded above.
   simpa [boundIbp, forward]
 
 /--
@@ -604,7 +466,7 @@ def crownTwoLayerMlpBounds {inDim hidDim outDim : Nat} [BoundOps α]
   Box α (.dim outDim .scalar) × Box α (.dim outDim .scalar) :=
   let net := ofLinearSpecs (α:=α) hiddenLayer outputLayer
   let xB : Box α (.dim inDim .scalar) :=
-    let rad := Tensor.scaleSpec (Tensor.full (α:=α) (.dim inDim .scalar) eps) 1
+    let rad := Tensor.full (α:=α) (.dim inDim .scalar) eps
     { lo := Tensor.subSpec xCenter rad, hi := Tensor.addSpec xCenter rad }
   (boundIbp (α:=α) net xB, boundAffineCrown (α:=α) net xB)
 
@@ -623,14 +485,19 @@ def lowerAt {n : Nat} (B : Box α (.dim n .scalar)) (i : Fin n) : α :=
 def upperAt {n : Nat} (B : Box α (.dim n .scalar)) (i : Fin n) : α :=
   Tensor.getScalar B.hi i
 
-/-- Maximum upper bound among competitors `k ≠ c`. -/
+/--
+Maximum upper bound among competitors `k ≠ c`.
+With no competitors, use the selected class's upper endpoint as a conservative singleton fallback.
+-/
 def maxCompetitorUpper {n : Nat} (B : Box α (.dim n .scalar)) (c : Fin n) : α :=
-  let init : α := upperAt B c
-  (List.finRange n).foldl (fun acc k =>
+  let competitor := (List.finRange n).foldl (fun (acc : Option α) k =>
     if k ≠ c then
       let uk := upperAt B k
-      if uk > acc then uk else acc
-    else acc) init
+      match acc with
+      | none => some uk
+      | some current => some (if uk > current then uk else current)
+    else acc) none
+  competitor.getD (upperAt B c)
 
 /-- Certified margin lower bound: `lowerAt c - maxCompetitorUpper c`. -/
 def certifiedMargin {n : Nat} (B : Box α (.dim n .scalar)) (c : Fin n) : α :=

@@ -129,40 +129,14 @@ def byteAt? (bs : ByteArray) (i : Nat) : Option UInt8 :=
   else
     none
 
-/-- Read a little-endian `UInt16` at byte offset `i`, returning `none` on out-of-bounds input. -/
-def readUInt16LE (bs : ByteArray) (i : Nat) : Option Nat :=
-  match byteAt? bs i, byteAt? bs (i + 1) with
-  | some b0, some b1 =>
-      let n := b0.toNat + b1.toNat * 256
-      some n
-  | _, _ => none
-
-/-- Read a little-endian `UInt32` at byte offset `i`, returning `none` on out-of-bounds input. -/
-def readUInt32LE (bs : ByteArray) (i : Nat) : Option UInt32 :=
-  match byteAt? bs i, byteAt? bs (i + 1), byteAt? bs (i + 2), byteAt? bs (i + 3) with
-  | some b0, some b1, some b2, some b3 =>
-      let w0 := b0.toUInt32
-      let w1 := b1.toUInt32 <<< (UInt32.ofNat 8)
-      let w2 := b2.toUInt32 <<< (UInt32.ofNat 16)
-      let w3 := b3.toUInt32 <<< (UInt32.ofNat 24)
-      some (w0 + w1 + w2 + w3)
-  | _, _, _, _ => none
-
-/-- Read a little-endian `UInt64` at byte offset `i`, returning `none` on out-of-bounds input. -/
-def readUInt64LE (bs : ByteArray) (i : Nat) : Option UInt64 :=
-  match byteAt? bs i, byteAt? bs (i + 1), byteAt? bs (i + 2), byteAt? bs (i + 3),
-        byteAt? bs (i + 4), byteAt? bs (i + 5), byteAt? bs (i + 6), byteAt? bs (i + 7) with
-  | some b0, some b1, some b2, some b3, some b4, some b5, some b6, some b7 =>
-      let w0 := b0.toUInt64
-      let w1 := b1.toUInt64 <<< (UInt64.ofNat 8)
-      let w2 := b2.toUInt64 <<< (UInt64.ofNat 16)
-      let w3 := b3.toUInt64 <<< (UInt64.ofNat 24)
-      let w4 := b4.toUInt64 <<< (UInt64.ofNat 32)
-      let w5 := b5.toUInt64 <<< (UInt64.ofNat 40)
-      let w6 := b6.toUInt64 <<< (UInt64.ofNat 48)
-      let w7 := b7.toUInt64 <<< (UInt64.ofNat 56)
-      some (w0 + w1 + w2 + w3 + w4 + w5 + w6 + w7)
-  | _, _, _, _, _, _, _, _ => none
+/-- Read `byteCount` little-endian bytes as a natural number, or `none` on truncated input. -/
+def readLittleEndian (bytes : ByteArray) (offset byteCount : Nat) : Option Nat := do
+  if offset + byteCount > bytes.size then return ← none
+  let mut value := 0
+  for index in [0:byteCount] do
+    let byte ← byteAt? bytes (offset + byteCount - 1 - index)
+    value := value * 256 + byte.toNat
+  return value
 
 /-- Parse a shape tuple like `(3, 4)` or `(3,)` from a NumPy header fragment. -/
 def parseShapeValue (s : String) : Option (Array Nat) := do
@@ -223,9 +197,9 @@ def npyHeaderLayout (tag : String) (bs : ByteArray) : Except String (Nat × Nat)
       else
         let headerLenOpt :=
           if major = 1 then
-            readUInt16LE bs 8
+            readLittleEndian bs 8 2
           else
-            readUInt32LE bs 8 |>.map UInt32.toNat
+            readLittleEndian bs 8 4
         match headerLenOpt with
         | none => .error (formatError tag "invalid NPY header length")
         | some headerLen =>
@@ -275,12 +249,12 @@ def parseNpyHeaderMeta (tag : String) (bs : ByteArray) : Except String NpyHeader
 /-- Read one supported numeric element from an NPY payload. -/
 def readNpyElement (tag descr : String) (bs : ByteArray) (off : Nat) : Except String Float :=
   if descr = "<f8" then
-    match readUInt64LE bs off with
-    | some w => .ok (Float.ofBits w)
+    match readLittleEndian bs off 8 with
+    | some w => .ok (Float.ofBits (UInt64.ofNat w))
     | none => .error (formatError tag "invalid float64 data")
   else if descr = "<f4" then
-    match readUInt32LE bs off with
-    | some w => .ok (Float32.toFloat (Float32.ofBits w))
+    match readLittleEndian bs off 4 with
+    | some w => .ok (Float32.toFloat (Float32.ofBits (UInt32.ofNat w)))
     | none => .error (formatError tag "invalid float32 data")
   else
     .error (formatError tag s!"unsupported dtype: {descr}")

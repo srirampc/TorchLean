@@ -15,7 +15,7 @@ import NN.Widgets.Runtime.Training
 
 This file visualizes the training curve produced by
 `NN/Examples/Models/RL/PPOCartPole.lean`
-(`lake -R -K cuda=true exe torchlean ppo_cartpole --device cuda ...`).
+(`scripts/lake.sh -Kcuda=true exe torchlean ppo_cartpole --device cuda ...`).
 
 The executable trainer and this editor-side view live together under `Examples/Models/RL`.
 
@@ -24,7 +24,7 @@ Workflow:
 
 ```bash
 python3 -m pip install --user 'gymnasium>=1.0'
-lake -R -K cuda=true exe torchlean ppo_cartpole --device cuda --updates 1 --eval-every 1 \
+scripts/lake.sh -Kcuda=true exe torchlean ppo_cartpole --device cuda --updates 1 --eval-every 1 \
   --eval-episodes 1 --eval-max-steps 8
 ```
 

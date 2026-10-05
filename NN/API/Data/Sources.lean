@@ -159,8 +159,8 @@ Labels are stored as floats (common when exporting from NumPy); we validate each
 integer in `[0, classes)` before returning the stream. Input conversion and one-hot encoding
 happen only when a sample is requested.
 -/
-private def labeledFromLeadingAxis {α : Type} [TorchLean.Storage α]
-    [Context α]
+private def classificationSamples {α : Type} [TorchLean.Storage α]
+    [Zero α] [One α]
     [TorchLean.Runtime.FromFloat α]
     (tag : String) (classes : Nat)
     {n : Nat} {σ : Shape}
@@ -178,7 +178,7 @@ Load a supervised dataset from a CSV with `inputWidth + targetWidth` columns per
 
 `input_1, ..., input_n, target_1, ..., target_m`.
 -/
-private def readCsvSupervised {α : Type} [TorchLean.Storage α] [Context α]
+private def readCsvSupervised {α : Type} [TorchLean.Storage α]
     [TorchLean.Runtime.FromFloat α]
     (path : System.FilePath) (inputWidth targetWidth : Nat) (options : CsvOptions := {}) :
     IO (Except String (SampleStream
@@ -381,19 +381,13 @@ opaque load {α : Type} [TorchLean.Storage α]
   let targetResult ← Internal.loadFloatTensor source.targetPath
     (source.target.prependDim source.sampleCount)
     source.csvOptions .leadingPrefix
-  match inputResult with
-  | .error message =>
-      throw <| IO.userError s!"SupervisedSource.load: {message}"
-  | .ok inputs =>
-      match targetResult with
-      | .error message =>
-          throw <| IO.userError s!"SupervisedSource.load: {message}"
-      | .ok targets =>
-          let typedInputs : Tensor Float (source.input.prependDim source.sampleCount) := inputs
-          let typedTargets : Tensor Float (source.target.prependDim source.sampleCount) := targets
-          pure <| SampleStream.fromFunction source.sampleCount fun sampleIndex =>
-            { input := Tensor.map Runtime.ofFloat (Spec.get typedInputs sampleIndex)
-              target := Tensor.map Runtime.ofFloat (Spec.get typedTargets sampleIndex) }
+  let inputs ← IO.ofExcept <|
+    inputResult.mapError fun message => s!"SupervisedSource.load: {message}"
+  let targets ← IO.ofExcept <|
+    targetResult.mapError fun message => s!"SupervisedSource.load: {message}"
+  pure <| SampleStream.fromFunction source.sampleCount fun sampleIndex =>
+    { input := Tensor.map Runtime.ofFloat (Spec.get inputs sampleIndex)
+      target := Tensor.map Runtime.ofFloat (Spec.get targets sampleIndex) }
 
 end SupervisedSource
 
@@ -430,7 +424,7 @@ Load a labeled classification dataset by slicing the leading batch axis and one-
 CSV label vectors may be stored as one column or one row; NPY label vectors have shape `[n]`.
 -/
 opaque load {α : Type} [TorchLean.Storage α]
-    [Context α] [TorchLean.Runtime.FromFloat α]
+    [Zero α] [One α] [TorchLean.Runtime.FromFloat α]
     (source : LabeledSource) :
     IO (SampleStream
       (TorchLean.Sample.Supervised α source.input [source.classCount])) := do
@@ -441,21 +435,12 @@ opaque load {α : Type} [TorchLean.Storage α]
     source.csvOptions .leadingPrefix
   let labelResult ← Internal.loadFloatTensor source.labelPath [source.sampleCount]
     source.csvOptions .leadingPrefix
-  match inputResult with
-  | .error message =>
-      throw <| IO.userError s!"LabeledSource.load: {message}"
-  | .ok inputs =>
-      match labelResult with
-      | .error message =>
-          throw <| IO.userError s!"LabeledSource.load: {message}"
-      | .ok labels =>
-          let typedInputs : Tensor Float (source.input.prependDim source.sampleCount) := inputs
-          let typedLabels : Tensor Float [source.sampleCount] := labels
-          match labeledFromLeadingAxis (α := α) (σ := source.input)
-              "LabeledSource.load" source.classCount typedInputs typedLabels with
-          | .ok samples => pure samples
-          | .error message =>
-              throw <| IO.userError message
+  let inputs ← IO.ofExcept <|
+    inputResult.mapError fun message => s!"LabeledSource.load: {message}"
+  let labels ← IO.ofExcept <|
+    labelResult.mapError fun message => s!"LabeledSource.load: {message}"
+  IO.ofExcept <| classificationSamples
+    "LabeledSource.load" source.classCount inputs labels
 
 end LabeledSource
 
@@ -485,7 +470,7 @@ def fromCsv (path : System.FilePath) (inputWidth targetWidth : Nat)
 
 /-- Load a single-table supervised CSV source. -/
 opaque load {α : Type} [TorchLean.Storage α]
-    [Context α] [TorchLean.Runtime.FromFloat α]
+    [TorchLean.Runtime.FromFloat α]
     (source : TabularSupervisedSource) :
     IO (SampleStream
       (TorchLean.Sample.Supervised α [source.inputWidth] [source.targetWidth])) := do

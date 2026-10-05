@@ -6,7 +6,7 @@ Authors: TorchLean Team
 
 module
 
-public import NN.Floats.Quantization
+public import FloatLib.Floats.Formats.Flocq.Theory.Rounding.Affine
 public import NN.Spec.Quantization.Rational
 
 /-!
@@ -15,6 +15,15 @@ public import NN.Spec.Quantization.Rational
 This module lifts FloatLib's `RealAffineQuantizer` pointwise over
 TorchLean's shape-indexed tensors. The real-domain specification retains arbitrary valid rounding
 rules. The rational tensor API imports FloatLib's executable affine quantizer directly.
+
+FloatLib's `RealAffineQuantizer` supplies a real-valued scale, bounded integer codes, and a
+caller-chosen rounding rule. Its `AffineQuantizer` supplies executable rational nearest-even
+quantization, and the Flocq adapter proves agreement with the real specification. Scalar
+definitions and rounding proofs stay in FloatLib so tensor clients use the same grids and error
+bounds.
+
+The equations follow Jacob et al., "Quantization and Training of Neural Networks for Efficient
+Integer-Arithmetic-Only Inference," CVPR 2018, doi:10.1109/CVPR.2018.00286.
 -/
 
 @[expose] public section
@@ -69,12 +78,7 @@ theorem quantizeTensor_mono (q : RealAffineQuantizer) (rnd : ℝ → ℤ) [Valid
       change Tensor.Forall₂ (· ≤ ·)
         (Tensor.unstack (Tensor.map (q.quantize rnd) x) i)
         (Tensor.unstack (Tensor.map (q.quantize rnd) y) i)
-      rw [show Tensor.unstack (Tensor.map (q.quantize rnd) x) i =
-          Tensor.map (q.quantize rnd) (Tensor.unstack x i) by
-        exact (TorchLean.Tensor.Internal.Rep.map_unstack (q.quantize rnd) x i).symm]
-      rw [show Tensor.unstack (Tensor.map (q.quantize rnd) y) i =
-          Tensor.map (q.quantize rnd) (Tensor.unstack y i) by
-        exact (TorchLean.Tensor.Internal.Rep.map_unstack (q.quantize rnd) y i).symm]
+      rw [Tensor.unstack_map, Tensor.unstack_map]
       exact ih (hxy i)
 
 /-- An in-range code tensor survives pointwise dequantization and requantization exactly. -/
@@ -92,15 +96,7 @@ theorem quantizeTensor_dequantizeTensor (q : RealAffineQuantizer) (rnd : ℝ →
       change Tensor.unstack
         (Tensor.map (q.quantize rnd) (Tensor.map q.dequantize codes)) i =
           Tensor.unstack codes i
-      rw [show Tensor.unstack
-          (Tensor.map (q.quantize rnd) (Tensor.map q.dequantize codes)) i =
-          Tensor.map (q.quantize rnd)
-            (Tensor.unstack (Tensor.map q.dequantize codes) i) by
-        exact (TorchLean.Tensor.Internal.Rep.map_unstack (q.quantize rnd)
-          (Tensor.map q.dequantize codes) i).symm]
-      rw [show Tensor.unstack (Tensor.map q.dequantize codes) i =
-          Tensor.map q.dequantize (Tensor.unstack codes i) by
-        exact (TorchLean.Tensor.Internal.Rep.map_unstack q.dequantize codes i).symm]
+      rw [Tensor.unstack_map, Tensor.unstack_map]
       exact ih (hcodes i)
 
 /-- If no coordinate clips, every tensor reconstruction error is at most half a step. -/
@@ -117,26 +113,11 @@ theorem dequantizeTensor_quantizeTensor_error_le (q : RealAffineQuantizer) (rnd 
   | dim n inner ih =>
       intro i
       change Tensor.Forall (fun e : ℝ => abs e ≤ q.scale / 2)
-        (Tensor.unstack
+        (Spec.get
           (Tensor.map2Spec (· - ·)
             (Tensor.map q.dequantize (Tensor.map (q.quantize rnd) x)) x) i)
-      rw [show Tensor.unstack
-          (Tensor.map2Spec (· - ·)
-            (Tensor.map q.dequantize (Tensor.map (q.quantize rnd) x)) x) i =
-          Tensor.map2Spec (· - ·)
-            (Tensor.unstack (Tensor.map q.dequantize (Tensor.map (q.quantize rnd) x)) i)
-            (Tensor.unstack x i) by
-        exact (TorchLean.Tensor.Internal.Rep.zipWith_unstack (· - ·)
-          (Tensor.map q.dequantize (Tensor.map (q.quantize rnd) x)) x i).symm]
-      rw [show Tensor.unstack
-          (Tensor.map q.dequantize (Tensor.map (q.quantize rnd) x)) i =
-          Tensor.map q.dequantize
-            (Tensor.unstack (Tensor.map (q.quantize rnd) x) i) by
-        exact (TorchLean.Tensor.Internal.Rep.map_unstack q.dequantize
-          (Tensor.map (q.quantize rnd) x) i).symm]
-      rw [show Tensor.unstack (Tensor.map (q.quantize rnd) x) i =
-          Tensor.map (q.quantize rnd) (Tensor.unstack x i) by
-        exact (TorchLean.Tensor.Internal.Rep.map_unstack (q.quantize rnd) x i).symm]
+      rw [Tensor.get_map2Spec]
+      simp only [Spec.get, Tensor.unstack_map]
       exact ih (hinactive i)
 
 end RealAffineQuantizer

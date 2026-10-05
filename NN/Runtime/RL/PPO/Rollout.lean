@@ -206,19 +206,18 @@ def trainingBatch {obsShape : Shape} {nActions horizon : Nat}
   let states : Tensor α (StateBatchShape horizon obsShape) :=
     Tensor.stackLeading (fun index => (stepAt index).state)
   let actionsOneHot : Tensor α (LogitsBatchShape horizon nActions) :=
-    Tensor.stackLeading (fun index => Tensor.oneHot (α := α) nActions (stepAt index).action)
+    Tensor.oneHotIndices nActions (Tensor.ofFn (fun index => (stepAt index).action) :
+      Tensor (Fin nActions) [horizon])
   let oldLogProb : Tensor α (ScalarBatchShape horizon) :=
     Tensor.ofFn (fun index => (stepAt index).oldLogProb)
   let values : Tensor α [horizon] := Tensor.ofFn (fun index => (stepAt index).value)
 
   let advRaw := generalizedAdvantages gamma lam r
   let returns := Core.returnsFromAdvantages (α := α) (n := horizon) advRaw values
-  let normalizedAdvantages := Spec.normalizeZscoreSpec (α := α) (n := horizon) advRaw
+  let advantages := Spec.normalizeZscoreSpec (α := α) (n := horizon) advRaw
 
   let valueTargets : Tensor α (ValueBatchShape horizon) :=
     Tensor.reshapeSpec returns (by simp [Shape.size])
-  let advantages : Tensor α (ScalarBatchShape horizon) := normalizedAdvantages
-
   pure { states, actionsOneHot, oldLogProb, advantages, valueTargets }
 
 end Rollout

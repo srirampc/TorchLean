@@ -28,6 +28,12 @@ relaxations for unstable neurons.
 
 Trust boundary: β is additional *evidence* verified against the trusted-for-this-theorem IBP bounds.
 
+Because a phase is accepted only when the IBP interval already proves it, the phases add no
+information beyond IBP. Plain CROWN already uses slope 1 or 0 on neurons that IBP proves stable,
+so this pass computes the same bounds as α-CROWN with the same slopes. There are no Lagrangian β
+multipliers and no branch splits. The name follows the certificate format, not the strength of the
+check.
+
 ## Background / citations
 
 This checker is kept narrow and certificate-friendly. Conceptually, β-phase
@@ -40,9 +46,9 @@ provably active/inactive ones.
 - β-CROWN (splitting / phase refinement): Wang et al., *Beta-CROWN: Efficient Bound Propagation
   with Provable Guarantees*, NeurIPS 2021 (and follow-up work).
 
-We do **not** attempt to formalize the full β-CROWN search/optimization loop here; the checker only
-verifies that the provided β phases are consistent with IBP and then uses the corresponding exact
-ReLU transfer rule (slope $0$ or $1$).
+We do **not** formalize the β-CROWN search or optimization loop here. The checker only verifies that
+the provided β phases are consistent with IBP and then uses the corresponding exact ReLU transfer
+rule (slope $0$ or $1$).
 -/
 
 @[expose] public section
@@ -98,7 +104,7 @@ def ReLUPhase.ofInt? (i : Int) : Option ReLUPhase :=
 
 /-- Safe lookup of the optional β vector at node id `id`. -/
 def getBeta? (beta : Array (Option (Array Int))) (id : Nat) : Option (Array Int) :=
-  if _h : id < beta.size then beta[id]! else none
+  beta.getD id none
 
 /--
 Executable phase-consistency check for a scalar pre-activation interval $[l,u]$.
@@ -133,19 +139,13 @@ def phaseRelaxLowerScalar (l u a : α) (ph : ReLUPhase) :
   | .unstable => alphaRelaxLowerScalar (α := α) l u a
 
 /--
-Opaque wrapper around `Array.get!` for β-phase vectors.
+Read the β phase of neuron `i`, with `0` (unconstrained) past the end of the array.
 
-Why this exists:
-* The executable definition `phaseRelaxVec?` indexes `phases` with `get!` after a
-  length check, to avoid threading bounds proofs through the code.
-* During proofs, `simp` can sometimes rewrite `get!` into the safe indexing `phases[i]` (which
-  carries a proof argument). Those proof terms are definitional artifacts and can make routine
-  simplification depend on irrelevant proof objects.
-
-Keeping the indexing step opaque prevents `simp` from introducing proof-carrying indices, while
-preserving executability.
+`phaseRelaxVec?` checks the array length before reading, so the default is never used there. The
+total read keeps the executable code free of bounds proofs, and the definition reduces in the
+kernel.
 -/
-opaque betaAt (phases : Array Int) (i : Nat) : Int := phases[i]!
+def betaAt (phases : Array Int) (i : Nat) : Int := phases.getD i 0
 
 /--
 Vectorized construction of ReLU relaxations under β-phase constraints.
@@ -157,8 +157,8 @@ Returns `(relaxLo, relaxHi)` if:
 Implementation notes:
 - We first compute a boolean `ok` over all indices (so the function remains executable in a
   generic `Context α`).
-- We access the β-phase vector with `get!` after checking the length. This avoids carrying bounds
-  proofs while remaining total as Lean code.
+- Phases are read with `betaAt` (a total `Array.getD` read) after checking the length, so no
+  bounds proofs are carried and the definition reduces in the kernel.
 -/
 def phaseRelaxVec?
     {n : Nat}
@@ -167,39 +167,37 @@ def phaseRelaxVec?
     (phases : Array Int) :
     Option
       (Tensor (NN.MLTheory.CROWN.Runtime.Ops.ReLURelax α) [n] ×
-       Tensor (NN.MLTheory.CROWN.Runtime.Ops.ReLURelax α) [n]) := by
-  classical
-  exact
-    -- Check length first.
-    if hlen : phases.size = n then
-      -- Check consistency of each scalar constraint.
-      let phaseAt : Fin n → Int := fun i => betaAt phases i
-      let ok :=
-        (List.finRange n).all fun i =>
-          match ReLUPhase.ofInt? (phaseAt i) with
-          | some ph => (phaseConsistentScalar? (α := α)
-              (lo.getScalar i) (hi.getScalar i) ph).isSome
-          | none => false
-      if ok then
-        let relaxHi : Tensor (NN.MLTheory.CROWN.Runtime.Ops.ReLURelax α) [n] :=
-          Tensor.dim fun i =>
-            Tensor.scalar <|
-              match ReLUPhase.ofInt? (phaseAt i) with
-              | some ph => phaseRelaxUpperScalar (α := α)
-                  (lo.getScalar i) (hi.getScalar i) ph
-              | none => { slope := 0, bias := 0 }
-        let relaxLo : Tensor (NN.MLTheory.CROWN.Runtime.Ops.ReLURelax α) [n] :=
-          Tensor.dim fun i =>
-            Tensor.scalar <|
-              match ReLUPhase.ofInt? (phaseAt i) with
-              | some ph => phaseRelaxLowerScalar (α := α)
-                  (lo.getScalar i) (hi.getScalar i) (αv.getScalar i) ph
-              | none => { slope := 0, bias := 0 }
-        some (relaxLo, relaxHi)
-      else
-        none
+       Tensor (NN.MLTheory.CROWN.Runtime.Ops.ReLURelax α) [n]) :=
+  -- Check length first.
+  if phases.size = n then
+    -- Check consistency of each scalar constraint.
+    let phaseAt : Fin n → Int := fun i => betaAt phases i
+    let ok :=
+      (List.finRange n).all fun i =>
+        match ReLUPhase.ofInt? (phaseAt i) with
+        | some ph => (phaseConsistentScalar? (α := α)
+            (lo.getScalar i) (hi.getScalar i) ph).isSome
+        | none => false
+    if ok then
+      let relaxHi : Tensor (NN.MLTheory.CROWN.Runtime.Ops.ReLURelax α) [n] :=
+        Tensor.dim fun i =>
+          Tensor.scalar <|
+            match ReLUPhase.ofInt? (phaseAt i) with
+            | some ph => phaseRelaxUpperScalar (α := α)
+                (lo.getScalar i) (hi.getScalar i) ph
+            | none => { slope := 0, bias := 0 }
+      let relaxLo : Tensor (NN.MLTheory.CROWN.Runtime.Ops.ReLURelax α) [n] :=
+        Tensor.dim fun i =>
+          Tensor.scalar <|
+            match ReLUPhase.ofInt? (phaseAt i) with
+            | some ph => phaseRelaxLowerScalar (α := α)
+                (lo.getScalar i) (hi.getScalar i) (αv.getScalar i) ph
+            | none => { slope := 0, bias := 0 }
+      some (relaxLo, relaxHi)
     else
       none
+  else
+    none
 
 /--
 One-node α/β-CROWN step:
@@ -228,8 +226,8 @@ def alphaBetaCrownStepNode?
               | some xin, some preB, some αv =>
                   if hout : xin.outDim = preB.dim then
                     if hα : αv.n = preB.dim then
-                      let xLo : AffineVec α xin.inDim preB.dim := by simpa [hout] using xin.loAff
-                      let xHi : AffineVec α xin.inDim preB.dim := by simpa [hout] using xin.hiAff
+                      let xLo := Graph.castAffineOut (α := α) hout xin.loAff
+                      let xHi := Graph.castAffineOut (α := α) hout xin.hiAff
                       let αt : Tensor α [preB.dim] :=
                         castDimScalar (α := α) (n := αv.n) (n' := preB.dim) hα αv.v
                       match phaseRelaxVec? (α := α) (n := preB.dim) preB.lo preB.hi αt phases with
@@ -249,8 +247,8 @@ def alphaBetaCrownStepNode?
                   -- No alpha provided: follow AlphaCROWN's default lower relaxation, but still
                   -- enforce β consistency.
                   if hout : xin.outDim = preB.dim then
-                    let xLo : AffineVec α xin.inDim preB.dim := by simpa [hout] using xin.loAff
-                    let xHi : AffineVec α xin.inDim preB.dim := by simpa [hout] using xin.hiAff
+                    let xLo := Graph.castAffineOut (α := α) hout xin.loAff
+                    let xHi := Graph.castAffineOut (α := α) hout xin.hiAff
                     let αt := defaultAlphaVec (α := α) (n := preB.dim) preB.lo preB.hi
                     match phaseRelaxVec? (α := α) (n := preB.dim) preB.lo preB.hi αt phases with
                     | some (relaxLo, relaxHi) =>
@@ -308,10 +306,11 @@ def inferredBeta
     inferredBetaForNode? (α := α) nodes ibp id.val
 
 /--
-Run the fixed-relaxation α/β-CROWN graph pass.
+Run the fixed-relaxation α-CROWN graph pass with IBP phase annotations.
 
 Stable ReLU phases come from IBP and are checked again by `alphaBetaCrownStepNode?`. Unstable
-neurons use the default α-CROWN lower relaxation.
+neurons use the default α-CROWN lower relaxation. No β multipliers are optimized and no neuron is
+split.
 -/
 def runAlphaBetaCROWN
     (g : Graph) (ps : ParamStore α) (ctx : AffineCtx)

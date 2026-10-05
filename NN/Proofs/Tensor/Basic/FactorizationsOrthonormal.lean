@@ -86,8 +86,8 @@ theorem proj_normalize {F : Type*} [NormedAddCommGroup F] [InnerProductSpace ℝ
   ring
 
 /-- `gramSchmidtNormed` over `ℝ`, with the scalar coercion removed. -/
-theorem gn_eq {n : Nat} {F : Type*} [NormedAddCommGroup F] [InnerProductSpace ℝ F]
-    (f : Fin n → F) (i : Fin n) :
+theorem gramSchmidtNormed_eq_inv_norm_smul {n : Nat} {F : Type*} [NormedAddCommGroup F]
+    [InnerProductSpace ℝ F] (f : Fin n → F) (i : Fin n) :
     gramSchmidtNormed ℝ f i = ‖gramSchmidt ℝ f i‖⁻¹ • gramSchmidt ℝ f i := by
   rw [gramSchmidtNormed]
   norm_num
@@ -135,7 +135,8 @@ theorem gsV_bridge (A : Fin m → Fin n → ℝ) (k : Fin n)
             • (WithLp.toLp 2 (Qcol A i) : EuclideanSpace ℝ (Fin m)) := by
     intro i hi
     have hik : i < k := Finset.mem_Iio.mp hi
-    rw [proj_normalize (gramSchmidt ℝ (gsCol A) i) (gsCol A k), ← gn_eq, ih i hik]
+    rw [proj_normalize (gramSchmidt ℝ (gsCol A) i) (gsCol A k),
+      ← gramSchmidtNormed_eq_inv_norm_smul, ih i hik]
   rw [Finset.sum_congr rfl hproj]
   -- Compare entrywise.
   ext r
@@ -176,7 +177,7 @@ theorem Qcol_bridge (A : Fin m → Fin n → ℝ) (hrank : ∀ j : Fin n, 0 < Rm
       have hρpos : 0 < gsRjj A (qsPrefix A k) k := by
         have h := hrank k; rwa [Rmat_eq, rStep_diag] at h
       have hgsV := gsV_bridge A k IH
-      rw [gn_eq, hgsV]
+      rw [gramSchmidtNormed_eq_inv_norm_smul, hgsV]
       ext r
       rw [PiLp.smul_apply, PiLp.toLp_apply, PiLp.toLp_apply, smul_eq_mul]
       show Qcol A k r = _
@@ -191,13 +192,14 @@ theorem Qcol_bridge (A : Fin m → Fin n → ℝ) (hrank : ∀ j : Fin n, 0 < Rm
 /-! ## Orthonormality `Qᵀ Q = 1` -/
 
 /-- Each normalized Gram–Schmidt vector is non-zero (the pivot is positive). -/
-theorem gn_ne_zero (A : Fin m → Fin n → ℝ) (hrank : ∀ j : Fin n, 0 < Rmat A j j) (j : Fin n) :
+theorem gramSchmidtNormed_gsCol_ne_zero (A : Fin m → Fin n → ℝ)
+    (hrank : ∀ j : Fin n, 0 < Rmat A j j) (j : Fin n) :
     gramSchmidtNormed ℝ (gsCol A) j ≠ 0 := by
   have hpos : 0 < ‖gramSchmidt ℝ (gsCol A) j‖ := by
     have h := hrank j
     rw [Rmat_eq, rStep_diag] at h
     rwa [gsV_bridge A j (fun i _ => Qcol_bridge A hrank i), ← normFn_eq_norm]
-  rw [gn_eq]
+  rw [gramSchmidtNormed_eq_inv_norm_smul]
   exact smul_ne_zero (inv_ne_zero (ne_of_gt hpos)) (norm_pos_iff.mp hpos)
 
 /-- **Orthonormality of the executable `Q` columns.** Under positive `R` pivots,
@@ -208,7 +210,7 @@ theorem Q_orthonormal (A : Fin m → Fin n → ℝ) (hrank : ∀ j : Fin n, 0 < 
   show ⟪(WithLp.toLp 2 (Qcol A a) : EuclideanSpace ℝ (Fin m)), WithLp.toLp 2 (Qcol A b)⟫_ℝ = _
   rw [Qcol_bridge A hrank a, Qcol_bridge A hrank b]
   have horth := orthonormal_iff_ite.mp (gramSchmidtNormed_orthonormal' (gsCol A))
-    ⟨a, gn_ne_zero A hrank a⟩ ⟨b, gn_ne_zero A hrank b⟩
+    ⟨a, gramSchmidtNormed_gsCol_ne_zero A hrank a⟩ ⟨b, gramSchmidtNormed_gsCol_ne_zero A hrank b⟩
   rw [horth]
   simp only [Subtype.mk.injEq]
 

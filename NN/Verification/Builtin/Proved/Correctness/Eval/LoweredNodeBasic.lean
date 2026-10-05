@@ -30,9 +30,6 @@ open NN.IR
 namespace Correctness
 
 open NN.Verification.Builtin
--- Typed context indices come from `NN.Proofs.Autograd.Tape.Util.Idx`, the one place
--- `Idx` and `getIdx` are defined.
-open Proofs (Idx getIdx)
 
 /-- A lowered `add` node evaluates like the typed `add` node. -/
 theorem evalAt_eq_evalNode_add
@@ -301,7 +298,8 @@ theorem evalAt_eq_evalNode_mseLoss
         Except.ok (Spec.SomeTensor.mk (α := α) .scalar (Tensor.scalar mean)) := by
     simp [Graph.evalAt, Graph.evalNode, Graph.binaryParentIds, binaryParents?,
       Graph.normalizeNodeOutput, Graph.mseLossSomeTensor, hGetNode, hSomeY, hSomeT, mean, diff,
-      yT, tT, yV, tV, Bind.bind, Except.bind, Pure.pure, Except.pure]
+      yT, tT, yV, tV, Spec.mseSpec, Spec.meanOver,
+      Bind.bind, Except.bind, Pure.pure, Except.pure]
   have hTypedEval :
       evalNode (α := α) (paramShapes := paramShapes) (inShape := inShape) (ss := ss)
           (out := .scalar) (Node.mseLoss yhat target) params vals =

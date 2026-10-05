@@ -9,6 +9,12 @@ module
 public import NN.Proofs.Autograd.Tape.Nodes.Reductions
 public import Mathlib.Analysis.InnerProductSpace.Calculus
 
+/-!
+# Negative Log-Likelihood
+
+Negative log-likelihood for one-hot targets when the input is already log-probabilities.
+-/
+
 @[expose] public section
 
 namespace Proofs
@@ -22,12 +28,6 @@ noncomputable section
 open scoped BigOperators
 
 namespace TapeNodes
-
-/-!
-# Negative Log-Likelihood
-
-Negative log-likelihood for one-hot targets when the input is already log-probabilities.
--/
 
 /-- Negative log-likelihood loss for log-probabilities and one-hot targets of shape `(m×n)`.
 
@@ -260,10 +260,6 @@ def nllOneHotLastFderiv {Γ : List Shape} {m n : Nat}
         (-c) * (inner ℝ tMN dlpMN + inner ℝ dtMN lpMN) := hL
       _ = D dxV := hD.symm
       _ = ((vecScalarCLM.comp D) dxV).ofLp i := hR.symm
-
--- ---------------------------------------------------------------------------
--- Loss: BCE with logits (mean over all entries)
--- ---------------------------------------------------------------------------
 
 end TapeNodes
 

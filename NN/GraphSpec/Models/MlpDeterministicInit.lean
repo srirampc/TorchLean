@@ -7,6 +7,7 @@ Authors: TorchLean Team
 module
 
 public import NN.GraphSpec.Models.Mlp
+public import NN.GraphSpec.Chain.ToDAG.Model
 
 /-!
 # MLP Deterministic Initialization
@@ -49,7 +50,7 @@ Seed discipline:
 - the second linear weight uses occurrence index `1`,
 - both biases are initialized exactly to zero.
 -/
-theorem mlp_detInitParams_eq_torchlean_linear_inits
+theorem mlp_detInitParams
     (inputWidth hiddenWidth outputWidth : Nat) :
     LowerToDAG.Chain.detInitParams?
         (mlp

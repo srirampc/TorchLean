@@ -31,7 +31,7 @@ open NN.MLTheory.CROWN
 
 /-! ## Small vector helpers -/
 
-@[simp] theorem getScalar_sub {n : Nat}
+@[simp] theorem getScalar_subSpec {n : Nat}
     (x y : Tensor ℝ [n]) (i : Fin n) :
     (Tensor.subSpec x y).getScalar i = x.getScalar i - y.getScalar i := by
   simp [Tensor.subSpec]
@@ -46,10 +46,10 @@ def boxSub {n : Nat}
     hi := Tensor.subSpec T.hi S.lo }
 
 /-- Predicate asserting all coordinates of `B` lie in `[-eps, eps]`. -/
-def boxWithinAbs {n : Nat} (B : Box ℝ (.dim n .scalar)) (eps : ℝ) : Prop :=
+def BoxWithinAbs {n : Nat} (B : Box ℝ (.dim n .scalar)) (eps : ℝ) : Prop :=
   ∀ i : Fin n, (-eps ≤ B.lo.getScalar i) ∧ (B.hi.getScalar i ≤ eps)
 
-/-- Classical decision procedure for `boxWithinAbs`.
+/-- Classical decision procedure for `BoxWithinAbs`.
 
 Noncomputable and `decide`-based because the carrier here is `ℝ`; the point is to have a
 `Bool`-valued
@@ -57,13 +57,19 @@ checker to state agreement against, not to run it. The executable float version 
 engine. -/
 noncomputable def checkBoxWithinAbs {n : Nat} (B : Box ℝ (.dim n .scalar)) (eps : ℝ) : Bool := by
   classical
-  exact decide (boxWithinAbs (n := n) B eps)
+  exact decide (BoxWithinAbs (n := n) B eps)
 
 /-- Correctness of `checkBoxWithinAbs`. -/
 theorem checkBoxWithinAbs_spec {n : Nat} {B : Box ℝ (.dim n .scalar)} {eps : ℝ} :
-    checkBoxWithinAbs (n := n) B eps = true ↔ boxWithinAbs (n := n) B eps := by
+    checkBoxWithinAbs (n := n) B eps = true ↔ BoxWithinAbs (n := n) B eps := by
   classical
   simp [checkBoxWithinAbs, decide_eq_true_eq]
+
+/-- Project a `Box.contains` hypothesis to scalar inequalities at a single coordinate. -/
+theorem boxContains_getScalar {n : Nat} {B : Box ℝ (.dim n .scalar)} {x : Tensor ℝ [n]}
+    (h : Box.contains (α := ℝ) B x) (i : Fin n) :
+    B.lo.getScalar i ≤ x.getScalar i ∧ x.getScalar i ≤ B.hi.getScalar i :=
+  h i
 
 /-- If `x ∈ T` and `y ∈ S`, then `x - y ∈ boxSub T S`. -/
 theorem boxSub_contains {n : Nat}
@@ -73,30 +79,18 @@ theorem boxSub_contains {n : Nat}
     (hy : Box.contains (α := ℝ) S y) :
     Box.contains (α := ℝ) (boxSub (n := n) T S) (Tensor.subSpec x y) := by
   intro i
-  have hx_i := hx i
-  have hy_i := hy i
-  have hx_scalar :
-      T.lo.getScalar i ≤ x.getScalar i ∧ x.getScalar i ≤ T.hi.getScalar i := by
-    simpa [Box.contains, Tensor.getScalar, Spec.get] using hx_i
-  have hy_scalar :
-      S.lo.getScalar i ≤ y.getScalar i ∧ y.getScalar i ≤ S.hi.getScalar i := by
-    simpa [Box.contains, Tensor.getScalar, Spec.get] using hy_i
+  have hx_scalar := boxContains_getScalar hx i
+  have hy_scalar := boxContains_getScalar hy i
   change
     (boxSub T S).lo.getScalar i ≤ (Tensor.subSpec x y).getScalar i ∧
       (Tensor.subSpec x y).getScalar i ≤ (boxSub T S).hi.getScalar i
-  simp only [boxSub, getScalar_sub]
+  simp only [boxSub, getScalar_subSpec]
   constructor <;> linarith [hx_scalar.1, hx_scalar.2, hy_scalar.1, hy_scalar.2]
-
-/-- Project a `Box.contains` hypothesis to scalar inequalities at a single coordinate. -/
-theorem boxContains_getScalar {n : Nat} {B : Box ℝ (.dim n .scalar)} {x : Tensor ℝ [n]}
-    (h : Box.contains (α := ℝ) B x) (i : Fin n) :
-    B.lo.getScalar i ≤ x.getScalar i ∧ x.getScalar i ≤ B.hi.getScalar i := by
-  exact h i
 
 /-! ## Distillation certificate for 2-layer MLPs -/
 
 /--
-Computable checker: returns `true` if IBP proves the student matches the teacher
+Real-valued reference checker: returns `true` if IBP proves the student matches the teacher
 up to `eps` (componentwise) on the given input box.
 -/
 noncomputable def checkEquivalenceTwoLayerMlp {inDim hidDim outDim : Nat}
@@ -111,7 +105,7 @@ noncomputable def checkEquivalenceTwoLayerMlp {inDim hidDim outDim : Nat}
 Soundness: if `checkEquivalenceTwoLayerMlp` returns `true`, then for all inputs `x` in `xB`,
 the outputs are `eps`-close componentwise: `|T(x)_i - S(x)_i| ≤ eps`.
 -/
-theorem checkEquivalence_twoLayerMlp_sound {inDim hidDim outDim : Nat}
+theorem checkEquivalenceTwoLayerMlp_sound {inDim hidDim outDim : Nat}
     (teacher student : NN.MLTheory.CROWN.TwoLayerMLP ℝ inDim hidDim outDim)
     (xB : Box ℝ (.dim inDim .scalar))
     (eps : ℝ)
@@ -126,7 +120,7 @@ theorem checkEquivalence_twoLayerMlp_sound {inDim hidDim outDim : Nat}
   intro x hx i
   -- Extract the checked predicate.
   have hwithin :
-      boxWithinAbs (n := outDim)
+      BoxWithinAbs (n := outDim)
         (boxSub (n := outDim)
           (NN.MLTheory.CROWN.boundIbp (α := ℝ) teacher xB)
           (NN.MLTheory.CROWN.boundIbp (α := ℝ) student xB))

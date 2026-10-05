@@ -80,7 +80,7 @@ end Chain
 
 /-- Lift a module to operate independently over one new leading dimension. -/
 def liftLeading
-  {α : Type} [TorchLean.Storage α] [Context α]
+  {α : Type} [TorchLean.Storage α]
     {n : Nat} {elemIn elemOut : Shape} (m : Module α elemIn elemOut) :
     Module α (.dim n elemIn) (.dim n elemOut) where
   forward tensor :=

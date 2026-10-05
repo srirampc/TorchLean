@@ -49,8 +49,7 @@ theorem evalAt_concat_binary_eq
           #[Spec.SomeTensor.mk (α := α) s₁ lhs, Spec.SomeTensor.mk (α := α) s₂ rhs]).bind
         (Graph.normalizeNodeOutput (α := α) 2 (binaryNodeOut (.concat axis) out)) := by
   simp [Graph.evalAt, Graph.evalNode, Graph.normalizeNodeOutput, binaryGraphOut, binaryNodeOut,
-    Graph.getNode, Graph.getNode?,
-    Graph.normalizeNodeOutput, Bind.bind, Except.bind, Pure.pure, Except.pure]
+    Graph.getNode, Graph.getNode?, Bind.bind, Except.bind, Pure.pure, Except.pure]
 
 /--
 Successful binary concat evaluation, once the shared concat interpreter has produced a value with
@@ -260,10 +259,8 @@ theorem evalConcat_leadingAxis_eq
         .ok (.dim (LeadingAxisConcat.fold first (second :: tail)).1 rest) := by
     have hTailShapes :
         tail.map (fun input => Shape.dim input.1 rest) =
-          (tail.map Sigma.fst).map (fun size => Shape.dim size rest) := by
-      induction tail with
-      | nil => rfl
-      | cons input tail ih => simp only [List.map_cons, ih]
+          (tail.map Sigma.fst).map (fun size => Shape.dim size rest) :=
+      (List.map_map (g := fun size => Shape.dim size rest) (f := Sigma.fst) (l := tail)).symm
     simp only [List.map_cons]
     rw [hTailShapes]
     simpa only [LeadingAxisConcat.shapes, LeadingAxisConcat.totalSize,
@@ -273,7 +270,7 @@ theorem evalConcat_leadingAxis_eq
   have hSame :
       (Shape.dim (LeadingAxisConcat.fold first (second :: tail)).1 rest !=
         Shape.dim (LeadingAxisConcat.fold first (second :: tail)).1 rest) = false :=
-    shapeBNe_refl _
+    bne_self_eq_false _
   have hShapes :
       ((first :: second :: tail).map LeadingAxisConcat.Input.toSomeTensor).map
           Spec.SomeTensor.shape =

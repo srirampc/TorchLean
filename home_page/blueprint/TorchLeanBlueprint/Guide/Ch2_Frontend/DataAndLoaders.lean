@@ -29,7 +29,7 @@ changes what one feature means. Keeping source rows, dataset items, and model ax
 what lets the same training loop consume an in-memory table or a checked file.
 
 Named Lean blocks and their outputs are checked when this page is built. Shell and Python blocks
-are reproduction instructions or recorded transcripts. Comparing the same twenty-five rows through
+show how to generate and compare the data. Comparing the same twenty-five rows through
 three file boundaries checks this example; agreement of printed losses alone does not establish
 identical tensor bits or parser equivalence.
 
@@ -268,6 +268,8 @@ Use the smallest constructor that matches where the samples come from:
 
 - `Data.fromTensors inputs targets` splits two batched tensors along the sample axis;
 - `Data.fromSamples values` wraps an in-memory array of concrete `Float` samples;
+- `Data.fromStream samples` wraps an indexed stream of concrete `Float` samples without first
+  collecting it into an array;
 - `Data.fromSample sample` wraps one concrete `Float` sample, which is enough to smoke-test a model;
 - `Data.defer action` materializes one concrete `Float` sample from an `IO` action;
 - `Data.generate builder` constructs samples directly in the arithmetic runtime selected by the
@@ -300,6 +302,10 @@ Choosing `Data.fromSamples` is useful when labels are computed one record at a t
 already arrive as pairs. `Data.fromTensors` instead starts with two stacked tensors and uses
 their common leading index to construct those same pairs. Both routes eventually expose the
 same per-item interface to the trainer.
+
+For an existing `Data.SampleStream (Sample.Supervised Float input target)`, use
+`Data.fromStream` instead: `Data.fromSamples` takes an array, not a stream. Both adapters convert
+the sample tensors to the trainer's selected scalar type when they are requested.
 
 The `Data.defer` variant is the one to reach for when the sample lives in a file. Note that the
 file is read when the trainer materializes the dataset, not while the module elaborates, so
@@ -356,34 +362,16 @@ one snapshot before splitting. Statistical evaluation and formal
 The data-generation script writes a 25-row regression table with columns `x1,x2,y`, along with
 equivalent NPY arrays:
 
-```terminal +output
-$ python3 NN/Examples/Data/generate_small_data.py
-wrote NN/Examples/Data/small_regression.csv rows=25
-wrote NN/Examples/Data/small_regression_X.npy shape=(25, 2) dtype=float32
-wrote NN/Examples/Data/small_regression_y.npy shape=(25, 1) dtype=float32
+```terminal
+python3 NN/Examples/Data/generate_small_data.py
 ```
 
 The rows are a deterministic 5 by 5 grid over $`[-1,1]^2` with targets
 $`y = 0.7x_1 - 0.4x_2 + 0.5x_1x_2`. This fixed target lets us compare loading paths on a
 controlled regression problem:
 
-```terminal +output
-$ lake exe torchlean data_csv --device cpu --batch 5 --steps 5 --seed 2026
-== CSV loader training tutorial ==
-model:
-Sequential: [5, 2] -> [5, 1], layers=3, params=33, state=33
-  [0] Linear(2, 8): [5, 2] -> [5, 8] params=24, state=24 [[8, 2], [8]]
-  [1] ReLU: [5, 8] -> [5, 8] params=0, state=0 []
-  [2] Linear(8, 1): [5, 8] -> [5, 1] params=9, state=9 [[1, 8], [1]]
-data_dir = NN/Examples/Data
-csv_path  = NN/Examples/Data/small_regression.csv
-seed      = 2026
-train     = Adam(lr=0.05), steps=5, batch_size=5, shuffle=true, drop_last=true
-dataset size = 5
-mean_loss(before training) = 0.210192
-mean_loss(after training) = 0.055578
-steps=5 arithmetic=native scalar=Float32 loss=0.210192 -> 0.055578
-predict(batch=heldout) = [[0.303611], [0.303611], [0.303611], [0.303611], [0.303611]]
+```terminal
+scripts/lake.sh exe torchlean data_csv --device cpu --batch 5 --steps 5 --seed 2026
 ```
 
 `dataset size = 5` counts materialized minibatches: twenty-five source rows become five items,
@@ -395,10 +383,9 @@ The loss is reduced over each batch item and the reported dataset mean is taken 
 items. Because every item here contains five rows, those groups have equal weight in the report.
 That interpretation depends on the full-batch policy: an arbitrary collection of unequal-sized
 items would need an explicit choice between averaging item losses and weighting by their sample
-counts. The printed `batch_size=5` and `drop_last=true` tell us which grouping produced this
-transcript.
+counts. The printed `batch_size=5` and `drop_last=true` identify the grouping used for training.
 
-The loader that produced that run is six lines of
+The loader is six lines of
 {src "NN/Examples/Data/Loaders/Csv.lean"}[`NN/Examples/Data/Loaders/Csv.lean`]:
 
 ```
@@ -469,7 +456,7 @@ A missing file, an invalid numeric cell, and a short row fail at different stage
 is caught before parsing:
 
 ```terminal +output
-$ lake exe torchlean data_csv --csv /tmp/no-such-data.csv
+$ scripts/lake.sh exe torchlean data_csv --csv /tmp/no-such-data.csv
 ...
 train     = Adam(lr=0.05), steps=30, batch_size=5, shuffle=true, drop_last=true
 error: data_csv: missing CSV dataset: /tmp/no-such-data.csv
@@ -602,34 +589,17 @@ encodes checked integer labels, and `Data.fromCsv` splits each row at the declar
 
 ## CSV, NPY, And PyTorch Data Comparison
 
-The generator wrote the same twenty-five samples as a CSV table and as a pair of NPY arrays.
-With matching training settings, the NPY run reproduces the displayed CSV losses and prediction:
+The generator writes the same twenty-five samples as a CSV table and as a pair of NPY arrays.
+Run the NPY example with the same training settings:
 
-```terminal +output
-$ lake exe torchlean data_npy --device cpu --steps 5 --seed 2026
-== NPY loader training tutorial ==
-model:
-Sequential: [5, 2] -> [5, 1], layers=3, params=33, state=33
-  [0] Linear(2, 8): [5, 2] -> [5, 8] params=24, state=24 [[8, 2], [8]]
-  [1] ReLU: [5, 8] -> [5, 8] params=0, state=0 []
-  [2] Linear(8, 1): [5, 8] -> [5, 1] params=9, state=9 [[1, 8], [1]]
-data_dir = NN/Examples/Data
-x_path   = NN/Examples/Data/small_regression_X.npy
-y_path   = NN/Examples/Data/small_regression_y.npy
-seed     = 2026
-train    = Adam(lr=0.05), steps=5, batch_size=5, shuffle=true, drop_last=true
-X.npy dtype=<f4 shape=#[25, 2]
-y.npy dtype=<f4 shape=#[25, 1]
-dataset size = 5
-mean_loss(before training) = 0.210192
-mean_loss(after training) = 0.055578
-steps=5 arithmetic=native scalar=Float32 loss=0.210192 -> 0.055578
-predict(batch=heldout) = [[0.303611], [0.303611], [0.303611], [0.303611], [0.303611]]
+```terminal
+scripts/lake.sh exe torchlean data_npy --device cpu --batch 5 --steps 5 --seed 2026
 ```
 
-The losses and prediction agree to the printed precision. Converting this input file to `float64`
-also preserves the run's displayed values: its entries started as `float32` and survive the round
-trip through the wider format {Informal.citep goldberg1991}[].
+Compare the source shapes and loaded values before comparing losses and predictions. Matching
+training settings are useful only if both loaders supply the same ordered samples. Converting
+this input file to `float64` preserves its entries exactly: they started as `float32` and survive
+the round trip through the wider format {Informal.citep goldberg1991}[].
 
 The three input files used from here to the end of this section are not in the repository. Two
 use a dtype or memory layout that the loader does not support; the third is a widened copy of
@@ -650,11 +620,9 @@ PY
 The loader takes `--x` exactly as written and does not join it to `data_dir`, so these paths are
 spelled out in full:
 
-```terminal +output
-$ lake exe torchlean data_npy --steps 5 --seed 2026 \
-    --x NN/Examples/Data/X_f64.npy
-...
-steps=5 arithmetic=native scalar=Float32 loss=0.210192 -> 0.055578
+```terminal
+scripts/lake.sh exe torchlean data_npy --device cpu --batch 5 --steps 5 --seed 2026 \
+  --x NN/Examples/Data/X_f64.npy
 ```
 
 The loader does not issue a diagnostic for this narrowing. A `float64` source can be accepted
@@ -663,25 +631,22 @@ establish lossless conversion. The header records the source representation; `sc
 records the arithmetic used for training.
 
 For this widened copy, the source header changes but the original binary32 values remain
-representable on conversion back. That explains the matching printed run without requiring all
-binary64 inputs to behave the same way. A newly generated binary64 dataset could contain values
+representable on conversion back. A newly generated binary64 dataset could contain values
 between adjacent binary32 numbers; materialization would then choose representable values in the
 runtime scalar. The file dtype, conversion, and arithmetic label describe three successive steps
 in the value's path from disk to a loss computation.
 
-We can also keep the file and select a different arithmetic at materialization:
+We can also keep the file and select FloatLib's configured binary32 arithmetic for training:
 
-The following transcript predates the FloatLib migration and retains its recorded scalar labels
-and numerical results. Current `.ieee` execution uses FloatLib binary32.
-
-```terminal +output
-$ lake exe torchlean data_csv --batch 5 --steps 5 --seed 2026 --arithmetic ieee
-...
-steps=5 arithmetic=ieee scalar=IEEE32Exec loss=0.210192 -> 0.055578
+```terminal
+scripts/lake.sh exe torchlean data_csv \
+  --device cpu --batch 5 --steps 5 --seed 2026 --arithmetic ieee
 ```
 
-The printed losses agree here. The chapter on {ref "floats"}[floating-point semantics] examines
-the rounding behavior behind that comparison.
+This selects `ExecFloat.Binary 8 23` without changing the CSV columns, batch shapes, or shuffle
+seed. Compare its losses with the native command above; matching decimal output alone does not
+establish identical tensor bits. The chapter on {ref "floats"}[floating-point semantics] examines
+the rounding behavior behind this comparison.
 
 ## NPY Header And Shape Errors
 
@@ -689,13 +654,13 @@ Three ways of feeding the NPY loader something structurally wrong, and the three
 produce:
 
 ```terminal +output
-$ lake exe torchlean data_npy --x NN/Examples/Data/small_regression_y.npy
+$ scripts/lake.sh exe torchlean data_npy --x NN/Examples/Data/small_regression_y.npy
 error: data_npy: X.npy: expected shape (N,2), got #[25, 1]
 
-$ lake exe torchlean data_npy --x NN/Examples/Data/X_i32.npy
+$ scripts/lake.sh exe torchlean data_npy --x NN/Examples/Data/X_i32.npy
 error: data_npy: npy: unsupported dtype: <i4
 
-$ lake exe torchlean data_npy --x NN/Examples/Data/X_fortran.npy
+$ scripts/lake.sh exe torchlean data_npy --x NN/Examples/Data/X_fortran.npy
 error: SupervisedSource.load: npy: prefix row loading requires C-order NPY arrays
 ```
 
@@ -876,9 +841,9 @@ def inspectBpe : IO Unit := do
       | .ok decoded => IO.println s!"decoded = {decoded}"
 ```
 
-The generic-tokenizer adapter serves APIs whose interface cannot return tokenization errors, so it
-maps failures to empty output. Use the error-reporting `GPT2BPE.encode` and `GPT2BPE.decode`
-functions directly at an artifact-validation boundary.
+Use the error-reporting `GPT2BPE.encode` and `GPT2BPE.decode` functions at the artifact-validation
+boundary. An encoding failure does not represent an empty text sample; it must be handled before
+the resulting identifiers enter a dataset.
 
 ## Unicode Tables And Tokenizer Reproducibility
 
@@ -898,7 +863,7 @@ First prepare the example corpus, then run the CUDA trainer with both tokenizer 
 # text-model training command.
 python3 scripts/datasets/download_example_data.py --tiny-shakespeare
 
-lake -R -K cuda=true exe torchlean text_gpt2 --device cuda \
+scripts/lake.sh -R -Kcuda=true exe torchlean text_gpt2 --device cuda \
   --data-file data/real/text/tiny_shakespeare.txt \
   --bpe-vocab data/real/gpt2/vocab.json \
   --bpe-merges data/real/gpt2/merges.txt \
@@ -911,7 +876,7 @@ loading progress, a first shifted token window, and before/after loss. Both BPE 
 together. Omitting both selects the runner's byte-token path instead.
 
 This runner is CUDA-only. It does not load OpenAI or Hugging Face model weights. Its BPE mode trains
-a randomly initialized TorchLean Transformer with batch size two, a one-token context, and a local
+a randomly initialized TorchLean Transformer with batch size two, a four-token context, and a local
 projection of at most 512 observed GPT-2 ids; ids outside that retained set map to the local
 fallback id. It exercises real file parsing, tokenization, shifted-window construction, training,
 and decode plumbing, but it is neither GPT-2-small nor evidence of checkpoint-level tokenizer
@@ -1014,7 +979,7 @@ For a `Data.batch`, each item already contains a fixed-size tensor minibatch. Ke
 `TrainOptions.samplesPerStep := 1` to perform one vectorized device pass per update. A larger value
 accumulates gradients across several tensor minibatches. On CUDA, generic accumulation currently
 synchronizes the parameter pack for the host optimizer update, so one typed batch item per update is
-the fast path for large batches.
+the path that avoids that host accumulation step.
 
 # Partial Batches And Fixed Shapes
 
@@ -1067,7 +1032,7 @@ The empty dataset is a valid batching result, but a positive-step training reque
 For example, a batch larger than this 25-row CSV cannot silently report a trained model:
 
 ```terminal +output
-$ lake exe torchlean data_csv --batch 30 --steps 3 --seed 2026
+$ scripts/lake.sh exe torchlean data_csv --batch 30 --steps 3 --seed 2026
 ...
 error: Trainer.train: no training samples; check the dataset and batch size (including drop_last)
 ```
@@ -1208,30 +1173,18 @@ At minimum, record:
 :::
 
 The CSV example passes `2026` to both model initialization and shuffling for convenience. They are
-conceptually separate choices and may be configured independently in a larger experiment. Running
-the same command twice reproduces every digit, and changing the one seed changes both the
-initialization and the sample order at once:
+conceptually separate choices and may be configured independently in a larger experiment. To
+check repeatability in your build, run the same command twice, then change the seed:
 
-```terminal +output
-$ lake exe torchlean data_csv --batch 5 --steps 5 --seed 2026
-mean_loss(before training) = 0.210192
-mean_loss(after training) = 0.055578
-predict(batch=heldout) = [[0.303611], ...]
-
-$ lake exe torchlean data_csv --batch 5 --steps 5 --seed 2026
-mean_loss(before training) = 0.210192
-mean_loss(after training) = 0.055578
-predict(batch=heldout) = [[0.303611], ...]
-
-$ lake exe torchlean data_csv --batch 5 --steps 5 --seed 7
-mean_loss(before training) = 0.740953
-mean_loss(after training) = 0.205089
-predict(batch=heldout) = [[-0.058836], ...]
+```terminal
+scripts/lake.sh exe torchlean data_csv --device cpu --batch 5 --steps 5 --seed 2026
+scripts/lake.sh exe torchlean data_csv --device cpu --batch 5 --steps 5 --seed 2026
+scripts/lake.sh exe torchlean data_csv --device cpu --batch 5 --steps 5 --seed 7
 ```
 
-The gap between `0.055578` and `0.205089` after five steps reflects a combined change in
-initialization and sample order. These commands do not isolate their individual effects.
-Recording both seeds and repeating the experiment makes that limitation visible.
+The third command changes both initialization and sample order. A difference in the final loss
+would not isolate their individual effects. Record the build, arithmetic, device, and both seeds
+with the results so that a later comparison has the same meaning.
 
 Training can write a JSON `TrainLog`:
 
@@ -1256,7 +1209,7 @@ Generate the small deterministic dataset once, then run the maintained loader-an
 # Generate the small regression files before invoking the
 # example that reads their CSV rows.
 python3 NN/Examples/Data/generate_small_data.py
-lake exe torchlean data_csv \
+scripts/lake.sh exe torchlean data_csv \
   --device cpu --batch 5 --steps 5 --seed 2026
 ```
 

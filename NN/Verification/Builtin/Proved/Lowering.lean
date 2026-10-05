@@ -31,6 +31,42 @@ def flatOfTensor {α : Type} [TorchLean.Storage α] [Context α] {s : Shape}
     (t : Tensor α s) : NN.MLTheory.CROWN.Graph.FlatTensor α :=
   { n := Spec.Shape.size s, v := Tensor.flattenSpec (α := α) (shape := s) t }
 
+/-- The IR convolution configuration emitted by lowering a `conv` node. -/
+abbrev loweredConvConfig {d : Nat} (inC outC : Nat)
+    (kernelShape stride padding : TorchLean.Tensor Nat [d]) : ConvConfig :=
+  { spatialRank := d
+    kernel := kernelShape
+    stride := stride
+    padding := padding
+    dilation := Tensor.full [d] 1
+    paddingAfter := padding
+    groups := 1
+    channelAxis := 0
+    inChannels := inC
+    outChannels := outC }
+
+/-- The convolution payload written to the parameter store by lowering a `conv` node. -/
+abbrev loweredConvParams
+    {α : Type} [TorchLean.Storage α] [Context α] {d : Nat} (inC outC : Nat)
+    (kernelShape stride padding inSpatial : TorchLean.Tensor Nat [d])
+    (hKernel : ∀ i : Fin d, kernelShape.getScalar i ≠ 0)
+    (hStride : ∀ i : Fin d, stride.getScalar i ≠ 0)
+    (kT : Tensor α (Shape.ofList (outC :: inC :: Tensor.to kernelShape (List Nat))))
+    (bT : Tensor α [outC]) : ConvParams α :=
+  { spatialRank := d
+    inChannels := inC
+    outChannels := outC
+    kernel := kernelShape
+    stride := stride
+    padding := padding
+    dilation := Tensor.full [d] 1
+    paddingAfter := padding
+    groups := 1
+    inputSpatial := inSpatial
+    kernelNonzero := hKernel
+    strideNonzero := hStride
+    spec := { kernel := kT, bias := bT } }
+
 /--
 Lower a single forward-fragment node into the verifier IR.
 
@@ -109,35 +145,13 @@ def lowerNode
       let n : NN.IR.Node :=
         { id := id
           parents := #[x.id]
-          kind := .conv
-            { spatialRank := d
-              kernel := kernelShape
-              stride := stride
-              padding := padding
-              dilation := Tensor.full [d] 1
-              paddingAfter := padding
-              groups := 1
-              channelAxis := 0
-              inChannels := inC
-              outChannels := outC }
+          kind := .conv (loweredConvConfig inC outC kernelShape stride padding)
           outShape := outShape }
-      let spec : Spec.ConvSpec d inC outC kernelShape stride padding α :=
-        { kernel := kT, bias := bT }
-      let config : NN.IR.ConvParams α :=
-        { spatialRank := d
-          inChannels := inC
-          outChannels := outC
-          kernel := kernelShape
-          stride := stride
-          padding := padding
-          dilation := Tensor.full [d] 1
-          paddingAfter := padding
-          groups := 1
-          inputSpatial := inSpatial
-          kernelNonzero := hKernel
-          strideNonzero := hStride
-          spec := spec }
-      let ps' := { ps with convCfg := ps.convCfg.insert id config }
+      let ps' :=
+        { ps with
+            convCfg := ps.convCfg.insert id
+              (loweredConvParams (α := α) inC outC kernelShape stride padding inSpatial hKernel
+                hStride kT bT) }
       (n, ps')
   | .mseLoss (s := _s) yhat target =>
       ({ id := id, parents := #[yhat.id, target.id], kind := .mseLoss, outShape := .scalar }, ps)
@@ -163,9 +177,8 @@ def lowerForwardLetChain
   | .let1 (ss := ss) (mid := mid) (out := out) node gNext =>
       let id := c.graph.nodes.size
       let (n, ps') :=
-        lowerNode (α := α) (paramShapes := paramShapes) (inShape := inShape) (ss := ss) (out :=
-          mid)
-          id node params c.ps
+        lowerNode (α := α) (paramShapes := paramShapes) (inShape := inShape) (ss := ss)
+          (out := mid) id node params c.ps
       let c' : NN.Verification.Builtin.LoweredIR α :=
         { c with graph := { nodes := c.graph.nodes.push n }, ps := ps', outputId := id }
       lowerForwardLetChain (α := α) (paramShapes := paramShapes) (inShape := inShape)
@@ -175,8 +188,8 @@ def lowerForwardLetChain
 /--
 Lower a proved forward-fragment program into the verifier IR.
 
-The resulting `LoweredIR` can be executed by the IR evaluator, and we prove (in this file) that
-its denotation agrees with `evalForward`.
+The resulting `LoweredIR` can be executed by the IR evaluator. The modules under
+`NN.Verification.Builtin.Proved.Correctness` prove that its denotation agrees with `evalForward`.
 -/
 def lowerForwardProgramToIR
     {α : Type} [TorchLean.Storage α] [Context α]
@@ -187,8 +200,7 @@ def lowerForwardProgramToIR
   let input : NN.IR.Node := { id := 0, parents := #[], kind := .input, outShape := inShape }
   let c0 : NN.Verification.Builtin.LoweredIR α :=
     { graph := { nodes := #[input] }, ps := {}, inputId := 0, outputId := 0 }
-  lowerForwardLetChain (α := α) (paramShapes := paramShapes) (inShape := inShape) (ss := []) (out :=
-    outShape)
-    p params c0
+  lowerForwardLetChain (α := α) (paramShapes := paramShapes) (inShape := inShape) (ss := [])
+    (out := outShape) p params c0
 
 end NN.Verification.Builtin.Proved

@@ -43,12 +43,12 @@ def variableReference {state : Nat} :
       let retained ← mul a0 initial
       let written ← mul b0 x0
       let next ← add retained written
-      let aTail ← sliceLeadingAxisRange 1 count (by omega) a
-      let bTail ← sliceLeadingAxisRange 1 count (by omega) b
-      let xTail ← sliceLeadingAxisRange 1 count (by omega) x
+      let aTail ← slice 1 count (by omega) a
+      let bTail ← slice 1 count (by omega) b
+      let xTail ← slice 1 count (by omega) x
       let tail ← variableReference aTail bTail xTail next
-      let head ← reshape (s₂ := [1, state]) next (by simp [Shape.eraseAxis, Shape.size])
-      let result ← concatLeadingAxis head tail
+      let head ← reshape (s₂ := [1, state]) next (by simp [Shape.size])
+      let result ← concat head tail
       pure (by simpa [Nat.one_add] using result)
 
 end SelectiveScan

@@ -5,10 +5,6 @@ Authors: TorchLean contributors
 -/
 module
 
-public import Mathlib.Algebra.Order.Field.Basic
-import Mathlib.Tactic.NormNum.Inv
-import Mathlib.Tactic.NormNum.Pow
-import Mathlib.Tactic.Positivity.Finset
 public import NN.Tensor.Internal.Check.Einsum
 public meta import NN.Tensor.Internal.Elab.Einsum.Contraction.Loop -- shake: keep
 

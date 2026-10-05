@@ -358,7 +358,6 @@ theorem approxTensor_scaledDotProductAttentionCore {nQ nK d : Nat}
   let kTR := Tensor.swapAdjacentAxes kR 0
   let scoresS := matMulSpec qS kTS
   let scoresR := matMulSpec qR kTR
-  let epsScores := scoreErrorBound (β := β) (fexp := fexp) (rnd := rnd) epsQ epsK qR kR
   let scaledS := scaleSpec scoresS scaleS
   let scaledR := scaleSpec scoresR scaleR
   let epsScaled := scaledScoreErrorBound (β := β) (fexp := fexp) (rnd := rnd)
@@ -367,7 +366,6 @@ theorem approxTensor_scaledDotProductAttentionCore {nQ nK d : Nat}
   let weightsR := Activation.softmaxSpec 1 scaledR
   let epsWeights := weightErrorBound (β := β) (fexp := fexp) (rnd := rnd)
     epsQ epsK epsScale scaleR qR kR
-
   have hscaled : approxTensor (α := R)
       (toSpec := NFBackend.toSpec (β := β) (fexp := fexp) (rnd := rnd))
       scaledS scaledR epsScaled := by
@@ -382,7 +380,7 @@ theorem approxTensor_scaledDotProductAttentionCore {nQ nK d : Nat}
     simpa [weightsS, weightsR, epsWeights, weightErrorBound, scaledR, epsScaled] using h
   have hout := NFBackend.approxTensor_mat_mul_spec (β := β) (fexp := fexp) (rnd := rnd) hweights hv
   simpa [kTS, kTR, scoresS, scoresR, scaledS, scaledR, weightsS, weightsR,
-    epsScores, epsScaled, epsWeights, outputErrorBound] using hout
+    epsScaled, epsWeights, outputErrorBound] using hout
 
 /-- Canonical TorchLean attention corollary for the unmasked branch.
 

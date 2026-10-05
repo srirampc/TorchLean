@@ -22,6 +22,8 @@ The folder is split by role:
   for autograd soundness proofs that should not commit to `ℝ`.
 - `NN.Proofs.Tensor.Basic` contains the real-valued tensor toolkit used by analysis,
   Lipschitz, normalization, attention, and model-level proofs.
+- `NN.Proofs.Tensor.AxisLinear` and `NN.Proofs.Tensor.AxisAdjoint` describe axis permutations as
+  coordinate maps, give their derivative, and show they preserve inner products.
 
 Use this umbrella from public entrypoints and CI. Import the leaf modules directly when a proof
 should keep its dependencies narrow.

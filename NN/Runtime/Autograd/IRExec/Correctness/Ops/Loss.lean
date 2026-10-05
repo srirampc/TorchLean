@@ -13,7 +13,7 @@ public import NN.Runtime.Autograd.IRExec.Correctness.Common
 
 Loss-function correctness lemmas for the IR-to-forward-executor lowering.
 
-The IR node kind `.mse_loss` is lowered into an SSA node whose `forward` computes the
+The IR node kind `.mseLoss` is lowered into an SSA node whose `forward` computes the
 specification-level mean squared error loss.
 
 This file proves the forward-correctness lemma for that lowering step: on successful lowering
@@ -25,7 +25,7 @@ makes no claim about generalization, training convergence, or the statistical pr
 
 ## Main definitions
 
-- `buildFrom_denoteAllFrom_mse_loss`: correctness step for `.mse_loss` lowering.
+- `buildFrom_denoteAllFrom_mseLoss`: correctness step for `.mseLoss` lowering.
 
 ## Implementation notes
 
@@ -60,8 +60,8 @@ open Internal
 -- `Idx` and `getIdx` are defined.
 open Proofs (Idx getIdx)
 
-/-- Correctness lemma for the `.mse_loss` node lowering pass. -/
-theorem buildFrom_denoteAllFrom_mse_loss
+/-- Correctness lemma for the `.mseLoss` node lowering pass. -/
+theorem buildFrom_denoteAllFrom_mseLoss
     {α : Type} [TorchLean.Storage α] [Context α]
     (g : NN.IR.Graph) (payload : Payload α) {inShape : Shape} {ss : List Shape}
     (gd : ForwardData α [inShape] ss) (i : Nat) (st' : State α inShape)
@@ -141,8 +141,8 @@ theorem buildFrom_denoteAllFrom_mse_loss
                           let nodeData : ForwardNode α ([inShape] ++ ss) nOutShape :=
                             mkForwardNode (α := α) (Γ := [inShape] ++ ss) (τ := nOutShape) (fun
                               ctx =>
-                              let yhat := getIdx (α := α) (xs := ctx) iy
-                              let target := getIdx (α := α) (xs := ctx) it
+                              let yhat := readTensor (α := α) (xs := ctx) iy
+                              let target := readTensor (α := α) (xs := ctx) it
                               let diff := Tensor.subSpec (α := α) yhat target
                               let sq := Tensor.mulSpec (α := α) diff diff
                               let total : α := Tensor.sumSpec (α := α) sq
@@ -186,7 +186,7 @@ theorem buildFrom_denoteAllFrom_mse_loss
                             -- `forward` closure uses `Tensor.cast_shape`.
                             --
                             -- Reduce the node fetch first so the large `OpKind` match
-                            -- collapses to the `.mse_loss` branch.
+                            -- collapses to the `.mseLoss` branch.
                             unfold NN.IR.Graph.evalAt NN.IR.Graph.evalNode
                             simp (config := { failIfUnchanged := false })
                               [hN, hParentIds, hGetY, hGetT,
@@ -196,19 +196,11 @@ theorem buildFrom_denoteAllFrom_mse_loss
                                 Tensor.eqRec_eq_cast_shape,
                                 Tensor.cast_shape_proof_irrel]
                             congr 1
-                          have hStep :
-                              denoteAllState (α := α) inShape st1 x =
-                                vals0.push (Spec.SomeTensor.mk (α := α) nOutShape
-                                  (nodeData.eval ctx)) := by
-                            simpa [vals0, st1, nodeData, ctx] using
-                              (denoteAllState_snoc (α := α) (inShape := inShape) (ss := ss)
-                                (τ := nOutShape) (gd := gd) (nodeData := nodeData) (x := x))
                           have hTail := ih st1 hRec
-                          exact buildFrom_denoteAllFrom_finish (α := α) (g := g) (payload :=
-                            payload)
-                            (i := i) (x := x) (hi := hi) (τ := nOutShape)
-                            (nodeData := nodeData) (st1 := st1) (st' := st')
-                            (ctx := ctx) (vals0 := vals0) (input := input) hTail hEval hStep
+                          exact buildFrom_denoteAllFrom_nodeData_exact (α := α) (g := g)
+                            (payload := payload)
+                            (gd := gd) (i := i) (st' := st') (x := x) (hi := hi)
+                            (τ := nOutShape) (nodeData := nodeData) hTail hEval
                 · -- `simp` normalizes the guard to `nOutShape = []` (via `List.nil_eq`), so the
                   -- `dite_eq_right` witness has to be stated in that orientation too.
                   exact False.elim <|

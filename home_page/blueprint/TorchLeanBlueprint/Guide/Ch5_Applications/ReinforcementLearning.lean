@@ -69,7 +69,7 @@ Run one update and write the artifacts to files:
 ```terminal
 # Keep the evaluation path and policy so the measured return
 # can be reconstructed.
-lake exe torchlean ppo_gridworld --device cpu \
+scripts/lake.sh exe torchlean ppo_gridworld --device cpu \
   --updates 1 \
   --eval-every 1 --eval-episodes 1 --eval-max-steps 8 \
   --log /tmp/ppo-gridworld-trainlog.json \
@@ -77,7 +77,8 @@ lake exe torchlean ppo_gridworld --device cpu \
   --path /tmp/ppo-gridworld-path.json
 ```
 
-A captured run produced the following output and exited 0:
+A captured run produced the following output and exited 0. Terminal transcripts in this chapter
+record earlier runs; banners and results can change with the backend, seed, and package versions.
 
 ```terminal +output
 [TorchLean] arithmetic: native binary32
@@ -436,6 +437,27 @@ share the same observation width and hidden-width configuration. The `[64, 1]` c
 must eventually align with one scalar target per collected step; the singleton axis is a model
 interface choice, not sixty-four additional value predictions.
 
+For a single observation, `rl.ppo.criticValue` accepts any output shape with exactly one
+element. The default critic returns `[1]`, but a scalar `[]` or a tensor `[1, 1]` expresses the
+same number of predictions. The adapter reshapes that one element to a scalar and reads it:
+
+```lean (name := rlSingletonCritic)
+#eval show IO Unit from do
+  let model : nn.Sequential [1, 1] [1, 1] := .id [1, 1]
+  let graph ← nn.lowerToTypedGraph model (α := Float)
+  let value := rl.ppo.criticValue
+    graph model model nn.State.empty
+  IO.println (value ([[2.5]] : Tensor Float [1, 1]))
+```
+
+```leanOutput rlSingletonCritic (whitespace := lax)
+2.500000
+```
+
+Here the identity model isolates scalar extraction from any learned computation. The adapter
+requires `valueShape.size = 1`; a `[64, 1]` batch has 64 elements and cannot satisfy that
+condition. Batch training still needs one target per prediction, with matching shapes.
+
 # Rollout Data
 
 For a discrete action space of size $`A`, one PPO step stores
@@ -448,8 +470,8 @@ The Lean structure in
 holds one observation tensor, one `Fin nActions` action, four scalars, and two Boolean markers
 per step. `done` marks either termination or truncation and stops advantage continuation.
 `terminated` suppresses the next-state value bootstrap. When constructing a step manually,
-omitting `terminated` defaults it to `done`, preserving the earlier single-mask behavior.
-The rollout container also fixes the number of steps:
+omitting `terminated` defaults it to `done`. A truncated step that should bootstrap needs
+`done := true` and `terminated := false`. The rollout container also fixes the number of steps:
 
 ```
 structure Rollout (α : Type) [TorchLean.Storage α]
@@ -723,9 +745,9 @@ in the application
 The message identifies the mismatched argument and required shape. The PyTorch column example
 instead produces a valid tensor of an unintended shape.
 
-The same horizon appears in every input and output tensor of GAE. The specification and runtime
-share these functions, so there is one recurrence and no separate array implementation that can
-silently shorten a trajectory.
+The same horizon appears in every input and output tensor of this GAE function. The runtime
+exports the specification's single-mask recurrence. The PPO collector uses the separate
+termination and episode-boundary masks described below, while keeping the common horizon.
 
 The broadcast counterexample creates all pairwise sums of three advantages and three values.
 Its nine entries can look numerically plausible, and taking a mean afterwards could even hide
@@ -851,8 +873,12 @@ $$`-L^{\mathrm{clip}}_t
 
 and the differentiable batch version over backend references lives in
 {src "NN/Runtime/RL/PolicyGradient/Autograd.lean"}[`NN.Runtime.RL.PolicyGradient.Autograd`],
-where the categorical log probability is built from `logSoftmax` and a one-hot action tensor. The
-pure scalar functions above are the scalar formulas without a tape. The ratio-based clipped
+where the categorical log probability is built from `logSoftmax` and a one-hot action tensor.
+Before multiplying by that tensor, the implementation clamps log probabilities to
+$`[-10^{30},10^{30}]`. This prevents an unselected $`-\infty` entry from contributing
+$`0\cdot(-\infty)=\mathrm{NaN}`. It changes selected log probabilities below the lower bound,
+requires the bound to be finite in the scalar type, and does not repair NaN log-softmax rows.
+The pure scalar functions above are the scalar formulas without a tape. The ratio-based clipped
 objective can be checked
 exactly at `ℚ`; computing the ratio from log probabilities additionally requires an exponential.
 Their tape implementations live inside {ref "runtime-autograd"}[the autograd runtime] and need
@@ -986,20 +1012,26 @@ needed by refinement theorems:
 
 ```lean (name := rlBackupBridge)
 -- Successful execution gives both the spec equality and
--- finite intermediate products.
-open Runtime.RL.Numerics.Float32 Floats.IEEE754 Spec.RL in
-#check @discountedBackup_eq_ok
-```
-
-```leanOutput rlBackupBridge (whitespace := lax)
-discountedBackup_eq_ok : ∀ (reward gamma bootstrap : Float32Exec) (done : Bool) (out : Float32Exec),
-  discountedBackupChecked reward gamma bootstrap done = Except.ok out →
-    ExecFloat.Binary.isFinite (ExecFloat.mul gamma (continueMask done)) = true ∧
-      ExecFloat.Binary.isFinite ((ExecFloat.mul gamma (continueMask done)).mul bootstrap) = true ∧
-        ExecFloat.Binary.isFinite (ExecFloat.add reward ((ExecFloat.mul gamma (continueMask
-          done)).mul bootstrap)) =
-            true ∧
-          out = discountedBackup reward gamma bootstrap done
+-- finite intermediate values.
+open Runtime.RL.Numerics.Float32 Spec.RL in
+example
+    (reward gamma bootstrap out : ExecFloat.Binary 8 23)
+    (done : Bool)
+    (h : discountedBackupChecked
+      reward gamma bootstrap done = .ok out) :
+    ExecFloat.Binary.isFinite
+      (ExecFloat.mul gamma (continueMask done)) = true ∧
+    ExecFloat.Binary.isFinite
+      (ExecFloat.mul
+        (ExecFloat.mul gamma (continueMask done))
+        bootstrap) = true ∧
+    ExecFloat.Binary.isFinite
+      (ExecFloat.add reward
+        (ExecFloat.mul
+          (ExecFloat.mul gamma (continueMask done))
+          bootstrap)) = true ∧
+    out = discountedBackup reward gamma bootstrap done :=
+  discountedBackup_eq_ok reward gamma bootstrap done out h
 ```
 
 Read the conclusion right to left. The last conjunct says the checked routine agrees with the
@@ -1077,14 +1109,18 @@ open Proofs.RL.FiniteStochastic Spec.RL.FiniteStochastic in
             mdp.discount ^ k * valueSupDist v vStar
 ```
 
-$`k` applications of the operator shrink the distance to a fixed point by $`\gamma^k`. The companion
-theorems prove that such a fixed point is unique for both operators, and related results appear
-for deterministic and stochastic settings: first for deterministic finite MDPs in
-{src "NN/Proofs/RL/MDP.lean"}[`NN.Proofs.RL.MDP`],
-once for stochastic ones in
-{src "NN/Proofs/RL/FiniteStochasticMDP.lean"}[`FiniteStochasticMDP`],
-and once more for general measurable state spaces in
-{src "NN/Proofs/RL/MarkovMDP.lean"}[`NN.Proofs.RL.MarkovMDP`].
+$`k` applications of the operator shrink the distance to a fixed point by $`\gamma^k`. The fixed
+point is not an extra assumption: `bellmanOptimality_existsUnique_fixedPoint` shows that exactly one
+exists, by Banach's fixed-point theorem on `Fin n → ℝ` with its sup metric, and
+`bellmanOptimality_valueIteration_tendsto` shows that value iteration reaches it from any starting
+table. The same holds for policy evaluation. Deterministic MDPs are handled in
+{src "NN/Proofs/RL/MDP.lean"}[`NN.Proofs.RL.MDP`]
+and stochastic ones in
+{src "NN/Proofs/RL/FiniteStochasticMDP.lean"}[`FiniteStochasticMDP`].
+For general measurable state spaces,
+{src "NN/Proofs/RL/MarkovMDP.lean"}[`NN.Proofs.RL.MarkovMDP`]
+proves the same contraction and gets a unique bounded measurable fixed point once the rewards are
+bounded and the policy is measurable.
 
 The sup distance asks for the largest error over all states. A stochastic transition row
 averages successor errors using nonnegative weights that sum to one, so this averaging cannot
@@ -1611,10 +1647,14 @@ linear regime, $`|e|-\tfrac12=0.66`. Transition B took action $`0` from $`s'=[1,
 $`1.2`, and it is terminal, so the target is just $`r=0.5`; the error is $`0.7`, squared $`0.49`,
 Huber $`\tfrac12(0.7)^2=0.245`. Lean agrees with all four:
 
+`rl.dqn.loss` uses squared error by default. Supply `error` to choose another scalar loss,
+`batch := true` to average a replay batch, or `double := true` to select next actions with the
+online network and evaluate them with the target network.
+
 ```lean (name := rlDqnLossA)
 -- The nonterminal target includes the maximum next-state
 -- target value.
-#eval rl.dqn.transitionMSELoss rlOnlineQ rlTargetQ 0.9 rlTrA
+#eval rl.dqn.loss rlOnlineQ rlTargetQ 0.9 rlTrA
 ```
 
 ```leanOutput rlDqnLossA (whitespace := lax)
@@ -1623,7 +1663,7 @@ Huber $`\tfrac12(0.7)^2=0.245`. Lean agrees with all four:
 
 ```lean (name := rlDqnLossB)
 -- The terminal target contains only its immediate reward.
-#eval rl.dqn.transitionMSELoss rlOnlineQ rlTargetQ 0.9 rlTrB
+#eval rl.dqn.loss rlOnlineQ rlTargetQ 0.9 rlTrB
 ```
 
 ```leanOutput rlDqnLossB (whitespace := lax)
@@ -1633,8 +1673,9 @@ Huber $`\tfrac12(0.7)^2=0.245`. Lean agrees with all four:
 ```lean (name := rlDqnHuberA)
 -- Error magnitude above one enters the linear branch of the
 -- Huber loss.
-#eval rl.dqn.transitionHuberLoss rlOnlineQ rlTargetQ 0.9 1.0
-  rlTrA
+#eval rl.dqn.loss rlOnlineQ rlTargetQ 0.9 rlTrA
+  (error := fun prediction target =>
+    rl.core.huberLoss prediction target 1.0)
 ```
 
 ```leanOutput rlDqnHuberA (whitespace := lax)
@@ -1644,8 +1685,9 @@ Huber $`\tfrac12(0.7)^2=0.245`. Lean agrees with all four:
 ```lean (name := rlDqnHuberB)
 -- Error magnitude below one remains in the quadratic
 -- branch.
-#eval rl.dqn.transitionHuberLoss rlOnlineQ rlTargetQ 0.9 1.0
-  rlTrB
+#eval rl.dqn.loss rlOnlineQ rlTargetQ 0.9 rlTrB
+  (error := fun prediction target =>
+    rl.core.huberLoss prediction target 1.0)
 ```
 
 ```leanOutput rlDqnHuberB (whitespace := lax)
@@ -1659,8 +1701,8 @@ numbers the example printed:
 ```lean (name := rlDqnBatch)
 -- Repeating both transitions equally preserves their mean
 -- squared loss.
-#eval rl.dqn.minibatchMSELoss rlOnlineQ rlTargetQ 0.9
-  #[rlTrA, rlTrB, rlTrA, rlTrB]
+#eval rl.dqn.loss rlOnlineQ rlTargetQ 0.9
+  #[rlTrA, rlTrB, rlTrA, rlTrB] (batch := true)
 ```
 
 ```leanOutput rlDqnBatch (whitespace := lax)
@@ -1669,8 +1711,10 @@ numbers the example printed:
 
 ```lean (name := rlDqnBatchHuber)
 -- Apply the same repeated batch to the Huber objective.
-#eval rl.dqn.minibatchHuberLoss rlOnlineQ rlTargetQ 0.9 1.0
-  #[rlTrA, rlTrB, rlTrA, rlTrB]
+#eval rl.dqn.loss rlOnlineQ rlTargetQ 0.9
+  #[rlTrA, rlTrB, rlTrA, rlTrB] (batch := true)
+  (error := fun prediction target =>
+    rl.core.huberLoss prediction target 1.0)
 ```
 
 ```leanOutput rlDqnBatchHuber (whitespace := lax)
@@ -1744,11 +1788,11 @@ the original gap:
 -- Over the reals, the displacement equals the mixing weight
 -- times the original gap.
 open Proofs.RL.DQN Runtime.RL.DQN in
-#check @softUpdateScalar_sub_target_real
+#check @softUpdateScalar_sub_target
 ```
 
 ```leanOutput rlSoftThm (whitespace := lax)
-softUpdateScalar_sub_target_real : ∀ (tau online target : ℝ),
+softUpdateScalar_sub_target : ∀ (tau online target : ℝ),
   softUpdateScalar tau online target - target =
     tau * (online - target)
 ```

@@ -6,6 +6,9 @@ benchmarks (AutoLiRPA / CROWN-style workflows): compute output logit bounds for 
 ℓ∞ input perturbation, then export the bounds so Lean can check the margin
 predicate and report certified accuracy.
 
+The host arithmetic below uses ordinary binary64 rounding. The exported bounds are producer
+assertions, not a directed-rounding proof that they enclose the real network.
+
 This implementation supports a simple linear classifier:
   logits(x) = W x + b
 
@@ -23,6 +26,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -105,6 +109,28 @@ def take_examples(examples: list[dict[str, Any]], max_n: int) -> Iterable[dict[s
     return examples[:max_n]
 
 
+def finite_vector(values: list[Any], context: str) -> list[float]:
+    """Validate producer inputs without changing the arithmetic evaluation order."""
+    try:
+        result = [float(value) for value in values]
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise SystemExit(f"{context}: expected finite numeric entries") from exc
+    if not all(math.isfinite(value) for value in result):
+        raise SystemExit(f"{context}: expected finite numeric entries")
+    return result
+
+
+def natural(value: Any, context: str) -> int:
+    """Read a natural-number identifier without truncating a fractional JSON number."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise SystemExit(f"{context}: expected a natural number")
+    if isinstance(value, float) and (not math.isfinite(value) or not value.is_integer()):
+        raise SystemExit(f"{context}: expected a natural number")
+    if value < 0:
+        raise SystemExit(f"{context}: expected a natural number")
+    return int(value)
+
+
 def main() -> None:
     """Export per-example logit bounds and margin outcomes for the digits workflow."""
     parser = argparse.ArgumentParser(
@@ -129,14 +155,21 @@ def main() -> None:
         default=Path("NN/Examples/Verification/Robustness/digits_linear_margin_cert.json"),
     )
     args = parser.parse_args()
+    if not math.isfinite(args.eps) or args.eps < 0:
+        parser.error("--eps must be finite and nonnegative")
 
     weights_obj = json.loads(args.weights.read_text())
     dataset_obj = json.loads(args.dataset.read_text())
 
-    W = weights_obj["layers.0.weight"]
-    b = weights_obj["layers.0.bias"]
+    W = [finite_vector(row, f"weight row {i}")
+         for i, row in enumerate(weights_obj["layers.0.weight"])]
+    b = finite_vector(weights_obj["layers.0.bias"], "bias")
     out_dim = len(W)
+    if out_dim < 2 or len(b) != out_dim:
+        raise SystemExit("expected at least two weight rows and one bias per class")
     in_dim = len(W[0])
+    if any(len(row) != in_dim for row in W):
+        raise SystemExit("weight rows must have equal lengths")
 
     examples = dataset_obj.get("examples", [])
     rows = []
@@ -145,19 +178,23 @@ def main() -> None:
     total = 0
 
     for ex in take_examples(examples, args.max):
-        x = ex["x"]
-        y = int(ex["y"])
-        ex_id = int(ex.get("id", total))
+        x = finite_vector(ex["x"], f"example {total}")
+        y = natural(ex["y"], f"example {total} label")
+        ex_id = natural(ex.get("id", total), f"example {total} id")
         if len(x) != in_dim:
             raise SystemExit(f"bad example {ex_id}: expected input_dim={in_dim}, got {len(x)}")
         if not (0 <= y < out_dim):
             raise SystemExit(f"bad example {ex_id}: label out of range: {y}")
+        if any(not 0.0 <= value <= 1.0 for value in x):
+            raise SystemExit(f"bad example {ex_id}: normalized inputs must lie in [0,1]")
 
         lo = [clamp01(float(v) - args.eps) for v in x]
         hi = [clamp01(float(v) + args.eps) for v in x]
         logits_lo, logits_hi = ibp_linear(W, b, lo, hi)
+        finite_vector(logits_lo + logits_hi, f"example {ex_id} propagated bounds")
 
         nominal_logits = linear_forward(W, b, [float(v) for v in x])
+        finite_vector(nominal_logits, f"example {ex_id} nominal logits")
         pred = argmax(nominal_logits)
         if pred == y:
             nominal_ok += 1
@@ -199,7 +236,7 @@ def main() -> None:
     }
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(json.dumps(cert_obj, indent=2) + "\n")
+    args.out.write_text(json.dumps(cert_obj, indent=2, allow_nan=False) + "\n")
     print(f"Wrote: {args.out}")
     print(f"Nominal accuracy:   {nominal_ok}/{total}")
     print(f"Certified accuracy: {certified_ok}/{total} (eps={args.eps})")

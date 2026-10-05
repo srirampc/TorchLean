@@ -27,11 +27,11 @@ loaders, interop, widgets, mathematical deep dives, and verification workflows.
 
 Typical usage:
 
-* Build the full example surface: `lake build NNExamples`
+* Build the full example surface: `scripts/lake.sh build NNExamples`
 * Run model examples through the CLI:
-  `lake exe torchlean mlp --steps 10`
+  `scripts/lake.sh exe torchlean mlp --steps 10`
 * Run CUDA-only model examples with both build-time and runtime CUDA selection:
-  `lake -R -K cuda=true exe torchlean gpt_adder --device cuda --steps 1`
+  `scripts/lake.sh -Kcuda=true exe torchlean gpt_adder --device cuda --steps 1`
 
 The heavier examples remain in their subdirectories, so each can still be built independently. The
 standalone CLI root `NN.Examples.RunnerMain` is intentionally excluded because importing an

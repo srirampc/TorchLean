@@ -17,10 +17,22 @@ scripts/lake.sh test
 scripts/lake.sh lint
 ```
 
-The wrapper requires Bash and Python 3. It keeps CPU, CUDA, and optional LibTorch builds in
+The wrapper requires Bash and Python 3. It keeps `cpu` and `cuda-libtorch` builds in
 separate local cache directories and holds a checkout lock while Lake runs. Use it consistently
 when switching profiles; direct `lake` commands do not acquire that lock. Blueprint builds select
 the parent library's CPU cache even after a CUDA build.
+
+For GPU checks, select a CUDA-enabled LibTorch SDK and require a visible device:
+
+```bash
+export TORCHLEAN_LIBTORCH_HOME=/path/to/torch
+scripts/lake.sh -Kcuda=true build nn_tests_suite
+TORCHLEAN_REQUIRE_CUDA=1 scripts/lake.sh -Kcuda=true test
+```
+
+The GPU implementation lives in `csrc/libtorch`. TorchLean owns the tape and calls ATen for forward operations and their VJPs. See
+[native build instructions](../scripts/README.md#libtorch-cuda-build) for SDK selection and
+compiler requirements. CPU checks do not exercise the GPU backend.
 
 Set `TORCHLEAN_BUILD_ROOT` to choose the cache location, or use `--torchlean-build-dir` to print
 the selected path. `TORCHLEAN_BUILD_PROFILE` overrides the profile name; use distinct names for
@@ -111,7 +123,10 @@ assumptions; see [trust boundaries](TRUST_BOUNDARIES.md). AI assistance is discl
 - Keep one canonical implementation. Public facades may re-export it; do not preserve unused
   compatibility synonyms or duplicate Option/Except versions of the same operation.
 - Avoid repeating a namespace in its declaration names. Name options records `Options`.
-  Use `batch` as the prefix for a batched counterpart.
+  Prefer a named `batch` option when the input and result shapes remain clear. Keep meaningful
+  spatial dimensions in names, such as `conv1d`. Scalar type names such as `Float32` name the
+  representation; arithmetic functions should take or infer the format/type instead of exposing
+  separate `32`/`64` suffixed APIs. Avoid arbitrary version suffixes.
 - Lowercase application namespaces such as `nn`, `optim`, and `text` follow the public API.
   Definition-specific auxiliary namespaces use their definition's spelling; other helpers belong
   under `Internal`. Keep top-level API entrypoints as focused import modules.
@@ -178,7 +193,7 @@ Adding one is three steps:
    into the docstring verbatim as a fenced `lean` block under an `Example:` heading, expanding a
    one-line docstring into the multi-line form if it has to.
 
-3. Build. `lake build NNTests` compiles the snippet, and `lake lint` compares the docstring against
+3. Build. `scripts/lake.sh build NNTests` compiles the snippet, and `scripts/lake.sh lint` compares the docstring against
    it, so the two cannot drift apart afterwards.
 
 Snippets use `--` line comments, never nested docstrings: a `-/` inside the snippet would close the
@@ -190,7 +205,7 @@ The build sets `warningAsError`, so any warning fails `lake build`. Check a sing
 way the build will:
 
 ```bash
-lake env lean -DwarningAsError=true NN/Path/To/File.lean
+scripts/lake.sh env lean -DwarningAsError=true NN/Path/To/File.lean
 ```
 
 ## Before Review

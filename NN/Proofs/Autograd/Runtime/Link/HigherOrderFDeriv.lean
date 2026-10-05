@@ -141,17 +141,7 @@ theorem tangent_vjpChecked {E : Type*} [NormedAddCommGroup E] [NormedSpace ℝ E
     Dual.Nested.tangentTensor (getIdx result.1 input) =
       iteratedFDeriv ℝ n (fun y => getIdx (real.vjpWithSeed (inputs y) data (seed y)) input)
         x directions := by
-  obtain ⟨tape, lowered⟩ : ∃ tape,
-      Runtime.Autograd.TypedGraph.lowerToTapeChecked nested.data values data = .ok tape := by
-    cases lowered : Runtime.Autograd.TypedGraph.lowerToTapeChecked nested.data values data with
-    | error message =>
-      simp only [vjpChecked, lowered, Bind.bind, Except.bind] at checked
-      cases checked
-    | ok tape => exact ⟨tape, rfl⟩
-  have sameResult := Except.ok.inj
-    ((vjpChecked_eq nested values data (DualTensor.jet directions seed x) tape lowered).symm.trans
-      checked)
-  rw [← sameResult]
+  rw [eq_of_vjpChecked_ok nested values data (DualTensor.jet directions seed x) result checked]
   exact tangent_vjp real nested sameShapes hgraph sameOutput directions x inputs values data
     hinputs seed hseed input
 

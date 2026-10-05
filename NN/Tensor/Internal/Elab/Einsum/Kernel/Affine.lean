@@ -38,15 +38,16 @@ the outer addition in either order also handles the compiler's associative
 index regrouping without adding a separate rewrite theorem.
 -/
 private def mixedRadixEncoding?
-    (value radix : Expr) : Option (Expr × Expr) := do
+    (value radix : Expr) : Option (Expr × Expr × Bool) := do
   let (left, right) ←
     natOperationOperands? ``Nat.add ``HAdd.hAdd value
-  let fromProduct (remainder product : Expr) : Option (Expr × Expr) := do
+  let fromProduct (remainder product : Expr) (swapped : Bool) :
+      Option (Expr × Expr × Bool) := do
     let (productRadix, digit) ←
       natOperationOperands? ``Nat.mul ``HMul.hMul product
     guard <| productRadix.consumeMData == radix.consumeMData
-    return (remainder, digit)
-  fromProduct left right <|> fromProduct right left
+    return (remainder, digit, swapped)
+  fromProduct left right false <|> fromProduct right left true
 
 /-- Recover the bounded value whose projection is a generated remainder. -/
 private def finSource? (value : Expr) : Option Expr := do
@@ -115,7 +116,7 @@ private def simplifyMixedRadix
         (false, ·) <$> natOperationOperands? ``Nat.mod ``HMod.hMod value
   let some (isDivision, (numerator, radix)) := operation?
     | return .continue
-  let some (remainder, digit) :=
+  let some (remainder, digit, swapped) :=
       mixedRadixEncoding? numerator radix
     | return .continue
   let some hRemainder ← remainderBound? remainder radix
@@ -126,6 +127,20 @@ private def simplifyMixedRadix
     else ``TorchLean.Tensor.Internal.MixedRadix.mod_encode
   let correctness ←
     mkAppM theoremName #[remainder, digit, radix, hRemainder]
+  let correctness ←
+    if swapped then
+      -- The mixed-radix theorem requires the remainder before the product.
+      let product ← mkAppM ``Nat.mul #[radix, digit]
+      let hNumerator ← mkAppM ``Nat.add_comm #[product, remainder]
+      let decode ←
+        withLocalDeclD `numerator (mkConst ``Nat) fun numerator => do
+          let result ←
+            mkAppM (if isDivision then ``Nat.div else ``Nat.mod) #[numerator, radix]
+          mkLambdaFVars #[numerator] result
+      let hDecode ← mkAppM ``congrArg #[decode, hNumerator]
+      mkAppM ``Eq.trans #[hDecode, correctness]
+    else
+      pure correctness
   let correctness ←
     withTransparency .all <|
       mkExpectedTypeHint correctness (← mkEq value replacement)

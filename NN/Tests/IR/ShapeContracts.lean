@@ -44,29 +44,22 @@ private def squareConvConfig
 private def node (kind : OpKind) (outShape : Spec.Shape) : Node :=
   { id := 0, parents := #[0], kind := kind, outShape := outShape }
 
-private def rejects (x : Except String Spec.Shape) : Bool :=
-  match x with
-  | .error _ => true
-  | .ok _ => false
-
 example :
-    rejects
-        (Infer.nodeOutShape
-          (node (.conv (squareConvConfig 1 1 3 1 0)) smallSpatialInput)
-          #[smallSpatialInput]) = true := by
+    (Infer.nodeOutShape
+      (node (.conv (squareConvConfig 1 1 3 1 0)) smallSpatialInput)
+      #[smallSpatialInput]).isOk = false := by
   decide
 
 example :
-    rejects (Infer.nodeOutShape
-      (node (.maxPool (squareWindowConfig 3 1 0)) smallSpatialInput) #[smallSpatialInput]) =
-      false := by
+    Infer.nodeOutShape
+      (node (.maxPool (squareWindowConfig 3 1 0)) smallSpatialInput) #[smallSpatialInput] =
+      .ok (.dim 1 (.dim 0 (.dim 0 .scalar))) := by
   decide
 
 example :
-    rejects
-      (Infer.nodeOutShape
-        (node (.broadcastTo (.dim 2 .scalar) (.dim 3 .scalar)) (.dim 3 .scalar))
-        #[.dim 2 .scalar]) = true := by
+    (Infer.nodeOutShape
+      (node (.broadcastTo (.dim 2 .scalar) (.dim 3 .scalar)) (.dim 3 .scalar))
+      #[.dim 2 .scalar]).isOk = false := by
   decide
 
 example :
@@ -77,8 +70,8 @@ example :
   decide
 
 example :
-    rejects (Infer.nodeOutShape (node (.layernorm 1) (.dim 0 .scalar)) #[.dim 0 .scalar]) =
-      true := by
+    (Infer.nodeOutShape (node (.layernorm 1) (.dim 0 .scalar)) #[.dim 0 .scalar]).isOk =
+      false := by
   decide
 
 end NN.Tests.IR.ShapeContracts

@@ -25,7 +25,7 @@ pass.
 ## Implementation status
 
 There is no dedicated `nn.models` builder; the API composes `nn.linear` and `nn.relu` directly.
-The relating theorem is `mlp_interp_eq_spec_mlp_forward` in
+The relating theorem is `mlp_interp` in
 `NN/GraphSpec/Models/MlpSpecEquivalence.lean`, which shows the typed-graph interpretation of the
 MLP equals this spec's forward pass; `NN/Proofs/Models/Mlp.lean` and
 `NN/Tests/Runtime/Floats/TorchLeanSpecMlpEquivCheck.lean` exercise it further.
@@ -60,28 +60,6 @@ def mlpSpec
     |>.append relu
     |>.append linear2
 
-/-- MLP with a softmax head (`Linear → ReLU → Linear → Softmax`).
-
-PyTorch analogy: `nn.Sequential(..., nn.Softmax(dim=-1))`.
-
-Note: this is a *shape-safe* softmax spec (applied along the last dimension). In PyTorch you
-choose `dim` at runtime; here the shape index already tells us what "the last dim" is.
--/
-def mlpWithSoftmaxSpec
-  {α : Type} [TorchLean.Storage α] [Context α]
-  {inDim hidDim outDim : Nat}
-  (l1 : Spec.LinearSpec α inDim hidDim)
-  (l2 : Spec.LinearSpec α hidDim outDim) :
-  Spec.Module.Chain α ([inDim]) ([outDim]) :=
-  let linear1 := Spec.Module.linear (α:=α) l1
-  let relu    := Spec.Module.relu (α:=α) ([hidDim])
-  let linear2 := Spec.Module.linear (α:=α) l2
-  let softmax := Spec.Module.softmax (α := α) ([outDim]) 0
-  Spec.Module.Chain.single linear1
-    |>.append relu
-    |>.append linear2
-    |>.append softmax
-
 /-- Run the MLP forward on a single input vector. -/
 def mlpForward
   {α : Type} [TorchLean.Storage α] [Context α]
@@ -112,7 +90,6 @@ def mlpBackward
   -- Forward intermediates
   let z1 := Spec.linearSpec (α:=α) l1 x
   let a1 := Activation.reluSpec z1
-  let _y := Spec.linearSpec (α:=α) l2 a1
 
   -- Layer 2 grads
   let dW2 := Spec.linearWeightsDerivSpec (α:=α) a1 dLdy

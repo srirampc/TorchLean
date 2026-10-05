@@ -21,33 +21,10 @@ namespace NN.Verification.Builtin.Proved
 open Spec TorchLean
 open TorchLean.Tensor
 open NN.IR
--- Typed context indices come from `NN.Proofs.Autograd.Tape.Util.Idx`, the one place
--- `Idx` and `getIdx` are defined.
-open Proofs (Idx getIdx)
 
 namespace Correctness
 
 namespace IRStep
-
-private theorem evalParsedMatmul_eq
-    {α : Type} [TorchLean.Storage α] [Context α]
-    {leading parsed : Shape} {m n p : Nat} (h : parsed = leading)
-    (left : Tensor α (leading.concat [m, n]))
-    (right : Tensor α (leading.concat [n, p]))
-    (i nodeId leftId rightId : Nat) :
-    (do
-        let left' ← Graph.expectShape (α := α) (expected := parsed.concat [m, n])
-          (Spec.SomeTensor.mk (α := α) (leading.concat [m, n]) left)
-        let right' ← Graph.expectShape (α := α) (expected := parsed.concat [n, p])
-          (Spec.SomeTensor.mk (α := α) (leading.concat [n, p]) right)
-        let value := Spec.SomeTensor.ofTensor (Graph.matmulLeading parsed left' right')
-        Graph.normalizeNodeOutput (α := α) i
-          { id := nodeId, parents := #[leftId, rightId], kind := .matmul,
-            outShape := leading.concat [m, p] } value) =
-      .ok (Spec.SomeTensor.mk (α := α) (leading.concat [m, p])
-        (Graph.matmulLeading leading left right)) := by
-  subst parsed
-  simp [Graph.expectShape, Bind.bind, Except.bind, Pure.pure, Except.pure]
 
 private theorem evalNode_matmul_eq
     {α : Type} [TorchLean.Storage α] [Context α]
@@ -63,22 +40,10 @@ private theorem evalNode_matmul_eq
     Graph.evalNode payload input vals i
         { id := nodeId, parents := #[leftId, rightId], kind := .matmul, outShape := outShape } =
       .ok (Spec.SomeTensor.mk (α := α) outShape (op.denote left right)) := by
-  have hLeftShape : leftValue.shape = leftShape := shape_eq_of_expectShape_eq_ok hLeft
-  have hRightShape : rightValue.shape = rightShape := shape_eq_of_expectShape_eq_ok hRight
-  have hLeftValue : leftValue = Spec.SomeTensor.mk (α := α) leftShape left := by
-    have hCast : leftValue.cast hLeftShape = left := by
-      have hExpected := expectShape_eq_ok (α := α) leftValue hLeftShape
-      rw [hLeft] at hExpected
-      exact Except.ok.inj hExpected.symm
-    rw [← Spec.SomeTensor.ofTensor_cast leftValue hLeftShape, hCast]
-    rfl
-  have hRightValue : rightValue = Spec.SomeTensor.mk (α := α) rightShape right := by
-    have hCast : rightValue.cast hRightShape = right := by
-      have hExpected := expectShape_eq_ok (α := α) rightValue hRightShape
-      rw [hRight] at hExpected
-      exact Except.ok.inj hExpected.symm
-    rw [← Spec.SomeTensor.ofTensor_cast rightValue hRightShape, hCast]
-    rfl
+  have hLeftValue : leftValue = Spec.SomeTensor.mk (α := α) leftShape left :=
+    eq_mk_of_expectShape_eq_ok hLeft
+  have hRightValue : rightValue = Spec.SomeTensor.mk (α := α) rightShape right :=
+    eq_mk_of_expectShape_eq_ok hRight
   subst leftValue
   subst rightValue
   cases op with

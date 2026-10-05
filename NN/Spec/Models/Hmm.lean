@@ -7,6 +7,7 @@ Authors: TorchLean Team
 module
 
 public import NN.Spec.Core.Sequence
+public import NN.Spec.Core.Tensor.Linalg
 public import NN.Spec.Core.TensorReductionShape.Reductions
 
 /-!
@@ -96,20 +97,10 @@ structure HMMSpec (α : Type) [TorchLean.Storage α]
 abbrev ObservationSeq (nObservations length : Nat) :=
   Tensor (Fin nObservations) [length]
 
-/-! ## Basic helpers -/
-
-/-- Get the emission probability $B_{\mathtt{state},\mathtt{obs}}$ for a discrete symbol. -/
-def getEmissionProbDiscrete
-  {nStates nObservations : Nat}
-  (m : HMMSpec α nStates nObservations)
-  (state : Fin nStates)
-  (obs : Fin nObservations) : α :=
-  (Tensor.unstack m.emission state).getScalar obs
-
 /-!
 ## Baum–Welch (EM) training
 
-The forward-pass APIs above are enough to *use* a fixed HMM, but a “fully implemented” baseline
+The forward-pass APIs below are enough to *use* a fixed HMM, but a “fully implemented” baseline
 should also include classical training. For discrete-observation HMMs, the standard training
 procedure is the Baum–Welch algorithm (an EM procedure):
 
@@ -159,9 +150,10 @@ private def uniformVec {n : Nat} : Tensor α [n] :=
 /-- Normalize a nonnegative vector $v$ to sum to $1$, returning
 $(v/\sum_i v_i,\sum_i v_i)$.
 
-If the sum is $0$, the normalized message is totalized to a uniform vector, while the returned
-scale remains $0$. The zero scale is essential: it records that the observation prefix has
-probability zero.
+If the computed sum does not compare strictly positive, the message falls back to a uniform vector
+and the returned scale is $0$. For a valid nonnegative model and exact arithmetic, a zero scale
+records an impossible observation prefix. Rounded arithmetic can also reach it through underflow;
+normalization does not guarantee a floating-point sum of exactly one.
 -/
 def normalizeVec {n : Nat} (v : Tensor α [n]) : (Tensor α [n] × α) :=
   let s := sumSpec v
@@ -183,7 +175,7 @@ private def logScales? {length : Nat} (scales : Tensor α [length]) : Option α 
 def emissionVec {nStates nObservations : Nat}
   (m : HMMSpec α nStates nObservations) (obs : Fin nObservations) : Tensor α [nStates]
     :=
-  Tensor.dim (fun s => Tensor.scalar (getEmissionProbDiscrete m s obs))
+  Tensor.ofFn (fun s => get2 m.emission s obs)
 
 /--
 One forward step (unnormalized) of the scaled forward algorithm.
@@ -197,13 +189,7 @@ private def forwardStep {nStates nObservations : Nat}
   (obs : Fin nObservations) : Tensor α [nStates] :=
   -- One forward update (without scaling): apply transitions, then reweight by emissions.
   let emissionProbs := emissionVec (α := α) m obs
-  Tensor.dim (fun s =>
-    let trans_sum := Tensor.dim (fun s' =>
-      let alpha_val := prevAlpha.getScalar s'
-      let transVal := (Tensor.unstack m.transition s').getScalar s
-      Tensor.scalar (alpha_val * transVal))
-    let transTotal := sumSpec trans_sum
-    Tensor.scalar (emissionProbs.getScalar s * transTotal))
+  mulSpec emissionProbs (vecMatMulSpec prevAlpha m.transition)
 
 /-- One timestep of a scaled HMM forward trace. -/
 structure HMMForwardStep (α : Type) [TorchLean.Storage α]
@@ -217,11 +203,11 @@ structure HMMForwardStep (α : Type) [TorchLean.Storage α]
 
 /-- Scaled forward pass, returning the observation, $\alpha_t$, and $c_t$ at each timestep.
 
-- Each $\alpha_t$ is normalized to sum to $1$.
-- Each $c_t$ is the normalization constant used at step $t$.
+- Each $\alpha_t$ is the message returned by `normalizeVec`, including its uniform fallback.
+- Each $c_t$ is the corresponding computed scale (zero on that fallback branch).
 
-If you need the total likelihood, multiply the scales:
-$p(o_{0:T-1})=\prod_t c_t$.
+For valid probabilities in exact arithmetic, the total likelihood is
+$p(o_{0:T-1})=\prod_t c_t$. With rounded arithmetic, multiplying the scales can still underflow.
 -/
 def hmmForwardScaled
   {nStates nObservations length : Nat}
@@ -277,11 +263,6 @@ private def hmmBackwardScaled
             betaRaw
         (some (beta, current), beta)).2
 
- /-- Elementwise multiplication for state-probability vectors. -/
-private def elementwiseMul {n : Nat} (a b : Tensor α [n]) : Tensor α [n]
-  :=
-  mulSpec a b
-
  /--
 Compute the normalized state posterior $\gamma_t$ from forward/backward messages.
 
@@ -293,7 +274,7 @@ private def gammaAt {nStates : Nat}
   (alpha : Tensor α [nStates]) (beta : Tensor α [nStates]) : Tensor α
     [nStates] :=
   -- γ_t(i) ∝ α_t(i) * β_t(i)
-  let g := elementwiseMul (α := α) alpha beta
+  let g := mulSpec alpha beta
   (normalizeVec (α := α) g).1
 
  /--
@@ -348,16 +329,13 @@ private def sumGammaWhereObs
       acc) 0
 
  /--
-Normalize each row of a nonnegative matrix to sum to `1`.
+Apply `normalizeVec` independently to each row.
 
-Rows with sum `0` fall back to a uniform row (keeps the EM update total).
+Rows whose computed sum does not compare positive fall back to a uniform row.
  -/
 private def normalizeRows {nRows nCols : Nat} (m : Tensor α [nRows, nCols]) :
     Tensor α [nRows, nCols] :=
-  Tensor.dim (fun i =>
-    let row := get m i
-    let s := sumSpec row
-    if s > 0 then scaleSpec row (1 / s) else uniformVec (α := α) (n := nCols))
+  Tensor.dim (fun i => (normalizeVec (get m i)).1)
 
  /--
 Compute expected sufficient statistics for one observation sequence.

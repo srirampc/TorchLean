@@ -39,19 +39,11 @@ def maxPool {α : Type} [TorchLean.Storage α]
   (x : TensorRef α (Shape.ofList (C :: Tensor.to inSpatial (List Nat)))) :
   IO (TensorRef α (Shape.ofList (C ::
     Tensor.to (Spec.poolOutSpatialPad inSpatial kernel stride padding) (List Nat)))) :=
-  commitGraphM (α := α) s
-    (β := TensorRef α (Shape.ofList (C ::
-      Tensor.to (Spec.poolOutSpatialPad inSpatial kernel stride padding) (List Nat))))
-    (refs := #[x.identity?])
-    (fun {Γ} {ss} xv nat g => do
-      let (v, st') ← runGraphM (α := α) (Γ := Γ)
-        (Runtime.Autograd.TypedGraph.GraphM.maxPool (α := α) (Γ := Γ) (d := d) (C := C)
-          (inSpatial := inSpatial) (kernel := kernel) (stride := stride) (padding := padding)
-          { id := x.id })
-        ss g
-      let ⟨ss', g'⟩ := st'
-      let st1 : TypedGraphSessionState α := { Γ := Γ, x := xv, nat := nat, ss := ss', g := g' }
-      pure ({ id := v.id }, st1))
+  recordGraphM (α := α) s (refs := #[x.identity?])
+    (fun {Γ} =>
+      Runtime.Autograd.TypedGraph.GraphM.maxPool (α := α) (Γ := Γ) (d := d) (C := C)
+        (inSpatial := inSpatial) (kernel := kernel) (stride := stride) (padding := padding)
+        { id := x.id })
 
 /--
 N-D smooth max-pooling (log-sum-exp surrogate) for channels-first tensors `(C, spatial...)`.
@@ -64,19 +56,11 @@ def smoothMaxPool {α : Type} [TorchLean.Storage α]
   (x : TensorRef α (Shape.ofList (C :: Tensor.to inSpatial (List Nat)))) (beta : α) :
   IO (TensorRef α (Shape.ofList (C ::
     Tensor.to (Spec.poolOutSpatialPad inSpatial kernel stride padding) (List Nat)))) :=
-  commitGraphM (α := α) s
-    (β := TensorRef α (Shape.ofList (C ::
-      Tensor.to (Spec.poolOutSpatialPad inSpatial kernel stride padding) (List Nat))))
-    (refs := #[x.identity?])
-    (fun {Γ} {ss} xv nat g => do
-      let (v, st') ← runGraphM (α := α) (Γ := Γ)
-        (Runtime.Autograd.TypedGraph.GraphM.smoothMaxPool (α := α) (Γ := Γ) (d := d) (C := C)
-          (inSpatial := inSpatial) (kernel := kernel) (stride := stride) (padding := padding)
-          { id := x.id } beta)
-        ss g
-      let ⟨ss', g'⟩ := st'
-      let st1 : TypedGraphSessionState α := { Γ := Γ, x := xv, nat := nat, ss := ss', g := g' }
-      pure ({ id := v.id }, st1))
+  recordGraphM (α := α) s (refs := #[x.identity?])
+    (fun {Γ} =>
+      Runtime.Autograd.TypedGraph.GraphM.smoothMaxPool (α := α) (Γ := Γ) (d := d) (C := C)
+        (inSpatial := inSpatial) (kernel := kernel) (stride := stride) (padding := padding)
+        { id := x.id } beta)
 
 /--
 N-D average-pooling for channels-first tensors `(C, spatial...)` (no batch axis).
@@ -90,19 +74,11 @@ def avgPool {α : Type} [TorchLean.Storage α]
   (x : TensorRef α (Shape.ofList (C :: Tensor.to inSpatial (List Nat)))) :
   IO (TensorRef α (Shape.ofList (C ::
     Tensor.to (Spec.poolOutSpatialPad inSpatial kernel stride padding) (List Nat)))) :=
-  commitGraphM (α := α) s
-    (β := TensorRef α (Shape.ofList (C ::
-      Tensor.to (Spec.poolOutSpatialPad inSpatial kernel stride padding) (List Nat))))
-    (refs := #[x.identity?])
-    (fun {Γ} {ss} xv nat g => do
-      let (v, st') ← runGraphM (α := α) (Γ := Γ)
-        (Runtime.Autograd.TypedGraph.GraphM.avgPool (α := α) (Γ := Γ) (d := d) (C := C)
-          (inSpatial := inSpatial) (kernel := kernel) (stride := stride) (padding := padding)
-          { id := x.id })
-        ss g
-      let ⟨ss', g'⟩ := st'
-      let st1 : TypedGraphSessionState α := { Γ := Γ, x := xv, nat := nat, ss := ss', g := g' }
-      pure ({ id := v.id }, st1))
+  recordGraphM (α := α) s (refs := #[x.identity?])
+    (fun {Γ} =>
+      Runtime.Autograd.TypedGraph.GraphM.avgPool (α := α) (Γ := Γ) (d := d) (C := C)
+        (inSpatial := inSpatial) (kernel := kernel) (stride := stride) (padding := padding)
+        { id := x.id })
 
 /--
 Record elementwise ReLU.
@@ -113,14 +89,9 @@ def relu {α : Type} [TorchLean.Storage α] (s : TypedGraphSession α)
   [Mul α] [Add α] [Zero α] [Max α] [BEq α] [One α] [LT α]
   [DecidableRel ((· > ·) : α → α → Prop)]
   {sh : Shape} (x : TensorRef α sh) : IO (TensorRef α sh) :=
-  commitGraphM (α := α) s (β := TensorRef α sh) (refs := #[x.identity?])
-      (fun {Γ} {ss} xv nat g => do
-    let (v, st') ← runGraphM (α := α) (Γ := Γ)
-      (Runtime.Autograd.TypedGraph.GraphM.relu (α := α) (Γ := Γ) (s := sh) { id := x.id })
-      ss g
-    let ⟨ss', g'⟩ := st'
-    let st1 : TypedGraphSessionState α := { Γ := Γ, x := xv, nat := nat, ss := ss', g := g' }
-    pure ({ id := v.id }, st1))
+  recordGraphM (α := α) s (refs := #[x.identity?])
+    (fun {Γ} =>
+      Runtime.Autograd.TypedGraph.GraphM.relu (α := α) (Γ := Γ) (s := sh) { id := x.id })
 
 /--
 Flatten a tensor into a 1D vector of length `Spec.Shape.size sh`.
@@ -130,14 +101,9 @@ PyTorch comparison: `torch.flatten(x)` (with default `start_dim=0`).
 def flatten {α : Type} [TorchLean.Storage α]
     (s : TypedGraphSession α) [Inhabited α] [Zero α] {sh : Shape}
   (x : TensorRef α sh) : IO (TensorRef α [Spec.Shape.size sh]) :=
-  commitGraphM (α := α) s (β := TensorRef α [Spec.Shape.size sh]) (refs := #[x.identity?])
-      (fun {Γ} {ss} xv nat g => do
-    let (v, st') ← runGraphM (α := α) (Γ := Γ)
-      (Runtime.Autograd.TypedGraph.GraphM.flatten (α := α) (Γ := Γ) (s := sh) { id := x.id })
-      ss g
-    let ⟨ss', g'⟩ := st'
-    let st1 : TypedGraphSessionState α := { Γ := Γ, x := xv, nat := nat, ss := ss', g := g' }
-    pure ({ id := v.id }, st1))
+  recordGraphM (α := α) s (refs := #[x.identity?])
+    (fun {Γ} =>
+      Runtime.Autograd.TypedGraph.GraphM.flatten (α := α) (Γ := Γ) (s := sh) { id := x.id })
 
 /--
 Reshape a tensor while preserving total number of elements.
@@ -149,15 +115,10 @@ def reshape {α : Type} [TorchLean.Storage α]
     (s : TypedGraphSession α) [Inhabited α] [Zero α]
     {sh1 sh2 : Shape} (x : TensorRef α sh1) (h : Spec.Shape.size sh1 = Spec.Shape.size sh2) :
     IO (TensorRef α sh2) :=
-  commitGraphM (α := α) s (β := TensorRef α sh2) (refs := #[x.identity?])
-      (fun {Γ} {ss} xv nat g => do
-    let (v, st') ← runGraphM (α := α) (Γ := Γ)
-      (Runtime.Autograd.TypedGraph.GraphM.reshape (α := α) (Γ := Γ) (s₁ := sh1) (s₂ := sh2) { id :=
+  recordGraphM (α := α) s (refs := #[x.identity?])
+    (fun {Γ} =>
+      Runtime.Autograd.TypedGraph.GraphM.reshape (α := α) (Γ := Γ) (s₁ := sh1) (s₂ := sh2) { id :=
         x.id } h)
-      ss g
-    let ⟨ss', g'⟩ := st'
-    let st1 : TypedGraphSessionState α := { Γ := Γ, x := xv, nat := nat, ss := ss', g := g' }
-    pure ({ id := v.id }, st1))
 
 /--
 Swap two adjacent axes at a given `depth` inside the shape.
@@ -168,15 +129,10 @@ def swapAdjacentAtDepth {α : Type} [TorchLean.Storage α]
     (s : TypedGraphSession α) [Context α]
   {sh : Shape} (depth : Nat) (x : TensorRef α sh) : IO (TensorRef α (sh.swapAdjacentAtDepth depth))
     :=
-  commitGraphM (α := α) s (β := TensorRef α (sh.swapAdjacentAtDepth depth))
-      (refs := #[x.identity?]) (fun {Γ} {ss} xv nat g => do
-    let (v, st') ← runGraphM (α := α) (Γ := Γ)
-      (Runtime.Autograd.TypedGraph.GraphM.swapAdjacentAtDepth (α := α) (Γ := Γ) (s := sh) depth { id
+  recordGraphM (α := α) s (refs := #[x.identity?])
+    (fun {Γ} =>
+      Runtime.Autograd.TypedGraph.GraphM.swapAdjacentAtDepth (α := α) (Γ := Γ) (s := sh) depth { id
         := x.id })
-      ss g
-    let ⟨ss', g'⟩ := st'
-    let st1 : TypedGraphSessionState α := { Γ := Γ, x := xv, nat := nat, ss := ss', g := g' }
-    pure ({ id := v.id }, st1))
 
 /--
 Broadcast a tensor to a larger shape.
@@ -188,15 +144,10 @@ def broadcastTo {α : Type} [TorchLean.Storage α]
     (s : TypedGraphSession α) [Inhabited α] [Add α] [Zero α]
   {sh1 sh2 : Shape} (cb : Shape.CanBroadcastTo sh1 sh2) (x : TensorRef α sh1) : IO (TensorRef α sh2)
     :=
-  commitGraphM (α := α) s (β := TensorRef α sh2) (refs := #[x.identity?])
-      (fun {Γ} {ss} xv nat g => do
-    let (v, st') ← runGraphM (α := α) (Γ := Γ)
-      (Runtime.Autograd.TypedGraph.GraphM.broadcastTo (α := α) (Γ := Γ) (s₁ := sh1) (s₂ := sh2) cb {
+  recordGraphM (α := α) s (refs := #[x.identity?])
+    (fun {Γ} =>
+      Runtime.Autograd.TypedGraph.GraphM.broadcastTo (α := α) (Γ := Γ) (s₁ := sh1) (s₂ := sh2) cb {
         id := x.id })
-      ss g
-    let ⟨ss', g'⟩ := st'
-    let st1 : TypedGraphSessionState α := { Γ := Γ, x := xv, nat := nat, ss := ss', g := g' }
-    pure ({ id := v.id }, st1))
 
 /--
 Sum-reduce along `axis`.
@@ -207,14 +158,9 @@ def reduceSum {α : Type} [TorchLean.Storage α]
     (s : TypedGraphSession α) [Add α] [Zero α] [Inhabited α]
   {sh : Shape} (axis : Nat) [valid : Shape.HasNonemptyAxis axis sh] [wf : Shape.WellFormed sh]
   (x : TensorRef α sh) : IO (TensorRef α (shapeAfterSum sh axis)) :=
-  commitGraphM (α := α) s (β := TensorRef α (shapeAfterSum sh axis))
-      (refs := #[x.identity?]) (fun {Γ} {ss} xv nat g => do
-    let (v, st') ← runGraphM (α := α) (Γ := Γ)
-      (Runtime.Autograd.TypedGraph.GraphM.reduceSum (α := α) (Γ := Γ) (s := sh) axis { id := x.id })
-      ss g
-    let ⟨ss', g'⟩ := st'
-    let st1 : TypedGraphSessionState α := { Γ := Γ, x := xv, nat := nat, ss := ss', g := g' }
-    pure ({ id := v.id }, st1))
+  recordGraphM (α := α) s (refs := #[x.identity?])
+    (fun {Γ} =>
+      Runtime.Autograd.TypedGraph.GraphM.reduceSum (α := α) (Γ := Γ) (s := sh) axis { id := x.id })
 
 /--
 Mean-reduce along `axis`.
@@ -225,15 +171,10 @@ def reduceMean {α : Type} [TorchLean.Storage α]
     (s : TypedGraphSession α) [Context α]
   {sh : Shape} (axis : Nat) [valid : Shape.HasNonemptyAxis axis sh] [wf : Shape.WellFormed sh]
   (x : TensorRef α sh) : IO (TensorRef α (shapeAfterSum sh axis)) :=
-  commitGraphM (α := α) s (β := TensorRef α (shapeAfterSum sh axis))
-      (refs := #[x.identity?]) (fun {Γ} {ss} xv nat g => do
-    let (v, st') ← runGraphM (α := α) (Γ := Γ)
-      (Runtime.Autograd.TypedGraph.GraphM.reduceMean (α := α) (Γ := Γ) (s := sh) axis
+  recordGraphM (α := α) s (refs := #[x.identity?])
+    (fun {Γ} =>
+      Runtime.Autograd.TypedGraph.GraphM.reduceMean (α := α) (Γ := Γ) (s := sh) axis
         { id := x.id })
-      ss g
-    let ⟨ss', g'⟩ := st'
-    let st1 : TypedGraphSessionState α := { Γ := Γ, x := xv, nat := nat, ss := ss', g := g' }
-    pure ({ id := v.id }, st1))
 
 /-! ## Indexing -/
 
@@ -243,15 +184,10 @@ def select {α : Type} [TorchLean.Storage α]
     {shape : Shape} (axis : Nat) [Shape.AxisInBounds axis shape]
     (x : TensorRef α shape) (index : Fin (Shape.axisSize shape axis)) :
     IO (TensorRef α (shape.eraseAxis axis)) :=
-  commitGraphM (α := α) session (refs := #[x.identity?])
-      (fun {Γ} {ss} values nat graph => do
-    let (output, state') ← runGraphM (α := α) (Γ := Γ)
-      (Runtime.Autograd.TypedGraph.GraphM.select (α := α) (Γ := Γ)
-        (s := shape) axis { id := x.id } index) ss graph
-    let ⟨ss', graph'⟩ := state'
-    let state : TypedGraphSessionState α :=
-      { Γ := Γ, x := values, nat := nat, ss := ss', g := graph' }
-    pure ({ id := output.id }, state))
+  recordGraphM (α := α) session (refs := #[x.identity?])
+    (fun {Γ} =>
+      Runtime.Autograd.TypedGraph.GraphM.select (α := α) (Γ := Γ)
+        (s := shape) axis { id := x.id } index)
 
 /-- Select several bounded coordinates from an arbitrary tensor axis. -/
 def indexSelect {α : Type} [TorchLean.Storage α]
@@ -259,15 +195,10 @@ def indexSelect {α : Type} [TorchLean.Storage α]
     [Shape.AxisInBounds axis shape] (x : TensorRef α shape)
     (indices : Tensor (Fin (Shape.axisSize shape axis)) [count]) :
     IO (TensorRef α (shape.replaceAxis axis count)) :=
-  commitGraphM (α := α) session (refs := #[x.identity?])
-      (fun {Γ} {ss} values nat graph => do
-    let (output, state') ← runGraphM (α := α) (Γ := Γ)
-      (Runtime.Autograd.TypedGraph.GraphM.indexSelect (α := α) (Γ := Γ)
-        (s := shape) axis count { id := x.id } (fun _ => indices)) ss graph
-    let ⟨ss', graph'⟩ := state'
-    let state : TypedGraphSessionState α :=
-      { Γ := Γ, x := values, nat := nat, ss := ss', g := graph' }
-    pure ({ id := output.id }, state))
+  recordGraphM (α := α) session (refs := #[x.identity?])
+    (fun {Γ} =>
+      Runtime.Autograd.TypedGraph.GraphM.indexSelect (α := α) (Γ := Γ)
+        (s := shape) axis count { id := x.id } (fun _ => indices))
 
 /-- Add source slices into an arbitrary tensor axis at bounded coordinates. -/
 def scatterAdd {α : Type} [TorchLean.Storage α]
@@ -275,15 +206,10 @@ def scatterAdd {α : Type} [TorchLean.Storage α]
     [Shape.AxisInBounds axis shape] (base : TensorRef α shape)
     (source : TensorRef α (shape.replaceAxis axis count))
     (indices : Tensor (Fin (Shape.axisSize shape axis)) [count]) : IO (TensorRef α shape) :=
-  commitGraphM (α := α) session (refs := #[base.identity?, source.identity?])
-      (fun {Γ} {ss} values nat graph => do
-    let (output, state') ← runGraphM (α := α) (Γ := Γ)
-      (Runtime.Autograd.TypedGraph.GraphM.scatterAdd (α := α) (Γ := Γ)
-        (s := shape) axis count { id := base.id } { id := source.id } (fun _ => indices)) ss graph
-    let ⟨ss', graph'⟩ := state'
-    let state : TypedGraphSessionState α :=
-      { Γ := Γ, x := values, nat := nat, ss := ss', g := graph' }
-    pure ({ id := output.id }, state))
+  recordGraphM (α := α) session (refs := #[base.identity?, source.identity?])
+    (fun {Γ} =>
+      Runtime.Autograd.TypedGraph.GraphM.scatterAdd (α := α) (Γ := Γ)
+        (s := shape) axis count { id := base.id } { id := source.id } (fun _ => indices))
 
 end TypedGraphSession
 

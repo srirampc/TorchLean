@@ -57,15 +57,6 @@ open Proofs.Autograd.Algebra
 
 noncomputable section
 
-namespace EList
-
-/-- Componentwise addition of error lists (used when accumulating cotangent/gradient bounds). -/
-def add : {ss : List Shape} → EList ss → EList ss → EList ss
-  | [], .nil, .nil => .nil
-  | _ :: ss, .cons a as, .cons b bs => .cons (a + b) (add (ss := ss) as bs)
-
-end EList
-
 variable {α : Type}
 
 -- Reverse-mode graph nodes carrying forward and VJP approximation data.

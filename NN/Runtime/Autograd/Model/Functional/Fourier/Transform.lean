@@ -36,7 +36,7 @@ namespace Fourier
 /-- Complete a real transform by reflecting its stored nonnegative-frequency bins. -/
 def fullSpectrum {batch n : Nat} (hn : 0 < n) (x : RefTy m α [batch, n])
     (path : SpectralPath) : m (RefTy m α [batch, n] × RefTy m α [batch, n]) := do
-  let packed ← if path == .automatic then rfft1d hn x else rfft1dReference x
+  let packed ← Runtime.Autograd.Model.F.rfft (batch := [batch]) hn x path
   let realPart : RefTy m α [batch, n / 2 + 1] ← select 2 packed ⟨0, by change 0 < 2; decide⟩
   let imagPart : RefTy m α [batch, n / 2 + 1] ← select 2 packed ⟨1, by change 1 < 2; decide⟩
   let indices : Tensor (Fin (n / 2 + 1)) [n] := Id.run <|

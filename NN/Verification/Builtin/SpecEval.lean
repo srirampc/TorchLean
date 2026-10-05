@@ -38,8 +38,8 @@ open _root_.TorchLean.Tensor
 /-- Error-reporting monad used by the pure TorchLean spec evaluator. -/
 abbrev SpecM := Except String
 
-instance {α : Type} [TorchLean.Storage α] [Context α] : Runtime.Autograd.Torch.Ops (m :=
-  SpecM) α where
+instance {α : Type} [TorchLean.Storage α] [Context α] :
+    Runtime.Autograd.Torch.Ops (m := SpecM) α where
   Ref := fun s => Tensor α s
   DataRef := fun β _ s => Tensor β s
 
@@ -67,12 +67,10 @@ instance {α : Type} [TorchLean.Storage α] [Context α] : Runtime.Autograd.Torc
 
   reduceSum := fun {s} axis _valid _wf x =>
     let hAxis : Shape.NonemptyAxis axis s := (inferInstance : Shape.HasNonemptyAxis axis s).proof
-    let hRed := hAxis
-    pure (Tensor.reduceSum (α := α) (s := s) axis x hRed)
+    pure (Tensor.reduceSum (α := α) (s := s) axis x hAxis)
   reduceMean := fun {s} axis _valid _wf x =>
     let hAxis : Shape.NonemptyAxis axis s := (inferInstance : Shape.HasNonemptyAxis axis s).proof
-    let hRed := hAxis
-    pure (Tensor.reduceMean (α := α) (s := s) axis x hRed)
+    pure (Tensor.reduceMean (α := α) (s := s) axis x hAxis)
 
   select := fun {_s} axis _axisInBounds x index =>
     pure (Tensor.selectSpec axis x index)
@@ -83,11 +81,11 @@ instance {α : Type} [TorchLean.Storage α] [Context α] : Runtime.Autograd.Torc
 
   matmul := fun {_batchA _batchB _batch _mDim _nDim _pDim} broadcastA broadcastB a b =>
     pure (Tensor.matmulSpec broadcastA.proof broadcastB.proof a b)
-  concatLeadingAxis := fun {_nDim _mDim} {_s} a b =>
+  concat := fun {_nDim _mDim} {_s} a b =>
     pure (Tensor.concatAxisSpec (α := α) .scalar a b)
 
-  sliceLeadingAxisRange := fun {_nDim} {_s} _start _len _h _x =>
-    throw "TorchLeanSpecEval: slice_leading_axis_range not supported in spec backend"
+  slice := fun {_nDim} {_s} start len h x =>
+    pure (Spec.sliceRangeSpec x start len h)
 
   maxPool := fun {d C} {inSpatial kernel stride padding} x =>
     if hKernel : (∀ i : Fin d, kernel.getScalar i ≠ 0) then
@@ -176,21 +174,13 @@ instance {α : Type} [TorchLean.Storage α] [Context α] : Runtime.Autograd.Torc
     pure (Spec.batchNorm (α := α) (channels := channels) (sSpatial := sSpatial)
       (x := x) (gamma := gamma) (beta := beta) (epsilon := epsilon))
 
-  multiHeadAttention := fun {n numHeads dModel headDim} h1 wq wk wv wo x mask =>
-    -- Package the weight matrices into the spec-layer structure.
-    let mha : Spec.MultiHeadAttention α numHeads dModel headDim :=
+  attention := fun {n numHeads dModel headDim batch} _hBatch h1 wq wk wv wo x mask =>
+    let layer : Spec.MultiHeadAttention α numHeads dModel headDim :=
       { queryWeight := wq, keyWeight := wk, valueWeight := wv, outputWeight := wo }
-    pure (Spec.MultiHeadAttention.forward (α := α) (numHeads := numHeads) (dModel := dModel)
-      (headDim := headDim)
-      (n := n) h1 mha x (mask := mask))
-
-  batchedMultiHeadAttention :=
-    fun {_batch n numHeads dModel headDim} _hBatch h1 wq wk wv wo x mask =>
-      let mha : Spec.MultiHeadAttention α numHeads dModel headDim :=
-        { queryWeight := wq, keyWeight := wk, valueWeight := wv, outputWeight := wo }
-      pure <| Tensor.dim (fun i =>
-        Spec.MultiHeadAttention.forward (α := α) (numHeads := numHeads) (dModel := dModel)
-          (headDim := headDim) (n := n) h1 mha (Tensor.unstack x i) (mask := mask))
+    let forward := fun sample => layer.forward n h1 sample mask
+    match batch, x with
+    | none, sample => pure (forward sample)
+    | some _, samples => pure (Tensor.dim (fun i => forward (Tensor.unstack samples i)))
 
   conv := fun {d inC outC} {kernel stride padding} {inSpatial} w b x =>
     let layer : Spec.ConvSpec d inC outC kernel stride padding α :=
@@ -213,6 +203,5 @@ instance {α : Type} [TorchLean.Storage α] [Context α] : Runtime.Autograd.Torc
     throw <|
       "TorchLeanSpecEval: bernoulli_mask is not supported in spec backend " ++
         "(needs a deterministic counter)"
-
 
 end NN.Verification.Builtin

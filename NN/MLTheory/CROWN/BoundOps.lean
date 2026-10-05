@@ -71,6 +71,8 @@ primitives that appear in IBP for affine/linear layers and basic arithmetic node
 If you want to swap in a quantized backend, the key is to provide an instance of `BoundOps` for
 your scalar type.
 -/
+/-- Arithmetic and capability flags used to compute interval and affine bounds.
+Soundness requires the separate laws for the selected scalar backend. -/
 class BoundOps (α : Type) [TorchLean.Storage α] [Context α] where
   addDown : α → α → α
   addUp   : α → α → α
@@ -130,8 +132,7 @@ class NonlinearBoundOps (α : Type) [TorchLean.Storage α] [Context α] where
   cosBounds : α → α → Option (α × α)
   /-- Uniform absolute bound for one last-axis layer-normalization row. -/
   layerNormAbsBound : Nat → Option α
-  /-- Whether coupled softmax/layer-normalization derivative formulas use exact scalar
-  arithmetic. -/
+  /-- Whether the coupled softmax formulas agree with the backend's normalization semantics. -/
   supportsIdealCoupledDerivatives : Bool
 
 namespace NonlinearBoundOps
@@ -242,6 +243,30 @@ def nextDown (x : Float) : Float :=
     Float.ofBits (bits - 1)
   else
     Float.ofBits (bits + 1)
+
+/--
+`a + b` rounded toward `+∞`, without widening an exact sum.
+
+The Knuth two-sum error term is exact for finite operands under round-to-nearest, so the rounded
+sum steps up one ulp only when it lies below the exact sum. On overflow the error term is NaN and
+the infinite rounded sum is returned unchanged.
+
+Unlike `instBoundOpsFloat`, which always widens, this keeps exact `center + radius` endpoints when
+JSON input boxes are decoded (`NN.Verification.Util.Json`); only the two directions that decoder
+needs are provided.
+-/
+def addUpTight (a b : Float) : Float :=
+  let s := a + b
+  let bv := s - a
+  let err := (a - (s - bv)) + (b - bv)
+  if err > 0 then nextUp s else s
+
+/-- `a - b` rounded toward `-∞`, without widening an exact difference; see `addUpTight`. -/
+def subDownTight (a b : Float) : Float :=
+  let s := a - b
+  let bv := s - a
+  let err := (a - (s - bv)) + (-b - bv)
+  if err < 0 then nextDown s else s
 
 end HostFloat
 

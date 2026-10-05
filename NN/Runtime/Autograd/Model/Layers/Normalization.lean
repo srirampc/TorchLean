@@ -209,8 +209,7 @@ def batchNorm
           let nextMean := updateRunning runningMean batchMean momentumT
           let nextVariance := updateRunning runningVariance runningBatchVar momentumT
           pure (.cons weight (.cons bias <| .cons nextMean <|
-            .cons nextVariance <| .cons momentumT .nil))
-      | .train, _ => pure ps)
+            .cons nextVariance <| .cons momentumT .nil)))
     forward := fun mode {α} _ _ =>
       fun {m} _ _ =>
         fun weight bias runningMean runningVariance _momentum x =>

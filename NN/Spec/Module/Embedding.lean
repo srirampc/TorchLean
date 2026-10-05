@@ -24,7 +24,7 @@ namespace Spec.Module
 
 open TorchLean TorchLean.Tensor
 
-variable {α : Type} [TorchLean.Storage α] [Context α]
+variable {α : Type} [TorchLean.Storage α] [Add α] [Mul α] [Zero α]
 
 /-- One-hot embedding module: `(seqLen, vocab)` to `(seqLen, embedDim)`. -/
 def oneHotEmbedding {vocab embedDim seqLen : Nat}

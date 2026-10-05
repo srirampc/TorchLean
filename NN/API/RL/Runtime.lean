@@ -37,64 +37,16 @@ export Runtime.RL.Boundary
    checkTransitionFin checkTransition
    parseTransitionJson)
 export Runtime.RL.Boundary.Transition (done)
-
-/-!
-## Casting to Other Scalar Backends
-
-The trust-boundary checker validates rollout JSON in host `Float`, because that is the interchange
-format. The functions below cast accepted rollouts into the element representation chosen for the
-proof or training path.
--/
-
-/-- Cast a `Float` observation tensor into a runtime element representation `α`. -/
-def castObservation {α : Type} [TorchLean.Storage α] [Runtime.FromFloat α] {obsShape : Shape}
-    (t : Tensor Float obsShape) : Tensor α obsShape :=
-  TorchLean.Tensor.map (Runtime.ofFloat (α := α)) t
-
-/-- Cast a validated `Float` transition into a runtime element representation `α`. -/
-def castTransition {α : Type} [TorchLean.Storage α] [Runtime.FromFloat α]
-    {obsShape : Shape} {nActions : Nat}
-    (tr : Transition obsShape nActions) :
-    Spec.RL.ObservedTransition (Tensor α obsShape) (Fin nActions) α :=
-  { observation := castObservation (α := α) tr.observation
-    action := tr.action
-    reward := Runtime.ofFloat (α := α) tr.reward
-    nextObservation := castObservation (α := α) tr.nextObservation
-    terminated := tr.terminated
-    truncated := tr.truncated }
-
-/-- Cast a whole rollout into a runtime element representation `α`. -/
-def castRollout {α : Type} [TorchLean.Storage α] [Runtime.FromFloat α]
-    {obsShape : Shape} {nActions : Nat}
-    (xs : Array (Transition obsShape nActions)) :
-    Array (Spec.RL.ObservedTransition (Tensor α obsShape) (Fin nActions) α) :=
-  xs.map (castTransition (α := α) (obsShape := obsShape) (nActions := nActions))
-
-/--
-Load and validate a rollout JSON file in the requested element type.
-
-Host `Float` is the default interchange representation. Select another executable or proof-facing
-representation with `(α := ...)`.
--/
-def loadRollout {obsShape : Shape} {nActions : Nat}
-    (path : String)
-    (c : Contract obsShape nActions)
-    (α : Type := Float)
-    [TorchLean.Storage α] [Runtime.FromFloat α] :
-    IO (Array (Spec.RL.ObservedTransition (Tensor α obsShape) (Fin nActions) α)) := do
-  let xs ← Runtime.RL.Boundary.loadRollout path c
-  pure (castRollout (α := α) xs)
-
 end boundary
 
 namespace numerics
 namespace float32
 export Runtime.RL.Numerics.Float32
-  (Float32Exec Interval32
-   ofFloatChecked castTensorChecked castTransitionChecked
+  (ofFloatChecked castTensorChecked castTransitionChecked
    discountedBackupChecked discountedReturnsChecked
    tdResidualChecked
    generalizedAdvantageEstimationChecked
+   generalizedAdvantageEstimationWithBoundariesChecked
    normalizeZScoreChecked
    importanceRatioChecked
    ppoClippedObjectiveFromRatioChecked
@@ -129,7 +81,7 @@ namespace ppo
 export Runtime.RL.PPO
   (StateBatchShape LogitsBatchShape ScalarBatchShape ValueBatchShape
    Step Rollout TrainingBatch TrainConfig train
-   collectRolloutFromCallbacks collectRolloutFromSession collectRolloutFromGymnasium)
+   collect collectRolloutFromGymnasium)
 export Runtime.RL.PPO.Rollout (trainingBatch)
 
 /--
@@ -241,7 +193,7 @@ uses that layout as well.
 def actorPolicy
     {obsShape logitsShape rolloutStateShape rolloutLogitsShape rolloutValueShape : Spec.Shape}
     {actorStateShapes : List Spec.Shape}
-    {α : Type} [TorchLean.Storage α] [Context α]
+    {α : Type} [TorchLean.Storage α]
     (actorGraph : nn.TypedGraphModel actorStateShapes obsShape logitsShape α)
     (actorRollout : nn.Sequential rolloutStateShape rolloutLogitsShape)
     (criticRollout : nn.Sequential rolloutStateShape rolloutValueShape)
@@ -258,23 +210,25 @@ def actorPolicy
 Build a single-observation critic function from the state of a rollout-shaped actor-critic module.
 
 The result is scalar because the typed critic graph has a checked one-element output shape.
+Scalar tensors and any number of singleton axes are accepted.
 -/
 def criticValue
-    {obsShape rolloutStateShape rolloutLogitsShape rolloutValueShape : Spec.Shape}
+    {obsShape valueShape rolloutStateShape rolloutLogitsShape rolloutValueShape : Spec.Shape}
     {criticStateShapes : List Spec.Shape}
-    {α : Type} [TorchLean.Storage α] [Context α]
-    (criticGraph : nn.TypedGraphModel criticStateShapes obsShape [1] α)
+    {α : Type} [TorchLean.Storage α]
+    (criticGraph : nn.TypedGraphModel criticStateShapes obsShape valueShape α)
     (actorRollout : nn.Sequential rolloutStateShape rolloutLogitsShape)
     (criticRollout : nn.Sequential rolloutStateShape rolloutValueShape)
     (state : nn.State α
       (nn.stateShapes actorRollout ++ nn.stateShapes criticRollout))
-    (sameCriticState : nn.stateShapes criticRollout = criticStateShapes := by rfl) :
+    (sameCriticState : nn.stateShapes criticRollout = criticStateShapes := by rfl)
+    (oneValue : valueShape.size = 1 := by decide) :
     Tensor α obsShape → α :=
   let criticState := (splitState actorRollout criticRollout state).critic
   let criticState : nn.State α criticStateShapes :=
     criticState.cast sameCriticState
   fun obs =>
-    (criticGraph.forward criticState obs)[0]
+    Tensor.item (Tensor.reshape (criticGraph.forward criticState obs) [] oneValue)
 
 end ppo
 

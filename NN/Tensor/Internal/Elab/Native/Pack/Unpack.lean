@@ -153,7 +153,7 @@ private def compileUnpackFlatMap
       mkAppM ``Lowering.Pack.Impl.unpackLinearIndex_lt #[
         specializedChecked, component, inputIndex]
     let compiledBound ←
-      indexBoundFromValueEquality outputSize hCompiledCompact compactBound
+      mkAppM ``lt_of_eq_of_lt #[hCompiledCompact, compactBound]
     let compiledIndex ←
       mkAppOptM ``Fin.mk #[
         some outputSize, some compiledValue, some compiledBound]

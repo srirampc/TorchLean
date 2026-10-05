@@ -80,6 +80,6 @@ def verifyCert (path : String) : IO Unit := do
   -- Every input coordinate gets the box $[x_i - \varepsilon, x_i + \varepsilon]$; the
   -- graph has 3 inputs, ids `0 .. 2`.
   let ps := ExampleInputs.seedNaturalInputBox 0 3 1.0 seedParamsFloat
-  NN.Verification.IBPCert.checkOrThrow g ps (outId := 3) path
+  NN.Verification.Cert.IBPCert.checkOrThrow g ps (outId := 3) path
 
 end NN.Verification.LiRPA.Mlp

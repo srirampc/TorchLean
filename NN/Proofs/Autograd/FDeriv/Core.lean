@@ -11,13 +11,13 @@ public import NN.Proofs.Autograd.Core.Vectorization
 public import NN.Proofs.Autograd.Notation
 public import NN.Proofs.Gradients.Activation
 
-
 /-!
 # FDeriv Core
 
 `HasFDerivAt`-level (analytic) soundness for the proved-correct autograd layer.
 
-This file starts by connecting our tensor `dot` to the Euclidean-space inner product, then
+This file starts by connecting our tensor `dot` to the Euclidean-space inner product, sets up the
+generic coordinatewise calculus on Euclidean vectors (`elemwiseVec`, `elemwiseDerivCLM`), then
 proves a first end-to-end theorem for a 2-layer MLP (Linear → ReLU → Linear):
 
 * the `OpSpec` reverse-mode `backward` computes the true analytic VJP,
@@ -39,7 +39,6 @@ Notes:
 -/
 
 @[expose] public section
-
 
 namespace Proofs
 namespace Autograd
@@ -89,17 +88,11 @@ theorem dot_eq_inner_vec {n : Nat} (a b : Tensor ℝ [n]) :
     _ = inner ℝ (getScalarE a) (getScalarE b) := by
       simpa [getScalarE] using hinter.symm
 
-/-- Coordinate formula for tensor addition under `TorchLean.Tensor.getScalar`. -/
-theorem getScalar_add_spec_apply {n : Nat} (a b : Tensor ℝ [n]) (i : Fin n) :
-    TorchLean.Tensor.getScalar (addSpec a b) i
-      = TorchLean.Tensor.getScalar a i + TorchLean.Tensor.getScalar b i := by
-  exact congrFun (Spec.getScalar_add_spec a b) i
-
 /-- Vectorization commutes with tensor addition. -/
 theorem getScalarE_add_spec {n : Nat} (a b : Tensor ℝ [n]) :
     getScalarE (addSpec a b) = getScalarE a + getScalarE b := by
   ext i
-  simp [getScalarE_ofLp, getScalar_add_spec_apply]
+  simp [getScalarE_ofLp, Spec.getScalar_add_spec]
 
 /--
 Vectorization commutes with elementwise mapping: `getScalarE (map_spec f t)` is `f` applied to each
@@ -132,8 +125,7 @@ View a matrix-shaped tensor `W : Tensor ℝ (m×n)` as a Mathlib `Matrix (Fin m)
 
 This is just the coordinate function `Spec.get2`.
 -/
-def tensorToMatrix {m n : Nat} (W : Tensor ℝ [m, n]) : Matrix (Fin m) (Fin n) ℝ
-  :=
+def tensorToMatrix {m n : Nat} (W : Tensor ℝ [m, n]) : Matrix (Fin m) (Fin n) ℝ :=
   fun i j => Spec.get2 W i j
 
 /--
@@ -141,13 +133,11 @@ The matrix–vector multiplication map as a continuous linear map on Euclidean v
 
 This is the Euclidean-space version of the tensor op `matVecMulSpec`.
 -/
-def matCLM {m n : Nat} (W : Matrix (Fin m) (Fin n) ℝ) : (Vec n) →L[ℝ] (Vec m) := by
-  classical
-  let em := euclideanEquiv m
-  let en := euclideanEquiv n
+def matCLM {m n : Nat} (W : Matrix (Fin m) (Fin n) ℝ) : (Vec n) →L[ℝ] (Vec m) :=
   let L : (Fin n → ℝ) →L[ℝ] (Fin m → ℝ) :=
     ⟨W.mulVecLin, LinearMap.continuous_of_finiteDimensional W.mulVecLin⟩
-  exact em.symm.toContinuousLinearMap.comp (L.comp en.toContinuousLinearMap)
+  (euclideanEquiv m).symm.toContinuousLinearMap.comp
+    (L.comp (euclideanEquiv n).toContinuousLinearMap)
 
 /--
 Vectorization commutes with matrix–vector multiplication:
@@ -203,108 +193,129 @@ theorem getScalarE_linear_spec {inDim outDim : Nat}
   classical
   simp [Spec.linearSpec, affine, getScalarE_add_spec, getScalarE_mat_vec_mul_spec]
 
--- Coordinatewise ReLU on Euclidean vectors and its differentiability facts.
+-- ---------------------------------------------------------------------------
+-- Generic coordinatewise calculus (`Vec n → Vec n`)
+-- ---------------------------------------------------------------------------
 
-/-- Coordinatewise ReLU on `Fin n → ℝ` (function-space representation). -/
-def reluFun {n : Nat} (x : Fin n → ℝ) : Fin n → ℝ :=
-  fun i => Activation.Math.reluSpec (x i)
+/--
+Apply a scalar function `f : ℝ → ℝ` coordinatewise to a vector.
+
+This is the Euclidean-space analogue of the tensor-level `mapSpec`.
+-/
+def elemwiseVec {n : Nat} (f : ℝ → ℝ) : Vec n → Vec n :=
+  fun x => WithLp.toLp 2 fun i : Fin n => f (x.ofLp i)
+
+/-- Coordinate evaluation as a continuous linear map on `Vec n`. -/
+def evalCLM {n : Nat} (i : Fin n) : Vec n →L[ℝ] ℝ :=
+  EuclideanSpace.proj (𝕜 := ℝ) i
+
+/-- The coordinate evaluation functional reads coordinate `i`. -/
+@[simp] theorem evalCLM_apply {n : Nat} (i : Fin n) (x : Vec n) :
+    evalCLM (n := n) i x = x.ofLp i := rfl
+
+/--
+The derivative candidate for `elemwiseVec f` at a point `x`, built from a proposed scalar
+derivative `f'`.
+
+Concretely: `(elemwiseDerivCLM f' x) dx` has coordinates `i ↦ f'(xᵢ) * dxᵢ`.
+-/
+def elemwiseDerivCLM {n : Nat} (f' : ℝ → ℝ) (x : Vec n) : Vec n →L[ℝ] Vec n :=
+  (euclideanEquiv n).symm.toContinuousLinearMap.comp <|
+    ContinuousLinearMap.pi (fun i : Fin n =>
+      ContinuousLinearMap.smulRight (M₁ := Vec n) (M₂ := ℝ) (R := ℝ) (S := ℝ)
+        (evalCLM (n := n) i) (f' (x.ofLp i)))
+
+/--
+`elemwiseVec f` is Fréchet differentiable at `x` as soon as `f` is differentiable at every
+coordinate of `x`, with the diagonal derivative `elemwiseDerivCLM f' x`.
+
+This is the form needed for maps such as ReLU whose scalar derivative exists only away from
+finitely many points.
+-/
+theorem hasFDerivAt_elemwiseVec_at {n : Nat} {f f' : ℝ → ℝ} (x : Vec n)
+    (hf : ∀ i : Fin n, HasDerivAt f (f' (x.ofLp i)) (x.ofLp i)) :
+    HasFDerivAt (elemwiseVec (n := n) f) (elemwiseDerivCLM (n := n) f' x) x := by
+  classical
+  have hcoord :
+      ∀ i : Fin n,
+        HasFDerivAt (fun x : Vec n => f (x.ofLp i))
+          (ContinuousLinearMap.smulRight (M₁ := Vec n) (M₂ := ℝ) (R := ℝ) (S := ℝ)
+            (evalCLM (n := n) i) (f' (x.ofLp i))) x := by
+    intro i
+    have hfF :
+        HasFDerivAt f
+          (ContinuousLinearMap.smulRight (M₁ := ℝ) (M₂ := ℝ) (R := ℝ) (S := ℝ)
+            (1 : ℝ →L[ℝ] ℝ) (f' (x.ofLp i))) (x.ofLp i) :=
+      (hf i).hasFDerivAt
+    have happly : HasFDerivAt (fun x : Vec n => x.ofLp i) (evalCLM (n := n) i) x :=
+      (evalCLM (n := n) i).hasFDerivAt
+    have hlin :
+        (ContinuousLinearMap.smulRight (M₁ := ℝ) (M₂ := ℝ) (R := ℝ) (S := ℝ)
+            (1 : ℝ →L[ℝ] ℝ) (f' (x.ofLp i))).comp (evalCLM (n := n) i)
+          =
+        ContinuousLinearMap.smulRight (M₁ := Vec n) (M₂ := ℝ) (R := ℝ) (S := ℝ)
+          (evalCLM (n := n) i) (f' (x.ofLp i)) := by
+      ext dx
+      simp [ContinuousLinearMap.smulRight_apply]
+    exact (hfF.comp x happly).congr_fderiv hlin
+
+  have hFun :
+      HasFDerivAt (fun x : Vec n => fun i : Fin n => f (x.ofLp i))
+        (ContinuousLinearMap.pi (fun i : Fin n =>
+          ContinuousLinearMap.smulRight (M₁ := Vec n) (M₂ := ℝ) (R := ℝ) (S := ℝ)
+            (evalCLM (n := n) i) (f' (x.ofLp i)))) x := by
+    refine (hasFDerivAt_pi (𝕜 := ℝ)
+        (φ := fun i : Fin n => fun x : Vec n => f (x.ofLp i))
+        (φ' := fun i : Fin n =>
+          ContinuousLinearMap.smulRight (M₁ := Vec n) (M₂ := ℝ) (R := ℝ) (S := ℝ)
+            (evalCLM (n := n) i) (f' (x.ofLp i)))
+        (x := x)).2 ?_
+    intro i
+    simpa using hcoord i
+  have he' :
+      HasFDerivAt (fun g : Fin n → ℝ => (euclideanEquiv n).symm g)
+        ((euclideanEquiv n).symm.toContinuousLinearMap)
+        (fun i : Fin n => f (x.ofLp i)) :=
+    (ContinuousLinearMap.hasFDerivAt (euclideanEquiv n).symm.toContinuousLinearMap)
+  have hcomp := he'.comp x hFun
+  show HasFDerivAt (fun x : Vec n => WithLp.toLp 2 fun i : Fin n => f (x.ofLp i))
+    (elemwiseDerivCLM (n := n) f' x) x
+  simpa [elemwiseVec, elemwiseDerivCLM, euclideanEquiv, Function.comp_def,
+    ContinuousLinearMap.comp_apply] using hcomp
+
+/--
+If `f` is differentiable everywhere with derivative `f'`, then `elemwiseVec f` is Fréchet
+differentiable everywhere with derivative `elemwiseDerivCLM f'`.
+-/
+theorem hasFDerivAt_elemwiseVec {n : Nat} {f f' : ℝ → ℝ} (x : Vec n)
+    (hf : ∀ z, HasDerivAt f (f' z) z) :
+    HasFDerivAt (elemwiseVec (n := n) f) (elemwiseDerivCLM (n := n) f' x) x :=
+  hasFDerivAt_elemwiseVec_at x fun i => hf (x.ofLp i)
+
+-- ---------------------------------------------------------------------------
+-- Coordinatewise ReLU on Euclidean vectors
+-- ---------------------------------------------------------------------------
 
 /--
 ReLU as a map on Euclidean vectors (coordinatewise `max x 0`).
 
 This is the Euclidean-space analogue of `Spec.relu_op.forward`.
 -/
-def reluVec {n : Nat} (x : Vec n) : Vec n :=
-  (euclideanEquiv n).symm (reluFun (n := n) ((euclideanEquiv n) x))
+def reluVec {n : Nat} : Vec n → Vec n :=
+  elemwiseVec Activation.Math.reluSpec
+
+/-- Derivative of `reluVec` at `x`: the diagonal scaling by the scalar ReLU derivative mask. -/
+def reluDerivCLM {n : Nat} (x : Vec n) : Vec n →L[ℝ] Vec n :=
+  elemwiseDerivCLM Activation.Math.reluDerivSpec x
 
 /--
-Derivative candidate for the coordinatewise ReLU function on `Fin n → ℝ`, expressed as a diagonal
-scaling map by the scalar derivative mask.
--/
-def reluFunDeriv {n : Nat} (x : Fin n → ℝ) : (Fin n → ℝ) →L[ℝ] (Fin n → ℝ) :=
-  by
-    classical
-    let pr := @ContinuousLinearMap.proj ℝ _ (Fin n) (fun _ : Fin n => ℝ) _ _ _
-    exact ContinuousLinearMap.pi fun i : Fin n =>
-      (pr i).smulRight (Activation.Math.reluDerivSpec (x i))
-
-/-- Transport `reluFunDeriv` to `Vec n` via `EuclideanSpace.equiv`. -/
-def reluDerivCLM {n : Nat} (x : Vec n) : Vec n →L[ℝ] Vec n :=
-  (euclideanEquiv n).symm.toContinuousLinearMap.comp <|
-    (reluFunDeriv (x := (euclideanEquiv n x))).comp (euclideanEquiv n).toContinuousLinearMap
-
-/-!
-ReLU is not differentiable at 0. We therefore assume a “no kinks” hypothesis that every coordinate
-of `x` is nonzero.
+ReLU is not differentiable at 0, so its Fréchet derivative is asserted under the “no kinks”
+hypothesis that every coordinate of `x` is nonzero.
 -/
 theorem hasFDerivAt_reluVec {n : Nat} (x : Vec n) (hx : ∀ i : Fin n, x i ≠ 0) :
-    HasFDerivAt (reluVec (n := n)) (reluDerivCLM (n := n) x) x := by
-  classical
-  let xF : Fin n → ℝ := (euclideanEquiv n) x
-  have hxF : ∀ i : Fin n, xF i ≠ 0 := by
-    intro i
-    simpa [xF] using hx i
-
-  have hcoord :
-      ∀ i : Fin n,
-        HasFDerivAt (fun x : Fin n → ℝ => Activation.Math.reluSpec (x i))
-          ((@ContinuousLinearMap.proj ℝ _ (Fin n) (fun _ : Fin n => ℝ) _ _ _ i).smulRight
-              (Activation.Math.reluDerivSpec (xF i))) xF := by
-    intro i
-    have hrelu :
-        HasDerivAt Activation.Math.reluSpec (Activation.Math.reluDerivSpec (xF i)) (xF i) :=
-      Proofs.relu_deriv_correct (x := xF i) (h := hxF i)
-    have hreluF :
-        HasFDerivAt Activation.Math.reluSpec
-          ((1 : ℝ →L[ℝ] ℝ).smulRight (Activation.Math.reluDerivSpec (xF i))) (xF i) :=
-      hrelu.hasFDerivAt
-    have happly :
-        HasFDerivAt (fun x : Fin n → ℝ => x i)
-          (@ContinuousLinearMap.proj ℝ _ (Fin n) (fun _ : Fin n => ℝ) _ _ _ i) xF :=
-      hasFDerivAt_apply i xF
-    have hcomp := hreluF.comp xF happly
-    have hlin :
-        ((1 : ℝ →L[ℝ] ℝ).smulRight (Activation.Math.reluDerivSpec (xF i))).comp
-            (@ContinuousLinearMap.proj ℝ _ (Fin n) (fun _ : Fin n => ℝ) _ _ _ i)
-          =
-        (@ContinuousLinearMap.proj ℝ _ (Fin n) (fun _ : Fin n => ℝ) _ _ _ i).smulRight
-            (Activation.Math.reluDerivSpec (xF i)) := by
-      ext dx
-      simp [ContinuousLinearMap.smulRight_apply]
-    exact hcomp.congr_fderiv hlin
-
-  have hReluFun : HasFDerivAt (reluFun (n := n)) (reluFunDeriv (x := xF)) xF := by
-    -- Coordinatewise `relu` on function space.
-    refine (hasFDerivAt_pi (𝕜 := ℝ)
-        (φ := fun (i : Fin n) => fun x : Fin n → ℝ => Activation.Math.reluSpec (x i))
-        (φ' := fun (i : Fin n) =>
-          (@ContinuousLinearMap.proj ℝ _ (Fin n) (fun _ : Fin n => ℝ) _ _ _ i).smulRight
-            (Activation.Math.reluDerivSpec (xF i)))
-        (x := xF)).2 ?_
-    intro i
-    simpa using hcoord i
-
-  -- Transport the derivative back to `Vec n` via `euclideanEquiv n : Vec n ≃L Fin n → ℝ`.
-  have he :
-      HasFDerivAt (fun x : Vec n => (euclideanEquiv n) x)
-        ((euclideanEquiv n).toContinuousLinearMap) x :=
-    (ContinuousLinearMap.hasFDerivAt (euclideanEquiv n).toContinuousLinearMap)
-  have hmid :
-      HasFDerivAt (fun x : Vec n => reluFun (n := n) ((euclideanEquiv n) x))
-        ((reluFunDeriv (x := xF)).comp (euclideanEquiv n).toContinuousLinearMap) x := by
-    simpa [xF] using hReluFun.comp x he
-  have he' :
-      HasFDerivAt (fun y : Fin n → ℝ => (euclideanEquiv n).symm y)
-        ((euclideanEquiv n).symm.toContinuousLinearMap)
-        (reluFun (n := n) ((euclideanEquiv n) x)) :=
-    (ContinuousLinearMap.hasFDerivAt (euclideanEquiv n).symm.toContinuousLinearMap)
-  -- Compose `euclideanEquiv.symm ∘ reluFun ∘ euclideanEquiv`.
-  change HasFDerivAt
-    ((fun y : Fin n → ℝ => (euclideanEquiv n).symm y) ∘
-      fun x : Vec n => reluFun (n := n) ((euclideanEquiv n) x))
-    ((euclideanEquiv n).symm.toContinuousLinearMap ∘SL
-      (reluFunDeriv (x := (euclideanEquiv n) x) ∘SL (euclideanEquiv n).toContinuousLinearMap)) x
-  simpa [reluDerivCLM, xF, Function.comp] using he'.comp x hmid
+    HasFDerivAt (reluVec (n := n)) (reluDerivCLM (n := n) x) x :=
+  hasFDerivAt_elemwiseVec_at (f := Activation.Math.reluSpec) (f' := Activation.Math.reluDerivSpec)
+    x fun i => Proofs.relu_deriv_correct _ (hx i)
 
 -- ---------------------------------------------------------------------------
 -- 2-layer MLP: Linear → ReLU → Linear
@@ -335,14 +346,13 @@ This is the chain rule composition: `W2 ∘ ReLU'(z1) ∘ W1`.
 def mlpDeriv {inDim hidDim outDim : Nat}
     (l1 : Spec.LinearSpec ℝ inDim hidDim)
     (l2 : Spec.LinearSpec ℝ hidDim outDim)
-    (x : Vec inDim) : Vec inDim →L[ℝ] Vec outDim := by
+    (x : Vec inDim) : Vec inDim →L[ℝ] Vec outDim :=
   let W1 := tensorToMatrix (m := hidDim) (n := inDim) l1.weights
   let W2 := tensorToMatrix (m := outDim) (n := hidDim) l2.weights
   let b1 : Vec hidDim := getScalarE l1.bias
   let z1 := affine (inDim := inDim) (outDim := hidDim) W1 b1 x
-  exact
-    (matCLM (m := outDim) (n := hidDim) W2).comp
-      ((reluDerivCLM (n := hidDim) z1).comp (matCLM (m := hidDim) (n := inDim) W1))
+  (matCLM (m := outDim) (n := hidDim) W2).comp
+    ((reluDerivCLM (n := hidDim) z1).comp (matCLM (m := hidDim) (n := inDim) W1))
 
 /--
 Fréchet differentiability of the 2-layer MLP (Linear → ReLU → Linear) under a “no kinks” hypothesis.
@@ -503,10 +513,9 @@ theorem getScalar_mlp_jvp {inDim hidDim outDim : Nat}
               ((matCLM (m := hidDim) (n := inDim) W1) dxV)).ofLp j
           =
         ((matCLM (m := hidDim) (n := inDim) W1) dxV).ofLp j *
-          Activation.Math.reluDerivSpec (z1V.ofLp j) := by
-      -- Unfold the transported diagonal map and evaluate at coordinate `j`.
-      simp [reluDerivCLM, reluFunDeriv, ContinuousLinearMap.comp_apply,
-        ContinuousLinearMap.smulRight_apply, euclideanEquiv]
+          Activation.Math.reluDerivSpec (z1V.ofLp j) :=
+      -- `reluDerivCLM` is a diagonal `elemwiseDerivCLM`; coordinate `j` reads off by definition.
+      rfl
 
     -- Left side is the elementwise product `dx₁ ⊙ relu'(z₁)` in coordinate form.
     -- Right side is the same coordinate as computed by `reluDerivCLM`.
@@ -634,7 +643,7 @@ theorem mlp_backward_eq_adjoint_fderiv {inDim hidDim outDim : Nat}
         (x := dxV) (y := getScalarE δ)).symm
 
   -- Combine `hinner` and `hadjoint` to show the two candidates have equal inner products
-  -- against all `dxV`, then conclude by `inner_self_eq_zero`.
+  -- against all `dxV`.
   have hforall :
       ∀ dxV : Vec inDim,
         inner ℝ dxV (getScalarE ((mlpOp (inDim := inDim) (hidDim := hidDim) (outDim := outDim) l1
@@ -647,48 +656,21 @@ theorem mlp_backward_eq_adjoint_fderiv {inDim hidDim outDim : Nat}
     -- Both sides equal `inner ℝ ((D dxV)) δ`.
     exact (hinner dxV).symm.trans (hadjoint dxV)
 
-  -- Nondegeneracy: if `inner dxV (u - v) = 0` for all dxV, then `u = v`.
+  -- A vector is determined by its inner products against every test vector.
   have :
       getScalarE ((mlpOp (inDim := inDim) (hidDim := hidDim) (outDim := outDim) l1 l2).backward x δ)
         =
       (mlpDeriv (inDim := inDim) (hidDim := hidDim) (outDim := outDim) l1 l2 xV).adjoint
-        (getScalarE δ) := by
-    -- Let `e := u - v` and take `dxV := e`.
-    set u :=
-      getScalarE ((mlpOp (inDim := inDim) (hidDim := hidDim) (outDim := outDim) l1 l2).backward x δ)
-        with hu
-    set v :=
-      (mlpDeriv (inDim := inDim) (hidDim := hidDim) (outDim := outDim) l1 l2 xV).adjoint
-        (getScalarE δ) with hv
-    have h0 : inner ℝ (u - v) (u - v) = 0 := by
-      have hEq := hforall (dxV := (u - v))
-      -- Move to a `sub = 0` form and expand `inner (u-v) (u-v)` using bilinearity.
-      have hSub : inner ℝ (u - v) u - inner ℝ (u - v) v = 0 := by
-        simpa [sub_eq_zero] using congrArg (fun t => t - inner ℝ (u - v) v) hEq
-      -- `⟪u - v, u - v⟫ = ⟪u - v, u⟫ - ⟪u - v, v⟫`.
-      have hinnerSub :
-          inner ℝ (u - v) (u - v) = inner ℝ (u - v) u - inner ℝ (u - v) v := by
-        rw [inner_sub_right]
-      exact hinnerSub.trans hSub
-    have : u - v = 0 := (inner_self_eq_zero (𝕜 := ℝ) (x := (u - v))).1 h0
-    simpa [hu, hv] using sub_eq_zero.mp this
+        (getScalarE δ) :=
+    ext_inner_left ℝ hforall
 
   -- Replace the explicit derivative with `fderiv` using `hf`.
-  have hfderiv :
-      fderiv ℝ f xV = mlpDeriv (inDim := inDim) (hidDim := hidDim) (outDim := outDim) l1 l2 xV := by
-    simpa using hf.fderiv
-  have hfderiv' :
-      mlpDeriv (inDim := inDim) (hidDim := hidDim) (outDim := outDim) l1 l2 xV = fderiv ℝ f xV := by
-    simpa using hfderiv.symm
   calc
     getScalarE ((mlpOp (inDim := inDim) (hidDim := hidDim) (outDim := outDim) l1 l2).backward x δ)
         =
       (mlpDeriv (inDim := inDim) (hidDim := hidDim) (outDim := outDim) l1 l2 xV).adjoint
         (getScalarE δ) := this
-    _ =
-      (fderiv ℝ f xV).adjoint (getScalarE δ) := by
-        simpa using
-          congrArg (fun D : Vec inDim →L[ℝ] Vec outDim => D.adjoint (getScalarE δ)) hfderiv'
+    _ = (fderiv ℝ f xV).adjoint (getScalarE δ) := by rw [hf.fderiv]
 
 end
 end Autograd

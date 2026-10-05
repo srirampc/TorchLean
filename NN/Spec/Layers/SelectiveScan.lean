@@ -19,9 +19,11 @@ update can be viewed as an affine map
 
 `h ↦ A_t h + b_t`.
 
-Affine maps compose associatively.  A recurrent scan can therefore be implemented either by a
-left-to-right recurrence or by a parallel prefix scan over affine summaries.  The scalar definitions
-below are kept compact so that `NN/MLTheory/Proofs/StateSpace/Scan.lean` can prove the algebra
+Over a semiring, affine maps compose associatively. A recurrent scan can therefore be implemented
+either by a left-to-right recurrence or by a parallel prefix scan over affine summaries. This
+algebraic equivalence does not assert identical rounded results for IEEE arithmetic. The scalar
+definitions below are kept compact so that `NN/MLTheory/Proofs/StateSpace/Scan.lean` can
+prove the algebra
 without depending on a particular runtime backend.  The diagonal tensor definitions are the direct
 TorchLean spec analogue used by the model and CUDA contracts.
 
@@ -44,7 +46,7 @@ Run a stateful step over an array, appending each emitted value to `initialOutpu
 The initial output buffer makes this suitable for chunked execution without changing the state
 transition being specified.
 -/
-def scanArrayFrom {State Input Output : Type}
+def scanArrayFrom {State : Type*} {Input : Type*} {Output : Type*}
     (step : State → Input → State × Output) (initial : State) (initialOutputs : Array Output)
     (xs : Array Input) : State × Array Output :=
   xs.foldl
@@ -54,19 +56,19 @@ def scanArrayFrom {State Input Output : Type}
     (initial, initialOutputs)
 
 /-- Run a stateful step over an array and return the final state and emitted values. -/
-def scanArray {State Input Output : Type}
+def scanArray {State : Type*} {Input : Type*} {Output : Type*}
     (step : State → Input → State × Output) (initial : State) (xs : Array Input) :
     State × Array Output :=
   scanArrayFrom step initial #[] xs
 
 /-- Scanning an empty array returns the initial state and no outputs. -/
-@[simp] theorem scanArray_empty {State Input Output : Type}
+@[simp] theorem scanArray_empty {State : Type*} {Input : Type*} {Output : Type*}
     (step : State → Input → State × Output) (initial : State) :
     scanArray step initial (#[] : Array Input) = (initial, (#[] : Array Output)) := by
   rfl
 
 /-- A stateful scan emits exactly one value for each input. -/
-@[simp] theorem scanArray_outputs_size {State Input Output : Type}
+@[simp] theorem scanArray_outputs_size {State : Type*} {Input : Type*} {Output : Type*}
     (step : State → Input → State × Output) (initial : State) (xs : Array Input) :
     (scanArray step initial xs).2.size = xs.size := by
   unfold scanArray scanArrayFrom
@@ -83,7 +85,7 @@ def scanArray {State Input Output : Type}
     simp [f, h]
 
 /-- A scalar affine transition `h ↦ a*h + b`. -/
-structure ScalarAffineTransition (α : Type) where
+structure ScalarAffineTransition (α : Type*) where
   /-- Linear multiplier. In diagonal SSMs this is one channel of the discretized state matrix. -/
   a : α
   /-- Additive input contribution for the current token. -/
@@ -92,7 +94,7 @@ deriving Repr
 
 namespace ScalarAffineTransition
 
-variable {α : Type}
+variable {α : Type*}
 
 /-- Apply a scalar affine transition. -/
 def apply [Mul α] [Add α] (tr : ScalarAffineTransition α) (h : α) : α :=
@@ -115,7 +117,7 @@ def compose [Mul α] [Add α] (t₂ t₁ : ScalarAffineTransition α) :
 end ScalarAffineTransition
 
 /-- Sequentially run scalar affine transitions from an initial state. -/
-def runScalarAffine {α : Type} [Mul α] [Add α] (h0 : α)
+def runScalarAffine {α : Type*} [Mul α] [Add α] (h0 : α)
     (transitions : Array (ScalarAffineTransition α)) : α :=
   (scanArray (fun state transition =>
     let nextState := transition.apply state
@@ -127,21 +129,21 @@ Summarize an array of transitions as one affine transition.
 This is the algebraic payload used by parallel selective scan: prefix summaries can be produced by
 any associative scan algorithm, and applying the summary to `h0` is equivalent to recurrence.
 -/
-def summarizeScalarAffine {α : Type} [Semiring α]
+def summarizeScalarAffine {α : Type*} [Semiring α]
     (transitions : Array (ScalarAffineTransition α)) : ScalarAffineTransition α :=
   transitions.foldr
     (fun transition summary => ScalarAffineTransition.compose summary transition)
     ScalarAffineTransition.id
 
 /-- Return every recurrent state after each scalar affine transition. -/
-def scalarAffineScan {α : Type} [Mul α] [Add α] (h0 : α) :
+def scalarAffineScan {α : Type*} [Mul α] [Add α] (h0 : α) :
     Array (ScalarAffineTransition α) → Array α :=
   fun transitions => (scanArray (fun state transition =>
     let nextState := transition.apply state
     (nextState, nextState)) h0 transitions).2
 
 /-- The scalar affine scan has one state per transition. -/
-@[simp] theorem scalarAffineScan_size {α : Type} [Mul α] [Add α] (h0 : α)
+@[simp] theorem scalarAffineScan_size {α : Type*} [Mul α] [Add α] (h0 : α)
     (transitions : Array (ScalarAffineTransition α)) :
     (scalarAffineScan h0 transitions).size = transitions.size := by
   exact scanArray_outputs_size _ h0 transitions
@@ -165,7 +167,8 @@ def apply (tr : DiagonalTransition α stateDim)
 /--
 Compose diagonal affine transitions channelwise.
 
-The order is the same as `ScalarAffineTransition.compose`: `compose t₂ t₁` is first `t₁`, then `t₂`.
+The order is the same as `ScalarAffineTransition.compose`: `compose t₂ t₁` is first `t₁`,
+then `t₂`.
 -/
 def compose (t₂ t₁ : DiagonalTransition α stateDim) : DiagonalTransition α stateDim :=
   { a := Tensor.mulSpec t₂.a t₁.a

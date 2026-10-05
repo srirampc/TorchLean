@@ -64,15 +64,15 @@ def tensorLinfDistanceFloat {s : Shape} (t1 t2 : Tensor Float s) : Float :=
 /--
 Decide whether `t` lies in the closed `L2`-ball of radius `ε` around `center`.
 -/
-def inL2BallFloat {s : Shape} (center : Tensor Float s) (ε : Float) (t : Tensor Float s) : Bool
-  :=
+def inL2BallFloat {s : Shape} (center : Tensor Float s) (ε : Float) (t : Tensor Float s) :
+    Bool :=
   tensorL2DistanceFloat center t ≤ ε
 
 /--
 Decide whether `t` lies in the closed `L∞`-ball of radius `ε` around `center`.
 -/
-def inLinfBallFloat {s : Shape} (center : Tensor Float s) (ε : Float) (t : Tensor Float s) : Bool
-  :=
+def inLinfBallFloat {s : Shape} (center : Tensor Float s) (ε : Float) (t : Tensor Float s) :
+    Bool :=
   tensorLinfDistanceFloat center t ≤ ε
 
 /-! ## Empirical (sampling-based) helpers -/
@@ -132,7 +132,7 @@ with when you want to build *concrete perturbations* of a fixed length at runtim
 
 For sampling, we therefore go through a standard interop path:
 
-1. compute the scalar count `numel s` from the tensor shape,
+1. compute the scalar count `s.size` from the tensor shape,
 2. construct a flat array `xs : Array Float` of that length, then
 3. use the checked flat-data constructor to obtain a tensor of shape `s`.
 
@@ -146,12 +146,6 @@ Correctness (what is and is not guaranteed):
   not attempt to be “complete” in any verification sense: it is purely an empirical exploration
   tool to produce inputs for downstream checks/counterexamples.
 -/
-
-/--
-Number of scalar elements (“numel”) in a tensor of shape `s`.
--/
-def numel (s : Shape) : Nat :=
-  s.size
 
 /--
 Deterministically generate a length-`n` direction vector from a `seed`.
@@ -180,7 +174,7 @@ def normalizeArray (xs : Array Float) : Array Float :=
   if n > 0.0 then xs.map (fun x => x / n) else xs
 
 /--
-Unflatten a flat array of length `numel s` into a `TorchLean.Tensor Float s`.
+Unflatten a flat array of length `s.size` into a `TorchLean.Tensor Float s`.
 
 The length proof is part of the interface to avoid “silent truncation/padding”.
 -/
@@ -193,7 +187,7 @@ Build a perturbation tensor of (approximately) the given `radius`, deterministic
 
 Construction:
 
-1. Make a flat direction array `base` of length `numel s`.
+1. Make a flat direction array `base` of length `s.size`.
 2. Normalize it to unit norm (when nonzero).
 3. Scale by `radius`.
 4. Unflatten back into the tensor shape.
@@ -201,7 +195,7 @@ Construction:
 This ensures the perturbation has the right shape by construction.
 -/
 def perturbationTensor {s : Shape} (radius : Float) (seed : Nat) : Tensor Float s :=
-  let n := numel s
+  let n := s.size
   let base : Array Float := perturbDirection n seed
   let dir : Array Float := normalizeArray base
   -- Scale direction and unflatten back into the tensor shape.
@@ -216,7 +210,7 @@ def perturbationTensor {s : Shape} (radius : Float) (seed : Nat) : Tensor Float 
     calc
       xs.size = dir.size := by simp [xs]
       _ = n := hdir
-      _ = s.size := by simp [numel, n]
+      _ = s.size := by simp [n]
   unflattenToTensor (s := s) xs hlen
 
 /--
@@ -255,11 +249,11 @@ Turn an array with at least two elements `#[x₀,x₁,…,x_{m-1}]` into adjacen
 This is a small combinator that is useful when you want to turn a sample array into a set of
 “nearby pairs” for empirical ratio computations. Empty and singleton arrays return no pairs.
 -/
-def adjacentPairs {α : Type} [Inhabited α] (xs : Array α) : Array (α × α) :=
+def adjacentPairs {α : Type} (xs : Array α) : Array (α × α) :=
   if xs.size < 2 then #[]
   else
-    (Array.range xs.size).map fun i =>
-      (xs[i]!, xs[(i + 1) % xs.size]!)
+    -- `(i + 1) % xs.size` is always in bounds; the `getD` fallback only avoids a panic path.
+    xs.mapIdx fun i x => (x, xs.getD ((i + 1) % xs.size) x)
 
 end Sampling
 

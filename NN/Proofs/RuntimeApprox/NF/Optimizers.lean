@@ -88,17 +88,20 @@ def sgdContract : NumericalStepContract R (toSpec (β := β) (fexp := fexp) (rnd
     intro s exactState runtimeState learningRateError
       exactParameters runtimeParameters parameterError
       exactGradients runtimeGradients gradientError
-      _assumptions stateApprox parametersApprox gradientsApprox _assumptionsHold
-    have scaledGradientApprox := approxTensor_scale_spec_of_approx
+      _assumptions hstate hparams hgrads _assumptionsHold
+    have hscaled := approxTensor_scale_spec_of_approx
       (β := β) (fexp := fexp) (rnd := rnd)
-      exactState.learningRate runtimeState.learningRate gradientsApprox stateApprox
-    have nextParametersApprox := approxTensor_sub_spec
-      (β := β) (fexp := fexp) (rnd := rnd) parametersApprox scaledGradientApprox
+      exactState.learningRate runtimeState.learningRate hgrads hstate
+    have hnext := approxTensor_sub_spec
+      (β := β) (fexp := fexp) (rnd := rnd) hparams hscaled
     constructor
-    · exact stateApprox
-    · simpa [sgdStepError, Optim.SGD.update] using nextParametersApprox
+    · exact hstate
+    · simpa [sgdStepError, Optim.SGD.update] using hnext
 
-/-- One actual TorchLean SGD parameter update refines its exact-real counterpart. -/
+/-- One actual TorchLean SGD parameter update refines its exact-real counterpart.
+
+This is the parameter component of `sgdContract.updateApprox`; the learning rate is carried over
+unchanged, so the contract's state component is just `hstate`. -/
 theorem approxTensor_sgd_update {s : Shape}
     {stateS : Optim.SGD.State ℝ s} {stateR : Optim.SGD.State R s}
     {learningRateError : ℝ}
@@ -117,13 +120,10 @@ theorem approxTensor_sgd_update {s : Shape}
       (Optim.SGD.update stateR runtimeParameters runtimeGradients).parameters
       (sgdStepError (β := β) (fexp := fexp) (rnd := rnd)
         learningRateError parameterError gradientError
-        stateR runtimeParameters runtimeGradients).parameterError := by
-  have hscaled := approxTensor_scale_spec_of_approx
-    (β := β) (fexp := fexp) (rnd := rnd)
-    stateS.learningRate stateR.learningRate hgrads hstate
-  have hnext := approxTensor_sub_spec
-    (β := β) (fexp := fexp) (rnd := rnd) hparams hscaled
-  simpa [sgdStepError, Optim.SGD.update] using hnext
+        stateR runtimeParameters runtimeGradients).parameterError :=
+  ((sgdContract (β := β) (fexp := fexp) (rnd := rnd)).updateApprox
+    stateS stateR learningRateError exactParameters runtimeParameters parameterError
+    exactGradients runtimeGradients gradientError () hstate hparams hgrads trivial).2
 
 /-! ## Momentum SGD -/
 
@@ -484,6 +484,7 @@ theorem approxTensor_adamW_update {s : Shape}
         (Optim.AdamW.update stateS paramsS gradsS).parameters
         (Optim.AdamW.update stateR paramsR gradsR).parameters
         trace.parameterError := by
+  have _ := hMoment2Margin
   dsimp only
   rcases hstate with ⟨hlr, hbeta1, hbeta2, hepsilon, hweightDecay, hm, hv, ht⟩
   let mS := addSpec (scaleSpec stateS.firstMoment stateS.beta1)
@@ -526,7 +527,6 @@ theorem approxTensor_adamW_update {s : Shape}
   have hsqrt := approxTensor_sqrt_spec_of_pos_lb
     (β := β) (fexp := fexp) (rnd := rnd) η hη hvHat
       (by simpa [vHatS, vS, bias2S] using hMoment2Hat)
-      hMoment2Margin
   have hepsilonFill := approxTensor_full_const
     (β := β) (fexp := fexp) (rnd := rnd) hepsilon (s := s)
   have hdenominator := approxTensor_add_spec
@@ -663,8 +663,7 @@ def adamWContract : NumericalStepContract R
       ("decay scale", assumptions.derivedErrors.decayScale)]
   updateApprox := by
     intro s stateS stateR stateError paramsS paramsR paramsError gradsS gradsR gradsError
-      assumptions
-      hstate hparams hgrads hvalid
+      assumptions hstate hparams hgrads hvalid
     rcases hvalid with
       ⟨honeMinus1, honeMinus2, hbias1, hbias2, hdecay, hEta, hEpsilon,
         hMoment2Hat, hMoment2Margin, hDenominatorMargin⟩

@@ -55,8 +55,8 @@ def crownUBoundsForward (g : Graph) (ps : ParamStore Float)
         some (ulo, uhi)
     | .error _ => none
 
-/-- Objective-dependent (backward/dual) CROWN bounds for the scalar output `u` (or sum of outputs).
-  -/
+/-- Objective-dependent (backward/dual) CROWN bounds for the scalar output `u` (or the sum of
+outputs). -/
 def crownUBoundsBackward (g : Graph) (ps : ParamStore Float)
   (ibp : Array (Option (FlatBox Float))) : Option (Float × Float) :=
   match ps.inputBoxes[0]? with
@@ -68,8 +68,7 @@ def crownUBoundsBackward (g : Graph) (ps : ParamStore Float)
       match outputBox? ibp outId with
       | .ok B => B.dim
       | .error _ => 0
-    let objV : Tensor Float [outDim] := Tensor.full (α := Float) (.dim outDim
-      .scalar) 1.0
+    let objV : Tensor Float [outDim] := Tensor.full (α := Float) [outDim] 1.0
     let obj : FlatTensor Float := { n := outDim, v := objV }
     match backwardObjectiveBox? (α := Float) g ps ctx ibp inB outId obj with
     | .ok outB =>

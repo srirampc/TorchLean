@@ -72,8 +72,7 @@ Attention with optional affine projection biases and dropout on softmax probabil
 
 The operation order is projection, head splitting, scaled dot products, masked softmax,
 probability dropout, value aggregation, and output projection. Dropout therefore removes
-individual query/key contributions before values are mixed. The existing fused attention path
-remains available to the bias-free constructors without probability dropout.
+individual query/key contributions before values are mixed.
 -/
 def forward {α : Type} [Storage α] [Context α]
     {m : Type → Type} [Monad m] [Ops (m := m) (α := α)]
@@ -167,141 +166,6 @@ def takeOptional {Ref : Shape → Type} (enabled : Bool) (shape : Shape) {rest :
 end Attention
 
 /--
-Multi-head self-attention layer for a sequence
-`(sequenceLength × modelWidth) → (sequenceLength × modelWidth)`.
-
-This layer packs the four projection matrices `(Wq, Wk, Wv, Wo)` and calls the TorchLean attention
-primitive. An optional boolean mask of shape `(sequenceLength × sequenceLength)` can be provided,
-for example for causal masking.
-
-PyTorch analogy: `torch.nn.MultiheadAttention(embed_dim=modelWidth, num_heads=headCount)` in
-self-attention mode.
--/
-def multiHeadAttention
-    (batchSize sequenceLength modelWidth headCount headWidth : Nat)
-    {sequenceLengthNonzero : sequenceLength ≠ 0}
-    (queryWeightSeed keyWeightSeed valueWeightSeed outputWeightSeed : Nat := 0)
-    (weightInitialization? : Option Torch.Init.Scheme := none)
-    (outputWeightInitialization? : Option Torch.Init.Scheme := none)
-    (mask : Option (Tensor Bool [sequenceLength, sequenceLength]) := none) :
-    Layer [batchSize, sequenceLength, modelWidth] [batchSize, sequenceLength, modelWidth] :=
-  let projectionWidth := headCount * headWidth
-  let projectionWeightShape : Shape := [modelWidth, projectionWidth]
-  let outputWeightShape : Shape := [projectionWidth, modelWidth]
-  let projectionInitialization :=
-    weightInitialization?.getD (.xavierUniform modelWidth projectionWidth)
-  let outputInitialization :=
-    outputWeightInitialization?.orElse (fun _ => weightInitialization?)
-      |>.getD (.xavierUniform projectionWidth modelWidth)
-  let initialQueryWeight : Tensor Float projectionWeightShape :=
-    Torch.Init.tensor projectionInitialization (seed := queryWeightSeed)
-  let initialKeyWeight : Tensor Float projectionWeightShape :=
-    Torch.Init.tensor projectionInitialization (seed := keyWeightSeed)
-  let initialValueWeight : Tensor Float projectionWeightShape :=
-    Torch.Init.tensor projectionInitialization (seed := valueWeightSeed)
-  let initialOutputWeight : Tensor Float outputWeightShape :=
-    Torch.Init.tensor outputInitialization (seed := outputWeightSeed)
-  { kind := s!"MultiHeadAttention(heads={headCount}, headWidth={headWidth})"
-    stateShapes :=
-      [projectionWeightShape, projectionWeightShape, projectionWeightShape, outputWeightShape]
-    initState :=
-      .cons initialQueryWeight <|
-      .cons initialKeyWeight <|
-      .cons initialValueWeight <|
-      .cons initialOutputWeight .nil
-    runtimeInit := some <|
-      .cons (Module.RuntimeInit.FloatInit.ofScheme projectionInitialization queryWeightSeed) <|
-      .cons (Module.RuntimeInit.FloatInit.ofScheme projectionInitialization keyWeightSeed) <|
-      .cons (Module.RuntimeInit.FloatInit.ofScheme projectionInitialization valueWeightSeed) <|
-      .cons (Module.RuntimeInit.FloatInit.ofScheme outputInitialization outputWeightSeed) .nil
-    requiresGrad := #[true, true, true, true]
-    validateConfig := do
-      if modelWidth = 0 then
-        throw "MultiHeadAttention: model width must be positive"
-      if headCount = 0 then
-        throw "MultiHeadAttention: head count must be positive"
-      if headWidth = 0 then
-        throw "MultiHeadAttention: head width must be positive"
-      projectionInitialization.validate
-      outputInitialization.validate
-    forward := fun _ {α} _ _ =>
-      fun {m} _ _ =>
-        fun queryWeight keyWeight valueWeight outputWeight input =>
-          Runtime.Autograd.Model.multiHeadAttention (m := m) (α := α)
-            (leadingShape := [batchSize]) (n := sequenceLength) (numHeads := headCount)
-            (dModel := modelWidth) (headDim := headWidth)
-            (hN := sequenceLengthNonzero)
-            queryWeight keyWeight valueWeight outputWeight input (mask := mask)
-  }
-
-/--
-Multi-head self-attention with a trainable bias on the final output projection.
-
-The Q/K/V projections remain bias-free.  This is the parameterization used in Karpathy's
-educational GPT implementation: the three per-head projections are linear maps without bias,
-while the projection applied after concatenating the heads is affine.
--/
-def multiHeadAttentionOutputBias
-    (batchSize sequenceLength modelWidth headCount headWidth : Nat)
-    {sequenceLengthNonzero : sequenceLength ≠ 0}
-    (queryWeightSeed keyWeightSeed valueWeightSeed outputWeightSeed : Nat := 0)
-    (weightInitialization? : Option Torch.Init.Scheme := none)
-    (outputWeightInitialization? : Option Torch.Init.Scheme := none)
-    (mask : Option (Tensor Bool [sequenceLength, sequenceLength]) := none) :
-    Layer [batchSize, sequenceLength, modelWidth] [batchSize, sequenceLength, modelWidth] :=
-  let projectionWidth := headCount * headWidth
-  let projectionWeightShape : Shape := [modelWidth, projectionWidth]
-  let outputWeightShape : Shape := [projectionWidth, modelWidth]
-  let outputBiasShape : Shape := [modelWidth]
-  let projectionInitialization :=
-    weightInitialization?.getD (.xavierUniform modelWidth projectionWidth)
-  let outputInitialization :=
-    outputWeightInitialization?.orElse (fun _ => weightInitialization?)
-      |>.getD (.xavierUniform projectionWidth modelWidth)
-  let initialQueryWeight : Tensor Float projectionWeightShape :=
-    Torch.Init.tensor projectionInitialization (seed := queryWeightSeed)
-  let initialKeyWeight : Tensor Float projectionWeightShape :=
-    Torch.Init.tensor projectionInitialization (seed := keyWeightSeed)
-  let initialValueWeight : Tensor Float projectionWeightShape :=
-    Torch.Init.tensor projectionInitialization (seed := valueWeightSeed)
-  let initialOutputWeight : Tensor Float outputWeightShape :=
-    Torch.Init.tensor outputInitialization (seed := outputWeightSeed)
-  let initialOutputBias : Tensor Float outputBiasShape := Tensor.zeros (α := Float) outputBiasShape
-  { kind := s!"MultiHeadAttention(heads={headCount}, headWidth={headWidth}, outputBias=true)"
-    stateShapes :=
-      [projectionWeightShape, projectionWeightShape, projectionWeightShape, outputWeightShape,
-        outputBiasShape]
-    initState :=
-      .cons initialQueryWeight <|
-      .cons initialKeyWeight <|
-      .cons initialValueWeight <|
-      .cons initialOutputWeight <|
-      .cons initialOutputBias .nil
-    runtimeInit := some <|
-      .cons (Module.RuntimeInit.FloatInit.ofScheme projectionInitialization queryWeightSeed) <|
-      .cons (Module.RuntimeInit.FloatInit.ofScheme projectionInitialization keyWeightSeed) <|
-      .cons (Module.RuntimeInit.FloatInit.ofScheme projectionInitialization valueWeightSeed) <|
-      .cons (Module.RuntimeInit.FloatInit.ofScheme outputInitialization outputWeightSeed) <|
-      .cons .zeros .nil
-    requiresGrad := #[true, true, true, true, true]
-    validateConfig := do
-      if modelWidth = 0 then
-        throw "MultiHeadAttention: model width must be positive"
-      if headCount = 0 then
-        throw "MultiHeadAttention: head count must be positive"
-      if headWidth = 0 then
-        throw "MultiHeadAttention: head width must be positive"
-      projectionInitialization.validate
-      outputInitialization.validate
-    forward := fun _ {α} _ _ =>
-      fun {m} _ _ =>
-        fun queryWeight keyWeight valueWeight outputWeight outputBias input =>
-          Runtime.Autograd.Model.multiHeadAttentionOutputBias (m := m) (α := α)
-            (leadingShape := [batchSize]) (n := sequenceLength) (numHeads := headCount)
-            (dModel := modelWidth) (headDim := headWidth) sequenceLengthNonzero
-            queryWeight keyWeight valueWeight outputWeight outputBias input (mask := mask) }
-
-/--
 Configurable affine self-attention with optional probability dropout.
 
 The first four state slots remain `queryWeight, keyWeight, valueWeight, outputWeight`.
@@ -309,7 +173,7 @@ Enabling input bias appends `queryBias, keyBias, valueBias`; enabling output bia
 `outputBias`; enabling dropout appends its non-trainable scalar probability. Disabled options
 allocate no state slots. All biases start at zero and consume no initialization seeds.
 -/
-def multiHeadAttentionConfigured
+def attention
     (batchSize sequenceLength modelWidth headCount headWidth : Nat)
     {sequenceLengthNonzero : sequenceLength ≠ 0}
     (queryWeightSeed keyWeightSeed valueWeightSeed outputWeightSeed : Nat := 0)
@@ -319,10 +183,26 @@ def multiHeadAttentionConfigured
     (inputBias outputBias : Bool := false)
     (dropout? : Option Float := none) (dropoutSeed : Nat := 0) :
     Layer [batchSize, sequenceLength, modelWidth] [batchSize, sequenceLength, modelWidth] :=
-  let base := multiHeadAttention batchSize sequenceLength modelWidth headCount headWidth
-    (sequenceLengthNonzero := sequenceLengthNonzero)
-    queryWeightSeed keyWeightSeed valueWeightSeed outputWeightSeed
-    weightInitialization? outputWeightInitialization? mask
+  let projectionWidth := headCount * headWidth
+  let projectionWeightShape : Shape := [modelWidth, projectionWidth]
+  let outputWeightShape : Shape := [projectionWidth, modelWidth]
+  let projectionInitialization :=
+    weightInitialization?.getD (.xavierUniform modelWidth projectionWidth)
+  let outputInitialization :=
+    outputWeightInitialization?.orElse (fun _ => weightInitialization?)
+      |>.getD (.xavierUniform projectionWidth modelWidth)
+  let weightShapes :=
+    [projectionWeightShape, projectionWeightShape, projectionWeightShape, outputWeightShape]
+  let weightState : TensorPack Float weightShapes :=
+    .cons (Torch.Init.tensor projectionInitialization (seed := queryWeightSeed)) <|
+    .cons (Torch.Init.tensor projectionInitialization (seed := keyWeightSeed)) <|
+    .cons (Torch.Init.tensor projectionInitialization (seed := valueWeightSeed)) <|
+    .cons (Torch.Init.tensor outputInitialization (seed := outputWeightSeed)) .nil
+  let weightInit : Module.RuntimeInit.Plan weightShapes :=
+    .cons (Module.RuntimeInit.FloatInit.ofScheme projectionInitialization queryWeightSeed) <|
+    .cons (Module.RuntimeInit.FloatInit.ofScheme projectionInitialization keyWeightSeed) <|
+    .cons (Module.RuntimeInit.FloatInit.ofScheme projectionInitialization valueWeightSeed) <|
+    .cons (Module.RuntimeInit.FloatInit.ofScheme outputInitialization outputWeightSeed) .nil
   let projectionShape : Shape := [headCount * headWidth]
   let outputShape : Shape := [modelWidth]
   let extraShapes :=
@@ -345,15 +225,22 @@ def multiHeadAttentionConfigured
         (.flat (FloatArray.mk #[dropout?.getD 0.0]))).append .nil
   { kind := s!"MultiHeadAttention(heads={headCount}, headWidth={headWidth}, " ++
       s!"inputBias={inputBias}, outputBias={outputBias})"
-    stateShapes := base.stateShapes ++ extraShapes
-    initState := base.initState.append extraState
-    runtimeInit := base.runtimeInit.map (fun plan => plan.append extraInit)
+    stateShapes := weightShapes ++ extraShapes
+    initState := weightState.append extraState
+    runtimeInit := some (weightInit.append extraInit)
     requiresGrad := #[true, true, true, true] ++
       (if inputBias then #[true, true, true] else #[]) ++
       (if outputBias then #[true] else #[]) ++
       (if dropout?.isSome then #[false] else #[])
     validateConfig := do
-      base.validateConfig
+      if modelWidth = 0 then
+        throw "Attention: model width must be positive"
+      if headCount = 0 then
+        throw "Attention: head count must be positive"
+      if headWidth = 0 then
+        throw "Attention: head width must be positive"
+      projectionInitialization.validate
+      outputInitialization.validate
       match dropout? with
       | none => pure ()
       | some probability =>
@@ -363,7 +250,7 @@ def multiHeadAttentionConfigured
     forward := fun mode {α} _ _ => fun {m} _ _ =>
       Runtime.Autograd.Torch.CurriedRef.curry
         (Ref := fun shape => Ref (m := m) (α := α) shape)
-        (ss := (base.stateShapes ++ extraShapes) ++ [[batchSize, sequenceLength, modelWidth]])
+        (ss := (weightShapes ++ extraShapes) ++ [[batchSize, sequenceLength, modelWidth]])
         (β := m (Ref (m := m) (α := α) [batchSize, sequenceLength, modelWidth]))
         fun arguments => do
           let (state, input) := Runtime.Autograd.Torch.RefList.splitLast arguments
@@ -374,11 +261,18 @@ def multiHeadAttentionConfigured
           let (valueBias, extra) := Attention.takeOptional inputBias projectionShape extra
           let (outputBias, extra) := Attention.takeOptional outputBias outputShape extra
           let (probability, _) := Attention.takeOptional dropout?.isSome .scalar extra
-          Attention.forward (m := m) (α := α)
-            (batch := batchSize) (n := sequenceLength) (modelWidth := modelWidth)
-            (heads := headCount) (headWidth := headWidth)
-            queryWeight keyWeight valueWeight outputWeight queryBias keyBias valueBias
-            outputBias probability input mask dropoutSeed (mode == .train) }
+          if !inputBias && dropout?.isNone then
+            Runtime.Autograd.Model.attention (m := m) (α := α)
+              (leadingShape := [batchSize]) (n := sequenceLength) (numHeads := headCount)
+              (dModel := modelWidth) (headDim := headWidth) (hN := sequenceLengthNonzero)
+              queryWeight keyWeight valueWeight outputWeight input (mask := mask)
+              (outputBias := outputBias)
+          else
+            Attention.forward (m := m) (α := α)
+              (batch := batchSize) (n := sequenceLength) (modelWidth := modelWidth)
+              (heads := headCount) (headWidth := headWidth)
+              queryWeight keyWeight valueWeight outputWeight queryBias keyBias valueBias
+              outputBias probability input mask dropoutSeed (mode == .train) }
 
 end Layers
 

@@ -67,6 +67,17 @@ def actionLogProbability {nActions : Nat} (logits : Tensor α [nActions])
     (action : Fin nActions) (epsilon : α := Context.defaultEpsilon) : α :=
   MathFunctions.log (actionProbability (α := α) logits action epsilon)
 
+/-- Unclamped log-probability `log_softmax(logits)[action]`.
+
+`Autograd.actionLogProbOneHot` additionally clamps log-probabilities to `[-10^30, 10^30]`
+before one-hot multiplication. This helper agrees with that selected value only when the clamp
+is inactive and the reductions agree. Rollouts used by that objective must apply the same clamp
+to cached old log-probabilities; an unclamped tail value can otherwise produce a nonunit ratio
+even when the policy parameters are unchanged. -/
+def actionLogSoftmax {nActions : Nat} (logits : Tensor α [nActions])
+    (action : Fin nActions) : α :=
+  Tensor.getScalar (Activation.logSoftmaxVecSpec (α := α) (n := nActions) logits) action
+
 /-- Guarded entropy bonus `-Σ q(a) log q(a)`, where `p = softmax logits` and
 `q = clamp p epsilon (1 - epsilon)`.
 
@@ -85,12 +96,6 @@ def reinforceLoss {nActions : Nat} (logits : Tensor α [nActions])
     (action : Fin nActions) (returnOrAdvantage : α) (epsilon : α := Context.defaultEpsilon) : α :=
   Neg.neg (returnOrAdvantage * actionLogProbability (α := α) logits action epsilon)
 
-/-- Advantage actor-critic policy loss:
-`-A_t * log π(a_t | s_t)`. -/
-def actorLoss {nActions : Nat} (logits : Tensor α [nActions])
-    (action : Fin nActions) (advantage : α) (epsilon : α := Context.defaultEpsilon) : α :=
-  reinforceLoss (α := α) logits action advantage epsilon
-
 /-- Value-regression loss used by actor-critic and PPO critics. -/
 def criticLoss (valuePrediction valueTarget : α) (valueCoef : α := 1) : α :=
   valueCoef * Core.squaredError (α := α) valuePrediction valueTarget
@@ -101,21 +106,9 @@ def actorCriticLoss {nActions : Nat} (logits : Tensor α [nActions])
     (action : Fin nActions) (advantage valuePrediction valueTarget : α)
     (valueCoef : α := 1) (entropyCoef : α := 0)
     (epsilon : α := Context.defaultEpsilon) : α :=
-  actorLoss (α := α) logits action advantage epsilon
+  reinforceLoss (α := α) logits action advantage epsilon
     + criticLoss (α := α) valuePrediction valueTarget valueCoef
     - entropyCoef * entropyBonus (α := α) logits epsilon
-
-/-- Advantage actor-critic loss with an explicit entropy bonus coefficient.
-
-This is the A2C/A3C-shaped single-sample objective:
-`-A_t log π(a_t|s_t) + c_v value_loss - c_e H(π(.|s_t))`.
--/
-def a2cLoss {nActions : Nat} (logits : Tensor α [nActions])
-    (action : Fin nActions) (advantage valuePrediction valueTarget : α)
-    (valueCoef : α := 1) (entropyCoef : α := 0)
-    (epsilon : α := Context.defaultEpsilon) : α :=
-  actorCriticLoss (α := α) logits action advantage valuePrediction valueTarget valueCoef entropyCoef
-    epsilon
 
 /-- Importance ratio `π_new(a|s) / π_old(a|s)` computed from log-probabilities. -/
 def importanceRatio (newLogProb oldLogProb : α) : α :=
@@ -264,16 +257,14 @@ def sampleCategorical {nActions : Nat} [NeZero nActions]
   let default : Fin nActions :=
     ⟨nActions - 1, Nat.pred_lt (NeZero.ne nActions)⟩
   Id.run do
-    let idxs : Array (Fin nActions) := Array.ofFn (fun i => i)
     let mut cum : α := 0
-    let mut chosen : Option (Fin nActions) := none
-    for k in idxs do
-      if chosen.isNone then
-        let pk : α := Tensor.item (get probs k)
-        cum := cum + pk
-        if Context.gtBool cum u then
-          chosen := some k
-    return (counter + 1, chosen.getD default)
+    for h : k in [:nActions] do
+      let action : Fin nActions := ⟨k, h.2.1⟩
+      let pk : α := Tensor.item (get probs action)
+      cum := cum + pk
+      if Context.gtBool cum u then
+        return (counter + 1, action)
+    return (counter + 1, default)
 
 /-- Sample an action from logits by applying softmax then `sampleCategorical`. -/
 def sampleActionFromLogits {nActions : Nat} [NeZero nActions]

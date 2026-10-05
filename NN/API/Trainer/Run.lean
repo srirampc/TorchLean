@@ -69,20 +69,6 @@ def withDevice (run : RunConfig) (device : Runtime.Device) : Except String RunCo
         s!"device `{device.cliName}` has no maintained runtime profile; " ++
           "provide an explicit backend profile"
 
-/--
-Select a complete backend contract profile.
-
-The profile carries the device, provider preference, assurance policy, VJP ownership, and capsule
-registry together. It can select, for example, LibTorch forward execution with a TorchLean-owned
-backward pass.
--/
-def withBackendProfile (run : RunConfig) (profile : NN.Backend.BackendProfile) : RunConfig :=
-  { run with device := profile.policy.device, backendProfile? := some profile }
-
-/-- Enable or disable first-use backend capsule reporting. -/
-def withBackendReport (run : RunConfig) (enabled : Bool := true) : RunConfig :=
-  { run with showBackend := enabled }
-
 /-- Apply runtime execution settings to a persistent trainer run configuration. -/
 def withRuntime (run : RunConfig) (runtime : Runtime.Config) : RunConfig :=
   { run with
@@ -105,7 +91,7 @@ def executionSettings (run : RunConfig) : Runtime.Config :=
 /-- Attach a training objective and initialization seed to these run settings. -/
 def forObjective {σ τ : Shape}
     (run : RunConfig)
-    (objective : Objective τ := .meanSquaredError)
+    (objective : Objective τ := .mse)
     (seed : Nat := 0) :
     Config σ τ :=
   { run with objective := objective, seed := seed }
@@ -142,7 +128,8 @@ structure TrainOptions where
   scheduler : Option TorchLean.Trainer.Scheduler.Config := none
   /-- Print step losses every `logEvery` updates; `0` disables stdout step logging. -/
   logEvery : Nat := 0
-  /-- Sample CUDA allocator state every this many completed updates; `0` disables sampling. -/
+  /-- CUDA allocator sampling cadence. `0` uses automatic sampling for runs of at least 1000
+  updates and disables it for shorter runs. Non-CUDA runs do not sample the allocator. -/
   cudaMemorySampleEvery : Nat := 0
   /-- Optional TrainLog artifact destination. Use `.disabled` for stdout-only runs. -/
   logDestination : Training.LogDestination := .disabled
@@ -154,6 +141,12 @@ structure TrainOptions where
   loadCheckpoint? : Option System.FilePath := none
   /-- Optional model-state checkpoint written after training. -/
   saveCheckpoint? : Option System.FilePath := none
+  /--
+  Measure and print the evaluation-mode mean loss over the whole dataset before and after
+  training. Each measurement is a forward pass over every sample, so large streamed datasets may
+  turn it off; the report then records `NaN` for both losses.
+  -/
+  reportLoss : Bool := true
 
 namespace TrainOptions
 

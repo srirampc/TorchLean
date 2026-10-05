@@ -25,7 +25,7 @@
    "type": "git",
    "subDir": null,
    "scope": "",
-   "rev": "c9a051f08f948ce473036b815b0669fafb61f601",
+   "rev": "1e83f09ed8c41a953cf8f93d26c210778177b94a",
    "name": "floatlib",
    "manifestFile": "lake-manifest.json",
    "inputRev": "main",

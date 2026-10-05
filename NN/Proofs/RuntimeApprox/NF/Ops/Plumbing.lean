@@ -7,8 +7,6 @@ Authors: TorchLean Team
 module
 
 public import NN.Proofs.RuntimeApprox.Graph.ForwardApprox
-public import Mathlib.Analysis.SpecialFunctions.Trigonometric.DerivHyp
-
 
 /-!
 # NF Tensor Approximation Plumbing
@@ -18,7 +16,6 @@ to turn scalar absolute-error facts into tensor-level forward-error bounds.
 -/
 
 @[expose] public section
-
 
 namespace Proofs
 namespace RuntimeApprox
@@ -44,7 +41,7 @@ theorem approxTensor_mono {α : Type} {toSpec : α → SpecScalar} {s : Shape}
   le_trans h hle
 
 /-- `linfNorm` is always nonnegative. -/
-theorem linf_norm_nonneg : ∀ {s : Shape} (t : SpecTensor s), 0 ≤ linfNorm t := by
+theorem linfNorm_nonneg : ∀ {s : Shape} (t : SpecTensor s), 0 ≤ linfNorm t := by
   intro s t
   induction s with
   | scalar =>
@@ -64,9 +61,9 @@ theorem linf_norm_nonneg : ∀ {s : Shape} (t : SpecTensor s), 0 ≤ linfNorm t 
 /--
 Componentwise bound for `linfNorm` on a dimensioned tensor.
 
-The norm of any component `t[i]` is bounded by the norm of the whole tensor.
+The norm of any slice `t.unstack i` is bounded by the norm of the whole tensor.
 -/
-theorem linf_norm_le_get_dim {n : Nat} {s : Shape} (t : SpecTensor (.dim n s)) (i : Fin n) :
+theorem linfNorm_unstack_le {n : Nat} {s : Shape} (t : SpecTensor (.dim n s)) (i : Fin n) :
     linfNorm (t.unstack i) ≤ linfNorm t := by
   rw [show t = Tensor.dim (Tensor.unstack t) from (Tensor.dim_unstack t).symm]
   have hi : i ∈ List.finRange n := List.mem_finRange i
@@ -90,16 +87,14 @@ theorem approxTensor_scalar_iff {α : Type} {toSpec : α → SpecScalar} {x : Sp
   · intro h
     have h' : abs (x - toSpec xR) ≤ eps := by
       simpa [approxTensor, approxWith, tensorToSpec, linfNorm, RuntimeApprox.linfNorm,
-        tensorDistance, NN.MLTheory.Robustness.Spec.tensor_distance_tensor_sub_eq_sub_spec,
-        tensorLinfNorm, TorchLean.Tensor.map, TorchLean.Tensor.subSpec,
+        tensorDistance, tensorLinfNorm, TorchLean.Tensor.map, TorchLean.Tensor.subSpec,
         TorchLean.Tensor.map2Spec_scalar, Tensor.item, MathFunctions.abs] using h
     simpa [abs_sub_comm] using h'
   · intro h
     have h' : abs (x - toSpec xR) ≤ eps := by
       simpa [abs_sub_comm] using h
     simpa [approxTensor, approxWith, tensorToSpec, linfNorm, RuntimeApprox.linfNorm,
-      tensorDistance, NN.MLTheory.Robustness.Spec.tensor_distance_tensor_sub_eq_sub_spec,
-      tensorLinfNorm, TorchLean.Tensor.map, TorchLean.Tensor.subSpec,
+      tensorDistance, tensorLinfNorm, TorchLean.Tensor.map, TorchLean.Tensor.subSpec,
       TorchLean.Tensor.map2Spec_scalar, Tensor.item, MathFunctions.abs] using h'
 
 /-- Scalar characterization of `approxTensor` stated for arbitrary rank-zero tensors. -/
@@ -113,10 +108,10 @@ theorem approxTensor_scalar_item_iff {α : Type} {toSpec : α → SpecScalar}
 /--
 Projection lemma for `approxTensor` on dimensioned tensors.
 
-If `xS` approximates `xR` within `eps`, then each component `xS[i]` approximates `xR[i]` within
-  `eps`.
+If `xS` approximates `xR` within `eps`, then each slice `xS.unstack i` approximates
+`xR.unstack i` within `eps`.
 -/
-theorem approxTensor_dim_get {α : Type} {toSpec : α → SpecScalar} {n : Nat} {s : Shape}
+theorem approxTensor_unstack {α : Type} {toSpec : α → SpecScalar} {n : Nat} {s : Shape}
     {xS : SpecTensor (.dim n s)} {xR : Tensor α (.dim n s)} {eps : SpecScalar}
     (h : approxTensor (α := α) (toSpec := toSpec) xS xR eps) (i : Fin n) :
     approxTensor (α := α) (toSpec := toSpec)
@@ -124,12 +119,11 @@ theorem approxTensor_dim_get {α : Type} {toSpec : α → SpecScalar} {n : Nat} 
       (xR.unstack i)
       eps := by
   have hComp :=
-    linf_norm_le_get_dim
-      (t := tensorDistance.tensorSub (α := SpecScalar) xS
+    linfNorm_unstack_le
+      (t := TorchLean.Tensor.subSpec (α := SpecScalar) xS
         (tensorToSpec (α := α) (toSpec := toSpec) xR)) i
   have hResult := le_trans hComp h
   simpa [approxTensor, approxWith, tensorDistance, tensorToSpec,
-    NN.MLTheory.Robustness.Spec.tensor_distance_tensor_sub_eq_sub_spec,
     TorchLean.Tensor.subSpec, TorchLean.Tensor.map2Spec, TorchLean.Tensor.map,
     TorchLean.Tensor.unstack,
     TorchLean.Tensor.Internal.Rep.map_unstack,
@@ -147,15 +141,15 @@ theorem approxTensor_eps_nonneg {α : Type} {toSpec : α → SpecScalar} {s : Sh
       0 ≤ tensorDistance (α := SpecScalar) linfNorm xS
         (tensorToSpec (α := α) (toSpec := toSpec) xR) := by
     simpa [tensorDistance, linfNorm] using
-      (linf_norm_nonneg
-        (t := tensorDistance.tensorSub (α := SpecScalar) (s := s) xS
+      (linfNorm_nonneg
+        (t := TorchLean.Tensor.subSpec (α := SpecScalar) (s := s) xS
           (tensorToSpec (α := α) (toSpec := toSpec) xR)))
   exact le_trans h0 hx
 
 /-- Assemble a dimensioned tensor approximation from uniform componentwise approximations.
 
 The premise uses one common infinity-norm budget for every component.  This is the converse of
-`approxTensor_dim_get` and is deliberately polymorphic in the runtime element representation, so NF,
+`approxTensor_unstack` and is deliberately polymorphic in the runtime element representation, so NF,
 IEEE execution, interval, and future quantized backends can share the same structural proof.
 -/
 theorem approxTensor_dim_of_forall {α : Type} {toSpec : α → SpecScalar} {n : Nat} {s : Shape}
@@ -185,7 +179,6 @@ theorem approxTensor_dim_of_forall {α : Type} {toSpec : α → SpecScalar} {n :
       (acc := (0 : SpecScalar)) (eps := eps) hε hf
   simpa [approxTensor, approxWith, tensorDistance, linfNorm, RuntimeApprox.linfNorm,
     tensorToSpec, tensorLinfNorm, MathFunctions.abs,
-    NN.MLTheory.Robustness.Spec.tensor_distance_tensor_sub_eq_sub_spec,
     TorchLean.Tensor.subSpec, TorchLean.Tensor.map2Spec, TorchLean.Tensor.map,
     TorchLean.Tensor.dim, TorchLean.Tensor.unstack,
     TorchLean.Tensor.Internal.Rep.map_stack,
@@ -197,75 +190,6 @@ theorem approxTensor_dim_of_forall {α : Type} {toSpec : α → SpecScalar} {n :
 -- ---------------------------------------------------------------------------
 -- Generic lifting lemmas for elementwise ops (`map_spec`, `map2_spec`)
 -- ---------------------------------------------------------------------------
-
-/--
-Lift a scalar approximation bound to an elementwise `mapSpec`.
-
-Given a scalar bound of the form
-`|toSpec (fR xR) - fS x| ≤ bnd (toSpec xR) eps`
-and an input approximation `approxTensor xS xR eps`, this produces an approximation bound for
-`map_spec fS xS` vs `map_spec fR xR`, with an output epsilon computed by taking the `linfNorm` of
-the pointwise bound.
--/
-theorem approxTensor_map_spec_of_scalar_bound {α : Type} {toSpec : α → SpecScalar} {s : Shape}
-    (fS : SpecScalar → SpecScalar) (fR : α → α) (bnd : SpecScalar → SpecScalar → SpecScalar) :
-    ∀ {xS : SpecTensor s} {xR : Tensor α s} {eps : SpecScalar},
-      approxTensor (α := α) (toSpec := toSpec) xS xR eps →
-        (∀ {x : SpecScalar} {xR : α},
-          abs (toSpec xR - x) ≤ eps →
-            abs (toSpec (fR xR) - fS x) ≤ bnd (toSpec xR) eps) →
-        approxTensor (α := α) (toSpec := toSpec)
-          (mapSpec (s := s) fS xS)
-          (mapSpec (s := s) fR xR)
-          (linfNorm
-            (mapSpec (s := s) (fun a => bnd a eps) (tensorToSpec (α := α) (toSpec := toSpec)
-              xR))) := by
-  intro xS xR eps hx hscalar
-  induction s with
-  | scalar =>
-      rw [← Tensor.scalar_item xS, ← Tensor.scalar_item xR] at hx ⊢
-      have hx' :=
-        (approxTensor_scalar_iff (α := α) (toSpec := toSpec)
-          (x := xS.item) (xR := xR.item) (eps := eps)).1 hx
-      have herr :
-          abs (toSpec (fR xR.item) - fS xS.item) ≤ bnd (toSpec xR.item) eps :=
-        hscalar hx'
-      have herr' :
-          abs (toSpec (fR xR.item) - fS xS.item) ≤ abs (bnd (toSpec xR.item) eps) :=
-        le_trans herr (le_abs_self _)
-      exact
-        (approxTensor_scalar_iff (α := α) (toSpec := toSpec)
-          (x := fS xS.item) (xR := fR xR.item)
-          (eps := linfNorm
-            (mapSpec (s := Shape.scalar) (fun a => bnd a eps)
-              (tensorToSpec (α := α) (toSpec := toSpec) (Tensor.scalar xR.item))))).2 (by
-                simpa [tensorToSpec, linfNorm, RuntimeApprox.linfNorm, tensorLinfNorm,
-                  mapSpec, Tensor.map, Tensor.item, MathFunctions.abs] using herr')
-  | dim n s ih =>
-      let boundTensor :=
-        mapSpec (s := Shape.dim n s) (fun a => bnd a eps)
-          (tensorToSpec (α := α) (toSpec := toSpec) xR)
-      let B := linfNorm boundTensor
-      have hB_nonneg : 0 ≤ B := linf_norm_nonneg boundTensor
-      apply approxTensor_dim_of_forall hB_nonneg
-      intro i
-      have hx_i :=
-        approxTensor_dim_get (α := α) (toSpec := toSpec)
-          (xS := xS) (xR := xR) (eps := eps) hx i
-      have hih := ih (xS := xS.unstack i) (xR := xR.unstack i) hx_i
-      have hB_ge := linf_norm_le_get_dim boundTensor i
-      have hB_ge' :
-          linfNorm
-              (mapSpec (s := s) (fun a => bnd a eps)
-                (tensorToSpec (α := α) (toSpec := toSpec) (xR.unstack i)))
-            ≤ B := by
-        simpa [B, boundTensor, tensorToSpec, mapSpec,
-          TorchLean.Tensor.map, TorchLean.Tensor.unstack,
-          TorchLean.Tensor.Internal.Rep.map_unstack] using hB_ge
-      have hmono := approxTensor_mono hih hB_ge'
-      simpa [B, boundTensor, tensorToSpec, mapSpec,
-        TorchLean.Tensor.map, TorchLean.Tensor.unstack,
-        TorchLean.Tensor.Internal.Rep.map_unstack] using hmono
 
 /--
 Lift a domain-restricted scalar approximation bound to an elementwise `mapSpec`.
@@ -318,11 +242,11 @@ theorem approxTensor_map_spec_of_scalar_bound_of_forall
         mapSpec (s := Shape.dim n inner) (fun a => bnd a eps)
           (tensorToSpec (α := α) (toSpec := toSpec) xR)
       let bound := linfNorm boundTensor
-      have hbound : 0 ≤ bound := linf_norm_nonneg boundTensor
+      have hbound : 0 ≤ bound := linfNorm_nonneg boundTensor
       apply approxTensor_dim_of_forall hbound
       intro i
       have hxI :=
-        approxTensor_dim_get (α := α) (toSpec := toSpec)
+        approxTensor_unstack (α := α) (toSpec := toSpec)
           (xS := xS) (xR := xR) (eps := eps) hx i
       have hdomI : Tensor.Forall predicate (xS.unstack i) := hdom i
       have hlocal := ih hxI hdomI
@@ -331,7 +255,7 @@ theorem approxTensor_map_spec_of_scalar_bound_of_forall
               (mapSpec (s := inner) (fun a => bnd a eps)
                 (tensorToSpec (α := α) (toSpec := toSpec) (xR.unstack i))) ≤
             bound := by
-        have h := linf_norm_le_get_dim boundTensor i
+        have h := linfNorm_unstack_le boundTensor i
         simpa [bound, boundTensor, tensorToSpec, mapSpec,
           TorchLean.Tensor.map, TorchLean.Tensor.unstack,
           TorchLean.Tensor.Internal.Rep.map_unstack] using h
@@ -339,6 +263,32 @@ theorem approxTensor_map_spec_of_scalar_bound_of_forall
       simpa [bound, boundTensor, tensorToSpec, mapSpec,
         TorchLean.Tensor.map, TorchLean.Tensor.unstack,
         TorchLean.Tensor.Internal.Rep.map_unstack] using hmono
+
+/--
+Lift a scalar approximation bound to an elementwise `mapSpec`.
+
+Given a scalar bound of the form
+`|toSpec (fR xR) - fS x| ≤ bnd (toSpec xR) eps`
+and an input approximation `approxTensor xS xR eps`, this produces an approximation bound for
+`map_spec fS xS` vs `map_spec fR xR`, with an output epsilon computed by taking the `linfNorm` of
+the pointwise bound. It is the domain-restricted lifting at the trivial predicate.
+-/
+theorem approxTensor_map_spec_of_scalar_bound {α : Type} {toSpec : α → SpecScalar} {s : Shape}
+    (fS : SpecScalar → SpecScalar) (fR : α → α) (bnd : SpecScalar → SpecScalar → SpecScalar) :
+    ∀ {xS : SpecTensor s} {xR : Tensor α s} {eps : SpecScalar},
+      approxTensor (α := α) (toSpec := toSpec) xS xR eps →
+        (∀ {x : SpecScalar} {xR : α},
+          abs (toSpec xR - x) ≤ eps →
+            abs (toSpec (fR xR) - fS x) ≤ bnd (toSpec xR) eps) →
+        approxTensor (α := α) (toSpec := toSpec)
+          (mapSpec (s := s) fS xS)
+          (mapSpec (s := s) fR xR)
+          (linfNorm
+            (mapSpec (s := s) (fun a => bnd a eps) (tensorToSpec (α := α) (toSpec := toSpec)
+              xR))) := by
+  intro xS xR eps hx hscalar
+  exact approxTensor_map_spec_of_scalar_bound_of_forall (α := α) (toSpec := toSpec)
+    (fun _ => True) fS fR bnd hx (Tensor.forall_true xS) (fun _ h => hscalar h)
 
 /--
 Lift a scalar approximation bound that depends on the original runtime scalar.
@@ -380,18 +330,18 @@ theorem approxTensor_map_spec_of_runtime_scalar_bound
       let boundTensor :=
         Tensor.map (fun a => bnd a eps) xR
       let bound := linfNorm boundTensor
-      have hbound : 0 ≤ bound := linf_norm_nonneg boundTensor
+      have hbound : 0 ≤ bound := linfNorm_nonneg boundTensor
       apply approxTensor_dim_of_forall hbound
       intro i
       have hxI :=
-        approxTensor_dim_get (α := α) (toSpec := toSpec)
+        approxTensor_unstack (α := α) (toSpec := toSpec)
           (xS := xS) (xR := xR) (eps := eps) hx i
       have hlocal := ih hxI
       have hle :
           linfNorm
               (Tensor.map (fun a => bnd a eps) (xR.unstack i)) ≤
             bound := by
-        have h := linf_norm_le_get_dim boundTensor i
+        have h := linfNorm_unstack_le boundTensor i
         simpa [bound, boundTensor, mapSpec, TorchLean.Tensor.map,
           TorchLean.Tensor.unstack,
           TorchLean.Tensor.Internal.Rep.map_unstack] using h
@@ -459,19 +409,19 @@ theorem approxTensor_map2_spec_of_scalar_bound {α : Type} {toSpec : α → Spec
           (tensorToSpec (α := α) (toSpec := toSpec) xR)
           (tensorToSpec (α := α) (toSpec := toSpec) yR)
       let B := linfNorm boundTensor
-      have hB_nonneg : 0 ≤ B := linf_norm_nonneg boundTensor
+      have hB_nonneg : 0 ≤ B := linfNorm_nonneg boundTensor
       apply approxTensor_dim_of_forall hB_nonneg
       intro i
       have hx_i :=
-        approxTensor_dim_get (α := α) (toSpec := toSpec)
+        approxTensor_unstack (α := α) (toSpec := toSpec)
           (xS := xS) (xR := xR) (eps := epsx) hx i
       have hy_i :=
-        approxTensor_dim_get (α := α) (toSpec := toSpec)
+        approxTensor_unstack (α := α) (toSpec := toSpec)
           (xS := yS) (xR := yR) (eps := epsy) hy i
       have hih :=
         ih (xS := xS.unstack i) (yS := yS.unstack i)
           (xR := xR.unstack i) (yR := yR.unstack i) hx_i hy_i
-      have hB_ge := linf_norm_le_get_dim boundTensor i
+      have hB_ge := linfNorm_unstack_le boundTensor i
       have hB_ge' :
           linfNorm
               (map2Spec (fun a b => bnd a b epsx epsy)

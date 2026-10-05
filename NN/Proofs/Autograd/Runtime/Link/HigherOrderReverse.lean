@@ -36,11 +36,7 @@ theorem zero {shapes : List Shape} (directions : Fin n → E) (x : E) :
   | nil => trivial
   | cons shape shapes ih =>
       refine ⟨⟨contDiff_const, ?_⟩, ih⟩
-      apply Tensor.Internal.Rep.ext
-      intro i
-      simp only [DualTensor.jet_apply, TensorPack.zero, TensorPack.head, Tensor.zeros,
-        Tensor.full_apply, Dual.jet_const]
-      exact (Dual.Nested.ofPrimal_zero (α := ℝ) n).symm
+      exact (DualTensor.jet_full_zero directions x).symm
 
 /-- Place a tensor's full jet at one typed input and zero-fill the other gradient buffers. -/
 theorem single {shapes : List Shape} {shape : Shape} (index : Proofs.Idx shapes shape)
@@ -55,12 +51,7 @@ theorem single {shapes : List Shape} {shape : Shape} (index : Proofs.Idx shapes 
       | zero => exact ⟨⟨hf, rfl⟩, zero directions x⟩
       | succ i =>
           refine ⟨⟨contDiff_const, ?_⟩, ih i hf⟩
-          change Tensor.full shape (0 : Dual.Nested ℝ n) =
-            DualTensor.jet directions (fun _ => Tensor.full shape (0 : ℝ)) x
-          apply Tensor.Internal.Rep.ext
-          intro j
-          simp only [DualTensor.jet_apply, Tensor.full_apply, Dual.jet_const]
-          exact (Dual.Nested.ofPrimal_zero (α := ℝ) n).symm
+          exact (DualTensor.jet_full_zero directions x).symm
 
 /-- Gradient accumulation preserves mixed derivatives, including shared-parent contributions. -/
 theorem add {shapes : List Shape} {directions : Fin n → E} {x : E}
@@ -70,10 +61,8 @@ theorem add {shapes : List Shape} {directions : Fin n → E} {x : E}
   induction shapes with
   | nil => cases fv; cases gv; trivial
   | cons shape shapes ih =>
-      have heq (k : E → TensorPack ℝ (shape :: shapes)) :
-          k = fun y => .cons (k y).head (k y).tail := by funext y; cases k y; rfl
-      rw [heq f] at hf ⊢
-      rw [heq g] at hg ⊢
+      rw [TensorPack.eta_cons f] at hf ⊢
+      rw [TensorPack.eta_cons g] at hg ⊢
       cases fv with
       | cons a rest =>
         cases gv with
@@ -83,7 +72,7 @@ theorem add {shapes : List Shape} {directions : Fin n → E} {x : E}
           · rw [hf.1.2, hg.1.2]
             apply Tensor.Internal.Rep.ext
             intro i
-            simp only [DualTensor.jet_apply, TensorPack.add, TensorPack.head,
+            simp only [DualTensor.jet_apply, TensorPack.add, TensorPack.zipWith, TensorPack.head,
               Tensor.addSpec, Tensor.map2Spec_apply]
             exact (Dual.jet_add directions
               (TensorCoordinates.contDiff_coordinate hf.1.1 i)
@@ -109,11 +98,7 @@ theorem unsnoc {shapes : List Shape} {shape : Shape} {directions : Fin n → E} 
       cases values with
       | cons value rest => cases rest; exact ⟨trivial, h.1⟩
   | cons shape shapes ih =>
-      have hf : f = fun y => .cons (f y).head (f y).tail := by
-        funext y
-        cases f y
-        rfl
-      rw [hf] at h ⊢
+      rw [TensorPack.eta_cons f] at h ⊢
       cases values with
       | cons value rest =>
         obtain ⟨hp, hl⟩ := ih h.2

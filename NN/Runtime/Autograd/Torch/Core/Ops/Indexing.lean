@@ -8,7 +8,7 @@ module
 
 public import NN.Runtime.Autograd.Torch.Core.Ops.Dispatch
 public import NN.Runtime.Autograd.Engine.Core.Indexing
-public import NN.Runtime.Autograd.Engine.Cuda.Ops.Indexing
+public import NN.Runtime.Autograd.Engine.LibTorch.Ops.Indexing
 
 /-!
 # Eager Tensor Operations
@@ -38,18 +38,12 @@ def select {α : Type} [TorchLean.Storage α] (session : EagerSession α) [Zero 
     (x : TensorRef α shape) (index : Fin (Shape.axisSize shape axis)) :
     IO (TensorRef α (shape.eraseAxis axis)) := do
   let cpu := do
-    let tape ← session.tape.get
-    let (tape', id) ← okOrThrow <|
+    session.recordCpu fun tape => keepTapeOnError tape <|
       Runtime.Autograd.Tape.select (t := tape) x.id axis index
-    session.tape.set tape'
-    pure { id }
   let cuda := do
-    let tape ← session.cudaTape.get
-    let (tape', id) ← okOrThrow <|
-      Runtime.Autograd.Cuda.Tape.select (t := tape) x.id axis index
-    session.cudaTape.set tape'
-    pure (some { id := id })
-  dispatchCudaOpt (α := α) session .gather #[x.identity?] cpu cuda
+    session.recordCuda fun tape => keepTapeOnError tape <|
+      Runtime.Autograd.LibTorch.Tape.select (t := tape) x.id axis index
+  executeRecorded (α := α) session .gather #[x.identity?] cpu cuda
 
 /-- Select several bounded coordinates from an arbitrary tensor axis. -/
 def indexSelect {α : Type} [TorchLean.Storage α] (session : EagerSession α) [Add α] [Zero α]
@@ -58,18 +52,12 @@ def indexSelect {α : Type} [TorchLean.Storage α] (session : EagerSession α) [
     (indices : Tensor (Fin (Shape.axisSize shape axis)) [count]) :
     IO (TensorRef α (shape.replaceAxis axis count)) := do
   let cpu := do
-    let tape ← session.tape.get
-    let (tape', id) ← okOrThrow <|
+    session.recordCpu fun tape => keepTapeOnError tape <|
       Runtime.Autograd.Tape.indexSelect (t := tape) x.id axis count indices
-    session.tape.set tape'
-    pure { id }
   let cuda := do
-    let tape ← session.cudaTape.get
-    let (tape', id) ← okOrThrow <|
-      Runtime.Autograd.Cuda.Tape.indexSelect (t := tape) x.id axis count indices
-    session.cudaTape.set tape'
-    pure (some { id := id })
-  dispatchCudaOpt (α := α) session .gather #[x.identity?] cpu cuda
+    session.recordCuda fun tape => keepTapeOnError tape <|
+      Runtime.Autograd.LibTorch.Tape.indexSelect (t := tape) x.id axis count indices
+  executeRecorded (α := α) session .gather #[x.identity?] cpu cuda
 
 /-- Add source slices into an arbitrary tensor axis at bounded coordinates. -/
 def scatterAdd {α : Type} [TorchLean.Storage α] (session : EagerSession α) [Add α] [Zero α]
@@ -78,18 +66,12 @@ def scatterAdd {α : Type} [TorchLean.Storage α] (session : EagerSession α) [A
     (source : TensorRef α (shape.replaceAxis axis count))
     (indices : Tensor (Fin (Shape.axisSize shape axis)) [count]) : IO (TensorRef α shape) := do
   let cpu := do
-    let tape ← session.tape.get
-    let (tape', id) ← okOrThrow <|
+    session.recordCpu fun tape => keepTapeOnError tape <|
       Runtime.Autograd.Tape.scatterAdd (t := tape) base.id source.id axis count indices
-    session.tape.set tape'
-    pure { id }
   let cuda := do
-    let tape ← session.cudaTape.get
-    let (tape', id) ← okOrThrow <|
-      Runtime.Autograd.Cuda.Tape.scatterAdd (t := tape) base.id source.id axis count indices
-    session.cudaTape.set tape'
-    pure (some { id := id })
-  dispatchCudaOpt (α := α) session .scatterAdd #[base.identity?, source.identity?] cpu cuda
+    session.recordCuda fun tape => keepTapeOnError tape <|
+      Runtime.Autograd.LibTorch.Tape.scatterAdd (t := tape) base.id source.id axis count indices
+  executeRecorded (α := α) session .scatterAdd #[base.identity?, source.identity?] cpu cuda
 
 end EagerSession
 

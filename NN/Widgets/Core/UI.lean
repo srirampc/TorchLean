@@ -23,7 +23,7 @@ This file centralizes those helpers so:
 - we avoid “private def …” duplication across many files.
 
 Design notes:
-- This is small and explicit and depends only on ProofWidgets.
+- This is small and explicit and depends on Lean and ProofWidgets.
 - These helpers are **meta** only (used for infoview UI), not part of the executable runtime.
 
 References:

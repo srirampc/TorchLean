@@ -32,7 +32,7 @@ References:
 - Any standard Fourier analysis / numerical linear algebra text (this is the classical DFT
   inversion formula).
 - For the primitive-root-of-unity facts used here, we rely on mathlib’s
-  `Complex.isPrimitiveRoot_exp` and the geometric-sum identity `mul_geom_sum`.
+  `Complex.isPrimitiveRoot_exp` and the geometric-sum identity `geom_sum_eq`.
 -/
 
 @[expose] public section
@@ -101,17 +101,7 @@ $\sum_{j=0}^{n-1}r^j=0$.
 -/
 private theorem geom_sum_eq_zero_of_pow_eq_one {r : ℂ} {n : Nat} (hr : r ≠ 1) (hrn : r ^ n = 1) :
     (∑ j ∈ Finset.range n, r ^ j) = 0 := by
-  -- Use `(r - 1) * (∑ r^j) = r^n - 1`.
-  have hmul : (r - 1) * (∑ j ∈ Finset.range n, r ^ j) = 0 := by
-    calc
-      (r - 1) * (∑ j ∈ Finset.range n, r ^ j) = r ^ n - 1 := by
-        simpa using (mul_geom_sum r n)
-      _ = 0 := by
-        simp [hrn]
-  exact
-    eq_zero_of_ne_zero_of_mul_left_eq_zero
-      (sub_ne_zero.mpr hr)
-      hmul
+  rw [geom_sum_eq hr, hrn, sub_self, zero_div]
 
 /--
 Main algebraic identity: $\operatorname{IDFT}\operatorname{DFT}=I$ (over `ℂ`), for $n\ne0$.
@@ -132,7 +122,6 @@ theorem idft_mul_dft (n : Nat) (hn : n ≠ 0) :
       (idftMatrix n * dftMatrix n) i k =
         (1 / (n : ℂ)) * ∑ j : Fin n, r ^ (j : Nat) := by
     -- Expand the matrix product and normalize each summand.
-    have hz0 : ζ n ≠ 0 := zeta_ne_zero n
     calc
       (idftMatrix n * dftMatrix n) i k
           = ∑ j : Fin n, idftMatrix n i j * dftMatrix n j k := by
@@ -201,21 +190,9 @@ theorem idft_mul_dft (n : Nat) (hn : n ≠ 0) :
     have hr_pow_n : r ^ n = 1 := by
       -- `(ζ^i * (ζ^k)⁻¹)^n = (ζ^i)^n * ((ζ^k)⁻¹)^n = 1 * 1`.
       have hzi : ((ζ n) ^ i.val) ^ n = 1 := by
-        calc
-          ((ζ n) ^ i.val) ^ n = (ζ n) ^ (i.val * n) := by
-            simpa using (pow_mul (ζ n) i.val n).symm
-          _ = (ζ n) ^ (n * i.val) := by simp [Nat.mul_comm]
-          _ = ((ζ n) ^ n) ^ i.val := by
-            simpa using (pow_mul (ζ n) n i.val)
-          _ = 1 := by simp [hprim.pow_eq_one]
+        rw [pow_right_comm, hprim.pow_eq_one, one_pow]
       have hzk : ((ζ n) ^ k.val) ^ n = 1 := by
-        calc
-          ((ζ n) ^ k.val) ^ n = (ζ n) ^ (k.val * n) := by
-            simpa using (pow_mul (ζ n) k.val n).symm
-          _ = (ζ n) ^ (n * k.val) := by simp [Nat.mul_comm]
-          _ = ((ζ n) ^ n) ^ k.val := by
-            simpa using (pow_mul (ζ n) n k.val)
-          _ = 1 := by simp [hprim.pow_eq_one]
+        rw [pow_right_comm, hprim.pow_eq_one, one_pow]
       calc
         r ^ n = (((ζ n) ^ i.val) * ((ζ n) ^ k.val)⁻¹) ^ n := by simp [r]
         _ = ((ζ n) ^ i.val) ^ n * (((ζ n) ^ k.val)⁻¹) ^ n := by simp [mul_pow]

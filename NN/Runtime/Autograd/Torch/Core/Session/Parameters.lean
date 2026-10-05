@@ -54,7 +54,7 @@ The incoming buffer must not remain subject to another scope's explicit release;
 owned tape intermediate requires a copy or transfer of that scope's release responsibility.
 -/
 def setParamCudaValue {α : Type} [Storage α] {sh : Shape} (p : Param α sh)
-    (any : Runtime.Autograd.Cuda.AnyBuffer) : IO Unit := do
+    (any : Runtime.Autograd.LibTorch.AnyBuffer) : IO Unit := do
   if _h : any.s = sh then
     p.cudaValue.set (some { s := sh, buf := any.buf })
     p.hostCurrent.set false
@@ -77,12 +77,12 @@ replacing the cache later drops only the parameter's reference. A cache with the
 an absent cache paired with a stale host value, has no justified current value to use.
 -/
 def getParamCudaValue {α : Type} [Storage α] [TensorTransfer α] {sh : Shape}
-    (p : Param α sh) : IO Runtime.Autograd.Cuda.AnyBuffer := do
+    (p : Param α sh) : IO Runtime.Autograd.LibTorch.AnyBuffer := do
   match ← p.cudaValue.get with
   | some stored =>
       unless stored.s == sh do
         throw <| IO.userError "torch: current CUDA parameter mirror has the wrong shape"
-      match Runtime.Autograd.Cuda.AnyBuffer.validate stored with
+      match Runtime.Autograd.LibTorch.AnyBuffer.validate stored with
       | .ok value => pure value
       | .error message => throw <| IO.userError message
   | none =>

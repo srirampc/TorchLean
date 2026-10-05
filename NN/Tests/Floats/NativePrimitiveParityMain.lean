@@ -8,7 +8,9 @@ module
 
 import NN.Tests.Floats.NativePrimitiveParity
 
-/-! Entry point for `lake exe native_float32_parity`, including CUDA reference-case emission. -/
+/-!
+Entry point for `scripts/lake.sh exe native_float32_parity`, including CUDA reference-case emission.
+-/
 
 /-- Run native binary32 conformance checks or emit reference cases for the CUDA harness. -/
 public def main (args : List String) : IO Unit :=

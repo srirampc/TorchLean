@@ -7,16 +7,13 @@ Authors: TorchLean Team
 module
 
 public import NN.API.Seeded
-public import NN.Runtime.Autograd.Model.FnoRfft
+public import NN.Runtime.Autograd.Model.Fno
 
 /-!
 # Fourier Neural Operators
 
 `fno` is polymorphic in spatial rank and uses separable FFTs or a dense multidimensional DFT with
-the same real/imaginary weights. `fnoRfft` uses learned nonnegative-frequency weights and chooses a
-dense reference and native cuFFT with the same checkpoint. Its default ReLU and parameter layout
-match the specialized CUDA Burgers model. The two constructors have different spectral weights;
-switching between them requires an explicit model conversion.
+the same real/imaginary weights.
 
 Reference: Zongyi Li et al., *Fourier Neural Operator for Parametric Partial Differential
 Equations*, ICLR 2021.
@@ -26,7 +23,7 @@ Equations*, ICLR 2021.
 
 namespace TorchLean.nn.models
 
-/-- Configuration for a scalar-field FNO over `d` spatial axes. -/
+/-- Configuration for an FNO over `d` spatial axes with tensor-valued fields. -/
 structure FNO.Config (d : Nat) where
   /-- Size of each sampled grid axis. -/
   spatial : Tensor Nat [d]
@@ -37,6 +34,10 @@ structure FNO.Config (d : Nat) where
   `spatial - modes` are retained. Overlapping bands retain the entire axis.
   -/
   modes : Tensor Nat [d]
+  /-- Feature axes at each input grid point; `[]` is a scalar field. -/
+  inputFeatures : Spec.Shape := []
+  /-- Feature axes at each output grid point; `[]` is a scalar field. -/
+  outputFeatures : Spec.Shape := []
   /-- Width of the latent channel representation. -/
   width : Nat
   /-- Number of spectral residual blocks. -/
@@ -54,21 +55,29 @@ def validate {d : Nat} (config : FNO.Config d) : Except String Unit := do
     throw "FNO: spatial grid must contain at least one point"
   if config.width = 0 then
     throw "FNO: width must be positive"
+  if config.inputFeatures.size = 0 then
+    throw "FNO: input features must contain at least one value"
+  if config.outputFeatures.size = 0 then
+    throw "FNO: output features must contain at least one value"
 
 end FNO.Config
 
-/-- Scalar-field input shape with an arbitrary batch shape. -/
+/-- Batch axes followed by spatial axes and input feature axes. -/
 abbrev FNO.Config.inputShape {d : Nat} (config : FNO.Config d)
     (batchShape : Spec.Shape := []) : Spec.Shape :=
-  batchShape.concat (config.spatial.to Spec.Shape)
+  batchShape.concat ((config.spatial.to Spec.Shape).concat config.inputFeatures)
 
-/-- Scalar-field output shape with the same batch shape as the input. -/
+/-- Batch axes followed by spatial axes and output feature axes. -/
 abbrev FNO.Config.outputShape {d : Nat} (config : FNO.Config d)
     (batchShape : Spec.Shape := []) : Spec.Shape :=
-  batchShape.concat (config.spatial.to Spec.Shape)
+  batchShape.concat ((config.spatial.to Spec.Shape).concat config.outputFeatures)
 
 /--
-Build a multidimensional FNO model, independently of spatial rank and batch shape.
+Build a multidimensional FNO model, independently of spatial rank, feature shape and batch shape.
+
+The pointwise lift and projection flatten only the feature axes. Spectral blocks still transform
+the spatial axes separately. Empty feature shapes select scalar fields, preserving the default
+parameter layout; feature shapes containing a zero extent are rejected before initialization.
 
 `automatic` uses separable transforms, with cuFFT on supported eager CUDA interpreters and dense
 per-axis transforms otherwise. `denseReference` uses the full-grid DFT matrices. Both paths retain
@@ -102,15 +111,13 @@ def fno {d : Nat} (config : FNO.Config d) (batchShape : Spec.Shape := []) :
         nn.withSeed fun projectWeightSeed =>
           let lift :=
             Runtime.Autograd.Model.Layers.FNO.pointwiseAffine
-              grid 1 config.width liftWeightSeed
+              grid config.inputFeatures.size config.width liftWeightSeed
           let project :=
             Runtime.Autograd.Model.Layers.FNO.pointwiseAffine
-              grid config.width 1 projectWeightSeed
+              grid config.width config.outputFeatures.size projectWeightSeed
           let model :=
-            Runtime.Autograd.Model.Layers.Seq.cons
-              (Runtime.Autograd.Model.Layers.FNO.Internal.addScalarChannel config.spatial) <|
-            Runtime.Autograd.Model.Layers.Seq.cons
-              (Runtime.Autograd.Model.Layers.FNO.Internal.flattenSpatial config.spatial) <|
+            Runtime.Autograd.Model.Layers.Seq.comp
+              (nn.Impl.reshape (config.inputShape []) [grid, config.inputFeatures.size]) <|
             Runtime.Autograd.Model.Layers.Seq.cons lift <|
             Runtime.Autograd.Model.Layers.Seq.cons
               (Runtime.Autograd.Model.Layers.FNO.Internal.restoreSpatial config.spatial) <|
@@ -118,73 +125,7 @@ def fno {d : Nat} (config : FNO.Config d) (batchShape : Spec.Shape := []) :
             Runtime.Autograd.Model.Layers.Seq.cons
               (Runtime.Autograd.Model.Layers.FNO.Internal.flattenSpatial config.spatial) <|
             Runtime.Autograd.Model.Layers.Seq.cons project <|
-            Runtime.Autograd.Model.Layers.Seq.cons
-              (Runtime.Autograd.Model.Layers.FNO.Internal.restoreSpatial config.spatial) <|
-            Runtime.Autograd.Model.Layers.Seq.cons
-              (Runtime.Autograd.Model.Layers.FNO.Internal.removeScalarChannel config.spatial)
-              (nn.Sequential.identity _)
+              nn.Impl.reshape [grid, config.outputFeatures.size] (config.outputShape [])
           pure (nn.mapLeading batchShape model)
-
-/-- Configuration for the one-dimensional, one-sided spectral FNO. -/
-structure FNO.RFFTConfig where
-  /-- Number of spatial samples per scalar field. -/
-  grid : Nat
-  /-- Number of nonnegative frequencies with learned channel maps, including DC. -/
-  modes : Nat
-  /-- Number of hidden channels at each spatial sample. -/
-  width : Nat
-  /-- Number of spectral residual blocks. -/
-  layerCount : Nat
-  /-- Execution choice; both paths use the same weights and Fourier normalization. -/
-  spectralPath : Runtime.Autograd.Model.F.SpectralPath := .automatic
-  /-- Activation after each spectral residual block. -/
-  activation : Activation.Kind := .relu
-
-/--
-Build an FNO whose dense and native paths have identical one-sided spectral semantics.
-
-Parameters are ordered as lift weight/bias, each block's real weight/imaginary weight/skip/bias,
-and project weight/bias. This is the layout used by the specialized CUDA model. To compare the
-runners, supply the same parameter tensors and loss, rather than assuming equal seeds suffice.
--/
-def fnoRfft (config : FNO.RFFTConfig) (batchShape : Spec.Shape := []) :
-    nn.Builder (nn.Sequential (batchShape.concat [config.grid])
-      (batchShape.concat [config.grid])) :=
-  if valid : 0 < config.grid ∧ 0 < config.width ∧ config.modes ≤ config.grid / 2 + 1 then
-    let spatial : Tensor Nat [1] := [config.grid]
-    let rec buildBlocks (remaining : Nat) :
-        nn.Builder (nn.Sequential [config.grid, config.width] [config.grid, config.width]) :=
-      match remaining with
-      | 0 => pure <| nn.Sequential.identity _
-      | count + 1 =>
-          nn.withSeed fun realSeed =>
-            nn.withSeed fun imagSeed =>
-              nn.withSeed fun skipSeed => do
-                let rest ← buildBlocks count
-                let block := Runtime.Autograd.Model.Layers.FNO.rfftBlock
-                  config.grid config.width config.modes valid.1 valid.2.1 valid.2.2
-                  config.spectralPath config.activation realSeed imagSeed skipSeed
-                pure <| Runtime.Autograd.Model.Layers.Seq.cons block rest
-    nn.withSeed fun liftSeed => do
-      let blocks ← buildBlocks config.layerCount
-      nn.withSeed fun projectSeed =>
-        let model :=
-          Runtime.Autograd.Model.Layers.Seq.cons
-            (Runtime.Autograd.Model.Layers.FNO.Internal.addScalarChannel spatial) <|
-          Runtime.Autograd.Model.Layers.Seq.cons
-            (Runtime.Autograd.Model.Layers.FNO.pointwiseAffine
-              config.grid 1 config.width liftSeed) <|
-          Runtime.Autograd.Model.Layers.Seq.comp blocks <|
-          Runtime.Autograd.Model.Layers.Seq.cons
-            (Runtime.Autograd.Model.Layers.FNO.pointwiseAffine
-              config.grid config.width 1 projectSeed) <|
-          Runtime.Autograd.Model.Layers.Seq.cons
-            (Runtime.Autograd.Model.Layers.FNO.Internal.removeScalarChannel spatial)
-            (nn.Sequential.identity _)
-        pure (nn.mapLeading batchShape model)
-  else
-    pure <| nn.Internal.invalidConfiguration
-      (batchShape.concat [config.grid]) (batchShape.concat [config.grid]) "FNO RFFT"
-      "FNO RFFT: grid and width must be positive, and modes must be at most grid / 2 + 1"
 
 end TorchLean.nn.models

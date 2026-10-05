@@ -71,27 +71,6 @@ def linearRegressionBatchedForwardSpec {batch inDim : Nat}
   Tensor α [batch] :=
   Tensor.dim (fun i => linearRegressionForwardSpec model (Tensor.unstack input i))
 
-/-- VJP contribution for `weights`: `dL/dw = x * (dL/dy)` (scalar-times-vector scaling). -/
-def linearRegressionWeightsDerivSpec {inDim : Nat}
-  (input : Tensor α [inDim])
-  (gradOutput : Tensor α .scalar) :
-  Tensor α [inDim] :=
-  scaleSpec input (Tensor.item gradOutput)
-
-/-- VJP contribution for `bias`: `dL/db = dL/dy`. -/
-def linearRegressionBiasDerivSpec {inDim : Nat}
-  (_weights : Tensor α [inDim])
-  (gradOutput : Tensor α .scalar)
-  (_input : Tensor α [inDim]) :
-  Tensor α .scalar := gradOutput
-
-/-- VJP contribution for `input`: `dL/dx = w * (dL/dy)`. -/
-def linearRegressionInputDerivSpec {inDim : Nat}
-  (weights : Tensor α [inDim])
-  (gradOutput : Tensor α .scalar) :
-  Tensor α [inDim] :=
-  scaleSpec weights (Tensor.item gradOutput)
-
 /-- Gradients for a linear regression model.
 
 `inputShape` is a parameter so that the unbatched and batched backward passes return the same
@@ -112,9 +91,9 @@ def linearRegressionBackwardSpec {inDim : Nat}
   (input : Tensor α [inDim])
   (gradOutput : Tensor α .scalar) :
   LinearRegressionGradients α inDim [inDim] :=
-  { weightGradient := linearRegressionWeightsDerivSpec input gradOutput
-    biasGradient := linearRegressionBiasDerivSpec model.weights gradOutput input
-    inputGradient := linearRegressionInputDerivSpec model.weights gradOutput }
+  { weightGradient := scaleSpec input (Tensor.item gradOutput)
+    biasGradient := gradOutput
+    inputGradient := scaleSpec model.weights (Tensor.item gradOutput) }
 
 /-- Batched backward pass.
 

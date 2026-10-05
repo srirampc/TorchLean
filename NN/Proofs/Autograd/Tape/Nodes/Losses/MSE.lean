@@ -9,6 +9,12 @@ module
 public import NN.Proofs.Autograd.Tape.Nodes.Reductions
 public import Mathlib.Analysis.InnerProductSpace.Calculus
 
+/-!
+# Mean-Squared Error
+
+Tape node and Fréchet derivative proof for scalar mean-squared error.
+-/
+
 @[expose] public section
 
 namespace Proofs
@@ -22,16 +28,6 @@ noncomputable section
 open scoped BigOperators
 
 namespace TapeNodes
-
-/-!
-# Mean-Squared Error
-
-Tape node and Fréchet derivative proof for scalar mean-squared error.
--/
-
--- ---------------------------------------------------------------------------
--- Loss: scalar mean squared error
--- ---------------------------------------------------------------------------
 
 /--
 Mean-squared-error loss node: `c * ‖yhat - target‖^2`, with
@@ -138,34 +134,18 @@ def mseLossFderiv {Γ : List Shape} {s : Shape} (yhat target : Idx Γ s) :
     -- `get` projections are CLMs.
     have hgetY :
         HasFDerivAt (fun x : CtxVec Γ => CtxVec.get (Γ := Γ) (s := s) yhat x)
-          (CtxVec.getCLM (Γ := Γ) (s := s) yhat) xV := by
-      have h := (CtxVec.getCLM (Γ := Γ) (s := s) yhat).hasFDerivAt (x := xV)
-      have hfun :
-          (fun x : CtxVec Γ => CtxVec.get (Γ := Γ) (s := s) yhat x)
-            =
-          fun x : CtxVec Γ => (CtxVec.getCLM (Γ := Γ) (s := s) yhat) x := by
-        funext x
-        exact (CtxVec.getCLM_apply (Γ := Γ) (s := s) yhat x).symm
-      exact h.congr_of_eventuallyEq hfun.eventuallyEq
+          (CtxVec.getCLM (Γ := Γ) (s := s) yhat) xV :=
+      CtxVec.hasFDerivAt_get yhat xV
     have hgetT :
         HasFDerivAt (fun x : CtxVec Γ => CtxVec.get (Γ := Γ) (s := s) target x)
-          (CtxVec.getCLM (Γ := Γ) (s := s) target) xV := by
-      have h := (CtxVec.getCLM (Γ := Γ) (s := s) target).hasFDerivAt (x := xV)
-      have hfun :
-          (fun x : CtxVec Γ => CtxVec.get (Γ := Γ) (s := s) target x)
-            =
-          fun x : CtxVec Γ => (CtxVec.getCLM (Γ := Γ) (s := s) target) x := by
-        funext x
-        exact (CtxVec.getCLM_apply (Γ := Γ) (s := s) target x).symm
-      exact h.congr_of_eventuallyEq hfun.eventuallyEq
+          (CtxVec.getCLM (Γ := Γ) (s := s) target) xV :=
+      CtxVec.hasFDerivAt_get target xV
     have hdiff :
         HasFDerivAt
           (fun x : CtxVec Γ =>
             (CtxVec.get (Γ := Γ) (s := s) yhat x) - (CtxVec.get (Γ := Γ) (s := s) target x))
-          diffDeriv xV := by
-      have hsub := hgetY.sub hgetT
-      refine hsub.congr_of_eventuallyEq ?_
-      exact Filter.Eventually.of_forall fun _ => rfl
+          diffDeriv xV :=
+      hgetY.sub hgetT
     -- `‖diff ·‖^2` and scale by `c`.
     have hsq :
         HasFDerivAt
@@ -240,10 +220,6 @@ def mseLossFderiv {Γ : List Shape} {s : Shape} (yhat target : Idx Γ s) :
           = c * (2 * inner ℝ diffV ddiffV) := hL
       _ = D0 dxV := hD0.symm
       _ = ((vecScalarCLM.comp D0) dxV).ofLp i := hR.symm
-
--- ---------------------------------------------------------------------------
--- Loss: cross entropy (one-hot targets; last-axis softmax; mean over batch)
--- ---------------------------------------------------------------------------
 
 end TapeNodes
 

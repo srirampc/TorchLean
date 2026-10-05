@@ -25,13 +25,13 @@ open BoundOps
 /-!
 # CROWN Activation Relaxations
 
-Affine transfer rules for nonlinear scalar activations.
+Affine transfer rules for ReLU, with and without externally supplied lower slopes.
 -/
 
 /-- Propagate CROWN bounds through ReLU using standard per-neuron triangle relaxations. -/
 def propagateReluBounds
   (preB : FlatBox α) (xB : FlatAffineBounds α) (hout : xB.outDim = preB.dim) :
-  FlatAffineBounds α := by
+  FlatAffineBounds α :=
   let relaxHi0 := NN.MLTheory.CROWN.Runtime.Ops.ReLU.relaxVector (α:=α) (n:=preB.dim) preB.lo
     preB.hi
   let relaxLo0 := NN.MLTheory.CROWN.Runtime.Ops.ReLU.relaxVectorLower (α:=α) (n:=preB.dim) preB.lo
@@ -44,16 +44,15 @@ def propagateReluBounds
     (inDim:=xB.inDim) (hidDim:=preB.dim) relaxLo0 xLo
   let hiAff := NN.MLTheory.CROWN.Runtime.Ops.ReLU.propagateAffine (α:=α)
     (inDim:=xB.inDim) (hidDim:=preB.dim) relaxHi0 xHi
-  exact
-    { inDim := xB.inDim
-      outDim := preB.dim
-      loAff := loAff
-      hiAff := hiAff }
+  { inDim := xB.inDim
+    outDim := preB.dim
+    loAff := loAff
+    hiAff := hiAff }
 
 /-- Propagate ReLU bounds with externally supplied α slopes for crossing neurons. -/
 def propagateReluBoundsWithAlpha
   (preB : FlatBox α) (xB : FlatAffineBounds α) (hout : xB.outDim = preB.dim)
-  (alpha : Tensor α [preB.dim]) : FlatAffineBounds α := by
+  (alpha : Tensor α [preB.dim]) : FlatAffineBounds α :=
   -- Upper relaxation: standard secant/tight bounds (independent of α).
   let relaxHi0 := NN.MLTheory.CROWN.Runtime.Ops.ReLU.relaxVector (α:=α) (n:=preB.dim) preB.lo
     preB.hi
@@ -82,10 +81,9 @@ def propagateReluBoundsWithAlpha
     (inDim:=xB.inDim) (hidDim:=preB.dim) relaxLo0 xLo
   let hiAff := NN.MLTheory.CROWN.Runtime.Ops.ReLU.propagateAffine (α:=α)
     (inDim:=xB.inDim) (hidDim:=preB.dim) relaxHi0 xHi
-  exact
-    { inDim := xB.inDim
-      outDim := preB.dim
-      loAff := loAff
-      hiAff := hiAff }
+  { inDim := xB.inDim
+    outDim := preB.dim
+    loAff := loAff
+    hiAff := hiAff }
 
 end NN.MLTheory.CROWN.Graph

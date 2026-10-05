@@ -24,7 +24,7 @@ if [ "${SKIP_DOCGEN:-0}" = "1" ]; then
   echo "    Reusing .lake/build/doc"
 else
   rm -rf .lake/build/doc .lake/build/doc-data .lake/build/api-docs.db
-  DISABLE_EQUATIONS=1 "$LAKE" build TorchLeanDocs:docs
+  DISABLE_EQUATIONS=1 "$LAKE" -Kenv=dev build TorchLeanDocs:docs
 fi
 
 echo "==> Copying DocGen output"

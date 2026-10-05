@@ -8,8 +8,8 @@ module
 
 public import NN.Spec.Layers.Linear
 public import NN.Spec.Layers.Loss
-public import NN.Spec.Layers.Lstm
-public import NN.Spec.Models.Transformer
+public import NN.Spec.Layers.Attention
+public import NN.Spec.Layers.Embedding
 public import NN.Spec.Layers.Rnn
 
 /-!
@@ -24,7 +24,7 @@ as a matrix multiplication.
 
 PyTorch analogue:
 
-- encoder: `nn.RNN` / `nn.LSTM` (or `nn.TransformerEncoder`) over source token embeddings
+- encoder: `nn.RNN` over source token embeddings
 - decoder: `nn.RNN` over target embeddings (teacher forcing in training), then a final `nn.linear`
   to vocabulary logits
 
@@ -33,30 +33,21 @@ Scope of this baseline:
 - the optional attention in `Seq2SeqDecoderSpec` is causal self-attention over decoder inputs.
   Training and inference use the same attention parameters and RNN recurrence. The baseline
   receives the encoder's final hidden state; it does not attend to the encoder's output sequence.
-- for cross-attention style mechanisms, we include a small additive/Bahdanau-style attention at the
-  bottom of the file (`computeAttentionWeightsSpec` / `applyAttentionSpec`).
-
-The transformer encoder blocks used by the transformer variant come from
-`NN/Spec/Models/Transformer.lean`.
+- projected dot-product attention over encoder outputs is available separately at the bottom of
+  the file (`computeAttentionWeightsSpec` / `applyAttentionSpec`); the baseline does not call it.
 
 References:
 - Sutskever et al., "Sequence to Sequence Learning with Neural Networks" (NeurIPS 2014).
-- Bahdanau et al., "Neural Machine Translation by Jointly Learning to Align and Translate" (2015).
-- Hochreiter and Schmidhuber, "Long Short-Term Memory" (1997).
 - Cho et al.,
   "Learning Phrase Representations using RNN Encoder-Decoder for Statistical Machine Translation"
   (2014).
-- Vaswani et al., "Attention Is All You Need" (2017) for the transformer encoder variant.
 
 PyTorch docs (for API intuition, not semantics):
 - `torch.nn.Embedding`: https://pytorch.org/docs/stable/generated/torch.nn.Embedding.html
 - `torch.nn.RNN`: https://pytorch.org/docs/stable/generated/torch.nn.RNN.html
-- `torch.nn.LSTM`: https://pytorch.org/docs/stable/generated/torch.nn.LSTM.html
 - `torch.nn.Linear`: https://pytorch.org/docs/stable/generated/torch.nn.Linear.html
 - `torch.nn.MultiheadAttention`:
   https://pytorch.org/docs/stable/generated/torch.nn.MultiheadAttention.html
-- `torch.nn.TransformerEncoderLayer`:
-  https://pytorch.org/docs/stable/generated/torch.nn.TransformerEncoderLayer.html
 
 ## Implementation status
 
@@ -80,7 +71,7 @@ variable {α : Type} [TorchLean.Storage α] [Context α]
 /-!
 ## Training + gradients (one-hot inputs)
 
-Most of this file focuses on *architecture variants* and *forward passes* (teacher-forcing,
+Most of this file focuses on *forward passes* (teacher-forcing,
 inference-time decoding, optional self-attention in the decoder, etc.).
 
 To make Seq2Seq usable as a first-class baseline, we also provide an explicit training objective
@@ -161,12 +152,12 @@ PyTorch analogue: `nn.Embedding` on an integer tensor. The `Fin vocabularySize` 
 expresses the lookup precondition directly, rather than assigning an arbitrary meaning to an invalid
 token.
 -/
-def Seq2SeqEmbeddingSpec.forward {vocabularySize embedDim seqLen : Nat}
+def Seq2SeqEmbeddingSpec.forward {α : Type} [TorchLean.Storage α]
+  {vocabularySize embedDim seqLen : Nat}
   (embedding : Seq2SeqEmbeddingSpec α vocabularySize embedDim)
   (tokenIds : Tensor (Fin vocabularySize) [seqLen]):
   Tensor α [seqLen, embedDim] :=
-  Tensor.dim (fun i =>
-    get embedding.embedding (Tensor.getScalar tokenIds i))
+  Embedding.lookup { weight := embedding.embedding } tokenIds
 
 /-- Seq2Seq embedding forward pass for one-hot / token distributions.
 
@@ -179,11 +170,12 @@ This is the usual "embedding lookup as a matrix multiply":
 PyTorch analogy: `y = x @ E` where `x` is one-hot / a distribution; this matches `nn.Embedding`
 when the input is exactly one-hot.
 -/
-def Seq2SeqEmbeddingSpec.forwardOneHot {vocabularySize embedDim seqLen : Nat}
+def Seq2SeqEmbeddingSpec.forwardOneHot {α : Type} [TorchLean.Storage α]
+  [Add α] [Mul α] [Zero α] {vocabularySize embedDim seqLen : Nat}
   (embedding : Seq2SeqEmbeddingSpec α vocabularySize embedDim)
   (tokenOneHot : Tensor α [seqLen, vocabularySize]) :
   Tensor α [seqLen, embedDim] :=
-  Tensor.dim (fun i => vecMatMulSpec (get tokenOneHot i) embedding.embedding)
+  Embedding.oneHot { weight := embedding.embedding } tokenOneHot
 
 /--
 Backward pass for `Seq2SeqEmbeddingSpec.forwardOneHot`.
@@ -196,7 +188,8 @@ So:
 - `dE = Σ_t token_t ⊗ dY_t`
 - `dToken_t = E · dY_t` (not usually needed, but included for completeness)
 -/
-def Seq2SeqEmbeddingSpec.backwardOneHot {vocabularySize embedDim seqLen : Nat}
+def Seq2SeqEmbeddingSpec.backwardOneHot {α : Type} [TorchLean.Storage α]
+  [Add α] [Mul α] [Zero α] {vocabularySize embedDim seqLen : Nat}
   (embedding : Seq2SeqEmbeddingSpec α vocabularySize embedDim)
   (tokenOneHot : Tensor α [seqLen, vocabularySize])
   (gradOutput : Tensor α [seqLen, embedDim]) :
@@ -253,82 +246,6 @@ def Seq2SeqRNNEncoderSpec.forward {α : Type} [TorchLean.Storage α] [Context α
 
 
 /--
-LSTM-based encoder specification for Seq2Seq.
-
-This models an `nn.LSTM`-style encoder over embedded tokens, returning the full hidden sequence,
-final hidden state, and final cell state.
-
-PyTorch analogue: `nn.LSTM(..., batch_first=True)` (ignoring the batch axis), returning
-`(output, (h_n, c_n))`.
--/
-structure Seq2SeqLSTMEncoderSpec (α : Type) [TorchLean.Storage α]
-    (embedDim hiddenDim : Nat) where
-  /-- LSTM cell parameters. -/
-  lstm : LSTMSpec α embedDim hiddenDim
-
-/--
-Forward pass for `Seq2SeqLSTMEncoderSpec`.
-
-Inputs:
-- `x : (seqLen × embedDim)`, embedded source tokens,
-- `h0`, optional initial hidden state (`hiddenDim`),
-- `c0`, optional initial cell state (`hiddenDim`).
-
-Returns:
-- `(outputs, final_h, final_c)` where `outputs : (seqLen × hiddenDim)` is the per-timestep hidden
-  sequence.
--/
-def Seq2SeqLSTMEncoderSpec.forward {embedDim hiddenDim seqLen : Nat}
-  (encoder : Seq2SeqLSTMEncoderSpec α embedDim hiddenDim)
-  (x : Tensor α [seqLen, embedDim])
-  (h0 : Option (Tensor α [hiddenDim]))
-  (c0 : Option (Tensor α [hiddenDim])):
-  (Tensor α [seqLen, hiddenDim] ×
-   Tensor α [hiddenDim] ×
-   Tensor α [hiddenDim]) :=
-  let initialHidden := match h0 with
-  | some h => h
-  | none => Tensor.full (.dim hiddenDim .scalar) 0
-  let initialCell := match c0 with
-  | some c => c
-  | none => Tensor.full (.dim hiddenDim .scalar) 0
-  let (outputs, finalState) :=
-    lstmSequenceSpec encoder.lstm x { hidden := initialHidden, cell := initialCell }
-  (outputs, finalState.hidden, finalState.cell)
-
-/--
-Transformer-based encoder specification for Seq2Seq.
-
-This wrapper applies exactly `numLayers` `TransformerEncoderLayer`s from
-`NN.Spec.Models.Transformer` as a left fold.
-
-PyTorch analogue: `nn.TransformerEncoder(nn.TransformerEncoderLayer(...), num_layers=...)`
-(ignoring dropout and most configuration knobs).
--/
-structure Seq2SeqTransformerEncoderSpec (α : Type) [TorchLean.Storage α] [Context α]
-  (embedDim numHeads numLayers : Nat) where
-  /-- Encoder layer stack. Its length is part of the type. -/
-  layers : Tensor (TransformerEncoderLayer numHeads embedDim (embedDim * 4) α)
-    [numLayers]
-
-/--
-Forward pass for `Seq2SeqTransformerEncoderSpec`.
-
-Input/output shape: `(seqLen × embedDim)`.
-
-This uses post-norm transformer layers from `NN.Spec.Models.Transformer` and does not model
-dropout; it is meant as a clean semantic reference rather than a full training-ready implementation.
--/
-def Seq2SeqTransformerEncoderSpec.forward {embedDim numHeads numLayers seqLen : Nat}
-  (encoder : Seq2SeqTransformerEncoderSpec α embedDim numHeads numLayers)
-  (x : Tensor α [seqLen, embedDim])
-  (h1 : seqLen > 0) (h2 : embedDim > 0) :
-  Tensor α [seqLen, embedDim] :=
-  (Tensor.to encoder.layers
-    (Array (TransformerEncoderLayer numHeads embedDim (embedDim * 4) α))).foldl
-      (fun acc layer => TransformerEncoderLayer.forward layer acc h1 h2) x
-
-/--
 RNN decoder specification for Seq2Seq.
 
 This decoder consumes a sequence of target-side embeddings and produces vocabulary logits:
@@ -347,7 +264,8 @@ structure Seq2SeqDecoderSpec (α : Type) [TorchLean.Storage α]
   rnn : RNNSpec α embedDim hiddenDim
   /-- Optional causal self-attention over decoder inputs, shared by training and inference. -/
   attention :
-    Option (Σ numHeads : Nat, MultiHeadAttention α numHeads embedDim (embedDim / numHeads)) := none
+    Option (Σ numHeads : Nat, MultiHeadAttention α numHeads embedDim (embedDim /
+numHeads)) := none
   /-- Output projection (`hiddenDim -> vocabularySize`) producing per-timestep logits. -/
   outputProjection : LinearSpec α hiddenDim vocabularySize
 
@@ -622,15 +540,17 @@ def Seq2SeqSpec.forwardTrainingOneHot
   Seq2SeqDecoderSpec.forwardTeacherForcing model.decoder tgtEmbeds encHidden hTgt
 
 /--
-Per-timestep cross-entropy loss for the differentiable Seq2Seq baseline.
+Same-position reconstruction loss for the differentiable Seq2Seq baseline.
 
 Computes:
 1. logits via `Seq2SeqSpec.forwardTrainingOneHot`,
 2. probabilities via `softmax`,
-3. cross-entropy against the target token distribution at each timestep.
+3. cross-entropy against `tgtOneHot`, which also supplies the decoder inputs.
 
-PyTorch analogue: `nn.CrossEntropyLoss` applied per timestep (with probabilities represented as
-  one-hot).
+This reconstructs the supplied decoder tokens. For shifted next-token supervision, call
+`forwardTrainingOneHot`, apply softmax to its logits, and pass separate labels to
+`crossEntropySpec`.
+The reduction and probability clamping here are exactly those of `crossEntropySpec`.
 -/
 def Seq2SeqSpec.crossEntropyLossOneHot
   {srcVocabSize tgtVocabSize embedDim hiddenDim srcSeqLen tgtSeqLen : Nat}
@@ -644,7 +564,10 @@ def Seq2SeqSpec.crossEntropyLossOneHot
   crossEntropySpec 1 probs tgtOneHot
 
 /--
-Compute `(loss, grads)` for the Seq2Seq baseline under per-timestep cross-entropy.
+Compute `(loss, grads)` for the same-position objective in `crossEntropyLossOneHot`.
+
+The decoder inputs and labels are both `tgtOneHot`; these gradients do not implement shifted
+next-token supervision.
 
 This returns gradients for:
 - both embedding tables,
@@ -715,29 +638,6 @@ def Seq2SeqSpec.crossEntropyGradOneHot
   (loss, grads)
 
 /--
-Attention-augmented Seq2Seq specification (simple encoder-output attention).
-
-This record extends the baseline with an additional projection matrix used by the helper
-attention functions below (`computeAttentionWeightsSpec` / `applyAttentionSpec`).
-
-Note: this file includes these attention helpers as a building block; the main baseline forward
-passes above do not integrate encoder-decoder cross-attention by default.
--/
-structure AttentionSeq2SeqSpec (α : Type) [TorchLean.Storage α]
-    (srcVocabSize tgtVocabSize embedDim hiddenDim
-  : Nat) where
-  /-- Source embedding table. -/
-  sourceEmbedding : Seq2SeqEmbeddingSpec α srcVocabSize embedDim
-  /-- Target embedding table. -/
-  targetEmbedding : Seq2SeqEmbeddingSpec α tgtVocabSize embedDim
-  /-- Encoder RNN parameters. -/
-  encoder : Seq2SeqRNNEncoderSpec α embedDim hiddenDim
-  /-- Decoder parameters (RNN + output projection + optional self-attention). -/
-  decoder : Seq2SeqDecoderSpec α embedDim hiddenDim tgtVocabSize
-  /-- Attention projection matrix used to score encoder outputs against the decoder hidden state. -/
-  attentionWeights : Tensor α [hiddenDim, hiddenDim]
-
-/--
 Compute attention weights over encoder outputs for a single decoder hidden state.
 
 This is a simple dot-product style attention:
@@ -745,15 +645,14 @@ This is a simple dot-product style attention:
 2. score each encoder hidden vector by an elementwise product + sum,
 3. normalize scores with `softmax` over the sequence axis.
 
-It is inspired by classic encoder-decoder attention mechanisms (Bahdanau-style), and this spec keeps
-the scoring rule compact.
+The score at position `i` is `Σ_j (attentionWeights · decoderHidden)_j · encoderOutputs[i,j]`.
 -/
 def computeAttentionWeightsSpec {α : Type} [TorchLean.Storage α] [Context α]
   {hiddenDim seqLen : Nat}
   (attentionWeights : Tensor α [hiddenDim, hiddenDim])
   (decoderHidden : Tensor α [hiddenDim])
   (encoderOutputs : Tensor α [seqLen, hiddenDim])
-  (h1 : hiddenDim ≠ 0) (_h2 : seqLen ≠ 0) :
+  (h1 : hiddenDim ≠ 0) :
   Tensor α [seqLen] :=
   -- Compute attention scores
   let projectedHidden := matVecMulSpec attentionWeights decoderHidden
@@ -774,7 +673,7 @@ context vector `c = Σ_i a_i · H_i : (hiddenDim)`.
 def applyAttentionSpec {hiddenDim seqLen : Nat}
   (attentionWeights : Tensor α [seqLen])
   (encoderOutputs : Tensor α [seqLen, hiddenDim])
-  (h1 : seqLen ≠ 0) (_h2 : hiddenDim ≠ 0) :
+  (h1 : seqLen ≠ 0) :
   Tensor α [hiddenDim] :=
   -- Weighted sum of encoder outputs
   let weightedOutputs := Tensor.dim (fun i =>

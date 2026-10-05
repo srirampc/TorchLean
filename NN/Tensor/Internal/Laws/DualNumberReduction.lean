@@ -43,14 +43,10 @@ private theorem fst_finset_prod_dualNumber
             TrivSqZeroExt.inr (R := R) (inputTangent coordinate) :
             DualNumber R)) =
       coordinates.prod inputTensor := by
-  classical
-  induction coordinates using Finset.induction_on with
-  | empty =>
-      simp
-  | @insert coordinate coordinates hNotMem inductionHypothesis =>
-      simp only [Finset.prod_insert hNotMem, TrivSqZeroExt.fst_mul,
-        TrivSqZeroExt.fst_add, TrivSqZeroExt.fst_inl,
-        TrivSqZeroExt.fst_inr, add_zero, inductionHypothesis]
+  change (TrivSqZeroExt.fstHom R R R) _ = _
+  rw [map_prod]
+  simp only [TrivSqZeroExt.fstHom_apply, TrivSqZeroExt.fst_add,
+    TrivSqZeroExt.fst_inl, TrivSqZeroExt.fst_inr, add_zero]
 
 /-- The tangent component of a finite product is its sum of leave-one-out products. -/
 private theorem snd_finset_prod_dualNumber

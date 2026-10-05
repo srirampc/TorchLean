@@ -228,13 +228,6 @@ private def inferInputGroups (span : Syntax.Span) :
           message := "normalized input groups and input shape have different ranks"
           span }
 
-/-- Find the first axis whose length remains unresolved. -/
-private def firstUnresolved? (lengths : PartialAxisLengths) :
-    List AxisId → Option AxisId
-  | [] => none
-  | axis :: axes =>
-      if (lengths axis).isSome then firstUnresolved? lengths axes else some axis
-
 /-- Explain why a particular normalized axis still needs a length. -/
 private def missingAxisMessage : AxisId → String
   | .named name => s!"axis '{name}' requires a supplied length"
@@ -255,7 +248,7 @@ def checkTransform (kind : TransformKind) (pattern : Syntax.TransformPattern)
       let seeded := PartialAxisLengths.seed supplementary
       let resolved ←
         inferInputGroups pattern.left.span normalized.inputGroups inputShape seeded
-      match firstUnresolved? resolved normalized.outputAxes with
+      match normalized.outputAxes.find? (fun axis => (resolved axis).isNone) with
       | some axis =>
           .error
             { code := .missingAxisLength

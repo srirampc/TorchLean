@@ -22,13 +22,14 @@ After `lake update`, their license files are available under `.lake/packages/` a
 | Lean 4, Lake, and Std | Compiler, package manager, and standard library, selected by `lean-toolchain`. | Source project: `leanprover/lean4`. |
 | mimalloc 3.4.4 | Private allocator object for TorchLean's Linux native executables and shared libraries, with a narrow global purge-wakeup repair. The installed Lean compiler allocator is unchanged. | Source project: `microsoft/mimalloc`, MIT licensed. `scripts/lean_allocator.py` pins and checks the source archive and SDK header; the archive includes `LICENSE`. |
 | Mathlib | Formal mathematics used by specifications, proofs, probability, real analysis, tensors, and optimization files. | Source project: `leanprover-community/mathlib4`, pinned to the Lean 4.34 line here. Mathlib is Apache-2.0 licensed. |
-| FloatLib | Configurable executable scalars, reference semantics, generic rounding theory, and arithmetic refinement proofs. | Source project: `lean-dojo/FloatLib`, tracking `main` and locked to `c9a051f08f948ce473036b815b0669fafb61f601` in `lake-manifest.json`. MIT licensed; its license and third-party notices are distributed with the dependency. |
+| FloatLib | Configurable executable scalars, reference semantics, generic rounding theory, and arithmetic refinement proofs. | Source project: `lean-dojo/FloatLib`, tracking `main` with the exact revision locked in `lake-manifest.json`. MIT licensed; its license and third-party notices are distributed with the dependency. |
 | Batteries, Aesop, Qq, ProofWidgets, LeanSearchClient, importGraph, plausible, Cli, leansqlite, MD4Lean, BibtexQuery, UnicodeBasic | Lean ecosystem packages pulled directly or transitively for proofs, tactics, widgets, documentation, dependency analysis, and command-line tooling. | Their license files are fetched with the Lake package cache. |
-| doc-gen4 | Generates the API documentation built with `lake build NN:docs`. | Source project: `leanprover/doc-gen4`, Apache-2.0 licensed. |
+| doc-gen4 | Generates the API documentation built with `scripts/lake.sh -Kenv=dev build TorchLeanDocs:docs`. | Source project: `leanprover/doc-gen4`, Apache-2.0 licensed. |
 | Verso, VersoBlueprint, SubVerso, Illuminate | Build the TorchLean guide/blueprint documentation. | Upstream Lean documentation tooling. |
 | Lean4Checker | Optional kernel-level checking infrastructure used by verification workflows. | Upstream Lean project pinned in the Lake manifests. |
-| CUDA toolkit, cuBLAS, cuFFT | Optional external NVIDIA libraries used when building with `lake build -K cuda=true`. | Users provide their own CUDA installation. |
-| PyTorch, ATen, libtorch, ONNX tooling | Optional runtime/import/export providers for checkpoints, graph capture, IR exchange, and fast forward kernels. | PyTorch/ATen/libtorch and ONNX remain external systems; TorchLean checks imported JSON/IR artifacts and documents runtime trust boundaries separately. |
+| CUDA toolkit and NVIDIA runtime libraries | Dependencies of the selected CUDA-enabled LibTorch SDK when building with `scripts/lake.sh -Kcuda=true build`. | Users provide a compatible SDK and toolkit installation. |
+| LibTorch and ATen | CUDA tensor evaluation and local gradient operations, called by TorchLean's differentiation tape. | External C++ SDK; its bundled dependencies and license notices accompany the selected distribution. |
+| PyTorch and ONNX tooling | Checkpoint exchange, graph capture, and IR import/export. | External systems; TorchLean checks imported JSON/IR artifacts and documents their trust boundaries separately. |
 | Jekyll and Ruby gems | Website build tooling for `home_page/`. | Used to build the public site. |
 
 ## Local Data Policy
@@ -84,7 +85,7 @@ These are the public data sources used by the runnable examples when a user choo
 | Tiny Shakespeare | `https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt` | `data/real/text/tiny_shakespeare.txt` | `python3 scripts/datasets/download_example_data.py --tiny-shakespeare` | Public text corpus popularized by the `char-rnn` examples. |
 | TinyStories validation split | `https://huggingface.co/datasets/roneneldan/TinyStories/resolve/main/TinyStories-valid.txt` | `data/real/text/tinystories_valid.txt` | `python3 scripts/datasets/download_example_data.py --tinystories-valid` | TinyStories is the Eldan/Li synthetic stories corpus on Hugging Face. |
 | WikiText | Hugging Face dataset `Salesforce/wikitext` via the Dataset Viewer API | `data/real/text/wikitext2_train.txt`, optional cache under `data/real/hf_cache/wikitext/` | `python3 scripts/datasets/download_wikitext.py --config wikitext-2-raw-v1 --split train --output data/real/text/wikitext2_train.txt` | The script records the upstream license note: WikiText is CC BY-SA 3.0 / GFDL; see the Hugging Face dataset card for details. |
-| GPT-2 tokenizer files | Hugging Face repository `openai-community/gpt2` | `data/real/gpt2/vocab.json`, `data/real/gpt2/merges.txt` | Use the `curl` commands in the Local Data Policy section. | Used by `NN.API.Text.Bpe` and `torchlean text_gpt2` for standard GPT-2 byte-pair encoding. |
+| GPT-2 tokenizer files | Hugging Face repository `openai-community/gpt2` | `data/real/gpt2/vocab.json`, `data/real/gpt2/merges.txt` | Use the `curl` commands in the Local Data Policy section. | Used by `NN.API.Text.Tokenizer` and `torchlean text_gpt2` for standard GPT-2 byte-pair encoding. |
 | 1D Burgers FNO dataset | `https://huggingface.co/datasets/kks32/sciml-dataset/resolve/main/fno/burgers_data_R10.mat` | `data/real/fno/burgers_*.npy`, `data/real/fno/burgers_meta.json` | `python3 NN/Examples/Data/prepare_fno1d_burgers.py --download --out-dir data/real/fno` | Public SciML/FNO Burgers operator-learning data. The script converts the `.mat` file to native NPY arrays used by `torchlean fno1d_burgers`. |
 | Viscous Burgers PINN reference data | `https://github.com/AdrianDario10/Burgers_Equation1D` (`burgers_shock.mat`) | User-selected path, commonly `/tmp/burgers_dataset.json` after conversion | `git clone --depth 1 https://github.com/AdrianDario10/Burgers_Equation1D.git /tmp/Burgers_Equation1D` then `python3 scripts/verification/pinn/import_burgers_shock_mat.py --mat /tmp/Burgers_Equation1D/burgers_shock.mat --out /tmp/burgers_dataset.json` | Classic Raissi et al. viscous Burgers PINN reference dataset as distributed by the external repository. |
 
@@ -99,9 +100,10 @@ python3 scripts/datasets/download_wikitext.py \
   --output data/real/text/wikitext103_train_120mb.txt
 ```
 
-## Bundled Example Artifacts
+## Example Artifacts
 
-The repository includes generated artifacts so examples and tests can run without network access:
+The example scripts generate the small synthetic datasets locally; they are not checked in. The
+other artifacts below are included so examples and tests can run without network access:
 
 | Artifact | Path | Origin / notice |
 | --- | --- | --- |
@@ -109,7 +111,7 @@ The repository includes generated artifacts so examples and tests can run withou
 | Small CIFAR-10-like NPY | `NN/Examples/Data/small_cifar10like_X.npy`, `NN/Examples/Data/small_cifar10like_y.npy` | Synthetic TorchLean image-shaped data generated by `NN/Examples/Data/generate_small_data.py`, covered by the repository MIT license. |
 | Robustness digits JSON artifacts | `NN/Examples/Verification/Robustness/digits_test.json`, `NN/Examples/Verification/Robustness/digits_linear_weights.json`, `NN/Examples/Verification/Robustness/digits_linear_margin_cert.json` | Derived artifacts produced from scikit-learn's built-in `load_digits` dataset and local training/certification scripts. scikit-learn is BSD-3-Clause licensed. |
 | LiRPA/CROWN fixture JSON | `NN/Examples/Verification/LiRPA/*.json` | Small deterministic artifacts produced by scripts under `scripts/verification/lirpa/`; Lean checkers consume the represented bounds. |
-| Alpha-beta-CROWN-style leaf artifacts | `NN/Examples/Verification/AbCrown/*.json` | Compact raw/converted terminal-leaf artifacts for the TorchLean structural checker. The external verifier/search remains a producer boundary. |
+| Alpha-beta-CROWN-style leaf artifacts | `NN/Examples/Verification/AbCrown/*.json` | Compact raw/converted terminal-leaf artifacts for the TorchLean consistency checker. The external verifier/search remains a producer boundary. |
 | ODE/PINN/spline certificate fixtures | `NN/Examples/Verification/{ODE,PINN,Splines}/` | Small curated artifacts produced by local scripts or hand-written fixtures so verification commands run offline. Larger trained checkpoints stay outside git. |
 
 Bundled JSON fixtures should stay small enough to review. If an artifact depends on a large model,

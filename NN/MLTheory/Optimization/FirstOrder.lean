@@ -27,19 +27,13 @@ namespace Optim
 open Spec TorchLean
 open TorchLean TorchLean.Tensor
 
-variable {α : Type} [TorchLean.Storage α] [Context α] [DecidableRel ((· > ·) : α → α → Prop)]
-
 namespace AdamW
-
-/-!
-`Context α` gives us executable operators, but not algebraic laws like `x * 0 = 0`.
-
-Optimizer-relationship theorems (AdamW → Adam, L2 vs weight decay, etc.) therefore live most
-naturally over proof backends like `ℝ` where the laws are available from Mathlib.
--/
 
 /--
 AdamW reduces to Adam when `weightDecay = 0` (parameter-update equality), over `ℝ`.
+
+`Context α` gives executable operators but no algebraic laws such as `x * 0 = 0`, so the statement
+is made over `ℝ`, where Mathlib supplies them.
 -/
 theorem update_weight_decay_zero_parameters_eq_adam_real {s : Shape}
     (state : State ℝ s) (parameters gradients : Tensor ℝ s) (hwd : state.weightDecay = 0) :
@@ -53,10 +47,8 @@ theorem update_weight_decay_zero_parameters_eq_adam_real {s : Shape}
              secondMoment := state.secondMoment
              stepCount := state.stepCount } : Adam.State ℝ s)
           parameters gradients).parameters := by
-  -- `Context` gives operators; to simplify the decoupled decay term we use `ℝ`'s algebraic laws
-  -- together with structural recursion on TorchLean spec tensors.
-  --
-  -- Helper lemmas: scaling by `0` yields the all-zero tensor, and subtracting that yields identity.
+  -- With `weightDecay = 0` the decoupled decay term is `scaleSpec parameters 0`, which is the zero
+  -- tensor, and subtracting the zero tensor is the identity.
   have scaleSpec_zero : ∀ {s : Shape} (t : Tensor ℝ s), scaleSpec t (0 : ℝ) = Tensor.full s 0 := by
     intro s t
     apply TorchLean.Tensor.Internal.Rep.ext
@@ -69,10 +61,7 @@ theorem update_weight_decay_zero_parameters_eq_adam_real {s : Shape}
     simp [Tensor.subSpec]
   cases state with
   | mk learningRate beta1 beta2 epsilon weightDecay firstMoment secondMoment stepCount =>
-      -- Now `weightDecay = 0` makes the decayed-parameter term a no-op.
-      -- We rewrite `weightDecay` first, then discharge the tensor equalities via the helpers.
       have hwd' : weightDecay = 0 := by simpa using hwd
-      -- `simp` doesn't know tensor algebra, but it will reduce the remaining goal to our helpers.
       simp [AdamW.update, Adam.update, hwd', scaleSpec_zero, subSpec_full_zero]
 
 end AdamW

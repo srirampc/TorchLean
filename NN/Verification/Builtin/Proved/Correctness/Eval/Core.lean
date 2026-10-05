@@ -23,23 +23,6 @@ open NN.IR
 namespace Correctness
 
 open NN.Verification.Builtin
--- Typed context indices come from `NN.Proofs.Autograd.Tape.Util.Idx`, the one place
--- `Idx` and `getIdx` are defined.
-open Proofs (Idx getIdx)
-
-namespace IRStep
-
-/-- Reflexivity for the structural shape equality used by IR runtime guards. -/
-theorem shapeBEq_refl (s : Shape) : (s == s) = true :=
-  beq_self_eq_true s
-
-/-- Reflexivity for the structural shape inequality used by IR runtime guards. -/
-theorem shapeBNe_refl (s : Shape) : (s != s) = false := by
-  simp [bne]
-
-end IRStep
-
-/-! ### Lowering correctness (forward fragment) -/
 
 namespace IRStep
 
@@ -58,14 +41,11 @@ def unaryGraphOut (kind : OpKind) (inShape outShape : Shape) : Graph :=
 
 /-- A unary node whose input and output share the same shape. -/
 def unaryNode (kind : OpKind) (s : Shape) : NN.IR.Node :=
-  { id := 1, parents := #[0], kind := kind, outShape := s }
+  unaryNodeOut kind s
 
 /-- A two-node graph for a unary op whose input and output share the same shape. -/
 def unaryGraph (kind : OpKind) (s : Shape) : Graph :=
-  { nodes := #[
-      { id := 0, parents := #[], kind := .input, outShape := s },
-      unaryNode kind s
-    ] }
+  unaryGraphOut kind s s
 
 /-- A binary node with parents `0` and `1` and an explicit output shape. -/
 def binaryNodeOut (kind : OpKind) (outShape : Shape) : NN.IR.Node :=
@@ -81,15 +61,11 @@ def binaryGraphOut (kind : OpKind) (leftShape rightShape outShape : Shape) : Gra
 
 /-- A binary node whose inputs and output share the same shape. -/
 def binaryNode (kind : OpKind) (s : Shape) : NN.IR.Node :=
-  { id := 2, parents := #[0, 1], kind := kind, outShape := s }
+  binaryNodeOut kind s
 
 /-- A three-node graph for a binary op whose inputs and output share the same shape. -/
 def binaryGraph (kind : OpKind) (s : Shape) : Graph :=
-  { nodes := #[
-      { id := 0, parents := #[], kind := .input, outShape := s },
-      { id := 1, parents := #[], kind := .input, outShape := s },
-      binaryNode kind s
-    ] }
+  binaryGraphOut kind s s s
 
 /-- A node consuming every preceding entry of a shape array, in order. -/
 def variadicNodeOut (kind : OpKind) (parentShapes : Array Shape) (outShape : Shape) : NN.IR.Node :=
@@ -107,7 +83,8 @@ def variadicGraphOut (kind : OpKind) (parentShapes : Array Shape) (outShape : Sh
       { id := i, parents := #[], kind := .input, outShape := shape }).push
       (variadicNodeOut kind parentShapes outShape) }
 
-/-- A failure-aware lookup reconstructs an array when it succeeds at every valid index. -/
+/-- A failure-aware lookup over `List.range` reconstructs the array's element list when it
+succeeds at every valid index. -/
 theorem range_mapM_eq_toList_of_getElem_eq {β : Type} (values : Array β)
     (get : Nat → Except String β)
     (hget : ∀ i (hi : i < values.size), get i = Except.ok values[i]) :
@@ -199,6 +176,18 @@ theorem shape_eq_of_expectShape_eq_ok
   by_contra hShape
   simp [NN.IR.Graph.expectShape, hShape] at h
 
+/-- A successful shape check identifies the packed value with the typed tensor it returned. -/
+theorem eq_mk_of_expectShape_eq_ok
+    {α : Type} [TorchLean.Storage α] [Context α]
+    {expected : Shape} {v : Spec.SomeTensor α} {t : Tensor α expected}
+    (h : NN.IR.Graph.expectShape (α := α) (expected := expected) v = Except.ok t) :
+    v = Spec.SomeTensor.mk (α := α) expected t := by
+  have hShape : v.shape = expected := shape_eq_of_expectShape_eq_ok h
+  have hCast : v.cast hShape = t :=
+    Except.ok.inj ((expectShape_eq_ok v hShape).symm.trans h)
+  rw [← Spec.SomeTensor.ofTensor_cast v hShape, hCast]
+  rfl
+
 /-- `getVal` returns the indexed tensor when the runtime value carries the expected shape tag. -/
 theorem getVal_eq_ok
     {α : Type} [TorchLean.Storage α] [Context α]
@@ -262,7 +251,6 @@ theorem getElem?_eq_some_packedAt
     (vals : Array (Spec.SomeTensor α)) (idx : Idx (Ctx inShape ss) s)
     (hShapes : shapesOfVals (α := α) vals = Ctx inShape ss) :
     (packedAt vals idx hShapes).shape = s := by
-  classical
   have hLen : vals.size = (Ctx inShape ss).length := by
     simpa [shapesOfVals_length] using congrArg List.length hShapes
   have hiΓ : idx.id < (Ctx inShape ss).length := idx_id_lt_length (x := idx)

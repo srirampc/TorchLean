@@ -26,21 +26,9 @@ universe u
 theorem transpose2DIndexValue_lt
     (rows columns index : Nat) (hIndex : index < columns * rows) :
     index / rows + columns * (index % rows) < rows * columns := by
-  have hRows : 0 < rows := by
-    have hProduct : 0 < columns * rows := Nat.zero_lt_of_lt hIndex
-    exact Nat.pos_of_mul_pos_right (Nat.mul_comm columns rows ▸ hProduct)
-  have hColumn : index / rows < columns :=
-    Nat.div_lt_of_lt_mul (Nat.mul_comm columns rows ▸ hIndex)
-  have hRow : index % rows < rows := Nat.mod_lt _ hRows
-  calc
-    index / rows + columns * (index % rows) <
-        columns + columns * (index % rows) :=
-      Nat.add_lt_add_right hColumn _
-    _ = columns * (index % rows + 1) := by
-      rw [Nat.mul_succ, Nat.add_comm]
-    _ ≤ columns * rows :=
-      Nat.mul_le_mul_left columns (Nat.succ_le_iff.mpr hRow)
-    _ = rows * columns := Nat.mul_comm columns rows
+  let coordinates : Fin columns × Fin rows :=
+    finProdFinEquiv.symm ⟨index, hIndex⟩
+  exact (finProdFinEquiv coordinates.swap).isLt
 
 /-- Source index selected by a row-major two-dimensional transpose. -/
 def transpose2DIndex (rows columns : Nat) :
@@ -130,7 +118,7 @@ theorem arrayBufferTranspose2D_size
 /--
 Transpose a rank-two packed floating-point tensor without scalar callbacks.
 -/
-@[inline] def nativeFloatTranspose2D
+@[inline] def nativePackedTranspose2D
     (rows columns : Nat)
     (source : @Rep Float [rows, columns] instFloatStorage) :
     @Rep Float [columns, rows] instFloatStorage :=
@@ -177,10 +165,10 @@ Transpose a rank-two ordinary-array tensor without scalar callbacks.
         arrayBufferTranspose2D_size source.buffer rows columns hSourceSize)
 
 /-- The native rank-two transpose implements the ordinary flat pullback. -/
-theorem nativeFloatTranspose2D_correct
+theorem nativePackedTranspose2D_correct
     (rows columns : Nat)
     (source : @Rep Float [rows, columns] instFloatStorage) :
-    nativeFloatTranspose2D rows columns source =
+    nativePackedTranspose2D rows columns source =
       Rep.pullFlat (transpose2DShapeIndex rows columns) source := by
   let hSourceSize : source.buffer.data.size = rows * columns := by
     calc
@@ -189,7 +177,7 @@ theorem nativeFloatTranspose2D_correct
         instFloatStorage.toArray_size source.buffer
       _ = rows * columns := by
         simpa [Shape.size] using source.size_eq
-  unfold nativeFloatTranspose2D Rep.pullFlat
+  unfold nativePackedTranspose2D Rep.pullFlat
   apply (@Rep.mk_eq_ofFlatFn Float instFloatStorage)
   change
     (floatBufferTranspose2D source.buffer rows columns hSourceSize).data =

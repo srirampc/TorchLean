@@ -267,19 +267,10 @@ def matmulFderiv {Γ : List Shape} {h m n p : Nat}
       hasFDerivAt := ?_
       jvp_eq := ?_ }
   · intro xV
-    have hA :
-        HasFDerivAt fA (CtxVec.getCLM (Γ := Γ) (s := sA) A) xV := by
-      have h := (CtxVec.getCLM (Γ := Γ) (s := sA) A).hasFDerivAt (x := xV)
-      have hfun : fA = fun x => (CtxVec.getCLM (Γ := Γ) (s := sA) A) x := by
-        funext x; simp [fA, CtxVec.getCLM_apply]
-      exact h.congr_of_eventuallyEq hfun.eventuallyEq
-    have hB :
-        HasFDerivAt fB (CtxVec.getCLM (Γ := Γ) (s := sB) B) xV := by
-      have h := (CtxVec.getCLM (Γ := Γ) (s := sB) B).hasFDerivAt (x := xV)
-      have hfun : fB = fun x => (CtxVec.getCLM (Γ := Γ) (s := sB) B) x := by
-        funext x; simp [fB, CtxVec.getCLM_apply]
-      exact h.congr_of_eventuallyEq hfun.eventuallyEq
-
+    have hA : HasFDerivAt fA (CtxVec.getCLM (Γ := Γ) (s := sA) A) xV :=
+      CtxVec.hasFDerivAt_get (Γ := Γ) (s := sA) A xV
+    have hB : HasFDerivAt fB (CtxVec.getCLM (Γ := Γ) (s := sB) B) xV :=
+      CtxVec.hasFDerivAt_get (Γ := Γ) (s := sB) B xV
     have hbilin :=
       ContinuousLinearMap.hasFDerivAt_of_bilinear (B := Bmul) (hf := hA) (hg := hB)
     have hEq :
@@ -393,36 +384,24 @@ def softmaxLastFderiv {Γ : List Shape} {h m n : Nat}
           HasFDerivAt (SoftmaxLastAxis.forwardMN (m := m) (n := n))
             (SoftmaxLastAxis.derivMN (m := m) (n := n) (r0 head)) (r0 head) :=
         SoftmaxLastAxis.hasFDerivAt_forwardMN (m := m) (n := n) (x := r0 head)
-      have happly :
-          HasFDerivAt (fun r : (Fin h → Vec (m * n)) => r head)
-            (ContinuousLinearMap.proj (R := ℝ) head) r0 := by
-        exact ((ContinuousLinearMap.proj (R := ℝ) head).hasFDerivAt (x := r0)).congr_of_eventuallyEq
-          (Filter.Eventually.of_forall fun _ => rfl)
-      exact hsoft.comp r0 happly
+      let P : (Fin h → Vec (m * n)) →L[ℝ] Vec (m * n) :=
+        ContinuousLinearMap.proj (R := ℝ) head
+      exact hsoft.comp r0 P.hasFDerivAt
 
     -- Linear reshapes/casts around the middle map.
     have hget :
         HasFDerivAt (fun x : CtxVec Γ => castVec hsz (CtxVec.get (Γ := Γ) (s := s) idx x))
           ((Graph.castCLM (h := hsz)).comp (CtxVec.getCLM (Γ := Γ) (s := s) idx)) xV := by
-      have hlin :=
-        ((Graph.castCLM (h := hsz)).comp (CtxVec.getCLM (Γ := Γ) (s := s) idx)).hasFDerivAt (x :=
-          xV)
-      have hfun :
-          (fun x : CtxVec Γ => castVec hsz (CtxVec.get (Γ := Γ) (s := s) idx x))
-            =
-          fun x : CtxVec Γ =>
-            ((Graph.castCLM (h := hsz)).comp (CtxVec.getCLM (Γ := Γ) (s := s) idx)) x := by
-        funext x
-        simp [Graph.castCLM, ContinuousLinearMap.comp_apply, CtxVec.getCLM_apply]
-      exact hlin.congr_of_eventuallyEq hfun.eventuallyEq
+      simpa only [Function.comp_def, Graph.castCLM_apply] using
+        (Graph.castCLM (h := hsz)).hasFDerivAt.comp xV
+          (CtxVec.hasFDerivAt_get (Γ := Γ) (s := s) idx xV)
 
     have hheads :
-        HasFDerivAt (headsCLM (h := h) (n := m * n)) (headsCLM (h := h) (n := m * n)) x0 := by
-      simpa using ((headsCLM (h := h) (n := m * n)).hasFDerivAt (x := x0))
+        HasFDerivAt (headsCLM (h := h) (n := m * n)) (headsCLM (h := h) (n := m * n)) x0 :=
+      (headsCLM (h := h) (n := m * n)).hasFDerivAt
     have hunheads :
         HasFDerivAt (unheadsCLM (h := h) (n := m * n)) (unheadsCLM (h := h) (n := m * n)) (G r0) :=
-          by
-      simpa using ((unheadsCLM (h := h) (n := m * n)).hasFDerivAt (x := G r0))
+      (unheadsCLM (h := h) (n := m * n)).hasFDerivAt
 
     have hmid :
         HasFDerivAt (fun z : Vec (h * (m * n)) => unheadsCLM (h := h) (n := m * n) (G (headsCLM (h
@@ -448,7 +427,8 @@ def softmaxLastFderiv {Γ : List Shape} {h m n : Nat}
           x)))
           ((deriv0 x0).comp ((Graph.castCLM (h := hsz)).comp (CtxVec.getCLM (Γ := Γ) (s := s) idx)))
             xV := by
-      exact hmid.comp xV hget
+      simpa only [forward0, G, headsCLM_apply, unheadsCLM_apply, Function.comp_def] using
+        hmid.comp xV hget
 
     have hcomp := hcastOut.comp xV hforward0
     -- rewrite to the node's `forwardVec`

@@ -18,7 +18,6 @@ third_party/interval/
 
 # Local LibTorch unpack (CUDA prerequisite; see README)
 /libtorch
-/libtorch/
 .lake/build/libtorch.path
 
 # Python caches and artifacts
@@ -30,7 +29,7 @@ __pycache__/
 .mypy_cache/
 .ipynb_checkpoints/
 
-# Generated PyTorch exports (created by `lake exe torchlean pytorch_roundtrip --action export`)
+# Generated PyTorch exports (`scripts/lake.sh exe torchlean pytorch_roundtrip --action export`)
 NN/Examples/PyTorch/*/Test*.py
 NN/Examples/Interop/PyTorch/*/Test*.py
 

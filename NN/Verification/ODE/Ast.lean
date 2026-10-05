@@ -148,14 +148,11 @@ Returns `none` if the interval contains `0`, because `1/x` is not interval-safe 
 @[inline] def inv {α : Type} [TorchLean.Storage α] [Context α] (y : α × α) : Option (α × α) :=
   let (yl, yh) := y
   let z := 0
-  -- If 0 ∈ [yl,yh], reciprocal is not interval-safe.
+  -- If 0 ∈ [yl,yh], reciprocal is not interval-safe. Otherwise the interval lies on one side of
+  -- zero, where `1/x` is decreasing, so the endpoints swap.
   if leBool yl z && leBool z yh then
     none
-  else if Context.gtBool yl z then
-    -- 1/x is decreasing on (0,∞).
-    some (1 / yh, 1 / yl)
   else
-    -- yl < 0 and yh < 0, decreasing on (-∞,0).
     some (1 / yh, 1 / yl)
 
 /-- Interval division, returning `none` if the denominator interval contains `0`. -/
@@ -181,46 +178,34 @@ Returns `none` unless the interval is strictly positive.
     none
 
 /--
-Interval sine enclosure.
-
-We use a 1‑Lipschitz enclosure around the midpoint and clamp to `[-1, 1]`.
+Enclosure of a 1-Lipschitz function with range in $[-1,1]$: evaluate at the midpoint, widen by
+the radius, and clamp. Shared by `sin` and `cos`.
 -/
+@[inline] def lipschitzOneClamped {α : Type} [TorchLean.Storage α] [Context α] (f : α → α)
+    (x : α × α) : α × α :=
+  let (l, u) := x
+  let m := (l + u) * (1 / 2)
+  let r := (u - l) * (1 / 2)
+  let base := f m
+  let lo := max2 (base - r) (-1)
+  let hi := min2 (base + r) 1
+  (lo, hi)
+
+/-- Interval sine enclosure: 1-Lipschitz around the midpoint, clamped to `[-1, 1]`. -/
 @[inline] def sin {α : Type} [TorchLean.Storage α] [Context α] (x : α × α) : α × α :=
-  -- 1‑Lipschitz enclosure around midpoint, clamped to [-1,1].
-  let (l, u) := x
-  let m := (l + u) * (1 / 2)
-  let r := (u - l) * (1 / 2)
-  let base := MathFunctions.sin m
-  let lo0 := base - r
-  let hi0 := base + r
-  let lo := max2 lo0 (-1)
-  let hi := min2 hi0 1
-  (lo, hi)
+  lipschitzOneClamped MathFunctions.sin x
 
-/--
-Interval cosine enclosure.
-
-Same strategy as `sin`: 1‑Lipschitz around the midpoint, clamped to `[-1, 1]`.
--/
+/-- Interval cosine enclosure: same strategy as `sin`. -/
 @[inline] def cos {α : Type} [TorchLean.Storage α] [Context α] (x : α × α) : α × α :=
-  -- Same 1‑Lipschitz enclosure as `sin`, clamped to [-1,1].
-  let (l, u) := x
-  let m := (l + u) * (1 / 2)
-  let r := (u - l) * (1 / 2)
-  let base := MathFunctions.cos m
-  let lo0 := base - r
-  let hi0 := base + r
-  let lo := max2 lo0 (-1)
-  let hi := min2 hi0 1
-  (lo, hi)
+  lipschitzOneClamped MathFunctions.cos x
 
 end Ival
 
 /--
 Interval evaluation for `Expr`.
 
-`evalWithFuel` uses a fuel parameter so the evaluator is total even for malformed/self-referential
-expressions (though `Expr` itself has no recursion).
+Structural recursion on `Expr` is already total; the fuel parameter caps the accepted expression
+depth (512 via `eval`), so deeper expressions are rejected with `none` instead of evaluated.
 -/
 def evalWithFuel {α : Type} [TorchLean.Storage α] [Context α] (ofFloat : Float → α) (fuel : Nat)
     (env : Env α) (e : Expr) : Option (α × α) :=

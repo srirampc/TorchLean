@@ -9,7 +9,7 @@ module
 public import NN.Runtime.Autograd.Torch.Core.Ops.Dispatch
 public import NN.Runtime.Autograd.Engine.Core.ActivationsLoss
 public import NN.Runtime.Autograd.Engine.Core.Shape
-public import NN.Runtime.Autograd.Engine.Cuda.Ops.Shape
+public import NN.Runtime.Autograd.Engine.LibTorch.Ops.Shape
 
 /-!
 # Eager Tensor Operations
@@ -37,33 +37,23 @@ namespace EagerSession
 def sum {α : Type} [TorchLean.Storage α] (s : EagerSession α) [Add α] [Zero α]
   {sh : Shape} (x : TensorRef α sh) : IO (TensorRef α Shape.scalar) := do
   let cpu := do
-    let t0 ← s.tape.get
-    let (t1, id) ← okOrThrow (Runtime.Autograd.Tape.sum (t := t0) (s := sh) x.id)
-    s.tape.set t1
-    pure { id := id }
+    s.recordCpu fun t0 => keepTapeOnError t0 <|
+      Runtime.Autograd.Tape.sum (t := t0) (s := sh) x.id
   let cuda := do
-    let t0 ← s.cudaTape.get
-    let (t1, id) ← okOrThrow <|
-      Runtime.Autograd.Cuda.Tape.sum (t := t0) (s := sh) x.id
-    s.cudaTape.set t1
-    pure (some { id := id })
-  dispatchCudaOpt (α := α) s .reduceSum #[x.identity?] cpu cuda
+    s.recordCuda fun t0 => keepTapeOnError t0 <|
+      Runtime.Autograd.LibTorch.Tape.sum (t := t0) (s := sh) x.id
+  executeRecorded (α := α) s .reduceSum #[x.identity?] cpu cuda
 
 /-- Flatten a tensor to a 1D vector. PyTorch: `torch.flatten`. -/
 def flatten {α : Type} [TorchLean.Storage α] (s : EagerSession α) [Inhabited α] {sh : Shape}
   (x : TensorRef α sh) : IO (TensorRef α [Spec.Shape.size sh]) := do
   let cpu := do
-    let t0 ← s.tape.get
-    let (t1, id) ← okOrThrow (Runtime.Autograd.Tape.flatten (t := t0) (s := sh) x.id)
-    s.tape.set t1
-    pure { id := id }
+    s.recordCpu fun t0 => keepTapeOnError t0 <|
+      Runtime.Autograd.Tape.flatten (t := t0) (s := sh) x.id
   let cuda := do
-    let t0 ← s.cudaTape.get
-    let (t1, id) ← okOrThrow <|
-      Runtime.Autograd.Cuda.Tape.flatten (t := t0) (s := sh) x.id
-    s.cudaTape.set t1
-    pure (some { id := id })
-  dispatchCudaOpt (α := α) s .reshape #[x.identity?] cpu cuda
+    s.recordCuda fun t0 => keepTapeOnError t0 <|
+      Runtime.Autograd.LibTorch.Tape.flatten (t := t0) (s := sh) x.id
+  executeRecorded (α := α) s .reshape #[x.identity?] cpu cuda
 
 /--
 Reshape a tensor while preserving total number of elements.
@@ -73,35 +63,23 @@ PyTorch comparison: `torch.reshape` / `view` (when valid).
 def reshape {α : Type} [TorchLean.Storage α] (s : EagerSession α) [Inhabited α] {sh1 sh2 : Shape}
   (x : TensorRef α sh1) (h : Spec.Shape.size sh1 = Spec.Shape.size sh2) : IO (TensorRef α sh2) := do
   let cpu := do
-    let t0 ← s.tape.get
-    let (t1, id) ←
-      okOrThrow (Runtime.Autograd.Tape.reshape (t := t0) (s₁ := sh1) (s₂ := sh2) x.id h)
-    s.tape.set t1
-    pure { id := id }
+    s.recordCpu fun t0 => keepTapeOnError t0 <|
+      Runtime.Autograd.Tape.reshape (t := t0) (s₁ := sh1) (s₂ := sh2) x.id h
   let cuda := do
-    let t0 ← s.cudaTape.get
-    let (t1, id) ← okOrThrow <|
-      Runtime.Autograd.Cuda.Tape.reshape (t := t0) (s₁ := sh1) (s₂ := sh2) x.id h
-    s.cudaTape.set t1
-    pure (some { id := id })
-  dispatchCudaOpt (α := α) s .reshape #[x.identity?] cpu cuda
+    s.recordCuda fun t0 => keepTapeOnError t0 <|
+      Runtime.Autograd.LibTorch.Tape.reshape (t := t0) (s₁ := sh1) (s₂ := sh2) x.id h
+  executeRecorded (α := α) s .reshape #[x.identity?] cpu cuda
 
 /-- Swap two adjacent axes at a given depth. PyTorch analogue: `x.transpose(dim, dim+1)`. -/
 def swapAdjacentAtDepth {α : Type} [TorchLean.Storage α] (s : EagerSession α) {sh : Shape}
   (depth : Nat) (x : TensorRef α sh) : IO (TensorRef α (sh.swapAdjacentAtDepth depth)) := do
   let cpu := do
-    let t0 ← s.tape.get
-    let (t1, id) ← okOrThrow (Runtime.Autograd.Tape.swapAdjacentAtDepth (t := t0) (s := sh) depth
-      x.id)
-    s.tape.set t1
-    pure { id := id }
+    s.recordCpu fun t0 => keepTapeOnError t0 <|
+      Runtime.Autograd.Tape.swapAdjacentAtDepth (t := t0) (s := sh) depth x.id
   let cuda := do
-    let t0 ← s.cudaTape.get
-    let (t1, id) ← okOrThrow <|
-      Runtime.Autograd.Cuda.Tape.swapAdjacentAtDepth (t := t0) (s := sh) depth x.id
-    s.cudaTape.set t1
-    pure (some { id := id })
-  dispatchCudaOpt (α := α) s .permute #[x.identity?] cpu cuda
+    s.recordCuda fun t0 => keepTapeOnError t0 <|
+      Runtime.Autograd.LibTorch.Tape.swapAdjacentAtDepth (t := t0) (s := sh) depth x.id
+  executeRecorded (α := α) s .permute #[x.identity?] cpu cuda
 
 /-- Broadcast a tensor to a larger shape. PyTorch: implicit broadcasting / `expand`. -/
 def broadcastTo {α : Type} [TorchLean.Storage α] (s : EagerSession α) [Inhabited α] [Add α]
@@ -109,18 +87,12 @@ def broadcastTo {α : Type} [TorchLean.Storage α] (s : EagerSession α) [Inhabi
   {sh1 sh2 : Shape} (cb : Shape.CanBroadcastTo sh1 sh2) (x : TensorRef α sh1) : IO (TensorRef α sh2)
     := do
   let cpu := do
-    let t0 ← s.tape.get
-    let (t1, id) ← okOrThrow
+    s.recordCpu fun t0 => keepTapeOnError t0 <|
       (Runtime.Autograd.Tape.broadcastTo (α := α) (t := t0) (s₁ := sh1) (s₂ := sh2) cb x.id)
-    s.tape.set t1
-    pure { id := id }
   let cuda := do
-    let t0 ← s.cudaTape.get
-    let (t1, id) ← okOrThrow <|
-      Runtime.Autograd.Cuda.Tape.broadcastTo (t := t0) (s₁ := sh1) (s₂ := sh2) cb x.id
-    s.cudaTape.set t1
-    pure (some { id := id })
-  dispatchCudaOpt (α := α) s .broadcast #[x.identity?] cpu cuda
+    s.recordCuda fun t0 => keepTapeOnError t0 <|
+      Runtime.Autograd.LibTorch.Tape.broadcastTo (t := t0) (s₁ := sh1) (s₂ := sh2) cb x.id
+  executeRecorded (α := α) s .broadcast #[x.identity?] cpu cuda
 
 /-- Sum-reduce along `axis`. PyTorch: `torch.sum(x, dim=axis)`. -/
 def reduceSum {α : Type} [TorchLean.Storage α] (s : EagerSession α) [Add α] [Zero α]
@@ -128,34 +100,24 @@ def reduceSum {α : Type} [TorchLean.Storage α] (s : EagerSession α) [Add α] 
   {sh : Shape} (axis : Nat) [valid : Shape.HasNonemptyAxis axis sh] [wf : Shape.WellFormed sh]
   (x : TensorRef α sh) : IO (TensorRef α (shapeAfterSum sh axis)) := do
   let cpu := do
-    let t0 ← s.tape.get
-    let (t1, id) ← okOrThrow (Runtime.Autograd.Tape.reduceSum (t := t0) (s := sh) axis x.id)
-    s.tape.set t1
-    pure { id := id }
+    s.recordCpu fun t0 => keepTapeOnError t0 <|
+      Runtime.Autograd.Tape.reduceSum (t := t0) (s := sh) axis x.id
   let cuda := do
-    let t0 ← s.cudaTape.get
-    let (t1, id) ← okOrThrow <|
-      Runtime.Autograd.Cuda.Tape.reduceSum (s := sh) axis (t := t0) x.id
-    s.cudaTape.set t1
-    pure (some { id := id })
-  dispatchCudaOpt (α := α) s .reduceSum #[x.identity?] cpu cuda
+    s.recordCuda fun t0 => keepTapeOnError t0 <|
+      Runtime.Autograd.LibTorch.Tape.reduceSum (s := sh) axis (t := t0) x.id
+  executeRecorded (α := α) s .reduceSum #[x.identity?] cpu cuda
 
 /-- Mean-reduce along `axis`. PyTorch: `torch.mean(x, dim=axis)`. -/
 def reduceMean {α : Type} [TorchLean.Storage α] (s : EagerSession α) [Context α]
   {sh : Shape} (axis : Nat) [valid : Shape.HasNonemptyAxis axis sh] [wf : Shape.WellFormed sh]
   (x : TensorRef α sh) : IO (TensorRef α (shapeAfterSum sh axis)) := do
   let cpu := do
-    let t0 ← s.tape.get
-    let (t1, id) ← okOrThrow (Runtime.Autograd.Tape.reduceMean (t := t0) (s := sh) axis x.id)
-    s.tape.set t1
-    pure { id := id }
+    s.recordCpu fun t0 => keepTapeOnError t0 <|
+      Runtime.Autograd.Tape.reduceMean (t := t0) (s := sh) axis x.id
   let cuda := do
-    let t0 ← s.cudaTape.get
-    let (t1, id) ← okOrThrow <|
-      Runtime.Autograd.Cuda.Tape.reduceMean (s := sh) axis (t := t0) x.id
-    s.cudaTape.set t1
-    pure (some { id := id })
-  dispatchCudaOpt (α := α) s .reduceMean #[x.identity?] cpu cuda
+    s.recordCuda fun t0 => keepTapeOnError t0 <|
+      Runtime.Autograd.LibTorch.Tape.reduceMean (s := sh) axis (t := t0) x.id
+  executeRecorded (α := α) s .reduceMean #[x.identity?] cpu cuda
 
 end EagerSession
 

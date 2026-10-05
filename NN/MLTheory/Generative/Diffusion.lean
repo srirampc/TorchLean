@@ -16,7 +16,7 @@ public import NN.MLTheory.Generative.Diffusion.Samplers
 This entrypoint collects the diffusion-theory facts that connect TorchLean's executable sampler
 specifications to the mathematical language used in diffusion and score-based generative modeling.
 
-This entrypoint collects:
+It contains:
 - `ForwardGaussian`: a mathlib-backed result showing that affine forward noising of a standard
   Gaussian remains Gaussian.
 - `Samplers`: proved boundary, dynamics-adapter, and Euler-stability facts for DDPM, DDIM, and

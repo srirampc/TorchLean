@@ -52,7 +52,7 @@ def huberTDLoss
   let halfBounded ← scale (m := m) (α := α) bounded ((1 : α) / 2)
   let remainder ← sub (m := m) (α := α) magnitude halfBounded
   let losses ← mul (m := m) (α := α) bounded remainder
-  Loss.reduceLoss (m := m) (α := α) losses reduction
+  Loss.reduce (m := m) (α := α) losses reduction
 
 /--
 Mean DQN Huber loss for a batch of Q vectors, one-hot actions, and scalar Bellman targets.
@@ -65,7 +65,7 @@ adding unused actions does not rescale the loss.
 Pass a positive `delta`. Target construction, termination masking, and target-network updates
 remain the caller's responsibility.
 -/
-def actionHuberLossBatch
+def actionHuberLoss
     {m : Type → Type} [Monad m] [Runtime.Autograd.Torch.Ops (m := m) (α := α)]
     {batch nActions : Nat} [NeZero batch] [NeZero nActions]
     (qValues actionOneHot :

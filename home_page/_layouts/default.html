@@ -99,12 +99,13 @@
       <input
         class="search-input"
         type="search"
+        aria-label="Search query"
         placeholder="Search site pages..."
         autocomplete="off"
         data-search-input />
-      <div class="search-modes" role="tablist" aria-label="Search category">
-        <button class="search-mode active" type="button" role="tab" aria-selected="true" data-search-mode="site">Site pages</button>
-        <button class="search-mode" type="button" role="tab" aria-selected="false" data-search-mode="api">API declarations</button>
+      <div class="search-modes" role="group" aria-label="Search category">
+        <button class="search-mode active" type="button" aria-pressed="true" data-search-mode="site">Site pages</button>
+        <button class="search-mode" type="button" aria-pressed="false" data-search-mode="api">API declarations</button>
       </div>
       <a class="search-route" href="{{ '/docs/search.html' | relative_url }}" data-search-route>Search API declarations</a>
       <div class="search-results" data-search-results aria-live="polite"></div>

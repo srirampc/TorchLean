@@ -427,7 +427,7 @@ def appendAxisExpression (assignments : List (Check.AxisId × Expr))
   else
     assignments.concat (axis, length)
 
-/-- Construct a balanced-by-source-order natural-number product expression. -/
+/-- Construct a left-associated natural-number product in source order. -/
 def natProductExpr : List Expr → MetaM Expr
   | [] => pure (mkNatLit 1)
   | first :: rest =>
@@ -475,24 +475,6 @@ partial def natMultiplicationFactors (value : Expr) :
       (← natMultiplicationFactors arguments[1]!)
   return [reduced]
 
-/--
-Flatten addition syntax after reducible normalization, preserving each
-summand expression for definitional matching.
--/
-partial def natAdditionSummands (value : Expr) :
-    MetaM (List Expr) := do
-  let value := (← instantiateMVars value).consumeMData
-  if value.isAppOfArity ``Nat.add 2 then
-    let arguments := value.getAppArgs
-    return (← natAdditionSummands arguments[0]!) ++
-      (← natAdditionSummands arguments[1]!)
-  let reduced ← withTransparency .all <| whnf value
-  if reduced.isAppOfArity ``Nat.add 2 then
-    let arguments := reduced.getAppArgs
-    return (← natAdditionSummands arguments[0]!) ++
-      (← natAdditionSummands arguments[1]!)
-  return [reduced]
-
 /-- Remove one definitionally equal factor from a candidate multiset. -/
 def eraseDefinitionalFactor? (factor : Expr) :
     List Expr → MetaM (Option (List Expr))
@@ -535,24 +517,6 @@ def explicitMissingFactor? (dimension : Expr)
     | return none
   return some (← natProductExpr remaining)
 
-/--
-Recover the part of a packed length not occupied by known segments.
-
-Addition is treated modulo association and order, but only definitionally
-equal summands are removed. This preserves expressions already present in the
-tensor type without asking the kernel to choose a subtraction normal form.
--/
-def explicitResidual? (total : Expr) (known : List Expr) :
-    MetaM (Option Expr) := do
-  let totalSummands ← natAdditionSummands total
-  let knownSummands ←
-    known.foldlM (init := []) fun summands length =>
-      return summands ++ (← natAdditionSummands length)
-  let some remaining ←
-      eraseDefinitionalFactors? knownSummands totalSummands
-    | return none
-  return some (← natSumExpr remaining)
-
 /-- Construct the type-level shape list represented by symbolic dimensions. -/
 def shapeExpr (dimensions : List Expr) : MetaM Expr :=
   mkListLit (mkConst ``Nat) dimensions
@@ -566,8 +530,8 @@ def shapesExpr (shapes : List Expr) : MetaM Expr := do
 Transport a generated tensor from a checker-indexed result shape to the
 compact dimension list computed by the surface operation.
 
-The equality is definitional for generated plans, but the explicit transport
-prevents inferred declaration types from retaining the complete checker
+Symbolic shapes may require arithmetic simplification rather than reflexivity.
+The proved transport keeps inferred types from retaining the complete checker
 certificate.
 -/
 def castTensorToCompactShape (result targetShape : Expr) :
@@ -584,10 +548,14 @@ def castTensorToCompactShape (result targetShape : Expr) :
   unless (← getDecLevel arguments[0]!) == .zero do
     return result
   let sourceShape := arguments[1]!
+  let agreement ← mkEq sourceShape targetShape
   let shapeAgreement ←
-    withTransparency .all <|
-      mkExpectedTypeHint (← mkEqRefl sourceShape)
-        (← mkEq sourceShape targetShape)
+    if ← withTransparency .all <| isDefEq sourceShape targetShape then
+      withTransparency .all <|
+        mkExpectedTypeHint (← mkEqRefl sourceShape) agreement
+    else
+      certifyGeneratedInvariant
+        "that the generated tensor has the displayed shape" agreement
   mkAppM ``TorchLean.Tensor.Internal.Rep.castShape #[
     shapeAgreement, result]
 
@@ -614,8 +582,10 @@ shape expression computed by the public operation.
 -/
 def exposePublicTensorType (result shape : Expr)
     (expectedType? : Option Expr) : TermElabM Expr := do
-  if expectedType?.isSome then
-    return ← ensureHasType expectedType? result
+  if let some expectedType := expectedType? then
+    let expectedType ← instantiateMVars expectedType
+    unless expectedType.isMVar do
+      return ← ensureHasType (some expectedType) result
   let resultType ←
     withTransparency .reducible <| whnf (← inferType result)
   unless resultType.isAppOfArity ``TorchLean.Tensor.Internal.Rep 3 do
@@ -731,15 +701,15 @@ def buildTensorFamily (scalarType storage : Expr)
         tensorIndex
     mkLambdaFVars #[tensorIndex] body
 
-/-- One operand of a tensor family after promotion, with the coercion it needs applied. -/
+/-- One original tensor operand and its pending conversion to the common scalar type. -/
 private structure CommonScalarInput where
   /-- Syntax this operand came from, for error positions. -/
   sourceSyntax : Syntax
   /-- The operand's tensor expression. -/
   tensor : Expr
-  /-- Scalar type the operand is being read at, after promotion. -/
+  /-- Original scalar type, used as the domain when composing conversions. -/
   scalarType : Expr
-  /-- `Storage` instance for that scalar type. -/
+  /-- Original `Storage` instance, retained when no conversion is needed. -/
   storage : Expr
   /-- The operand's shape, outermost dimension first. -/
   dimensions : List Expr
@@ -893,8 +863,7 @@ def elaborateCommonScalarFamily (operation member : String)
 
 /--
 Elaborate a common-scalar tensor family and share every required conversion
-around
-the generated consumer.
+around the generated consumer.
 
 The continuation sees local tensor variables rather than repeated conversion
 expressions. Each conversion is passed through `nativeStage`, whose no-inline

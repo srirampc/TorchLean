@@ -47,11 +47,11 @@ Compile the contraction into one arbitrary-rank output loop nest.
 
 Every output axis follows the same recursive lowering. Concrete portable
 lengths use native counters; symbolic and oversized lengths use `Fin.foldl`.
-Small concrete contractions evaluate one output at a time. A concrete final
-axis uses four lanes from eight contraction terms when fewer than eight
-output positions are available, and otherwise uses eight lanes when the live
-read family is modest. Multi-axis tiled contractions flatten into one native
-loop from 32 terms for four lanes and 128 terms for eight lanes. Untiled
+Small concrete contractions evaluate one output at a time. With more than
+eight contraction terms, a concrete final axis may use four lanes, or eight
+lanes when enough output positions are available and the live read family is
+modest. `einsumOutputTileWidth?` selects the width. Multi-axis tiled contractions
+flatten into one native loop from 32 terms for four lanes and 128 terms for eight lanes. Untiled
 scalar contractions retain the nested arbitrary-rank fold. Each lane keeps
 the scalar reduction order, and both concrete widths advance one contraction
 coordinate per recursive step so their callbacks inline consistently. When
@@ -407,7 +407,7 @@ def compileEinsumOutput
       let value := mkApp reference outputIndex
       let hValue ← mkEqRefl value
       mkLambdaFVars #[outputIndex] hValue
-  let outputBufferType :=
+  let bufferType :=
     mkAppN (mkConst ``Storage.Buffer [scalarLevel]) #[
       scalarType, storage]
   -- Build a native output fold together with its equality to the corresponding
@@ -416,7 +416,7 @@ def compileEinsumOutput
       (length nativeBound hBound generatedStep initial generatedFinLoop : Expr)
       (nativeCoordinateName : Name) : TermElabM (Expr × Expr) := do
     let (nativeCallback, rawNativeCallback, hNativeCallback) ←
-      withLocalDeclD `output outputBufferType fun nativeOutput =>
+      withLocalDeclD `output bufferType fun nativeOutput =>
         withLocalDeclD nativeCoordinateName (mkConst ``USize)
             fun nativeCoordinate => do
           let nativeCoordinateNat ←
@@ -679,7 +679,7 @@ def compileEinsumOutput
               mkExpectedTypeHint hCoordinateSumSelect
                 (← mkEq genericRawTileFunction rawTileFunction)
           let hGenericRaw ←
-            mkAppM ``ofFn_congr #[hCoordinateSumSelect]
+            mkCongrArg genericRawTile.appFn! hCoordinateSumSelect
           let hGenericRaw ←
             withTransparency .all <|
               mkExpectedTypeHint hGenericRaw
@@ -883,7 +883,7 @@ def compileEinsumOutput
               mkAppM ``Fin.natAdd #[tiledPrefixExpr, tail]
             withTransparency .all <|
               mkExpectedTypeHint coordinate coordinateType
-          withLocalDeclD `output outputBufferType fun loopOutput =>
+          withLocalDeclD `output bufferType fun loopOutput =>
             withLocalDeclD
                 (Name.mkSimple s!"outputAxis{coordinates.length}")
                 coordinateType fun coordinate => do
@@ -905,7 +905,7 @@ def compileEinsumOutput
                   (Name.mkSimple s!"outputTile{coordinates.length}")
                   blockType fun block => do
                 let referenceLaneStep ←
-                  withLocalDeclD `output outputBufferType fun tileOutput =>
+                  withLocalDeclD `output bufferType fun tileOutput =>
                     withLocalDeclD `lane laneType fun lane => do
                       let tileCoordinate ←
                         makeTileCoordinate block lane
@@ -1037,7 +1037,7 @@ def compileEinsumOutput
                   mkAppM ``Eq.trans #[
                     hNativeGeneratedBlocks, hBlockFinLoops]
                 let tailStepData ←
-                  withLocalDeclD `output outputBufferType
+                  withLocalDeclD `output bufferType
                       fun tailOutput =>
                     withLocalDeclD `tail tailType fun tail => do
                       let tailCoordinate ←
@@ -1113,7 +1113,7 @@ def compileEinsumOutput
                     mkAppM ``congrArg #[
                       preserveStep, hTailStep]
                 let hReferenceTailInitial ←
-                  withLocalDeclD `initial outputBufferType
+                  withLocalDeclD `initial bufferType
                       fun initial => do
                     let fold ←
                       mkAppM ``Fin.foldl #[
@@ -1148,7 +1148,7 @@ def compileEinsumOutput
                     hGeneratedReference)
         else
           let coordinateType ← mkAppM ``Fin #[length]
-          withLocalDeclD `output outputBufferType fun loopOutput =>
+          withLocalDeclD `output bufferType fun loopOutput =>
             withLocalDeclD
                 (Name.mkSimple s!"outputAxis{coordinates.length}")
                 coordinateType fun coordinate => do
@@ -1193,17 +1193,17 @@ def compileEinsumOutput
     let emptyOutput :=
       mkAppN (mkConst ``Storage.emptyWithCapacity [scalarLevel]) #[
         scalarType, storage, outputSize]
-    let (rawOutputBuffer, _, hRawOutputReference) ←
+    let (rawBuffer, _, hRawOutputReference) ←
       buildOutputLoops outputLengths [] emptyOutput
     -- Only the complete loop nest exposes every outer native coordinate inside
     -- the staged input indices. Normalize here so those conversions disappear
     -- from the executable kernel while the simplifier supplies the equality
     -- needed by the semantic certificate.
-    let (outputBuffer, hOutputRaw) ←
+    let (buffer, hOutputRaw) ←
       simplifyNativeOutputIndices
-        nativeCoordinateSimpContext rawOutputBuffer
+        nativeCoordinateSimpContext rawBuffer
     let hOutputReference ←
-      mkAppM ``Eq.trans #[hOutputRaw, hRawOutputReference]
+      mkEqTrans hOutputRaw hRawOutputReference
     let hOutputReferenceType ← inferType hOutputReference
     let hOutputReference ←
       sealCertificate hOutputReferenceType hOutputReference
@@ -1211,31 +1211,30 @@ def compileEinsumOutput
       match outputLengths with
       | [length] =>
           mkAppM ``storage_toArray_eq_array_ofFn_of_rankOne_eq #[
-            length, reference, outputBuffer, hOutputReference]
+            length, reference, buffer, hOutputReference]
       | _ => do
           let hCoordinateArray ←
             mkAppM
               ``coordinateFoldl_storagePush_linearized_toArray_eq_array_ofFn #[
               outputShape, reference]
           let toArrayFunction ←
-            withLocalDeclD `buffer outputBufferType fun buffer => do
+            withLocalDeclD `buffer bufferType fun buffer => do
               let observed :=
                 mkAppN (mkConst ``Storage.toArray [scalarLevel]) #[
                   scalarType, storage, buffer]
               mkLambdaFVars #[buffer] observed
           let hOutputCoordinateFold ←
-            mkAppM ``congrArg #[toArrayFunction, hOutputReference]
+            mkCongrArg toArrayFunction hOutputReference
           let hOutputCoordinateFoldType ←
             inferType hOutputCoordinateFold
           let hOutputCoordinateFold ←
             sealCertificate hOutputCoordinateFoldType
               hOutputCoordinateFold
-          mkAppM ``Eq.trans #[
-            hOutputCoordinateFold, hCoordinateArray]
+          mkEqTrans hOutputCoordinateFold hCoordinateArray
     let hOutputArrayType ← inferType hOutputArray
     let hOutputArray ←
       sealCertificate hOutputArrayType hOutputArray
-    pure (outputBuffer, hOutputArray)
+    pure (buffer, hOutputArray)
   let compileFlatSequentialOutput? :
       TermElabM (Option (Expr × Expr)) := do
     let some concreteOutputLengths ←
@@ -1280,7 +1279,7 @@ def compileEinsumOutput
           pure
             (← mkLambdaFVars locals value,
               ← mkLambdaFVars locals hValue)
-    let outputBuffer ←
+    let buffer ←
       mkAppM ``nativeBufferOfFn #[
         outputSize, nativeBound, hBound, nativeValues]
     let hOutputArray ←
@@ -1289,27 +1288,27 @@ def compileEinsumOutput
         nativeValues, reference, hValues]
     let producer ←
       withLocalDeclD `unused (mkConst ``Unit) fun unused =>
-        mkLambdaFVars #[unused] outputBuffer
+        mkLambdaFVars #[unused] buffer
     let certifiedOutput ←
       mkAppM ``CertifiedFlatBuffer.mk #[producer, hOutputArray]
     let certifiedOutput ← sealSequentialOutput certifiedOutput
-    let outputBuffer ←
+    let buffer ←
       mkAppM ``CertifiedFlatBuffer.produce #[
         certifiedOutput, mkConst ``Unit.unit]
     let hOutputArray ←
       mkAppM ``CertifiedFlatBuffer.toArray_produce #[certifiedOutput]
-    return some (outputBuffer, hOutputArray)
-  let (outputBuffer, hOutputArray) ←
+    return some (buffer, hOutputArray)
+  let (buffer, hOutputArray) ←
     match ←
         compileParallelEinsumOutput?
-          scalarType storage outputBufferType reference outputLengths
-          contractionEntries? inputFactorization?.isSome buildOutputLoops
+          scalarType storage bufferType reference outputLengths
+          contractionEntries? buildOutputLoops
           compileNativeOutputFold with
     | some parallelOutput => pure parallelOutput
     | none =>
         match ← compileFlatSequentialOutput? with
         | some flatOutput => pure flatOutput
         | none => compileSequentialOutput
-  return (reference, outputCorrectness, outputBuffer, hOutputArray)
+  return (reference, outputCorrectness, buffer, hOutputArray)
 
 end TorchLean.Tensor.Internal.Elab.Impl

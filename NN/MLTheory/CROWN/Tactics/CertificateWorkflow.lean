@@ -31,7 +31,7 @@ References:
 
 namespace NN.MLTheory.CROWN.Tactics.CertificateWorkflow
 
-open Lean Elab Tactic Meta Term
+open Lean Elab Tactic Meta
 open NN.Verification.Json
 
 /-! ## Certificate data structures -/
@@ -192,9 +192,7 @@ def loadCertificate (path : System.FilePath) : IO CrownCert := do
     | .error msg => throw <| IO.userError s!"Certificate parse error: {msg}"
     | .ok cert => return cert
 
-/-!
-# Python execution
--/
+/-! ## Python execution -/
 
 /-- Run the external Python CROWN producer and write its JSON certificate output. -/
 def runPythonCrown (networkPath : String) (inputBox : String)
@@ -216,9 +214,7 @@ def runPythonCrown (networkPath : String) (inputBox : String)
   if result.exitCode != 0 then
     throw <| IO.userError s!"Python CROWN failed:\n{result.stderr}"
 
-/-!
-# Certificate inspection
--/
+/-! ## Certificate inspection -/
 
 /-- `inspect_crown_certificate` loads a certificate and reports its producer claims.
 
@@ -331,13 +327,3 @@ meta def evalSummarizeCrownCertificate : Tactic := fun stx => do
 end
 
 end NN.MLTheory.CROWN.Tactics.CertificateWorkflow
-
-/-!
-# External certificate workflow
-
-These tactics are for *workflow support* (loading JSON certificates and showing diagnostics).
-To turn a certificate into a Lean theorem, prove that its bounds enclose the specified network on
-the specified region, then derive the desired consequence such as the Lyapunov inequalities.
-
-Trust boundary: loading a report does not verify the external tool or its bounds.
--/

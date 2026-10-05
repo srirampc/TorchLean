@@ -29,15 +29,9 @@ def naturalCenter (dim : Nat) : Tensor Float [dim] :=
     | [i] => Float.ofNat (i + 1)
     | _ => 0.0
 
-/-- Insert an $L^\infty$ input box around `center` into a graph parameter store. -/
-def seedInputBox (inputId dim : Nat)
-    (center : Tensor Float [dim]) (eps : Float)
-    (ps : ParamStore Float) : ParamStore Float :=
-  ps.seedLInfBall inputId center eps
-
 /-- Insert an $L^\infty$ input box around the center vector $[1,2,\ldots,\mathrm{dim}]$. -/
 def seedNaturalInputBox (inputId dim : Nat) (eps : Float)
     (ps : ParamStore Float) : ParamStore Float :=
-  seedInputBox inputId dim (naturalCenter dim) eps ps
+  ps.seedLInfBall inputId (naturalCenter dim) eps
 
 end NN.Verification.LiRPA.ExampleInputs

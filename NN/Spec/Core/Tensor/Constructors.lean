@@ -74,13 +74,6 @@ abbrev ones {α : Type} [TorchLean.Storage α] [One α]
     Tensor.item (TorchLean.Tensor.Internal.Rep.const value : Tensor α .scalar) = value :=
   TorchLean.Tensor.Internal.Rep.const_apply value PUnit.unit
 
-/-- Every entry of an internally constant vector is the constant. -/
-@[simp] theorem getScalar_rep_const {α : Type} [TorchLean.Storage α] {n : Nat}
-    (value : α) (i : Fin n) :
-    Tensor.getScalar (TorchLean.Tensor.Internal.Rep.const value : Tensor α [n]) i = value := by
-  rw [Tensor.getScalar_eq_apply]
-  exact TorchLean.Tensor.Internal.Rep.const_apply (s := [n]) value (i, PUnit.unit)
-
 /-- Replicating a scalar tensor observes that scalar at every target coordinate. -/
 @[simp] theorem replicate_scalar_apply {α : Type} [TorchLean.Storage α]
     (value : α) (shape : Shape) (coordinate : shape.Coord) :
@@ -271,21 +264,6 @@ theorem padLeft_succ {α : Type} [TorchLean.Storage α]
 
 end Spec
 
-namespace TorchLean.Tensor
-
-/-- Stack an array of equal-shaped tensors along a new leading dimension.
-
-The explicit size proof prevents silent truncation or padding. Taking tensors as array elements
-makes this constructor independent of rank: use scalar tensors for a vector, vectors for a matrix,
-or arbitrary inner tensors for higher-rank values.
--/
-def stackArray {α : Type} [TorchLean.Storage α] {n : Nat} {s : Shape}
-    (xs : Array (Tensor α s)) (_h : n = xs.size) : Tensor α (.dim n s) :=
-  Tensor.dim (fun i : Fin n =>
-    xs[i.val]'(by simpa [_h] using i.2))
-
-end TorchLean.Tensor
-
 open Spec TorchLean
 
 namespace TorchLean.Tensor
@@ -294,40 +272,8 @@ namespace TorchLean.Tensor
 theorem forall_full {α : Type} [TorchLean.Storage α]
     {p : α → Prop} {s : Shape} {x : α}
     (hx : p x) : Tensor.Forall p (full s x) := by
-  induction s with
-  | scalar =>
-      change p ((full .scalar x).item)
-      change p (full .scalar x PUnit.unit)
-      rw [Tensor.full_apply]
-      exact hx
-  | dim _ _ ih =>
-      intro index
-      change Tensor.Forall p (get (full _ x) index)
-      rw [get_full]
-      exact ih
+  change Tensor.Forall p (TorchLean.Tensor.Internal.Rep.const x)
+  simpa only [Spec.replicate, Tensor.item_scalar] using
+    (Tensor.forall_replicate (shape := s) hx)
 
 end TorchLean.Tensor
-
-namespace Spec
-
-/-- Build a matrix when every row has the same length; reject ragged input. -/
-def matrixFromRows? {α : Type} [TorchLean.Storage α]
-    (rows : List (List α)) :
-    Option (Tensor α [rows.length, Option.getD (rows.head?.map List.length) 0]) :=
-  match rows with
-  | [] => some (Tensor.dim fun i => nomatch i)
-  | first :: rest =>
-      let allRows := first :: rest
-      let columnCount := first.length
-      if hRectangular : ∀ row ∈ allRows, row.length = columnCount then
-        some <| Tensor.dim fun i =>
-          let row := allRows.get i
-          have hLength : row.length = columnCount :=
-            hRectangular row (List.get_mem allRows i)
-          Tensor.ofFn fun j =>
-            have hIndex : j.val < row.length := by simpa [hLength] using j.isLt
-            row.get ⟨j.val, hIndex⟩
-      else
-        none
-
-end Spec

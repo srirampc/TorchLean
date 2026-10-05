@@ -31,7 +31,6 @@ open scoped BigOperators
 
 namespace TapeNodes
 
-
 /-- `CtxVec.get` specialized to vector shapes. -/
 def getVec {Γ : List Shape} {n : Nat} (idx : Idx Γ (.dim n .scalar)) (x : CtxVec Γ) : Vec n :=
   castVec (by simp [Spec.Shape.size] : Spec.Shape.size (.dim n .scalar) = n)
@@ -51,8 +50,8 @@ def getVecCLM {Γ : List Shape} {n : Nat} (idx : Idx Γ (.dim n .scalar)) : CtxV
 /-- Coordinate form of the general context lookup. -/
 @[simp] theorem getCLM_apply_ofLp {Γ : List Shape} {s : Shape} (idx : Idx Γ s) (x : CtxVec Γ)
     (i : Fin (Spec.Shape.size s)) :
-    ((CtxVec.getCLM (Γ := Γ) (s := s) idx) x).ofLp i = (CtxVec.get (Γ := Γ) (s := s) idx x).ofLp i
-      := by
+    ((CtxVec.getCLM (Γ := Γ) (s := s) idx) x).ofLp i =
+      (CtxVec.get (Γ := Γ) (s := s) idx x).ofLp i := by
   simp
 
 /-- Inject a `Vec n` into a vectorized context at `idx` (fills other blocks with zeros). -/
@@ -63,9 +62,8 @@ def singleVec {Γ : List Shape} {n : Nat} (idx : Idx Γ (.dim n .scalar)) (v : V
 /-- Reading a context slot is adjoint to writing that slot: `⟪x, single idx v⟫ = ⟪get idx x, v⟫`.
 
 This is the adjointness fact behind every elementwise node's VJP. A node reads one slot and writes
-one
-slot, so its reverse pass is the transpose of its forward projection, and that is exactly what this
-equation says. -/
+one slot, so its reverse pass is the transpose of its forward projection, and that is exactly what
+this equation says. -/
 @[simp] theorem inner_getVec_singleVec {Γ : List Shape} {n : Nat} (idx : Idx Γ (.dim n .scalar))
     (x : CtxVec Γ) (v : Vec n) :
     inner ℝ x (singleVec (Γ := Γ) (n := n) idx v) = inner ℝ (getVec (Γ := Γ) (n := n) idx x) v := by
@@ -118,63 +116,13 @@ def elemwise {Γ : List Shape} {s : Shape} (idx : Idx Γ s) (f f' : ℝ → ℝ)
       simp [inner_eq_sum_mul, mul_assoc, mul_comm]
       rfl)
 
-/-- Analytic correctness for `elemwise` nodes from a scalar `HasDerivAt` hypothesis. -/
-def elemwiseFderiv {Γ : List Shape} {s : Shape} (idx : Idx Γ s) (f f' : ℝ → ℝ)
-    (hf : ∀ z, HasDerivAt f (f' z) z) :
-    NodeFDerivCorrect (elemwise (Γ := Γ) (s := s) idx f f') :=
-by
-  classical
-  let n : Nat := Spec.Shape.size s
-  refine
-    { deriv := fun xV =>
-        (elemwiseDerivCLM (n := n) f' (CtxVec.get (Γ := Γ) (s := s) idx xV)).comp
-          (CtxVec.getCLM (Γ := Γ) (s := s) idx)
-      hasFDerivAt := ?_
-      jvp_eq := ?_ }
-  · intro xV
-    have hget :
-        HasFDerivAt (fun x : CtxVec Γ => CtxVec.get (Γ := Γ) (s := s) idx x)
-          (CtxVec.getCLM (Γ := Γ) (s := s) idx) xV := by
-      have h := (CtxVec.getCLM (Γ := Γ) (s := s) idx).hasFDerivAt (x := xV)
-      have hfun :
-          (fun x : CtxVec Γ => CtxVec.get (Γ := Γ) (s := s) idx x)
-            =
-          (fun x : CtxVec Γ => (CtxVec.getCLM (Γ := Γ) (s := s) idx) x) := by
-        funext x
-        exact (CtxVec.getCLM_apply (Γ := Γ) (s := s) idx x).symm
-      exact h.congr_of_eventuallyEq hfun.eventuallyEq
-    have helem :
-        HasFDerivAt (elemwiseVec (n := n) f) (elemwiseDerivCLM (n := n) f' (CtxVec.get (Γ := Γ) (s
-          := s) idx xV))
-          (CtxVec.get (Γ := Γ) (s := s) idx xV) :=
-      hasFDerivAt_elemwiseVec (n := n) (x := CtxVec.get (Γ := Γ) (s := s) idx xV) (f := f) (f' :=
-        f') hf
-    have hcomp := helem.comp xV hget
-    have hforward :
-        (elemwiseVec (n := n) f ∘ fun x : CtxVec Γ => CtxVec.get (Γ := Γ) (s := s) idx x)
-          =
-        (fun xV : CtxVec Γ =>
-          vecOfFun fun i => f ((CtxVec.get (Γ := Γ) (s := s) idx xV).ofLp i)) := by
-      funext x
-      ext i
-      simp [elemwiseVec, vecOfFun]
-    rw [hforward] at hcomp
-    -- rewrite the forward function to match `elemwiseVec ∘ get`
-    simpa [elemwise, Node.forwardVec_ofFn, elemwiseVec, n, ContinuousLinearMap.comp_apply] using
-      hcomp
-  · intro xV dxV
-    ext i
-    simp [elemwise, Node.jvpVec_ofFn, elemwiseDerivCLM, ContinuousLinearMap.comp_apply, n,
-      CtxVec.getCLM_apply, vecOfFun]
-
 /-- Pointwise analytic correctness for `elemwise` nodes from a coordinatewise `HasDerivAt`
   hypothesis. -/
 def elemwiseFderivAt {Γ : List Shape} {s : Shape} (idx : Idx Γ s) (f f' : ℝ → ℝ) (xV : CtxVec Γ)
     (hf : ∀ i : Fin (Spec.Shape.size s),
       HasDerivAt f (f' (CtxVec.get (Γ := Γ) (s := s) idx xV i)) (CtxVec.get (Γ := Γ) (s := s) idx xV
         i)) :
-    NodeFDerivCorrectAt (elemwise (Γ := Γ) (s := s) idx f f') xV :=
-by
+    NodeFDerivCorrectAt (elemwise (Γ := Γ) (s := s) idx f f') xV := by
   classical
   let n : Nat := Spec.Shape.size s
   refine
@@ -185,15 +133,8 @@ by
       jvp_eq := ?_ }
   · have hget :
         HasFDerivAt (fun x : CtxVec Γ => CtxVec.get (Γ := Γ) (s := s) idx x)
-          (CtxVec.getCLM (Γ := Γ) (s := s) idx) xV := by
-      have h := (CtxVec.getCLM (Γ := Γ) (s := s) idx).hasFDerivAt (x := xV)
-      have hfun :
-          (fun x : CtxVec Γ => CtxVec.get (Γ := Γ) (s := s) idx x)
-            =
-          (fun x : CtxVec Γ => (CtxVec.getCLM (Γ := Γ) (s := s) idx) x) := by
-        funext x
-        exact (CtxVec.getCLM_apply (Γ := Γ) (s := s) idx x).symm
-      exact h.congr_of_eventuallyEq hfun.eventuallyEq
+          (CtxVec.getCLM (Γ := Γ) (s := s) idx) xV :=
+      CtxVec.hasFDerivAt_get idx xV
     have helem :
         HasFDerivAt (elemwiseVec (n := n) f) (elemwiseDerivCLM (n := n) f' (CtxVec.get (Γ := Γ) (s
           := s) idx xV))
@@ -215,8 +156,18 @@ by
   · intro dxV
     ext i
     simp [elemwise, Node.jvpVec_ofFn, elemwiseDerivCLM, ContinuousLinearMap.comp_apply, n,
-      CtxVec.getCLM_apply,
-      vecOfFun]
+      CtxVec.getCLM_apply, vecOfFun]
+
+/-- Analytic correctness for `elemwise` nodes from a scalar `HasDerivAt` hypothesis valid
+everywhere: the pointwise certificate `elemwiseFderivAt`, read at every basepoint. -/
+def elemwiseFderiv {Γ : List Shape} {s : Shape} (idx : Idx Γ s) (f f' : ℝ → ℝ)
+    (hf : ∀ z, HasDerivAt f (f' z) z) :
+    NodeFDerivCorrect (elemwise (Γ := Γ) (s := s) idx f f') where
+  deriv xV :=
+    (elemwiseDerivCLM (n := Spec.Shape.size s) f' (CtxVec.get (Γ := Γ) (s := s) idx xV)).comp
+      (CtxVec.getCLM (Γ := Γ) (s := s) idx)
+  hasFDerivAt xV := (elemwiseFderivAt (Γ := Γ) (s := s) idx f f' xV fun _ => hf _).hasFDerivAt
+  jvp_eq xV := (elemwiseFderivAt (Γ := Γ) (s := s) idx f f' xV fun _ => hf _).jvp_eq
 
 /-- Runtime `relu` node (elementwise; nondifferentiable at zero). -/
 def relu {Γ : List Shape} {s : Shape} (idx : Idx Γ s) : Node Γ s :=
@@ -266,14 +217,11 @@ def invFderivAt {Γ : List Shape} {s : Shape} (idx : Idx Γ s) (xV : CtxVec Γ)
 /-- Derivative of the scalar function `y ↦ sqrt (max y 0)` at positive points. -/
 theorem hasDerivAt_sqrt_clamp_of_pos {x : ℝ} (hx : 0 < x) :
     HasDerivAt (fun y : ℝ => Real.sqrt (max y 0)) (1 / (2 * Real.sqrt x)) x := by
-  have hpos : ∀ᶠ y in nhds x, 0 < y := by
-    -- `Ioi 0` is an open neighborhood of any positive `x`.
-    filter_upwards [isOpen_Ioi.mem_nhds hx] with y hy
-    exact hy
+  -- Near a positive `x` the clamp is inactive, so the function agrees with `Real.sqrt`.
   have heq :
       (fun y : ℝ => Real.sqrt (max y 0)) =ᶠ[nhds x] fun y : ℝ => Real.sqrt y := by
-    filter_upwards [hpos] with y hy
-    simp [max_eq_left (le_of_lt hy)]
+    filter_upwards [Ioi_mem_nhds hx] with y (hy : 0 < y)
+    simp [max_eq_left hy.le]
   have hs : HasDerivAt (fun y : ℝ => Real.sqrt y) (1 / (2 * Real.sqrt x)) x := by
     -- `Real.hasDerivAt_sqrt` expects `x ≠ 0`.
     simpa using (Real.hasDerivAt_sqrt (ne_of_gt hx))
@@ -306,7 +254,7 @@ def sqrtFderivAt {Γ : List Shape} {s : Shape} (idx : Idx Γ s) (xV : CtxVec Γ)
 
 /-- Runtime scalar logistic node, applied elementwise.
 
-Rank-one and matrix softmax use the dedicated last-axis softmax nodes below; this node is the
+Softmax over a whole axis is a separate family of nodes in `Softmax.lean`; this node is the
 one-dimensional logistic map used by scalar activations. -/
 def logistic {Γ : List Shape} {s : Shape} (idx : Idx Γ s) : Node Γ s :=
   elemwise (Γ := Γ) (s := s) idx Activation.Math.logisticSpec Activation.Math.logisticDerivSpec
@@ -405,7 +353,7 @@ def smoothAbsFderiv {Γ : List Shape} {s : Shape} (idx : Idx Γ s) (ε : ℝ) (h
 def exp {Γ : List Shape} {s : Shape} (idx : Idx Γ s) : Node Γ s :=
   elemwise (Γ := Γ) (s := s) idx Real.exp Real.exp
 
-/-- Global `NodeFDerivCorrect` instance for the elementwise exponential. -/
+/-- Global `NodeFDerivCorrect` for the elementwise exponential. -/
 def expFderiv {Γ : List Shape} {s : Shape} (idx : Idx Γ s) :
     NodeFDerivCorrect (exp (Γ := Γ) (s := s) idx) :=
   elemwiseFderiv (Γ := Γ) (s := s) idx Real.exp Real.exp (fun z => Real.hasDerivAt_exp z)
@@ -554,8 +502,8 @@ def unaryOpFderiv {Γ : List Shape} {inDim outDim : Nat}
     -- projection is linear
     have hproj :
         HasFDerivAt (fun xV : CtxVec Γ => (getVecCLM (Γ := Γ) (n := inDim) idx) xV)
-          (getVecCLM (Γ := Γ) (n := inDim) idx) xV := by
-      exact (getVecCLM (Γ := Γ) (n := inDim) idx).hasFDerivAt (x := xV)
+          (getVecCLM (Γ := Γ) (n := inDim) idx) xV :=
+      (getVecCLM (Γ := Γ) (n := inDim) idx).hasFDerivAt (x := xV)
     have hC :
         HasFDerivAt (fun x : Vec inDim => C.forwardVec x)
           (C.deriv ((getVecCLM (Γ := Γ) (n := inDim) idx) xV))
@@ -596,18 +544,17 @@ def unaryOpFderiv {Γ : List Shape} {inDim outDim : Nat}
     simpa [unaryOp, getVecCLM_apply, getVec, Graph.castCLM, hOut, ContinuousLinearMap.comp_apply]
       using hjvp' }
 
-  /-- Linear layer as a single tape node (fixed weights/bias in the `Spec.LinearSpec`). -/
-  def linear {Γ : List Shape} {inDim outDim : Nat}
-      (x : Idx Γ (.dim inDim .scalar)) (m : Spec.LinearSpec ℝ inDim outDim) :
-      Node Γ (.dim outDim .scalar) :=
-    unaryOp (Γ := Γ) (inDim := inDim) (outDim := outDim) x (OpSpecFDerivCorrect.linear m)
+/-- Linear layer as a single tape node (fixed weights/bias in the `Spec.LinearSpec`). -/
+def linear {Γ : List Shape} {inDim outDim : Nat}
+    (x : Idx Γ (.dim inDim .scalar)) (m : Spec.LinearSpec ℝ inDim outDim) :
+    Node Γ (.dim outDim .scalar) :=
+  unaryOp (Γ := Γ) (inDim := inDim) (outDim := outDim) x (OpSpecFDerivCorrect.linear m)
 
-  /-- `NodeFDerivCorrect` for `linear`: the node derivative matches the spec's `OpSpec` derivative.
-    -/
-  def linearFderiv {Γ : List Shape} {inDim outDim : Nat}
-      (x : Idx Γ (.dim inDim .scalar)) (m : Spec.LinearSpec ℝ inDim outDim) :
-      NodeFDerivCorrect (linear (Γ := Γ) (inDim := inDim) (outDim := outDim) x m) :=
-    unaryOpFderiv (Γ := Γ) (inDim := inDim) (outDim := outDim) x (OpSpecFDerivCorrect.linear m)
+/-- `NodeFDerivCorrect` for `linear`: the node derivative is the spec's `OpSpec` derivative. -/
+def linearFderiv {Γ : List Shape} {inDim outDim : Nat}
+    (x : Idx Γ (.dim inDim .scalar)) (m : Spec.LinearSpec ℝ inDim outDim) :
+    NodeFDerivCorrect (linear (Γ := Γ) (inDim := inDim) (outDim := outDim) x m) :=
+  unaryOpFderiv (Γ := Γ) (inDim := inDim) (outDim := outDim) x (OpSpecFDerivCorrect.linear m)
 
 end TapeNodes
 

@@ -13,9 +13,9 @@ public import NN.Verification.Builtin.Lowering.API
 
 TorchLean→IR correctness helpers.
 
-This file does **not** (yet) contain a full lowering-correctness theorem for arbitrary
-`TorchLean.Program`s (the current embedding is higher-order). It provides the small, reusable
-bridges needed by concrete model-correctness theorems:
+This file contains no correctness theorem itself. It provides the two executable bridges that the
+lowering theorems under `NN.Verification.Builtin.Proved` (in particular
+`Proved.Correctness.runForwardIR_eq_evalForward`) are stated about:
 
 - convert a verifier `ParamStore` into an IR `Payload` for `NN.IR.Graph.denote`;
 - evaluate a `LoweredIR` graph on a concrete input.
@@ -45,11 +45,6 @@ def payloadOfParamStore {α : Type} [TorchLean.Storage α] [Context α]
     conv? := ps.convCfg.get?
     batchNormEval? := ps.batchNormEval.get?
     layerNorm? := ps.layerNorm.get? }
-
-/-- Cast a tensor across a proved shape equality. -/
-def castTensor {α : Type} [TorchLean.Storage α] [Context α] {s s' : Spec.Shape} (h : s = s')
-    (t : TorchLean.Tensor α s) : TorchLean.Tensor α s' :=
-  cast (congrArg (fun s : Spec.Shape => TorchLean.Tensor α s) h) t
 
 /-- Evaluate a `LoweredIR` forward graph on an input tensor, returning a shape-checked tensor. -/
 def runForwardIR

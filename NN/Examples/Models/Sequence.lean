@@ -37,7 +37,7 @@ Other sequence examples:
 
 - `Rnn` and `Lstm`: compact real-text recurrent training checks over the shared corpus-data
   boundary.
-- `Transformer`: one-block encoder example for attention/norm/FFN wiring.
+- `Transformer`: one-block causal model for next-byte prediction and attention/norm/FFN wiring.
 - `GptAdder`: synthetic algorithmic curriculum (addition), runnable as `torchlean gpt_adder`.
 
 For supervised time-series forecasting with an LSTM, see

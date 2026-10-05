@@ -18,7 +18,7 @@ import NN.Widgets.Runtime.Training
 # PPO GridWorld View
 
 This file visualizes the artifacts produced by
-`NN/Examples/Models/RL/PPOGridWorld.lean` (`lake exe torchlean ppo_gridworld`).
+`NN/Examples/Models/RL/PPOGridWorld.lean` (`scripts/lake.sh exe torchlean ppo_gridworld`).
 
 GridWorld is the smallest RL artifact path because the environment itself is Lean-native: the
 executable can both train and emit artifacts, while the proof layer can reason about the finite MDP
@@ -27,7 +27,7 @@ model.
 Tip:
 - For a short run that writes artifacts:
   ```bash
-  lake -R -K cuda=true exe torchlean ppo_gridworld --device cuda --updates 1 --eval-every 1 \
+  scripts/lake.sh -Kcuda=true exe torchlean ppo_gridworld --device cuda --updates 1 --eval-every 1 \
     --eval-episodes 1 --eval-max-steps 8
   ```
 
@@ -67,7 +67,7 @@ def policyPath : System.FilePath :=
 /--
 Default greedy-episode path snapshot written by `torchlean ppo_gridworld` (override with `--path`).
 -/
-def pathPath : System.FilePath :=
+def episodePath : System.FilePath :=
   Runtime.RL.Artifacts.DefaultPaths.ppoGridWorldPath
 
 #gridworld_view defaultGridWorld, defaultGridWorld.start
@@ -76,4 +76,4 @@ def pathPath : System.FilePath :=
 
 #gridworld_policy_file_view defaultGridWorld, policyPath
 
-#gridworld_path_file_view defaultGridWorld, pathPath
+#gridworld_path_file_view defaultGridWorld, episodePath

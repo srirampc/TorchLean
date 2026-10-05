@@ -18,8 +18,6 @@ Umbrella import for the graph builder and the public TorchLean-to-verifier-IR lo
 @[expose] public section
 
 open FloatLib.Floats (ExecFloat)
-open FloatLib.Floats.Formats.BinaryInterchange (Model FloatFormat)
-
 
 namespace NN.Verification.Builtin
 

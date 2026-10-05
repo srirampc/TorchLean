@@ -67,18 +67,21 @@ def init_deterministic_weights(model: TestCNN) -> None:
         for p in model.parameters():
             p.uniform_(-0.05, 0.05)
 
-def save_cnn_to_json(model: TestCNN, json_path: str):
+
+def save_cnn_to_json(model: TestCNN, json_path: str | Path) -> None:
     """Save CNN weights to JSON in the key format expected by TorchLean import."""
     state_dict = model.state_dict()
 
     # Convert PyTorch state dict to the TorchLean CNN import key format (named layers)
-    new_format = {}
-    new_format['conv1.weight'] = state_dict['conv1.weight'].tolist()
-    new_format['conv1.bias'] = state_dict['conv1.bias'].tolist()
-    new_format['conv2.weight'] = state_dict['conv2.weight'].tolist()
-    new_format['conv2.bias'] = state_dict['conv2.bias'].tolist()
-    new_format['fc.weight'] = state_dict['fc.weight'].tolist()
-    new_format['fc.bias'] = state_dict['fc.bias'].tolist()
+    keys = (
+        "conv1.weight",
+        "conv1.bias",
+        "conv2.weight",
+        "conv2.bias",
+        "fc.weight",
+        "fc.bias",
+    )
+    new_format = {key: state_dict[key].tolist() for key in keys}
 
     payload = {
         "params": new_format,
@@ -91,7 +94,8 @@ def save_cnn_to_json(model: TestCNN, json_path: str):
     with open(json_path, "w") as f:
         json.dump(payload, f, indent=2)
 
-def main():
+
+def main() -> None:
     model = TestCNN()
     init_deterministic_weights(model)
 
@@ -130,6 +134,7 @@ def main():
     original_output = test_model(x_train)
     print(f"Original model output: {original_output}")
     print(f"Output change from initialization: {torch.norm(model(x_train) - original_output).item():.6f}")
+
 
 if __name__ == "__main__":
     main()

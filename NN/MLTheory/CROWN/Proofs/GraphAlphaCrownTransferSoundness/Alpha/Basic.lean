@@ -11,10 +11,9 @@ public import NN.MLTheory.CROWN.Proofs.GraphAlphaCrownTransferSoundness.Common
 /-!
 # α-CROWN Transfer: Shared Extraction Lemmas
 
-Helper lemmas shared by the per-operator cases of `alphaCrown_transfer_sound`. They turn the safe
-lookups `getAff?`, `getVal?`, and `getAlpha?` into plain array lookups, package the parent
-hypothesis of `CrownTransferSound`, and transport enclosures across output-dimension casts and
-constant boxes.
+Helper lemmas shared by the per-operator cases of `alphaCrown_transfer_sound`. They package the
+parent hypothesis of `CrownTransferSound` and transport enclosures across output-dimension casts
+and constant boxes. The safe-lookup inversions for `getAff?` and `getAlpha?` live in `Common`.
 -/
 
 @[expose] public section
@@ -48,27 +47,6 @@ theorem parentsEnclosed_of_match {g : Graph} {cert : Array (Option (FlatAffineBo
   intro p hp bp vp hbp hvp
   have h := hparents p hp
   simpa [hbp, hvp] using h
-
-/-- A successful safe certificate lookup is a plain array lookup. -/
-theorem getElem!_of_getAff?_eq_some {cert : Array (Option (FlatAffineBounds ℝ))} {p : Nat}
-    {xin : FlatAffineBounds ℝ} (h : Cert.getAff? (α := ℝ) cert p = some xin) :
-    cert[p]! = some xin := by
-  by_cases hlt : p < cert.size
-  · simpa [Cert.getAff?, hlt] using h
-  · simp [Cert.getAff?, hlt] at h
-
-/-!
-`getElem!_of_getVal?_eq_some` is `CertSoundness`'s lemma, opened at the top of this file. Two files
-in this directory carried their own copy of it, proved with `by_cases` where the original uses
-`unfold` and `split`; the statements were the same, so the copies are gone.
--/
-/-- A successful safe α lookup is in bounds and is a plain array lookup. -/
-theorem lt_size_and_getElem!_of_getAlpha?_eq_some {alpha : Array (Option (FlatTensor ℝ))}
-    {id : Nat} {αv : FlatTensor ℝ} (h : Cert.getAlpha? (α := ℝ) alpha id = some αv) :
-    id < alpha.size ∧ alpha[id]! = some αv := by
-  by_cases hlt : id < alpha.size
-  · exact ⟨hlt, by simpa [Cert.getAlpha?, hlt] using h⟩
-  · simp [Cert.getAlpha?, hlt] at h
 
 /-- The unique parent of a unary node is enclosed whenever its certificate entry and semantic
 value are both found by the safe lookups. -/
@@ -116,11 +94,12 @@ encloses the value. -/
 theorem enclosesAtInput_boundsConst_of_enclosesBox {ctx : AffineCtx} {x : Tensor ℝ [ctx.inputDim]}
     {B0 : FlatBox ℝ} {v : Val} (hEnc : EnclosesBox B0 v) :
     EnclosesAtInput (α := ℝ) ctx x
-      (Cert.boundsConst (α := ℝ) ctx.inputDim B0.dim B0.lo B0.hi) v := by
+      (Graph.boundsConst (α := ℝ) ctx.inputDim B0.dim B0.lo B0.hi) v := by
   rcases hEnc with ⟨hdim, hbox⟩
   refine ⟨rfl, hdim, ?_⟩
   have hBoxEval :
-      boundsEvalAt (α := ℝ) (Cert.boundsConst (α := ℝ) ctx.inputDim B0.dim B0.lo B0.hi) x = B0 := by
+      boundsEvalAt (α := ℝ) (Graph.boundsConst (α := ℝ) ctx.inputDim B0.dim B0.lo B0.hi) x
+        = B0 := by
     cases B0
     exact boundsEvalAt_bounds_const _ _ x
   exact sem_encloses_transport hBoxEval.symm HEq.rfl hbox

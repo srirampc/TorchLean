@@ -19,8 +19,8 @@ From the repository root:
 
 ```bash
 python3 NN/Examples/Interop/PyTorch/Transformer/train_transformer.py
-lake exe torchlean pytorch_roundtrip --model transformer --action import
-lake exe torchlean pytorch_roundtrip --model transformer --action export
+scripts/lake.sh exe torchlean pytorch_roundtrip --model transformer --action import
+scripts/lake.sh exe torchlean pytorch_roundtrip --model transformer --action export
 ```
 
 Import prints the Lean CPU output. Export writes `TestTransformer_Encoder.py` and, when JSON

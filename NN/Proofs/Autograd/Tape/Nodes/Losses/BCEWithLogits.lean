@@ -10,6 +10,12 @@ public import NN.Proofs.Autograd.Tape.Nodes.Reductions
 public import Mathlib.Analysis.InnerProductSpace.Calculus
 public import NN.Proofs.Autograd.FDeriv.Elementwise
 
+/-!
+# Binary Cross-Entropy With Logits
+
+Stable BCE-with-logits loss and its tape-level derivative proof.
+-/
+
 @[expose] public section
 
 namespace Proofs
@@ -23,12 +29,6 @@ noncomputable section
 open scoped BigOperators
 
 namespace TapeNodes
-
-/-!
-# Binary Cross-Entropy With Logits
-
-Stable BCE-with-logits loss and its tape-level derivative proof.
--/
 
 /-- Binary cross-entropy with logits for same-shaped logits/targets.
 
@@ -233,25 +233,10 @@ def bceWithLogitsFderiv {Γ : List Shape} {s : Shape} (logits target : Idx Γ s)
       hasFDerivAt := ?_
       jvp_eq := ?_ }
   · intro xV
-    have hlogits0 :
-        HasFDerivAt (fun x : CtxVec Γ => logitsCLM x) logitsCLM xV :=
-      logitsCLM.hasFDerivAt (x := xV)
-    have hlogitsEq : (fun x : CtxVec Γ => logitsCLM x) = logitsV := by
-      funext x
-      dsimp [logitsCLM, logitsV]
-      exact CtxVec.getCLM_apply (Γ := Γ) (s := s) logits x
     have hlogits : HasFDerivAt logitsV logitsCLM xV :=
-      hlogits0.congr_of_eventuallyEq hlogitsEq.symm.eventuallyEq
-
-    have htarget0 :
-        HasFDerivAt (fun x : CtxVec Γ => targetCLM x) targetCLM xV :=
-      targetCLM.hasFDerivAt (x := xV)
-    have htargetEq : (fun x : CtxVec Γ => targetCLM x) = targetV := by
-      funext x
-      dsimp [targetCLM, targetV]
-      exact CtxVec.getCLM_apply (Γ := Γ) (s := s) target x
+      CtxVec.hasFDerivAt_get logits xV
     have htarget : HasFDerivAt targetV targetCLM xV :=
-      htarget0.congr_of_eventuallyEq htargetEq.symm.eventuallyEq
+      CtxVec.hasFDerivAt_get target xV
 
     have hsoftplus :
         HasFDerivAt (elemwiseVec (n := n) (f := Activation.Math.softplusSpec (α := ℝ)))
@@ -267,10 +252,8 @@ def bceWithLogitsFderiv {Γ : List Shape} {s : Shape} (logits target : Idx Γ s)
           (logitsV x))
           ((elemwiseDerivCLM (n := n) (f' := Activation.Math.softplusDerivSpec (α := ℝ)) (logitsV
             xV)).comp logitsCLM)
-          xV := by
-      have hcomp := hsoftplus.comp xV hlogits
-      refine hcomp.congr_of_eventuallyEq ?_
-      exact Filter.Eventually.of_forall fun _ => rfl
+          xV :=
+      hsoftplus.comp xV hlogits
     have hsumSp :
         HasFDerivAt (fun x => sumCLM (n := n)
               (elemwiseVec (n := n) (f := Activation.Math.softplusSpec (α := ℝ)) (logitsV x)))
@@ -452,10 +435,6 @@ def bceWithLogitsFderiv {Γ : List Shape} {s : Shape} (logits target : Idx Γ s)
             (vecOfFun (n := n) fun j => dt j * x j + t j * dx j)) := hjvp
       _ = D dxV := hD.symm
       _ = ((vecScalarCLM.comp D) dxV).ofLp i := hR.symm
-
--- ---------------------------------------------------------------------------
--- Loss: KL divergence (log-probs input, probs target; last axis; mean over batch)
--- ---------------------------------------------------------------------------
 
 end TapeNodes
 

@@ -6,14 +6,14 @@ Authors: TorchLean Team
 
 module
 
-public import NN.Runtime.Autograd.Engine.Cuda.Ops
+public import NN.Runtime.Autograd.Engine.LibTorch.Ops
 public import NN.Tensor
 public import NN.Tests.Runtime.Cuda.Utils
 
 /-!
 # CUDA Kernel Coverage: Elementwise Ops
 
-One small composite forward/backward test that exercises the full elementwise surface
+Focused activation value/VJP regressions and a composite forward/backward test cover
 (`add/sub/mul/scale/abs/sqrt/clamp/max/min/relu/sigmoid/tanh/gelu/softplus/exp/log/inv/safe_log`)
 plus `sum`.
 -/
@@ -28,8 +28,141 @@ open Spec TorchLean
 open TorchLean TorchLean.Tensor
 open Runtime.Autograd
 
+def assertActivationValue (label : String) (got expected : Float)
+    (rtol : Float := 3e-6) : IO Unit := do
+  if expected.isNaN then
+    unless got.isNaN do
+      throw <| IO.userError s!"{label}: expected NaN, got {got}"
+  else if expected == 0.0 || expected.isInf then
+    unless got.toBits == expected.toBits do
+      throw <| IO.userError
+        s!"{label}: expected bits {expected.toBits}, got {got.toBits}"
+  else
+    -- No absolute floor: replacing a tiny representable result with zero must fail.
+    unless !got.isNaN && !got.isInf && (got - expected).abs ≤ rtol * expected.abs do
+      throw <| IO.userError s!"{label}: got {got}, expected {expected} (rtol {rtol})"
+
+def assertActivationArray (label : String) (got expected : FloatArray)
+    (rtol : Float := 3e-6) : IO Unit := do
+  unless got.size == expected.size do
+    throw <| IO.userError s!"{label}: size {got.size}, expected {expected.size}"
+  for i in [:expected.size] do
+    assertActivationValue s!"{label}[{i}]" (got.get! i) (expected.get! i) rtol
+
+def checkActivation
+    (label : String)
+    (forward : Runtime.Autograd.LibTorch.Buffer → Runtime.Autograd.LibTorch.Buffer)
+    (record : (s : Shape) → Runtime.Autograd.LibTorch.Tape → Nat →
+      Result (Runtime.Autograd.LibTorch.Tape × Nat))
+    (derivative : Float32 → Float32)
+    (inputs expected seeds : Array Float) : IO Unit := do
+  unless inputs.size == expected.size && inputs.size == seeds.size do
+    throw <| IO.userError s!"{label}: inconsistent test data"
+  let s : Shape := [inputs.size]
+  let input ← Runtime.Autograd.LibTorch.Buffer.ofFloatArrayIO (FloatArray.mk inputs)
+  let original ← Runtime.Autograd.LibTorch.Buffer.toFloatArrayIO input
+  let direct ← IO.lazyPure fun _ => forward input
+  assertActivationArray s!"{label} buffer"
+    (← Runtime.Autograd.LibTorch.Buffer.toFloatArrayIO direct) (FloatArray.mk expected)
+  discard <| Runtime.Autograd.LibTorch.Buffer.releaseIO direct
+  assertActivationArray s!"{label} borrowed input"
+    (← Runtime.Autograd.LibTorch.Buffer.toFloatArrayIO input) original
+
+  let (t1, xId) := Runtime.Autograd.LibTorch.Tape.leaf
+    Runtime.Autograd.LibTorch.Tape.empty { s := s, buf := input }
+  let result ← IO.lazyPure fun _ => record s t1 xId
+  let (t2, yId) ← Utils.okOrThrow result
+  let some node := t2.getNode? yId
+    | throw <| IO.userError s!"{label}: missing activation node"
+  unless t2.nodes.size == 2 && node.parents == #[xId] &&
+      node.requiresGrad && node.ownsValue do
+    throw <| IO.userError s!"{label}: expected one owned, differentiable unary node"
+  assertActivationArray s!"{label} tape"
+    (← Runtime.Autograd.LibTorch.Buffer.toFloatArrayIO node.value.buf) (FloatArray.mk expected)
+  let expectedGrad := FloatArray.mk <| expected.mapIdx fun i y =>
+    (seeds[i]!.toFloat32 * derivative y.toFloat32).toFloat
+  let retained ← Runtime.Autograd.LibTorch.Buffer.allocatorStats
+  for pass in [:2] do
+    let seed ← Runtime.Autograd.LibTorch.Buffer.ofFloatArrayIO (FloatArray.mk seeds)
+    -- Exercise the recorded closure before accumulation, including signed-zero cotangents.
+    let localResult ← IO.lazyPure fun _ => node.backward { s := s, buf := seed }
+    let contributions ← Utils.okOrThrow localResult
+    let some (parentId, contribution) := contributions[0]?
+      | throw <| IO.userError s!"{label}: missing VJP contribution"
+    unless contributions.size == 1 && parentId == xId && contribution.s == s do
+      throw <| IO.userError s!"{label}: malformed VJP contribution"
+    assertActivationArray s!"{label} local VJP, pass {pass}"
+      (← Runtime.Autograd.LibTorch.Buffer.toFloatArrayIO contribution.buf) expectedGrad
+        (rtol := 3e-5)
+    discard <| Runtime.Autograd.LibTorch.Buffer.releaseIO contribution.buf
+    assertActivationArray s!"{label} borrowed cotangent"
+      (← Runtime.Autograd.LibTorch.Buffer.toFloatArrayIO seed) (FloatArray.mk seeds)
+    let grads ← Runtime.Autograd.LibTorch.Tape.backwardSparse t2 yId
+      { s := s, buf := seed } (fun id => id == xId)
+    let some grad := grads.get? xId
+      | throw <| IO.userError s!"{label}: missing tape gradient"
+    assertActivationArray s!"{label} tape VJP, pass {pass}"
+      (← Runtime.Autograd.LibTorch.Buffer.toFloatArrayIO grad.buf) expectedGrad (rtol := 3e-5)
+    Runtime.Autograd.LibTorch.Tape.releaseSparseGrads grads
+    assertActivationArray s!"{label} input after backward"
+      (← Runtime.Autograd.LibTorch.Buffer.toFloatArrayIO input) original
+    assertActivationArray s!"{label} output after backward"
+      (← Runtime.Autograd.LibTorch.Buffer.toFloatArrayIO node.value.buf) (FloatArray.mk expected)
+    let after ← Runtime.Autograd.LibTorch.Buffer.allocatorStats
+    unless after.liveBytes == retained.liveBytes do
+      throw <| IO.userError s!"{label}: backward retained temporary payloads on pass {pass}"
+  discard <| Runtime.Autograd.LibTorch.Buffer.releaseIO node.value.buf
+  discard <| Runtime.Autograd.LibTorch.Buffer.releaseIO input
+
+/-- Direct activations retain tiny values, selected nonfinite behavior, and TorchLean's VJPs. -/
+def runActivationNumerics : IO Unit := do
+  IO.println "== direct tanh/sigmoid numerical regressions =="
+  let inf := Float.ofBits 0x7ff0000000000000
+  let nan := Float.ofBits 0x7ff8000000000000
+  let tiny : Array Float :=
+    #[1e-30, -1e-30, 1e-12, -1e-12, 1e-8, -1e-8, 1e-5, -1e-5]
+  let central : Array Float := #[-3.0, -1.0, -0.5, 0.5, 1.0, 3.0]
+  let inputs := (tiny ++ #[0.0, -0.0] ++ central ++ #[-100.0, 100.0, -inf, inf, nan]).map
+    (fun (x : Float) => x.toFloat32.toFloat)
+  let seedPattern : Array Float := #[2.0, -0.5, 1.5, -3.0, 0.25]
+  let seeds := inputs.mapIdx fun i _ => seedPattern[i % seedPattern.size]!
+  let tanhValues := inputs.map fun x => (MathFunctions.tanh x).toFloat32.toFloat
+  let tanhNode := fun s t id => Runtime.Autograd.LibTorch.Tape.tanh (s := s) t id
+  let sigmoidNode := fun s t id => Runtime.Autograd.LibTorch.Tape.sigmoid (s := s) t id
+  let tanhDerivative := fun (y : Float32) => 1 - y * y
+  let sigmoidDerivative := fun (y : Float32) => y * (1 - y)
+  checkActivation "tanh tiny/center/tails" Runtime.Autograd.LibTorch.Buffer.tanh tanhNode
+    tanhDerivative inputs tanhValues seeds
+
+  -- Test normal negative-tail values separately from ATen's saturated float32 tail.
+  let sigmoidInputs := inputs ++ #[-80.0, -20.0, 20.0, 80.0]
+  let sigmoidValues := sigmoidInputs.map fun x =>
+    if x == -100.0 then 0.0 else (Activation.Math.sigmoidSpec x).toFloat32.toFloat
+  let sigmoidSeeds := sigmoidInputs.mapIdx fun i _ => seedPattern[i % seedPattern.size]!
+  checkActivation "sigmoid tiny/center/tails" Runtime.Autograd.LibTorch.Buffer.sigmoid sigmoidNode
+    sigmoidDerivative sigmoidInputs sigmoidValues sigmoidSeeds
+
+  -- Infinite cotangents at saturated outputs still multiply by zero and produce NaN.
+  let specialInputs : Array Float :=
+    #[0.0, -0.0, 1.0, -1.0, 100.0, -100.0, inf, -inf, nan, 0.5, -100.0]
+  let specialSeeds : Array Float :=
+    #[-0.0, 0.0, inf, -inf, inf, -inf, -0.0, -2.0, 0.0, nan, nan]
+  checkActivation "tanh nonfinite VJP" Runtime.Autograd.LibTorch.Buffer.tanh tanhNode tanhDerivative
+    specialInputs (specialInputs.map fun x => (MathFunctions.tanh x).toFloat32.toFloat)
+    specialSeeds
+  checkActivation "sigmoid nonfinite VJP" Runtime.Autograd.LibTorch.Buffer.sigmoid sigmoidNode
+    sigmoidDerivative specialInputs
+    (specialInputs.map fun x =>
+      if x == -100.0 then 0.0 else (Activation.Math.sigmoidSpec x).toFloat32.toFloat)
+    specialSeeds
+  checkActivation "tanh empty" Runtime.Autograd.LibTorch.Buffer.tanh tanhNode
+    tanhDerivative #[] #[] #[]
+  checkActivation "sigmoid empty" Runtime.Autograd.LibTorch.Buffer.sigmoid sigmoidNode
+    sigmoidDerivative #[] #[] #[]
+
 def run : IO Unit := do
   IO.println "=== CUDA kernel coverage: elementwise ==="
+  runActivationNumerics
 
   let s : Shape := [5]
   let a : Tensor Float s :=
@@ -74,40 +207,45 @@ def run : IO Unit := do
   let dB_cpu ← Utils.cpuGrad (s := s) gradsCpu bId
 
   -- CUDA tape
-  let t0c : Runtime.Autograd.Cuda.Tape := Runtime.Autograd.Cuda.Tape.empty
+  let t0c : Runtime.Autograd.LibTorch.Tape := Runtime.Autograd.LibTorch.Tape.empty
   let (t1c, aIdc) :=
-    Runtime.Autograd.Cuda.Tape.leaf (t := t0c) (Utils.tensorToAnyBuffer a) (name := some "a")
+    Runtime.Autograd.LibTorch.Tape.leaf (t := t0c) (Utils.tensorToAnyBuffer a) (name := some "a")
   let (t2c, bIdc) :=
-    Runtime.Autograd.Cuda.Tape.leaf (t := t1c) (Utils.tensorToAnyBuffer b) (name := some "b")
-  let (t3c, u1c) ← Utils.okOrThrow (Runtime.Autograd.Cuda.Tape.add (t := t2c) (s := s) aIdc bIdc)
+    Runtime.Autograd.LibTorch.Tape.leaf (t := t1c) (Utils.tensorToAnyBuffer b) (name := some "b")
+  let (t3c, u1c) ← Utils.okOrThrow (Runtime.Autograd.LibTorch.Tape.add (t := t2c) (s := s)
+    aIdc bIdc)
   let (t4c, u2c) ← Utils.okOrThrow
-    (Runtime.Autograd.Cuda.Tape.scale (t := t3c) (s := s) aIdc scaleC)
-  let (t5c, u3c) ← Utils.okOrThrow (Runtime.Autograd.Cuda.Tape.sub (t := t4c) (s := s) u1c u2c)
-  let (t6c, u4c) ← Utils.okOrThrow (Runtime.Autograd.Cuda.Tape.mul (t := t5c) (s := s) u3c bIdc)
-  let (t7c, u5c) ← Utils.okOrThrow (Runtime.Autograd.Cuda.Tape.max (t := t6c) (s := s) u4c aIdc)
-  let (t8c, u6c) ← Utils.okOrThrow (Runtime.Autograd.Cuda.Tape.min (t := t7c) (s := s) u5c bIdc)
-  let (t9c, u7c) ← Utils.okOrThrow (Runtime.Autograd.Cuda.Tape.relu (t := t8c) (s := s) u6c)
-  let (t10c, u8c) ← Utils.okOrThrow (Runtime.Autograd.Cuda.Tape.sigmoid (t := t9c) (s := s) u7c)
-  let (t11c, u9c) ← Utils.okOrThrow (Runtime.Autograd.Cuda.Tape.tanh (t := t10c) (s := s) u8c)
-  let (t12c, u10c) ← Utils.okOrThrow (Runtime.Autograd.Cuda.Tape.softplus (t := t11c) (s := s) u9c)
-  let (t13c, u11c) ← Utils.okOrThrow (Runtime.Autograd.Cuda.Tape.exp (t := t12c) (s := s) u10c)
-  let (t14c, u12c) ← Utils.okOrThrow (Runtime.Autograd.Cuda.Tape.abs (t := t13c) (s := s) u11c)
+    (Runtime.Autograd.LibTorch.Tape.scale (t := t3c) (s := s) aIdc scaleC)
+  let (t5c, u3c) ← Utils.okOrThrow (Runtime.Autograd.LibTorch.Tape.sub (t := t4c) (s := s) u1c u2c)
+  let (t6c, u4c) ← Utils.okOrThrow (Runtime.Autograd.LibTorch.Tape.mul (t := t5c) (s := s) u3c bIdc)
+  let (t7c, u5c) ← Utils.okOrThrow (Runtime.Autograd.LibTorch.Tape.max (t := t6c) (s := s) u4c aIdc)
+  let (t8c, u6c) ← Utils.okOrThrow (Runtime.Autograd.LibTorch.Tape.min (t := t7c) (s := s) u5c bIdc)
+  let (t9c, u7c) ← Utils.okOrThrow (Runtime.Autograd.LibTorch.Tape.relu (t := t8c) (s := s) u6c)
+  let (t10c, u8c) ← Utils.okOrThrow (Runtime.Autograd.LibTorch.Tape.sigmoid (t := t9c) (s := s) u7c)
+  let (t11c, u9c) ← Utils.okOrThrow (Runtime.Autograd.LibTorch.Tape.tanh (t := t10c) (s := s) u8c)
+  let (t12c, u10c) ← Utils.okOrThrow (Runtime.Autograd.LibTorch.Tape.softplus (t := t11c)
+    (s := s) u9c)
+  let (t13c, u11c) ← Utils.okOrThrow (Runtime.Autograd.LibTorch.Tape.exp (t := t12c) (s := s) u10c)
+  let (t14c, u12c) ← Utils.okOrThrow (Runtime.Autograd.LibTorch.Tape.abs (t := t13c) (s := s) u11c)
   let (t15c, u13c) ← Utils.okOrThrow
-    (Runtime.Autograd.Cuda.Tape.clamp (t := t14c) (s := s) u12c clampLo clampHi)
-  let (t16c, u14c) ← Utils.okOrThrow (Runtime.Autograd.Cuda.Tape.sqrt (t := t15c) (s := s) u13c)
-  let (t17c, u15c) ← Utils.okOrThrow (Runtime.Autograd.Cuda.Tape.inv (t := t16c) (s := s) u14c)
-  let (t18c, u16c) ← Utils.okOrThrow (Runtime.Autograd.Cuda.Tape.log (t := t17c) (s := s) u14c)
+    (Runtime.Autograd.LibTorch.Tape.clamp (t := t14c) (s := s) u12c clampLo clampHi)
+  let (t16c, u14c) ← Utils.okOrThrow (Runtime.Autograd.LibTorch.Tape.sqrt (t := t15c) (s := s) u13c)
+  let (t17c, u15c) ← Utils.okOrThrow (Runtime.Autograd.LibTorch.Tape.inv (t := t16c) (s := s) u14c)
+  let (t18c, u16c) ← Utils.okOrThrow (Runtime.Autograd.LibTorch.Tape.log (t := t17c) (s := s) u14c)
   let (t19c, u17c) ← Utils.okOrThrow
-    (Runtime.Autograd.Cuda.Tape.safeLog (t := t18c) (s := s) u14c eps)
-  let (t20c, u18c) ← Utils.okOrThrow (Runtime.Autograd.Cuda.Tape.add (t := t19c) (s := s) u15c u16c)
-  let (t21c, u19c) ← Utils.okOrThrow (Runtime.Autograd.Cuda.Tape.add (t := t20c) (s := s) u18c u17c)
-  let (t22c, outIdc) ← Utils.okOrThrow (Runtime.Autograd.Cuda.Tape.sum (t := t21c) (s := s) u19c)
+    (Runtime.Autograd.LibTorch.Tape.safeLog (t := t18c) (s := s) u14c eps)
+  let (t20c, u18c) ← Utils.okOrThrow (Runtime.Autograd.LibTorch.Tape.add (t := t19c) (s :=
+    s) u15c u16c)
+  let (t21c, u19c) ← Utils.okOrThrow (Runtime.Autograd.LibTorch.Tape.add (t := t20c) (s :=
+    s) u18c u17c)
+  let (t22c, outIdc) ← Utils.okOrThrow (Runtime.Autograd.LibTorch.Tape.sum (t := t21c) (s
+    := s) u19c)
 
   let outCuda ← Utils.cudaValue (s := Shape.scalar) t22c outIdc
-  let seedCuda : Runtime.Autograd.Cuda.AnyBuffer :=
-    { s := Shape.scalar, buf := Runtime.Autograd.Cuda.Buffer.full 1 1.0 }
+  let seedCuda : Runtime.Autograd.LibTorch.AnyBuffer :=
+    { s := Shape.scalar, buf := Runtime.Autograd.LibTorch.Buffer.full 1 1.0 }
   let gradsCuda ← Utils.okOrThrow
-    (Runtime.Autograd.Cuda.Tape.backwardDenseAll (t := t22c) outIdc seedCuda)
+    (Runtime.Autograd.LibTorch.Tape.backwardDenseAll (t := t22c) outIdc seedCuda)
   let dA_cuda ← Utils.cudaGrad (s := s) gradsCuda aIdc
   let dB_cuda ← Utils.cudaGrad (s := s) gradsCuda bIdc
 
@@ -119,11 +257,11 @@ def run : IO Unit := do
   let tailShape : Shape := [2]
   let tails : Tensor Float tailShape :=
     (Tensor.from #[100.0, -100.0]).reshape [2] (by dsimp; decide)
-  let tailTape0 : Runtime.Autograd.Cuda.Tape := Runtime.Autograd.Cuda.Tape.empty
-  let (tailTape1, tailsId) := Runtime.Autograd.Cuda.Tape.leaf
+  let tailTape0 : Runtime.Autograd.LibTorch.Tape := Runtime.Autograd.LibTorch.Tape.empty
+  let (tailTape1, tailsId) := Runtime.Autograd.LibTorch.Tape.leaf
     (t := tailTape0) (Utils.tensorToAnyBuffer tails) (name := some "tanh tails")
   let (tailTape2, tanhId) ← Utils.okOrThrow <|
-    Runtime.Autograd.Cuda.Tape.tanh (t := tailTape1) (s := tailShape) tailsId
+    Runtime.Autograd.LibTorch.Tape.tanh (t := tailTape1) (s := tailShape) tailsId
   let gotTails ← Utils.cudaValue (s := tailShape) tailTape2 tanhId
   let expectedTails : Tensor Float tailShape :=
     (Tensor.from #[1.0, -1.0]).reshape [2] (by dsimp; decide)
@@ -146,17 +284,17 @@ def run : IO Unit := do
     Tape.backwardDenseAll (α := Float) (t := geluCpu2) geluCpuOutputId geluSeedCpu
   let geluCpuGrad ← Utils.cpuGrad (s := geluShape) geluCpuGrads geluCpuInputId
 
-  let geluCuda0 : Runtime.Autograd.Cuda.Tape := Runtime.Autograd.Cuda.Tape.empty
+  let geluCuda0 : Runtime.Autograd.LibTorch.Tape := Runtime.Autograd.LibTorch.Tape.empty
   let (geluCuda1, geluCudaInputId) :=
-    Runtime.Autograd.Cuda.Tape.leaf
+    Runtime.Autograd.LibTorch.Tape.leaf
       (t := geluCuda0) (Utils.tensorToAnyBuffer geluInput) (name := some "gelu input")
   let (geluCuda2, geluCudaOutputId) ← Utils.okOrThrow <|
-    Runtime.Autograd.Cuda.Tape.gelu (t := geluCuda1) (s := geluShape) geluCudaInputId
+    Runtime.Autograd.LibTorch.Tape.gelu (t := geluCuda1) (s := geluShape) geluCudaInputId
   let geluCudaOutput ← Utils.cudaValue (s := geluShape) geluCuda2 geluCudaOutputId
-  let geluSeedCuda : Runtime.Autograd.Cuda.AnyBuffer :=
-    { s := geluShape, buf := Runtime.Autograd.Cuda.Buffer.full 7 1.0 }
+  let geluSeedCuda : Runtime.Autograd.LibTorch.AnyBuffer :=
+    { s := geluShape, buf := Runtime.Autograd.LibTorch.Buffer.full 7 1.0 }
   let geluCudaGrads ← Utils.okOrThrow <|
-    Runtime.Autograd.Cuda.Tape.backwardDenseAll
+    Runtime.Autograd.LibTorch.Tape.backwardDenseAll
       (t := geluCuda2) geluCudaOutputId geluSeedCuda
   let geluCudaGrad ← Utils.cudaGrad (s := geluShape) geluCudaGrads geluCudaInputId
 
@@ -189,22 +327,22 @@ def run : IO Unit := do
   let learningRate : Float := 3e-4
   let weightDecay : Float := 0.1
 
-  let mScaled := Runtime.Autograd.Cuda.Buffer.scale firstMomentBuf beta1
-  let expectedM := Runtime.Autograd.Cuda.Buffer.axpy mScaled gradientBuf oneMinusBeta1
-  let gradientSquared := Runtime.Autograd.Cuda.Buffer.mul gradientBuf gradientBuf
-  let vScaled := Runtime.Autograd.Cuda.Buffer.scale secondMomentBuf beta2
-  let expectedV := Runtime.Autograd.Cuda.Buffer.axpy vScaled gradientSquared oneMinusBeta2
-  let mHat := Runtime.Autograd.Cuda.Buffer.scale expectedM firstMomentCorrection
-  let vHat := Runtime.Autograd.Cuda.Buffer.scale expectedV secondMomentCorrection
-  let sqrtVHat := Runtime.Autograd.Cuda.Buffer.sqrt vHat
-  let epsilonBuf := Runtime.Autograd.Cuda.Buffer.full 4 epsilon
-  let denominator := Runtime.Autograd.Cuda.Buffer.add sqrtVHat epsilonBuf
-  let normalizedUpdate := Runtime.Autograd.Cuda.Buffer.div mHat denominator
+  let mScaled := Runtime.Autograd.LibTorch.Buffer.scale firstMomentBuf beta1
+  let expectedM := Runtime.Autograd.LibTorch.Buffer.axpy mScaled gradientBuf oneMinusBeta1
+  let gradientSquared := Runtime.Autograd.LibTorch.Buffer.mul gradientBuf gradientBuf
+  let vScaled := Runtime.Autograd.LibTorch.Buffer.scale secondMomentBuf beta2
+  let expectedV := Runtime.Autograd.LibTorch.Buffer.axpy vScaled gradientSquared oneMinusBeta2
+  let mHat := Runtime.Autograd.LibTorch.Buffer.scale expectedM firstMomentCorrection
+  let vHat := Runtime.Autograd.LibTorch.Buffer.scale expectedV secondMomentCorrection
+  let sqrtVHat := Runtime.Autograd.LibTorch.Buffer.sqrt vHat
+  let epsilonBuf := Runtime.Autograd.LibTorch.Buffer.full 4 epsilon
+  let denominator := Runtime.Autograd.LibTorch.Buffer.add sqrtVHat epsilonBuf
+  let normalizedUpdate := Runtime.Autograd.LibTorch.Buffer.div mHat denominator
   let decayedParams :=
-    Runtime.Autograd.Cuda.Buffer.axpy paramsBuf paramsBuf (-(learningRate * weightDecay))
+    Runtime.Autograd.LibTorch.Buffer.axpy paramsBuf paramsBuf (-(learningRate * weightDecay))
   let expectedParams :=
-    Runtime.Autograd.Cuda.Buffer.axpy decayedParams normalizedUpdate (-learningRate)
-  let (gotParams, gotM, gotV) := Runtime.Autograd.Cuda.Buffer.adamStep
+    Runtime.Autograd.LibTorch.Buffer.axpy decayedParams normalizedUpdate (-learningRate)
+  let (gotParams, gotM, gotV) := Runtime.Autograd.LibTorch.Buffer.adamStep
     paramsBuf gradientBuf firstMomentBuf secondMomentBuf
     beta1 oneMinusBeta1 beta2 oneMinusBeta2
     firstMomentCorrection secondMomentCorrection epsilon

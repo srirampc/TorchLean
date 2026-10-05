@@ -66,7 +66,6 @@ def IsCholesky (A L : Matrix (Fin n) (Fin n) ℝ) : Prop :=
 def IsQR {m k : Nat} (A Q : Matrix (Fin m) (Fin k) ℝ) (R : Matrix (Fin k) (Fin k) ℝ) : Prop :=
   Qᵀ * Q = 1 ∧ (∀ i j, j < i → R i j = 0) ∧ A = Q * R
 
-
 /-! ### Fold-indexing for the column-building specs
 
 `choleskyColsFn` and `gramSchmidtFn` build their output with a left fold that appends one column per
@@ -76,7 +75,7 @@ are the single home for these snoc-fold read lemmas; `FactorizationsReconstructi
 
 section FoldSnoc
 
-variable {β : Type _} {ι : Type _}
+variable {β : Type*} {ι : Type*}
 
 /-- A left fold that appends one element per input grows the accumulator by `l.length`. -/
 theorem length_foldl_snoc (g : List β → ι → β) (l : List ι) (acc : List β) :
@@ -132,34 +131,8 @@ theorem getD_foldl_finRange (g : List β → Fin n → β) (d : β) (j : Fin n) 
       = g (((List.finRange n).take j.val).foldl (fun s a => s ++ [g s a]) []) j := by
   have hjlen : j.val < (List.finRange n).length := by
     rw [List.length_finRange]; exact j.isLt
-  have htake : (List.finRange n).take (j.val + 1)
-      = (List.finRange n).take j.val ++ [j] := by
-    rw [List.take_succ_eq_append_getElem hjlen]
-    congr 1
-    simp [List.getElem_finRange]
-  have hplen : (((List.finRange n).take j.val).foldl (fun s a => s ++ [g s a]) []).length
-      = j.val := by
-    rw [length_foldl_snoc, List.length_nil, List.length_take, List.length_finRange, Nat.zero_add,
-      Nat.min_eq_left (Nat.le_of_lt j.isLt)]
-  calc
-    ((List.finRange n).foldl (fun s a => s ++ [g s a]) []).getD j.val d
-        = (((List.finRange n).drop (j.val + 1)).foldl (fun s a => s ++ [g s a])
-            ((List.finRange n).take (j.val + 1) |>.foldl (fun s a => s ++ [g s a]) [])).getD
-              j.val d := by
-          conv_lhs => rw [show List.finRange n
-            = (List.finRange n).take (j.val + 1) ++ (List.finRange n).drop (j.val + 1) from
-            (List.take_append_drop _ _).symm]
-          rw [List.foldl_append]
-    _ = ((List.finRange n).take (j.val + 1) |>.foldl (fun s a => s ++ [g s a]) []).getD
-          j.val d := by
-          apply getD_foldl_snoc_lt
-          rw [length_foldl_snoc, List.length_nil, List.length_take, List.length_finRange,
-            Nat.zero_add]
-          grind
-    _ = g (((List.finRange n).take j.val).foldl (fun s a => s ++ [g s a]) []) j := by
-          rw [htake, List.foldl_append, List.foldl_cons, List.foldl_nil]
-          rw [List.getD_append_right _ _ _ _ (le_of_eq hplen), hplen, Nat.sub_self]
-          rfl
+  have hj : (List.finRange n)[j.val]'hjlen = j := by simp [List.getElem_finRange]
+  rw [getD_foldl_snoc_read g d (List.finRange n) j.val hjlen, hj]
 
 end FoldSnoc
 
@@ -189,4 +162,5 @@ theorem choleskySpec_lower_triangular (A : TorchLean.Tensor ℝ [n, n])
       TorchLean.Tensor.matrix (Spec.choleskyFn (Spec.toMatFn A)) from rfl,
     get2_matrix]
   exact choleskyFn_lower_triangular _ hij
+
 end Spec.Factorization

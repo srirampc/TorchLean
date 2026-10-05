@@ -37,62 +37,6 @@ open MathFunctions
 
 variable {α : Type} [TorchLean.Storage α] [Context α]
 
-/-- Enumeration of supported loss families used by configuration records. -/
-inductive LossType
-| mse                    -- Mean Squared Error
-| mae                    -- Mean Absolute Error
-| huber                  -- Huber Loss
-| crossEntropy           -- Cross-Entropy Loss
-| hinge                  -- Hinge Loss
-| poisson                -- Poisson Loss
-| cosineSimilarity       -- Cosine Similarity Loss
-| logCosh                -- Log-Cosh Loss
-
-/-- Loss configuration record that names the selected loss family. -/
-structure Loss where
-  /-- Selected loss family for this configuration. -/
-  lossType : LossType
-  -- Note: regularization would be added here if needed
-
-/-- Configuration selecting mean-squared-error loss. -/
-def Loss.mse : Loss :=
-  { lossType := LossType.mse }
-
-/-- Configuration selecting mean-absolute-error loss. -/
-def Loss.mae : Loss :=
-  { lossType := LossType.mae }
-
-/-- Configuration selecting Huber loss. -/
-def Loss.huber : Loss :=
-  { lossType := LossType.huber }
-
-/-- Cross-entropy loss configuration. -/
-def Loss.crossEntropy : Loss :=
-  { lossType := LossType.crossEntropy }
-
-/-- Configuration selecting hinge loss. -/
-def Loss.hinge : Loss :=
-  { lossType := LossType.hinge }
-
-/-- Poisson loss configuration. -/
-def Loss.poisson : Loss :=
-  { lossType := LossType.poisson }
-
-/-- Cosine similarity loss configuration. -/
-def Loss.cosineSimilarity : Loss :=
-  { lossType := LossType.cosineSimilarity }
-
-/-- Log-cosh loss configuration. -/
-def Loss.logCosh : Loss :=
-  { lossType := LossType.logCosh }
-
--- Pure loss function specifications
-
-/-- Sum all tensor elements into a single scalar. -/
-def toScalarSpec {α : Type} [TorchLean.Storage α] [Add α] [Zero α]
-    {s : Shape} : Tensor α s → α :=
-  sumSpec
-
 /-- Mean of a scalar that conceptually came from a tensor with shape `s`.
 
 The denominator is `TorchLean.Tensor.meanDenominator`, the same totalized element count the tensor
@@ -100,18 +44,14 @@ reductions use, so the loss layer and `mean` agree on what an empty tensor avera
 def meanOver {α : Type} [Div α] [NatCast α] {s : Shape} (x : α) : α :=
   x / (meanDenominator s : α)
 
-/-- Number of slices orthogonal to `axis` in a tensor shape.
+/-- Totalized denominator for a mean over slices orthogonal to `axis`.
 
 Classification losses sum along the selected class dimension and average over every other
 dimension. Thus a class vector has one slice, a matrix of shape `(batch, classes)` with class
 dimension `1` has `batch` slices, and a tensor may instead place its class dimension anywhere in
-the shape. -/
-def axisSliceCount (s : Shape) (axis : Nat) [Shape.AxisInBounds axis s] : Nat :=
-  Spec.Shape.size (shapeAfterSum s axis)
-
-/-- Totalized denominator for a mean over slices orthogonal to `axis`. -/
+the shape. The shared `meanDenominator` supplies the empty-slice convention. -/
 def axisMeanDenom (s : Shape) (axis : Nat) [Shape.AxisInBounds axis s] : Nat :=
-  if axisSliceCount s axis = 0 then 1 else axisSliceCount s axis
+  meanDenominator (shapeAfterSum s axis)
 
 /-- Divide a classification loss by the number of slices orthogonal to `axis`. -/
 def meanOverAxisSlices {α : Type} [Div α] [NatCast α] {s : Shape}
@@ -124,7 +64,7 @@ def mseSpec {α : Type} [TorchLean.Storage α]
     {s : Shape} (predicted target : Tensor α s) : α :=
   let diff := subSpec predicted target
   let squared := mulSpec diff diff
-  meanOver (s := s) (toScalarSpec squared)
+  meanOver (s := s) (sumSpec squared)
 
 /-- Derivative of `mseSpec` with respect to `predicted`. -/
 def mseDerivSpec {α : Type} [TorchLean.Storage α]
@@ -140,7 +80,7 @@ def mseDerivSpec {α : Type} [TorchLean.Storage α]
 def maeSpec {s : Shape} (predicted : Tensor α s) (target : Tensor α s) : α :=
   let diff := subSpec predicted target
   let abs_diff := absSpec diff
-  meanOver (s := s) (toScalarSpec abs_diff)
+  meanOver (s := s) (sumSpec abs_diff)
 
 /-- Derivative of `maeSpec` w.r.t. `predicted` (subgradient via sign). -/
 def maeDerivSpec {s : Shape} (predicted : Tensor α s) (target : Tensor α s) : Tensor α s :=
@@ -174,7 +114,7 @@ def huberSpec {s : Shape} (predicted : Tensor α s) (target : Tensor α s) (delt
       (x * x) / 2
     else
       delta * (x - delta / 2)) abs_diff
-  meanOver (s := s) (toScalarSpec per_elem)
+  meanOver (s := s) (sumSpec per_elem)
 
 /-- Derivative of `huberSpec` w.r.t. `predicted`. -/
 def huberDerivSpec {s : Shape} (predicted : Tensor α s) (target : Tensor α s) (delta : α := (1 :
@@ -204,6 +144,10 @@ $$
 
 where `c` ranges along the selected class dimension and `r` ranges over all remaining dimensions.
 A lone class vector is one distribution and is not divided by its number of classes.
+
+Each predicted probability is clamped to `[epsilon, 1 - epsilon]` before the logarithm. A one-hot
+prediction that exactly matches a one-hot target therefore has loss `-log(1 - epsilon)`, which is
+small but not `0`.
 
 PyTorch's `F.cross_entropy` typically takes logits and does `log_softmax + NLLLoss`; that is a
 different API surface than this "probabilities in, scalar out" spec.
@@ -292,7 +236,7 @@ def hingeSpec {s : Shape} (predicted : Tensor α s) (target : Tensor α s) : α 
     let v := (1 : α) - m
     if v > (0 : α) then v else (0 : α)
   ) margin
-  meanOver (s := s) (toScalarSpec per_elem)
+  meanOver (s := s) (sumSpec per_elem)
 
 /-- Derivative/subgradient of `hingeSpec` w.r.t. `predicted`. -/
 def hingeDerivSpec {s : Shape} (predicted : Tensor α s) (target : Tensor α s) : Tensor α s :=
@@ -316,7 +260,7 @@ def poissonSpec {s : Shape} (predicted : Tensor α s) (target : Tensor α s) : �
   let exp_pred := mapSpec MathFunctions.exp predicted
   let target_times_pred := mulSpec target predicted
   let per_elem := subSpec exp_pred target_times_pred
-  meanOver (s := s) (toScalarSpec per_elem)
+  meanOver (s := s) (sumSpec per_elem)
 
 /-- Derivative of `poissonSpec` w.r.t. `predicted`. -/
 def poissonDerivSpec {s : Shape} (predicted : Tensor α s) (target : Tensor α s) : Tensor α s :=
@@ -331,9 +275,9 @@ def cosineSimilaritySpec {s : Shape} (predicted : Tensor α s) (target : Tensor 
   let dot_product := mulSpec predicted target
   let pred_squared := mulSpec predicted predicted
   let target_squared := mulSpec target target
-  let dot_sum := toScalarSpec dot_product
-  let pred_norm := MathFunctions.sqrt (toScalarSpec pred_squared)
-  let target_norm := MathFunctions.sqrt (toScalarSpec target_squared)
+  let dot_sum := sumSpec dot_product
+  let pred_norm := MathFunctions.sqrt (sumSpec pred_squared)
+  let target_norm := MathFunctions.sqrt (sumSpec target_squared)
   let pred_norm_safe := if pred_norm > epsilon then pred_norm else epsilon
   let target_norm_safe := if target_norm > epsilon then target_norm else epsilon
   let cosine_sim := dot_sum / (pred_norm_safe * target_norm_safe)
@@ -356,9 +300,9 @@ We use `epsilon` to avoid division by zero (similar to common "eps" handling in 
 def cosineSimilarityDerivSpec {s : Shape}
   (predicted : Tensor α s) (target : Tensor α s) (epsilon : α := Context.defaultEpsilon) :
     Tensor α s :=
-  let dot_sum := toScalarSpec (mulSpec predicted target)
-  let pred_sq_sum := toScalarSpec (mulSpec predicted predicted)
-  let target_sq_sum := toScalarSpec (mulSpec target target)
+  let dot_sum := sumSpec (mulSpec predicted target)
+  let pred_sq_sum := sumSpec (mulSpec predicted predicted)
+  let target_sq_sum := sumSpec (mulSpec target target)
   let pred_norm := MathFunctions.sqrt pred_sq_sum
   let target_norm := MathFunctions.sqrt target_sq_sum
   let pred_norm_safe := if pred_norm > epsilon then pred_norm else epsilon
@@ -379,7 +323,7 @@ def cosineSimilarityDerivSpec {s : Shape}
 def logCoshSpec {s : Shape} (predicted : Tensor α s) (target : Tensor α s) : α :=
   let diff := subSpec predicted target
   let per_elem := mapSpec (fun d => MathFunctions.log (MathFunctions.cosh d)) diff
-  meanOver (s := s) (toScalarSpec per_elem)
+  meanOver (s := s) (sumSpec per_elem)
 
 /-- Derivative of `logCoshSpec` w.r.t. `predicted`. -/
 def logCoshDerivSpec {s : Shape} (predicted : Tensor α s) (target : Tensor α s) : Tensor α s :=
@@ -431,7 +375,7 @@ def binaryCrossEntropyTensorSpec {s : Shape} (predicted : Tensor α s) (target :
   let per_elem := map2Spec (fun p y => binaryCrossEntropySpec (predicted := p) (target := y)
     (epsilon := epsilon))
       predicted target
-  meanOver (s := s) (toScalarSpec per_elem)
+  meanOver (s := s) (sumSpec per_elem)
 
 /-- Derivative of `binaryCrossEntropyTensorSpec` w.r.t. `predicted`. -/
 def binaryCrossEntropyTensorDerivSpec {s : Shape} (predicted : Tensor α s) (target : Tensor α

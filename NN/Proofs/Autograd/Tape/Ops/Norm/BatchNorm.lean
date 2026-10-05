@@ -42,23 +42,6 @@ noncomputable section
 
 open scoped BigOperators
 
-/-- Batch norm sees its input as `channels` rows of `positions` scalars each. -/
-private abbrev Matrix (channels positions : Nat) :=
-  Tensor ℝ [channels, positions]
-
-/-- One scalar per channel: the shape of the running statistics, the scale, and the shift. -/
-private abbrev ChannelTensor (channels : Nat) := Tensor ℝ [channels]
-
-/-- Scalar at a given channel and position. -/
-private abbrev entry {channels positions : Nat} (x : Matrix channels positions)
-    (channel : Fin channels) (position : Fin positions) : ℝ :=
-  get2 x channel position
-
-/-- Scalar of a per-channel vector. -/
-private abbrev channelEntry {channels : Nat} (x : ChannelTensor channels)
-    (channel : Fin channels) : ℝ :=
-  TorchLean.Tensor.getScalar x channel
-
 private theorem inner_getScalarE_cast {n m : Nat} (h : n = m)
     (a b : Tensor ℝ [n]) :
     inner ℝ (getScalarE (h ▸ a)) (getScalarE (h ▸ b)) =
@@ -80,81 +63,6 @@ private theorem dot_reshapeSpec_left {s₁ s₂ : Shape} (a : Tensor ℝ s₁)
   have hDot := dot_reshapeSpec a (reshapeSpec b h.symm) h
   rw [reshapeSpec_roundtrip] at hDot
   exact hDot
-
-private theorem entry_add {channels positions : Nat} (x y : Matrix channels positions)
-    (channel : Fin channels) (position : Fin positions) :
-    entry (addSpec x y) channel position =
-      entry x channel position + entry y channel position := by
-  simp [entry, addSpec]
-
-private theorem entry_sub {channels positions : Nat} (x y : Matrix channels positions)
-    (channel : Fin channels) (position : Fin positions) :
-    entry (subSpec x y) channel position =
-      entry x channel position - entry y channel position := by
-  simp [entry, subSpec]
-
-private theorem entry_mul {channels positions : Nat} (x y : Matrix channels positions)
-    (channel : Fin channels) (position : Fin positions) :
-    entry (mulSpec x y) channel position =
-      entry x channel position * entry y channel position := by
-  simp [entry, mulSpec]
-
-private theorem entry_broadcastChannel {channels positions : Nat} (x : ChannelTensor channels)
-    (channel : Fin channels) (position : Fin positions) :
-    entry (broadcastAfterSum (.dim channels (.dim positions .scalar)) 1 x) channel position =
-      channelEntry x channel := by
-  rw [← Tensor.dim_unstack x]
-  simp [entry, channelEntry, broadcastAfterSum, get2, TorchLean.Tensor.getScalar, Spec.get]
-
-private theorem channelEntry_reduceSum_axis_one {channels positions : Nat}
-    (hPositions : 0 < positions)
-    (x : Matrix channels positions) (channel : Fin channels) :
-    channelEntry
-        (reduceSum 1 x
-          (Shape.NonemptyAxis.succ
-            (Shape.hasNonemptyAxisZeroOfPos hPositions).proof))
-        channel =
-      ∑ position : Fin positions, entry x channel position := by
-  cases positions with
-  | zero => grind
-  | succ positions =>
-      let rows := Tensor.unstack x
-      rw [show x = Tensor.dim rows from (Tensor.dim_unstack x).symm]
-      simp only [reduceSum, reduceDim,
-        TorchLean.Tensor.Reduction.Internal.reduceDimCore_dim_succ,
-        TorchLean.Tensor.Reduction.Internal.reduceDimCore_dim_zero,
-        TorchLean.Tensor.Reduction.Internal.reduceOuterAxis_vector, shapeAfterSum,
-        channelEntry, TorchLean.Tensor.getScalar_dim]
-      rw [sum_spec_vec]
-      apply Finset.sum_congr rfl
-      intro position _
-      simp [entry, get2]
-
-private theorem channelEntry_reduceMean_axis_one {channels positions : Nat}
-    (hPositions : 0 < positions)
-    (x : Matrix channels positions) (channel : Fin channels) :
-    channelEntry
-        (reduceMean 1 x
-          (Shape.NonemptyAxis.succ
-            (Shape.hasNonemptyAxisZeroOfPos hPositions).proof))
-        channel =
-      (∑ position : Fin positions, entry x channel position) / positions := by
-  cases positions with
-  | zero => grind
-  | succ positions =>
-      let rows := Tensor.unstack x
-      rw [show x = Tensor.dim rows from (Tensor.dim_unstack x).symm]
-      simp only [reduceMean, reduceSum, reduceDim,
-        TorchLean.Tensor.Reduction.Internal.reduceDimCore_dim_succ,
-        TorchLean.Tensor.Reduction.Internal.reduceDimCore_dim_zero,
-        TorchLean.Tensor.Reduction.Internal.reduceOuterAxis_vector, shapeAfterSum, mapSpec,
-        channelEntry, TorchLean.Tensor.getScalar_map, TorchLean.Tensor.getScalar_dim,
-        Shape.axisSize_succ, Shape.axisSize_zero]
-      rw [sum_spec_vec]
-      congr 1
-      apply Finset.sum_congr rfl
-      intro position _
-      simp [entry, get2]
 
 private theorem channel_normalization_adjoint
     (positions : Nat) (hPositions : 0 < positions)
@@ -269,17 +177,17 @@ theorem normalizedJvp_normalizedBackward_adjoint
   simp only [Spec.BatchNorm.normalizedBackward]
   rw [dot_mat_eq_sum, dot_vec_eq_sum, dot_vec_eq_sum]
   simp only [Spec.BatchNorm.normalizedJvp]
-  simp only [entry_add, entry_sub, entry_mul, entry_broadcastChannel,
-    channelEntry_reduceMean_axis_one hPositions, channelEntry_reduceSum_axis_one hPositions]
+  simp only [Norm.get2_addSpec, Norm.get2_subSpec, Norm.get2_mulSpec,
+    Norm.get2_broadcastAfterSum_one, Norm.getScalar_reduceMean_one, Norm.getScalar_reduceSum_one]
   rw [← Finset.sum_add_distrib, ← Finset.sum_add_distrib]
   apply Finset.sum_congr rfl
   intro channel _
   exact channel_normalization_adjoint positions hPositions
-    (fun position => entry tangent channel position)
-    (fun position => entry gradOutput channel position)
-    (fun position => entry xHat channel position)
-    (channelEntry invStd channel) (channelEntry gamma channel)
-    (channelEntry dgamma channel) (channelEntry dbeta channel)
+    (fun position => get2 tangent channel position)
+    (fun position => get2 gradOutput channel position)
+    (fun position => get2 xHat channel position)
+    (getScalar invStd channel) (getScalar gamma channel)
+    (getScalar dgamma channel) (getScalar dbeta channel)
 
 private theorem normalizedJvp_normalizedBackward_spatial_adjoint
     {channels positions : Nat} {sSpatial : Shape}

@@ -7,6 +7,7 @@ Authors: TorchLean Team
 module
 
 public import NN.Runtime.Autograd.Model.Layers.Core
+public import NN.Runtime.Autograd.Model.Functional.Einsum
 
 /-!
 # Fourier transforms along a selected axis
@@ -17,13 +18,13 @@ $\alpha$ you instantiate it with (for example `Float`, `ExecFloat.Binary 8 23`, 
 would normally *change* the scalar type (real $\to$ complex), but TorchLean’s `Layer` does not
 support changing the scalar type mid-model.
 
-So this module provides **complex-domain** transforms: `fft` and `ifft` as layers that assume the
+This module provides DFT and inverse DFT matrices, and a forward `dft` layer that assumes
 $\alpha$ already behaves like a complex field (for example
-`TorchLean.Complex (FloatLib.Floats.ExecFloat.Binary 8 23)`, selected via `--arithmetic=complex`).
+`TorchLean.Complex (FloatLib.Floats.ExecFloat.Binary 8 23)`).
 
-Implementation note: we define `fft`/`ifft` as multiplication by explicit DFT matrices (so they are
-purely built from existing ops like `const` and `matmul`).  This is correctness-first and keeps the
-transform differentiable under the existing autograd rules.  It is not optimized for large `n`.
+The layer multiplies by an explicit DFT matrix using `const` and `matmul`, so the existing
+autograd rules apply. This is a dense transform, not a fast FFT algorithm; it is not intended for
+large `n`. The inverse matrix does not currently have a corresponding layer constructor here.
 
 Numerics note:
 - Over mathlib’s `ℂ`, the corresponding DFT/IDFT inversion facts are proved in
@@ -96,16 +97,16 @@ def idftMatrix {α : Type} [TorchLean.Storage α] [Context α] (n : Nat) :
 namespace Internal
 
 /--
-Implementation of FFT along the outermost axis of a tensor.
+Dense Fourier transform along the outermost axis of a tensor.
 
 This applies the DFT to the leading dimension `n` of a shape `dim n rest` by:
 1. reshaping to a matrix `n × (numel rest)`,
 2. left-multiplying by the `n×n` DFT matrix, then
 3. reshaping back.
 
-The public `fftAtDepth` operation moves an arbitrary axis here and restores the original axis order.
+The public `dft` operation moves the selected axis here and restores the original axis order.
 -/
-def fftLeadingAxis (n : Nat) (rest : Shape) :
+def dft (n : Nat) (rest : Shape) :
     Layer (rest.prependDim n) (rest.prependDim n) :=
   let sIn : Shape := rest.prependDim n
   let cols : Nat := Spec.Shape.size rest
@@ -129,55 +130,44 @@ def fftLeadingAxis (n : Nat) (rest : Shape) :
             Runtime.Autograd.Model.reshape (m := m) (α := α) (s₁ := sMat) (s₂ := sIn) yMat hSz.symm)
   }
 
-/-- Apply a sequence of `swapAdjacentAtDepth` operations (shape-indexed permutation primitive). -/
-def permuteBySwaps {α : Type} [TorchLean.Storage α] [Context α]
-    {m : Type → Type} [Monad m] [Ops (m := m) (α := α)]
-    (x : Σ s : Shape, RefTy (m := m) (α := α) s) :
-    (swaps : List Nat) → m (Σ s' : Shape, RefTy (m := m) (α := α) s')
-  | .nil => pure x
-  | .cons d ds => do
-      let y ← Runtime.Autograd.Model.swapAdjacentAtDepth (m := m) (α := α) (s := x.fst) d x.snd
-      permuteBySwaps (α := α) (m := m) ⟨x.fst.swapAdjacentAtDepth d, y⟩ ds
-
 end Internal
 
-/-!
-FFT along an axis at a given depth (0-based from the outermost).
+/--
+Dense Fourier transform along `axis`, numbered from zero.
 
 This is implemented by swapping the target axis outward (one adjacent swap per step) until it
-reaches depth `0`, applying the outer-axis implementation, then swapping back.
+reaches axis `0`, applying the outer-axis implementation, then swapping back.
 
-If $\mathtt{depth}\ge\operatorname{rank}(s)$, this layer is the identity.
+If $\mathtt{axis}\ge\operatorname{rank}(s)$, this layer is the identity.
 -/
-def fftAtDepth : {s : Shape} → Nat → Layer s s
-  | s, depth =>
+def dft {s : Shape} (axis : Nat) : Layer s s :=
     { stateShapes := []
       initState := .nil
       forward := fun mode {α} _ _ =>
         fun {m} _ _ =>
           fun x =>
             (show m (RefTy (m := m) (α := α) s) from do
-              if depth ≥ Spec.Shape.rank s then
+              if axis ≥ Spec.Shape.rank s then
                 pure x
               else
-                let swapsToFront : List Nat := (List.range depth).reverse
-                let swapsBack : List Nat := List.range depth
-                let xFront ← Internal.permuteBySwaps (α := α) (m := m) ⟨s, x⟩ swapsToFront
+                let swapsToFront : List Nat := (List.range axis).reverse
+                let swapsBack : List Nat := List.range axis
+                let xFront ← F.Einsum.permuteBySwaps (α := α) (m := m) ⟨s, x⟩ swapsToFront
                 match xFront with
                 | ⟨.scalar, x0⟩ =>
-                    -- Unreachable (rank is preserved by swaps and we checked `depth < rank s`), but
+                    -- Unreachable (rank is preserved by swaps and we checked `axis < rank s`), but
                     -- keep the fallback total.
-                    let yBack ← Internal.permuteBySwaps (α := α) (m := m) ⟨.scalar, x0⟩ swapsBack
+                    let yBack ← F.Einsum.permuteBySwaps (α := α) (m := m) ⟨.scalar, x0⟩ swapsBack
                     if h : yBack.fst = s then
                       pure (h ▸ yBack.snd)
                     else
                       pure x
                 | ⟨.dim nDim rest, x0⟩ =>
-                    let y0 ← (Internal.fftLeadingAxis (n := nDim) (rest := rest)).forward mode
+                    let y0 ← (Internal.dft (n := nDim) (rest := rest)).forward mode
                       (α := α) (m := m) x0
                     let yFront : Σ s' : Shape, RefTy (m := m) (α := α) s' :=
                       ⟨.dim nDim rest, y0⟩
-                    let yBack ← Internal.permuteBySwaps (α := α) (m := m) yFront swapsBack
+                    let yBack ← F.Einsum.permuteBySwaps (α := α) (m := m) yFront swapsBack
                     if h : yBack.fst = s then
                       pure (h ▸ yBack.snd)
                     else

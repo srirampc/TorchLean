@@ -12,7 +12,7 @@ Each family README describes its inputs and outputs.
 | `Vision/` | CNN, ResNet, and ViT |
 | `Sequence/` | RNN, LSTM, Transformer, GPT-style models, and Mamba |
 | `Generative/` | autoencoder, masked autoencoder, and diffusion |
-| `Operators/` | Fourier neural operator examples |
+| `Operators/` | Fourier neural operators, complex regression, and physics-informed neural fields |
 | `RL/` | PPO and DQN examples |
 | `Common/` | shared data and command plumbing |
 | `../Runner.lean` | the application-wide command registry |
@@ -20,9 +20,9 @@ Each family README describes its inputs and outputs.
 ## Discover Commands
 
 ```bash
-lake exe torchlean --help
-lake exe torchlean --list
-lake exe torchlean mlp --help
+scripts/lake.sh exe torchlean --help
+scripts/lake.sh exe torchlean --list
+scripts/lake.sh exe torchlean mlp --help
 ```
 
 `--help` lists commands with descriptions; `--list` prints their names for scripts. Each command's
@@ -42,8 +42,9 @@ let prediction ← trained.predict input
 The shared command helpers parse data and runtime flags around this lifecycle. They do not define a
 second training API.
 
-Examples with custom streams, reinforcement learning rollouts, or native fused steps use
-`trainer.open` sessions to control each step directly.
+Diffusion and FNO use `trainer.trainStream` for indexed samples and evaluation callbacks.
+The PPO examples use the specialized `rl.ppo` runtime, while CharGPT uses the `Module` API for
+mixed-dtype token inputs and floating-point parameters.
 
 ## Prepare Data
 
@@ -63,10 +64,10 @@ The data guide is `NN/Examples/Data/README.md`.
 ## Representative Runs
 
 ```bash
-lake exe torchlean mlp --device cpu --steps 10
-lake exe torchlean rnn --device cpu --steps 1
-lake -R -K cuda=true exe torchlean cnn --device cuda --n-total 1 --steps 1
-lake -R -K cuda=true exe torchlean gpt2 --device cuda --steps 1 --generate 0
+scripts/lake.sh exe torchlean mlp --device cpu --steps 10
+scripts/lake.sh exe torchlean rnn --device cpu --steps 1
+scripts/lake.sh -Kcuda=true exe torchlean cnn --device cuda --n-total 1 --steps 1
+scripts/lake.sh -Kcuda=true exe torchlean gpt2 --device cuda --steps 1 --generate 0
 ```
 
 Pass `--log PATH` when the training curve matters. `TrainLog` JSON is the stable quantitative
@@ -78,6 +79,6 @@ A model command trains, predicts, and exports artifacts. It does not prove that 
 is correct. When an artifact enters a formal claim, the relevant checker or theorem under
 `NN/Verification`, `NN/Proofs`, or `NN/MLTheory` must state the checked property.
 
-Compile the examples with `lake build NNExamples`, then run the affected model command on a
-small dataset. Retain permanent tests for numerical and native-boundary behavior; use temporary
+Compile the examples with `scripts/lake.sh build NNExamples`, then run the affected model command on
+a small dataset. Retain permanent tests for numerical and native-boundary behavior; use temporary
 checks for routine command changes.

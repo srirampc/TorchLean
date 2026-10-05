@@ -41,7 +41,8 @@ TorchLean therefore gives each factorization two parts:
 Application code uses the public `Tensor.*` factorization API. The examples below also inspect
 the generic `Spec.*` definitions that describe the arithmetic recurrences. Their real-valued
 instances are the objects of the exact theorems; a floating-point evaluation is a separate claim.
-The public operations have runtime overrides, whose relation to the specification we examine later.
+The Cholesky-based operations have runtime overrides, whose relation to the specification we
+examine later.
 
 For Cholesky, the proposition is
 
@@ -85,16 +86,18 @@ The vector operations live on the plain function representation `Fin p → α`, 
 #check @Spec.normFn
 ```
 
-```leanOutput dotSig
-@Spec.dotFn : {α : Type} → [Context α] → {p : ℕ} → (Fin p → α) → (Fin p → α) → α
+```leanOutput dotSig (whitespace := lax)
+@Spec.dotFn : {α : Type} → [Add α] → [Mul α] → [Zero α] → {p : ℕ} →
+  (Fin p → α) → (Fin p → α) → α
 ```
 
 ```leanOutput dotSig
 @Spec.normFn : {α : Type} → [Context α] → {p : ℕ} → (Fin p → α) → α
 ```
 
-`Context α` is TorchLean's scalar backend class: it supplies the arithmetic, the comparisons, and
-`MathFunctions.sqrt`. Instantiating `α := Float` gives a program you can run; instantiating
+`dotFn` needs only addition, multiplication, and zero. The norm also needs
+`MathFunctions.sqrt`, supplied here through TorchLean's scalar backend class `Context α`.
+Instantiating `α := Float` gives a program you can run; instantiating
 `α := ℝ` gives an object you can prove things about. That single generic definition is why the
 proofs and the executable path are not two independent transcriptions of the same recurrence.
 
@@ -177,7 +180,8 @@ def vTen : Tensor Float [3] := Tensor.from #[4.0, 5.0, 6.0]
 ```
 
 ```leanOutput tensorDotSig (whitespace := lax)
-@Tensor.dotSpec : {α : Type} → [inst : Storage α] → [Context α] → {s : Shape} →
+@Tensor.dotSpec : {α : Type} → [inst : Storage α] →
+  [Add α] → [Mul α] → [Zero α] → {s : Shape} →
   Tensor α s → Tensor α s → α
 ```
 
@@ -474,14 +478,14 @@ From the repository root, the shipped example checks the residual instead of the
 ```terminal
 # Run the shipped concrete factorization checks from the
 # repository root.
-lake exe torchlean factorizations
+scripts/lake.sh exe torchlean factorizations
 ```
 
 The Cholesky part of the output is:
 
 ```terminal +output
 Cholesky A = L·Lᵀ: OK (error = 0.000000)
-Cholesky on indefinite A correctly fails (no SPD ⇒ no factor): OK (failure detected)
+Cholesky on indefinite A correctly fails: OK (failure detected)
 ```
 
 The example itself calls the public executable API:
@@ -526,7 +530,8 @@ must choose NaN behavior deliberately.
 
 # Cholesky In PyTorch
 
-`torch.linalg.cholesky` returns the same displayed factor on the positive-definite input
+The recorded `torch.linalg.cholesky` transcript shows the same displayed factor on the
+positive-definite input
 {Informal.citep pytorch2019}[]:
 
 ```
@@ -845,7 +850,7 @@ reveals values hidden by six decimal places; it does not change the computed fac
 their accuracy. For a model that repeatedly uses an orthogonal basis, such as a projection layer,
 the cross-column error is directly relevant even when the reconstruction residual looks smaller.
 
-On the same matrix in float64, `torch.linalg.qr` returns factors with different signs:
+The recorded float64 `torch.linalg.qr` transcript has factors with different signs on this matrix:
 
 ```
 >>> # Inspect the alternative factor signs together with
@@ -875,7 +880,9 @@ signs: one must connect the algorithms and account for floating arithmetic.
 
 In the displayed run, LAPACK's reconstruction error is $`2.8\times10^{-14}`, while the
 Gram-Schmidt residual displays as zero even after scaling. The measured
-orthonormality is $`2.2\times10^{-16}` for LAPACK against $`2.8\times10^{-16}` for Gram-Schmidt.
+orthonormality error is $`2.2\times10^{-16}` for LAPACK. For Gram-Schmidt, the larger of the two
+displayed off-diagonal products is $`2.8\times10^{-16}`; those two entries alone do not measure
+the full Gram-matrix error.
 These measurements on one $`3\times3` matrix do not compare the algorithms' stability.
 Classical Gram-Schmidt can lose orthogonality as columns become nearly dependent. A stability
 analysis must relate the error to the input and the arithmetic across that wider class of cases.
@@ -919,9 +926,10 @@ def dCol (j : Fin 2) : Fin 2 → Float :=
 0.000000
 ```
 
-The zero column explains why the shipped example reports
-`error = 1.000000` for this case: $`Q^\top Q` is $`\operatorname{diag}(1,0)`, which differs from the
-identity by exactly one in one entry. The pivot hypothesis fails at `j = 1`, where
+Here $`Q^\top Q` is $`\operatorname{diag}(1,0)`, differing from the identity by one in one entry.
+The shipped example uses a 3×3 matrix with the same dependent-column mechanism: its Gram matrix
+is $`\operatorname{diag}(1,0,1)`, and it reports `error = 1.000000`. The pivot hypothesis fails
+at `j = 1`, where
 $`r_{11}=\|v_1\|=0`, and the executable code takes the guarded branch that emits `0` instead of
 dividing.
 
@@ -961,7 +969,7 @@ on its first and whose third supplies a later independent direction:
 ```terminal
 # The same shipped executable reports wide and
 # rank-deficient cases separately.
-lake exe torchlean factorizations
+scripts/lake.sh exe torchlean factorizations
 ```
 
 ```terminal +output
@@ -970,7 +978,7 @@ QR Qᵀ·Q = I: OK (error = 0.000000)
 QR(wide) A = Q·R: OK (error = 0.000000)
 QR(wide) Qᵀ·Q = I: OK (error = 0.000000)
 QR(rank-deficient) A = Q·R still reconstructs: OK (error = 0.000000)
-QR(rank-deficient) Qᵀ·Q = I correctly fails (needs full column rank):
+QR(rank-deficient) Qᵀ·Q = I correctly fails (zero basis column):
   OK (correctly rejected, error = 1.000000 ≥ 0.500000)
 ```
 

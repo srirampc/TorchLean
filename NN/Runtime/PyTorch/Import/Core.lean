@@ -6,7 +6,6 @@ Authors: TorchLean Team
 
 module
 
-import Mathlib.Tactic.Bound.Init
 public import NN.Spec.Core.Tensor -- shake: keep
 
 /-!
@@ -15,9 +14,9 @@ public import NN.Spec.Core.Tensor -- shake: keep
 PyTorch import core (JSON parsing).
 
 The Python side of TorchLean round-trips usually writes a JSON object containing nested arrays of
-floats (a Lean-readable projection of a PyTorch `state_dict`). The model-agnostic
-adapter emitted by `NN.Runtime.PyTorch.Export.StateDict` is the intended path from `.pt` / `.pth`
-checkpoints into this JSON format.
+floats (a Lean-readable projection of a PyTorch `state_dict`). Callers supply the Python script
+that loads `.pt` / `.pth` checkpoints and writes this JSON; the export helpers save and load
+PyTorch state dictionaries without converting them to JSON.
 
 Design note:
 
@@ -78,19 +77,13 @@ def parseTensor : (s : Shape) → Json → Option (Tensor Float s)
   | .dim n s, j =>
     match j with
     | .arr xs =>
-      if _h : xs.size = n then
-        match xs.mapM (fun x => parseTensor s x) with
+      if h : xs.size = n then
+        match Array.mapM' (fun x => parseTensor s x) xs with
         | some ts =>
-            -- `Array.mapM` should preserve size, but we keep a runtime check here so we can build a
-            -- tensor with O(1) indexing (instead of the O(n) if-chain used by the previous parser).
-            if hts : ts.size = n then
-              some <|
-                Tensor.dim (fun i : Fin n =>
-                  ts[i.val]'(by
-                    cases hts
-                    exact i.2))
-            else
-              none
+            -- The library traversal preserves left-to-right parsing and supplies the size proof.
+            some <|
+              Tensor.dim (fun i : Fin n =>
+                ts.val[i.val]'(by simpa only [ts.property, h] using i.isLt))
         | none => none
       else
         none
@@ -104,11 +97,6 @@ Some TorchLean Python scripts wrap the object as `{ "params": { ... } }`; `loadW
 both formats.
 -/
 
-/-- Read a JSON value as a `StateDict`. -/
-def loadStateDict? : Json → Option StateDict
-  | .obj o => some o
-  | _ => none
-
 /--
 If the object contains a `"params"` field that is itself an object, unwrap it.
 
@@ -119,9 +107,8 @@ replace a tensor with the same key.
 def unwrapParams (o : StateDict) : StateDict :=
   match o.get? "params" with
   | some (.obj p) =>
-      let withWrapperFields := o.foldl (init := p) (fun acc k v =>
-        if k = "params" then acc else acc.insert k v)
-      p.foldl (init := withWrapperFields) (fun acc k v => acc.insert k v)
+      o.foldl (init := p) (fun acc k v =>
+        if k = "params" || (p.get? k).isSome then acc else acc.insert k v)
   | _ => o
 
 /-- Whether a JSON string names the float32 format accepted by this importer. -/
@@ -133,7 +120,7 @@ def supportedDType : Json → Bool
 /--
 Whether optional state-dict metadata describes the numeric format supported by this importer.
 
-The general adapter records one metadata object per parameter. Older checked-in examples use one
+Per-parameter metadata records one object per parameter. Older checked-in examples use one
 model-level `"dtype": "float32"` entry instead. Both formats are accepted, but an explicit bf16,
 float64, or integer dtype is rejected rather than silently reinterpreted as `Tensor Float`.
 -/
@@ -162,25 +149,9 @@ Load weights from JSON, accepting either:
 - `{ "params": { ...state_dict... } }`.
 -/
 def loadWeights? (j : Json) : Option StateDict := do
-  let o ← loadStateDict? j
+  let .obj o := j | none
   guard (supportedWrapperDTypes o)
   pure (unwrapParams o)
-
-/-- Look up a JSON field by key in a `StateDict`. -/
-def getJson? (o : StateDict) (k : String) : Option Json :=
-  o.get? k
-
-/-- Look up a JSON field and require it to be a JSON object. -/
-def getObj? (o : StateDict) (k : String) : Option StateDict := do
-  match o.get? k with
-  | some (.obj o) => some o
-  | _ => none
-
-/-- Look up a JSON field and require it to be a JSON string. -/
-def getStr? (o : StateDict) (k : String) : Option String := do
-  match o.get? k with
-  | some (.str s) => some s
-  | _ => none
 
 /--
 Look up a key and parse it as a tensor of a given expected shape.
@@ -188,7 +159,7 @@ Look up a key and parse it as a tensor of a given expected shape.
 This is the helper most model-specific importers use to keep the “key wiring” readable.
 -/
 def getTensor? (o : StateDict) (k : String) (s : Shape) : Option (Tensor Float s) := do
-  let j ← getJson? o k
+  let j ← o.get? k
   parseTensor s j
 
 /--
@@ -203,15 +174,6 @@ def getTensorFirst? (o : StateDict) (keys : List String) (s : Shape) :
   | [] => none
   | key :: remaining =>
       getTensor? o key s <|> getTensorFirst? o remaining s
-
-/-!
-## Error-reporting variants (ergonomics)
-
-Most importers in this folder use `Option` for direct structural parsing. Round-trip checks need
-more precise failures, especially when distinguishing a missing key from a wrong JSON type or shape.
-
-The helpers below provide small `Except String` wrappers around the `Option`-based core.
--/
 
 /-!
 ## Small parsing helpers used by shape-inferring importers

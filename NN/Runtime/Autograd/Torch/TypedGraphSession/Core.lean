@@ -7,14 +7,14 @@ Authors: TorchLean Team
 module
 
 public import NN.Runtime.Autograd.Torch.Core.Session
-public import NN.Runtime.Autograd.TypedGraph.Core
+public import NN.Runtime.Autograd.TypedGraph.Compiled
 
 /-!
 # Typed graph sessions
 
-This session records shape-indexed `GraphData` as operations are called. A backward pass lowers
-the recorded graph and its current leaf values to a runtime tape, then runs the tape's reverse
-loop. `TorchLean.Session` selects this implementation when `options.execution := .typedGraph`;
+This session records shape-indexed `GraphData` as operations are called. A backward pass compiles
+the recorded graph at its current leaf values, then executes its saved reverse programs.
+`TorchLean.Session` selects this implementation when `options.execution := .typedGraph`;
 `Runtime.Autograd.Model.Session` provides the shared eager and typed graph interface.
 
 Create all parameter and input leaves before recording the first operation. A training step
@@ -93,10 +93,16 @@ structure TypedGraphSession (α : Type) [TorchLean.Storage α] where
   state : IO.Ref (TypedGraphSessionState α)
   /-- Map from graph leaf ids to mutable parameter objects. -/
   parametersByLeaf : IO.Ref (Std.HashMap Nat (AnyParam α))
+  /-- Storage identities for grouping repeated parameter leaves at update time. -/
+  parameterStorageByLeaf : IO.Ref (Std.HashMap Nat (ParameterStorage α))
   /-- Process-unique owner id for session references. -/
   referenceOwner : Nat
   /-- Current recording generation for session references. -/
   referenceGeneration : IO.Ref Nat
+  /-- Counter bumped by `setState`, used to key `valueCache`. -/
+  stateVersion : IO.Ref Nat
+  /-- Evaluated context values for the state version they were computed from. -/
+  valueCache : IO.Ref (Option (Nat × Array (Spec.SomeTensor α)))
 
 namespace TypedGraphSession
 
@@ -112,9 +118,21 @@ def new {α : Type} [TorchLean.Storage α] (options : Config := {}) : IO (TypedG
       s!"typed graph execution currently supports device `cpu`; requested `{options.deviceName}`"
   let state ← IO.mkRef (TypedGraphSessionState.empty (α := α))
   let parametersByLeaf ← IO.mkRef (Std.HashMap.emptyWithCapacity)
+  let parameterStorageByLeaf ← IO.mkRef (Std.HashMap.emptyWithCapacity)
   let referenceOwner ← RefIdentity.freshOwner
   let referenceGeneration ← IO.mkRef 0
-  pure { options, state, parametersByLeaf, referenceOwner, referenceGeneration }
+  let stateVersion ← IO.mkRef 0
+  let valueCache ← IO.mkRef none
+  pure
+    { options, state, parametersByLeaf, parameterStorageByLeaf, referenceOwner, referenceGeneration
+      stateVersion, valueCache }
+
+/-- Replace the session snapshot. Every write goes through here so cached values stay current. -/
+def setState {α : Type} [TorchLean.Storage α] (s : TypedGraphSession α)
+    (st : TypedGraphSessionState α) : IO Unit := do
+  s.state.set st
+  s.stateVersion.modify (· + 1)
+  s.valueCache.set none
 
 /-- Capture the current owner and generation for a newly recorded handle. -/
 def currentRefIdentity {α : Type} [TorchLean.Storage α]
@@ -166,8 +184,9 @@ Important invariant: this session requires that **all leaves are created before 
 `resetTape` is the intended boundary between training steps/forwards.
 -/
 def resetTape {α : Type} [TorchLean.Storage α] (s : TypedGraphSession α) : IO Unit := do
-  s.state.set (TypedGraphSessionState.empty (α := α))
+  s.setState (TypedGraphSessionState.empty (α := α))
   s.parametersByLeaf.set (Std.HashMap.emptyWithCapacity)
+  s.parameterStorageByLeaf.set (Std.HashMap.emptyWithCapacity)
   s.referenceGeneration.modify (fun generation => generation + 1)
 
 /--
@@ -219,7 +238,7 @@ def addLeaf {α : Type} [TorchLean.Storage α]
       nat := st0.nat
       ss := []
       g := .nil }
-  s.state.set st1
+  s.setState st1
   s.makeTensorRef id
 
 /--
@@ -239,6 +258,9 @@ def use {α : Type} [TorchLean.Storage α] [TensorTransfer α]
     (s.options.gradEnabled && p.requiresGrad)
   s.parametersByLeaf.modify (fun parameters =>
     parameters.insert leaf.id (AnyParam.ofParam p))
+  s.parameterStorageByLeaf.modify fun storages =>
+    storages.insert leaf.id
+      { shape := sh, value := p.value, cudaValue := p.cudaValue, hostCurrent := p.hostCurrent }
   pure leaf
 
 /--
@@ -266,7 +288,7 @@ def inputNat {α : Type} [TorchLean.Storage α]
   let st0 ← s.state.get
   ensureNoNodes st0
   let id := st0.nat.size
-  s.state.set { st0 with nat := st0.nat.push v }
+  s.setState { st0 with nat := st0.nat.push v }
   s.makeNatRef id
 
 /-- Read a previously recorded `NatRef`. -/
@@ -286,7 +308,7 @@ def setNat {α : Type} [TorchLean.Storage α]
   let st0 ← s.state.get
   if h : r.id < st0.nat.size then
     let i : Fin st0.nat.size := ⟨r.id, h⟩
-    s.state.set { st0 with nat := st0.nat.set i v }
+    s.setState { st0 with nat := st0.nat.set i v }
   else
     throw <| IO.userError "torch(TypedGraphSession): invalid nat id"
 
@@ -296,7 +318,7 @@ Build a typed index into the current context `Γ ++ ss` from a raw numeric id an
 This is the main "dynamic check" used by `getValue` (and by a few index-driven nodes): it ensures
 that the `Nat` id points to an existing tensor in the session context and that the shape matches.
 -/
-def mkIdxOrThrow {_α : Type} {Γ ss : List Shape} (id : Nat) (s : Shape) :
+def mkIdxOrThrow {Γ ss : List Shape} (id : Nat) (s : Shape) :
     Runtime.Autograd.Result (Proofs.Idx (Γ ++ ss) s) := by
     if h : id < (Γ ++ ss).length then
       let fin : Fin (Γ ++ ss).length := ⟨id, h⟩
@@ -313,20 +335,37 @@ def mkIdxOrThrow {_α : Type} {Γ ss : List Shape} (id : Nat) (s : Shape) :
 /--
 Evaluate the recorded graph and return the value of a `TensorRef`.
 
-This uses `lowerToTapeChecked` to validate and evaluate the graph at the recorded leaf values and
-nat-environment. It constructs a runtime tape, discards that tape, and reads the value from the
-resulting context. It does not run backward or mutate session state.
+The first read after a change to the session compiles the graph at the recorded leaf values and
+nat-environment and keeps the indexed context values. Later reads of the same snapshot use those
+values. It does not run backward.
 -/
 def getValue {α : Type} [TorchLean.Storage α]
     (s : TypedGraphSession α) {sh : Shape}
   (x : TensorRef α sh) : IO (Tensor α sh) := do
   s.validateTensorRef x
+  let version ← s.stateVersion.get
   let st0 ← s.state.get
-  -- Validate and evaluate the recorded graph, retaining only its value context.
-  let (_, ctx) ← okOrThrow <|
-    Runtime.Autograd.TypedGraph.lowerToTapeChecked st0.g st0.x st0.nat
-  let idx ← okOrThrow (mkIdxOrThrow (_α := α) (Γ := st0.Γ) (ss := st0.ss) x.id sh)
-  pure (Proofs.getIdx (α := α) (xs := ctx) idx)
+  let values ← match ← s.valueCache.get with
+    | some (cached, values) =>
+        if cached == version then pure values
+        else evaluate st0 version
+    | none => evaluate st0 version
+  let _ ← okOrThrow (mkIdxOrThrow (Γ := st0.Γ) (ss := st0.ss) x.id sh)
+  match values[x.id]? with
+  | some value =>
+      if h : value.shape = sh then pure (value.cast h)
+      else throw <| IO.userError "torch(TypedGraphSession): cached value has the wrong shape"
+  | none => throw <| IO.userError "torch(TypedGraphSession): cached context is too short"
+where
+  /-- Validate and evaluate the recorded graph, retaining only its value context. -/
+  evaluate (st0 : TypedGraphSessionState α) (version : Nat) :
+      IO (Array (Spec.SomeTensor α)) := do
+    let compiled ← okOrThrow <|
+      Runtime.Autograd.TypedGraph.compileChecked st0.g st0.x st0.nat
+    let values := compiled.context.values
+    s.valueCache.set (some (version, values))
+    pure values
+
 end TypedGraphSession
 
 end Internal

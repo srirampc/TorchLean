@@ -47,8 +47,8 @@ theorem diagonalS4_runArray_append_outputs_prefix
     (m : DiagonalS4Spec α inputDim stateDim outputDim)
     (h0 : Tensor α [stateDim])
     (xs ys : Array (Tensor α [inputDim])) :
-    (m.runArray h0 (xs ++ ys)).2.take xs.size = (m.runArray h0 xs).2 := by
-  exact scanArray_append_outputs_take m.step h0 xs ys
+    (m.runArray h0 (xs ++ ys)).2.take xs.size = (m.runArray h0 xs).2 :=
+  scanArray_append_outputs_take m.step h0 xs ys
 
 /--
 Compact Mamba prefix causality.
@@ -60,8 +60,8 @@ theorem compactMamba_runArray_append_outputs_prefix
     (m : MambaBlockSpec α inputDim stateDim outputDim)
     (h0 : Tensor α [stateDim])
     (xs ys : Array (Tensor α [inputDim])) :
-    (m.runArray h0 (xs ++ ys)).2.take xs.size = (m.runArray h0 xs).2 := by
-  exact scanArray_append_outputs_take m.step h0 xs ys
+    (m.runArray h0 (xs ++ ys)).2.take xs.size = (m.runArray h0 xs).2 :=
+  scanArray_append_outputs_take m.step h0 xs ys
 
 /--
 Full selective Mamba prefix causality for the internal runner.
@@ -75,8 +75,8 @@ theorem selectiveMamba_runArrayWithHistory_append_outputs_prefix
     (history : Array (Tensor α [innerDim]))
     (xs ys : Array (Tensor α [inputDim])) :
     (m.runArrayWithHistory h0 history (xs ++ ys)).2.take xs.size =
-      (m.runArrayWithHistory h0 history xs).2 := by
-  exact scanArray_append_outputs_take m.stepWithConvolutionHistory (h0, history) xs ys
+      (m.runArrayWithHistory h0 history xs).2 :=
+  scanArray_append_outputs_take m.stepWithConvolutionHistory (h0, history) xs ys
 
 /--
 Full selective Mamba prefix causality for the public runner.

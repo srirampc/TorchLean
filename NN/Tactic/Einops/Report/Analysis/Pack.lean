@@ -7,7 +7,6 @@ module
 
 public meta import NN.Tactic.Einops.Report.Analysis.Common
 public import NN.Tactic.Einops.Report.Analysis.Common
-import Mathlib.Algebra.Order.Field.Basic
 
 /-!
 # Pack reports
@@ -56,8 +55,7 @@ def concretePackReport (operation : String)
     inputShapes.mapM fun shape => concreteTensorType scalarType shape
   let packedType ← concreteTensorType scalarType outputShape
   let componentTypeEntries :=
-    ((List.range componentTypes.length).zip componentTypes).map
-      fun component => (s!"Component {component.1}", component.2)
+    componentTypes.mapIdx fun index type => (s!"Component {index}", type)
   let typeEntries :=
     if operation = "pack" then
       [("Scalar type", scalarTypeDescription)] ++
@@ -68,17 +66,15 @@ def concretePackReport (operation : String)
        ("Rep input tensor", packedType)] ++
         componentTypeEntries
   let componentDetails :=
-    ((List.range inputShapes.length).zip
-      (inputShapes.zip (metadata.zip segmentLengths))).map
-      fun component =>
-        s!"Component {component.1}: {formatShape component.2.1} = \
-          {formatShape leadingShape} ++ {formatShape component.2.2.1} ++ \
+    (inputShapes.zip (metadata.zip segmentLengths)).mapIdx
+      fun index (shape, starShape, segmentLength) =>
+        s!"Component {index}: {formatShape shape} = \
+          {formatShape leadingShape} ++ {formatShape starShape} ++ \
           {formatShape trailingShape}; packed segment length \
-          {component.2.2.2}."
+          {segmentLength}."
   let mut segmentStart := 0
   let mut partitionDetails : List String := []
-  for (component, segmentLength) in
-      (List.range segmentLengths.length).zip segmentLengths do
+  for (segmentLength, component) in segmentLengths.zipIdx do
     let segmentEnd := segmentStart + segmentLength
     partitionDetails := partitionDetails.concat <|
       s!"Component {component}: packed-axis interval \
@@ -140,9 +136,9 @@ def concretePackReport (operation : String)
       s!"  Rep shape: {formatShape outputShape}"
     else
       s!"  Component shapes: {formatShapes inputShapes}"
-  let componentEntries := inputShapes.map shapeSize
+  let componentEntries := inputShapes.map List.prod
   let totalComponentEntries := componentEntries.sum
-  let packedEntries := shapeSize outputShape
+  let packedEntries := outputShape.prod
   let workEstimate :=
     if operation = "pack" then
       [s!"Component entries: {formatShape componentEntries}; total \

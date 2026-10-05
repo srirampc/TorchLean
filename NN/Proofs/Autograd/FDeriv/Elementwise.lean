@@ -11,15 +11,15 @@ public import NN.Proofs.Autograd.FDeriv.OpSpec
 /-!
 # Elementwise
 
-Elementwise (`map`) Fréchet-derivative facts for Euclidean vectors.
+`OpSpecFDerivCorrect` instances for elementwise (`map`) ops on Euclidean vectors.
 
-This is the missing bridge for turning the scalar calculus lemmas in
-`NN/Proofs/Gradients/Activation.lean` into `OpSpecFDerivCorrect` instances for
-vector-valued ops (sigmoid/tanh/softplus/…).
+The generic coordinatewise calculus (`elemwiseVec`, `elemwiseDerivCLM`,
+`hasFDerivAt_elemwiseVec_at`) lives in `NN.Proofs.Autograd.FDeriv.Core`. This file turns the
+scalar calculus lemmas in `NN/Proofs/Gradients/Activation.lean` into `OpSpecFDerivCorrect`
+instances for vector-valued ops (sigmoid/tanh/softplus/…).
 -/
 
 @[expose] public section
-
 
 namespace Proofs
 namespace Autograd
@@ -29,169 +29,6 @@ open TorchLean TorchLean.Tensor
 open scoped BigOperators
 
 noncomputable section
-
--- ---------------------------------------------------------------------------
--- Generic coordinatewise calculus (`Vec n → Vec n`)
--- ---------------------------------------------------------------------------
-
-/--
-Apply a scalar function `f : ℝ → ℝ` coordinatewise to a vector.
-
-This is the Euclidean-space analogue of the tensor-level `mapSpec`.
--/
-def elemwiseVec {n : Nat} (f : ℝ → ℝ) : Vec n → Vec n :=
-  fun x => WithLp.toLp 2 fun i : Fin n => f (x.ofLp i)
-
-/-- Coordinate evaluation as a continuous linear map on `Vec n`. -/
-def evalCLM {n : Nat} (i : Fin n) : Vec n →L[ℝ] ℝ := by
-  classical
-  let fLin : Vec n →ₗ[ℝ] ℝ :=
-    { toFun := fun x => x.ofLp i
-      map_add' := by
-        intro x y
-        simp
-      map_smul' := by
-        intro a x
-        simp }
-  refine { toLinearMap := fLin, cont := ?_ }
-  exact LinearMap.continuous_of_finiteDimensional (f := fLin)
-
-/-- The coordinate evaluation functional reads coordinate `i`. -/
-@[simp] theorem evalCLM_apply {n : Nat} (i : Fin n) (x : Vec n) :
-    evalCLM (n := n) i x = x.ofLp i := rfl
-
-/--
-The derivative candidate for `elemwiseVec f` at a point `x`, built from a proposed scalar derivative
-  `f'`.
-
-Concretely: `(elemwiseDerivCLM f' x) dx` has coordinates `i ↦ f'(xᵢ) * dxᵢ`.
--/
-def elemwiseDerivCLM {n : Nat} (f' : ℝ → ℝ) (x : Vec n) : Vec n →L[ℝ] Vec n :=
-  (Proofs.Autograd.euclideanEquiv n).symm.toContinuousLinearMap.comp <|
-    ContinuousLinearMap.pi (fun i : Fin n =>
-      ContinuousLinearMap.smulRight (M₁ := Vec n) (M₂ := ℝ) (R := ℝ) (S := ℝ)
-        (evalCLM (n := n) i) (f' (x.ofLp i)))
-
-/--
-If `f` is differentiable everywhere with derivative `f'`, then `elemwiseVec f` is Fréchet
-differentiable everywhere with derivative `elemwiseDerivCLM f'`.
--/
-theorem hasFDerivAt_elemwiseVec {n : Nat} {f f' : ℝ → ℝ} (x : Vec n)
-    (hf : ∀ z, HasDerivAt f (f' z) z) :
-    HasFDerivAt (elemwiseVec (n := n) f) (elemwiseDerivCLM (n := n) f' x) x := by
-  classical
-  have hcoord :
-      ∀ i : Fin n,
-        HasFDerivAt (fun x : Vec n => f (x.ofLp i))
-          (ContinuousLinearMap.smulRight (M₁ := Vec n) (M₂ := ℝ) (R := ℝ) (S := ℝ)
-            (evalCLM (n := n) i) (f' (x.ofLp i))) x := by
-    intro i
-    have hf_i : HasDerivAt f (f' (x.ofLp i)) (x.ofLp i) := hf (x.ofLp i)
-    have hfF :
-        HasFDerivAt f
-          (ContinuousLinearMap.smulRight (M₁ := ℝ) (M₂ := ℝ) (R := ℝ) (S := ℝ)
-            (1 : ℝ →L[ℝ] ℝ) (f' (x.ofLp i))) (x.ofLp i) :=
-      hf_i.hasFDerivAt
-    have happly :
-        HasFDerivAt (fun x : Vec n => x.ofLp i) (evalCLM (n := n) i) x := by
-      have h := ((evalCLM (n := n) i).hasFDerivAt (x := x))
-      change HasFDerivAt (fun x : Vec n => x.ofLp i) (evalCLM (n := n) i) x at h
-      exact h
-    have hcomp := hfF.comp x happly
-    have hlin :
-        (ContinuousLinearMap.smulRight (M₁ := ℝ) (M₂ := ℝ) (R := ℝ) (S := ℝ)
-            (1 : ℝ →L[ℝ] ℝ) (f' (x.ofLp i))).comp (evalCLM (n := n) i)
-          =
-        ContinuousLinearMap.smulRight (M₁ := Vec n) (M₂ := ℝ) (R := ℝ) (S := ℝ)
-          (evalCLM (n := n) i) (f' (x.ofLp i)) := by
-      ext dx
-      simp [ContinuousLinearMap.smulRight_apply]
-    exact hcomp.congr_fderiv hlin
-
-  -- First prove the derivative as a map into `Fin n → ℝ`, then transport through `e n`.symm.
-  have hFun :
-      HasFDerivAt (fun x : Vec n => fun i : Fin n => f (x.ofLp i))
-        (ContinuousLinearMap.pi (fun i : Fin n =>
-          ContinuousLinearMap.smulRight (M₁ := Vec n) (M₂ := ℝ) (R := ℝ) (S := ℝ)
-            (evalCLM (n := n) i) (f' (x.ofLp i)))) x := by
-    refine (hasFDerivAt_pi (𝕜 := ℝ)
-        (φ := fun i : Fin n => fun x : Vec n => f (x.ofLp i))
-        (φ' := fun i : Fin n =>
-          ContinuousLinearMap.smulRight (M₁ := Vec n) (M₂ := ℝ) (R := ℝ) (S := ℝ)
-            (evalCLM (n := n) i) (f' (x.ofLp i)))
-        (x := x)).2 ?_
-    intro i
-    simpa using hcoord i
-  have he' :
-      HasFDerivAt (fun g : Fin n → ℝ => (Proofs.Autograd.euclideanEquiv n).symm g)
-        ((Proofs.Autograd.euclideanEquiv n).symm.toContinuousLinearMap)
-        (fun i : Fin n => f (x.ofLp i)) :=
-    (ContinuousLinearMap.hasFDerivAt (Proofs.Autograd.euclideanEquiv n).symm.toContinuousLinearMap)
-  have hcomp := he'.comp x hFun
-  show HasFDerivAt (fun x : Vec n => WithLp.toLp 2 fun i : Fin n => f (x.ofLp i))
-    (elemwiseDerivCLM (n := n) f' x) x
-  simpa [elemwiseVec, elemwiseDerivCLM, Proofs.Autograd.euclideanEquiv, Function.comp_def,
-    ContinuousLinearMap.comp_apply] using hcomp
-
-/--
-Pointwise (at `x`) version of `hasFDerivAt_elemwiseVec`.
-
-This is useful when the scalar `HasDerivAt` facts are only available at the coordinates of `x`.
--/
-theorem hasFDerivAt_elemwiseVec_at {n : Nat} {f f' : ℝ → ℝ} (x : Vec n)
-    (hf : ∀ i : Fin n, HasDerivAt f (f' (x.ofLp i)) (x.ofLp i)) :
-    HasFDerivAt (elemwiseVec (n := n) f) (elemwiseDerivCLM (n := n) f' x) x := by
-  classical
-  have hcoord :
-      ∀ i : Fin n,
-        HasFDerivAt (fun x : Vec n => f (x.ofLp i))
-          (ContinuousLinearMap.smulRight (M₁ := Vec n) (M₂ := ℝ) (R := ℝ) (S := ℝ)
-            (evalCLM (n := n) i) (f' (x.ofLp i))) x := by
-    intro i
-    have hf_i : HasDerivAt f (f' (x.ofLp i)) (x.ofLp i) := hf i
-    have hfF :
-        HasFDerivAt f
-          (ContinuousLinearMap.smulRight (M₁ := ℝ) (M₂ := ℝ) (R := ℝ) (S := ℝ)
-            (1 : ℝ →L[ℝ] ℝ) (f' (x.ofLp i))) (x.ofLp i) :=
-      hf_i.hasFDerivAt
-    have happly : HasFDerivAt (fun x : Vec n => x.ofLp i) (evalCLM (n := n) i) x := by
-      have h := ((evalCLM (n := n) i).hasFDerivAt (x := x))
-      change HasFDerivAt (fun x : Vec n => x.ofLp i) (evalCLM (n := n) i) x at h
-      exact h
-    have hcomp := hfF.comp x happly
-    have hlin :
-        (ContinuousLinearMap.smulRight (M₁ := ℝ) (M₂ := ℝ) (R := ℝ) (S := ℝ)
-            (1 : ℝ →L[ℝ] ℝ) (f' (x.ofLp i))).comp (evalCLM (n := n) i)
-          =
-        ContinuousLinearMap.smulRight (M₁ := Vec n) (M₂ := ℝ) (R := ℝ) (S := ℝ)
-          (evalCLM (n := n) i) (f' (x.ofLp i)) := by
-      ext dx
-      simp [ContinuousLinearMap.smulRight_apply]
-    exact hcomp.congr_fderiv hlin
-
-  have hFun :
-      HasFDerivAt (fun x : Vec n => fun i : Fin n => f (x.ofLp i))
-        (ContinuousLinearMap.pi (fun i : Fin n =>
-          ContinuousLinearMap.smulRight (M₁ := Vec n) (M₂ := ℝ) (R := ℝ) (S := ℝ)
-            (evalCLM (n := n) i) (f' (x.ofLp i)))) x := by
-    refine (hasFDerivAt_pi (𝕜 := ℝ)
-        (φ := fun i : Fin n => fun x : Vec n => f (x.ofLp i))
-        (φ' := fun i : Fin n =>
-          ContinuousLinearMap.smulRight (M₁ := Vec n) (M₂ := ℝ) (R := ℝ) (S := ℝ)
-            (evalCLM (n := n) i) (f' (x.ofLp i)))
-        (x := x)).2 ?_
-    intro i
-    simpa using hcoord i
-  have he' :
-      HasFDerivAt (fun g : Fin n → ℝ => (Proofs.Autograd.euclideanEquiv n).symm g)
-        ((Proofs.Autograd.euclideanEquiv n).symm.toContinuousLinearMap)
-        (fun i : Fin n => f (x.ofLp i)) :=
-    (ContinuousLinearMap.hasFDerivAt (Proofs.Autograd.euclideanEquiv n).symm.toContinuousLinearMap)
-  have hcomp := he'.comp x hFun
-  show HasFDerivAt (fun x : Vec n => WithLp.toLp 2 fun i : Fin n => f (x.ofLp i))
-    (elemwiseDerivCLM (n := n) f' x) x
-  simpa [elemwiseVec, elemwiseDerivCLM, Proofs.Autograd.euclideanEquiv, Function.comp_def,
-    ContinuousLinearMap.comp_apply] using hcomp
 
 /--
 Evaluation lemma: converting an elementwise-mapped tensor back to coordinates agrees with applying
@@ -422,7 +259,7 @@ def tanh {n : Nat} : OpSpecFDerivCorrect n n :=
           elemwiseVec (n := n) (fun z => Activation.Math.tanhSpec z) := by
       funext xV
       ext i
-      simp [tanhCorrect, Spec.tanhOp, Spec.liftElementwise, elemwiseVec]
+      simp [tanhCorrect, Spec.tanhOp, elemwiseVec]
     rw [hfun]
     exact h
   jvp_eq := by
@@ -434,7 +271,7 @@ def tanh {n : Nat} : OpSpecFDerivCorrect n n :=
         dxV i *
           TorchLean.Tensor.getScalar
             (mapSpec (s := .dim n .scalar) Activation.Math.tanhDerivSpec (ofFnE xV)) i := by
-      simp [tanhCorrect, Spec.tanhOp, Spec.liftElementwise,
+      simp [tanhCorrect, Spec.tanhOp,
         Activation.tanhDerivSpec, getScalarE, ofFnE,
         TorchLean.Tensor.getScalar_ofFn, Spec.getScalar_mul_spec]
     have hMap :
@@ -469,7 +306,7 @@ def sigmoid {n : Nat} : OpSpecFDerivCorrect n n :=
           elemwiseVec (n := n) (fun z => Activation.Math.sigmoidSpec z) := by
       funext xV
       ext i
-      simp [sigmoidCorrect, Spec.sigmoidOp, Spec.liftElementwise, elemwiseVec]
+      simp [sigmoidCorrect, Spec.sigmoidOp, elemwiseVec]
     rw [hfun]
     exact h
   jvp_eq := by
@@ -481,7 +318,7 @@ def sigmoid {n : Nat} : OpSpecFDerivCorrect n n :=
         dxV i *
           TorchLean.Tensor.getScalar
             (mapSpec (s := .dim n .scalar) Activation.Math.sigmoidDerivSpec (ofFnE xV)) i := by
-      simp [sigmoidCorrect, Spec.sigmoidOp, Spec.liftElementwise,
+      simp [sigmoidCorrect, Spec.sigmoidOp,
         Activation.sigmoidDerivSpec, getScalarE, ofFnE,
         TorchLean.Tensor.getScalar_ofFn, Spec.getScalar_mul_spec]
     have hMap :
@@ -516,7 +353,7 @@ def softplus {n : Nat} : OpSpecFDerivCorrect n n :=
           elemwiseVec (n := n) (fun z => Activation.Math.softplusSpec z) := by
       funext xV
       ext i
-      simp [softplusCorrect, Spec.softplusOp, Spec.liftElementwise, elemwiseVec]
+      simp [softplusCorrect, Spec.softplusOp, elemwiseVec]
     rw [hfun]
     exact h
   jvp_eq := by
@@ -528,7 +365,7 @@ def softplus {n : Nat} : OpSpecFDerivCorrect n n :=
         dxV i *
           TorchLean.Tensor.getScalar
             (mapSpec (s := .dim n .scalar) Activation.Math.softplusDerivSpec (ofFnE xV)) i := by
-      simp [softplusCorrect, Spec.softplusOp, Spec.liftElementwise,
+      simp [softplusCorrect, Spec.softplusOp,
         Activation.softplusDerivSpec, getScalarE, ofFnE,
         TorchLean.Tensor.getScalar_ofFn, Spec.getScalar_mul_spec]
     have hMap :
@@ -662,7 +499,7 @@ def safeLog {n : Nat} (ε : ℝ) (hε : 0 < ε) : OpSpecFDerivCorrect n n :=
           elemwiseVec (n := n) (fun z => Activation.Math.safeLogSpec z ε) := by
       funext xV
       ext i
-      simp [safeLogCorrect, Spec.safeLogOp, Spec.liftElementwise, elemwiseVec]
+      simp [safeLogCorrect, Spec.safeLogOp, elemwiseVec]
     rw [hfun]
     exact h
   jvp_eq := by
@@ -675,7 +512,7 @@ def safeLog {n : Nat} (ε : ℝ) (hε : 0 < ε) : OpSpecFDerivCorrect n n :=
           TorchLean.Tensor.getScalar
             (mapSpec (s := .dim n .scalar) (fun x => Activation.Math.safeLogDerivSpec x ε)
               (ofFnE xV)) i := by
-      simp [safeLogCorrect, Spec.safeLogOp, Spec.liftElementwise,
+      simp [safeLogCorrect, Spec.safeLogOp,
         Activation.safeLogDerivSpec, getScalarE, ofFnE,
         TorchLean.Tensor.getScalar_ofFn, Spec.getScalar_mul_spec]
     have hMap :
@@ -716,7 +553,7 @@ def smoothAbs {n : Nat} (ε : ℝ) (hε : 0 < ε) : OpSpecFDerivCorrect n n :=
           elemwiseVec (n := n) (fun z => Activation.Math.smoothAbsSpec z ε) := by
       funext xV
       ext i
-      simp [smoothAbsCorrect, Spec.smoothAbsOp, Spec.liftElementwise, elemwiseVec]
+      simp [smoothAbsCorrect, Spec.smoothAbsOp, elemwiseVec]
     rw [hfun]
     exact h
   jvp_eq := by
@@ -729,7 +566,7 @@ def smoothAbs {n : Nat} (ε : ℝ) (hε : 0 < ε) : OpSpecFDerivCorrect n n :=
           TorchLean.Tensor.getScalar
             (mapSpec (s := .dim n .scalar) (fun x => Activation.Math.smoothAbsDerivSpec x ε)
               (ofFnE xV)) i := by
-      simp [smoothAbsCorrect, Spec.smoothAbsOp, Spec.liftElementwise,
+      simp [smoothAbsCorrect, Spec.smoothAbsOp,
         Activation.smoothAbsDerivSpec, getScalarE, ofFnE,
         TorchLean.Tensor.getScalar_ofFn, Spec.getScalar_mul_spec]
     have hMap :

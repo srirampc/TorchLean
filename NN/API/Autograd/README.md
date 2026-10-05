@@ -67,11 +67,11 @@ returns a new state-shaped gradient value; there is no mutable `.grad` field.
 def model : nn.Sequential [2] [1] := nn.build 0 (nn.linear 2 1)
 
 #eval show IO Unit from do
-  let state : autograd.model.State model Float := autograd.model.initialState model
+  let state : autograd.model.State model Float := nn.initialState model
   let input : Tensor Float [2] := [0.5, -1.0]
   let target : Tensor Float [1] := [0.25]
   let (gradient, lossValue) ← autograd.model.grad model
-    autograd.model.Loss.meanSquaredError state input target (value := true)
+    autograd.model.Loss.mse state input target (value := true)
   IO.println s!"loss = {lossValue}, gradient = {reprStr gradient}"
 ```
 

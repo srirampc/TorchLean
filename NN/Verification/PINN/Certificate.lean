@@ -72,7 +72,7 @@ def verifyCert (path : String) : IO Unit := do
   | .ok certificate => do
     let config := certificate.config
     let g := buildReferenceGraph 1
-    let outId := g.nodes.size - 1
+    let outId := SequentialPINNArch.graphOutputId g
     let basePs : ParamStore Float := referenceParams 1
     for i in Array.finRange config.pointCount do
       let x := Tensor.getScalar config.points i
@@ -85,31 +85,17 @@ def verifyCert (path : String) : IO Unit := do
           TorchLean.Tensor.dim fun _ => TorchLean.Tensor.scalar xi
         let ps := seedInput basePs center config.radius
         let boxes := NN.MLTheory.CROWN.Graph.runIBP (α:=Float) g ps
-        let outB ←
-          match NN.MLTheory.CROWN.Graph.outputBox? boxes outId with
-          | .ok outB => pure outB
-          | .error msg => throw <| IO.userError s!"PINN IBP failed: {msg}"
-        let loVal := TorchLean.Tensor.sumSpec outB.lo
-        let hiVal := TorchLean.Tensor.sumSpec outB.hi
-        solutionTriplet := solutionTriplet.push { lower := loVal, upper := hiVal }
+        solutionTriplet := solutionTriplet.push
+          (← IO.ofExcept (outputInterval "PINN IBP failed" boxes outId))
         let dboxes := NN.MLTheory.CROWN.Graph.runScalarDerivative (α:=Float) g ps boxes
-        let dB ←
-          match NN.MLTheory.CROWN.Graph.outputBox? dboxes outId with
-          | .ok dB => pure dB
-          | .error msg => throw <| IO.userError s!"PINN first-derivative propagation failed: {msg}"
-        let dlo := TorchLean.Tensor.sumSpec dB.lo
-        let dhi := TorchLean.Tensor.sumSpec dB.hi
-        derivativeTriplet := derivativeTriplet.push { lower := dlo, upper := dhi }
+        derivativeTriplet := derivativeTriplet.push
+          (← IO.ofExcept
+            (outputInterval "PINN first-derivative propagation failed" dboxes outId))
         let d2boxes :=
-          NN.MLTheory.CROWN.Graph.runScalarSecondDerivative (α := Float) g ps boxes dboxes
-        let d2B ←
-          match NN.MLTheory.CROWN.Graph.outputBox? d2boxes outId with
-          | .ok d2B => pure d2B
-          | .error msg => throw <| IO.userError s!"PINN second-derivative propagation failed: {msg}"
-        let d2lo := TorchLean.Tensor.sumSpec d2B.lo
-        let d2hi := TorchLean.Tensor.sumSpec d2B.hi
-        secondDerivativeTriplet :=
-          secondDerivativeTriplet.push { lower := d2lo, upper := d2hi }
+          NN.MLTheory.CROWN.Graph.runSecondDirectionalDerivative (α := Float) g ps boxes dboxes
+        secondDerivativeTriplet := secondDerivativeTriplet.push
+          (← IO.ofExcept
+            (outputInterval "PINN second-derivative propagation failed" d2boxes outId))
       match solutionTriplet[0]?, solutionTriplet[1]?, solutionTriplet[2]? with
       | some previous, some center, some next =>
         let artifactBounds ←
@@ -143,13 +129,10 @@ def verifyCert (path : String) : IO Unit := do
               throw <| IO.userError <|
                 s!"PINN certificate derivative residual missing index {i.1} " ++
                 s!"(size={certificate.derivativeResidualBounds.size})"
-        -- Compute and print residual bounds from the PDE specification via the parser/AST.
-        -- We support a small DSL: u, ux, uxx, uy, uyy, +, -, *, scaling constants, parentheses, and
-        -- powers by ^n.
-        let env : String → Option Float := fun _ => none
-        -- identifiers map, can be extended to constants
+        -- Recompute the residual from the PDE expression (grammar in `PdeParse`). The certificate
+        -- format defines no named constants, so the identifier environment is empty.
         let pdeParsed ←
-          match parseExpr env config.pde with
+          match parseExpr (fun _ => none) config.pde with
           | .ok e => pure e
           | .error msg => throw <| IO.userError s!"PINN PDE parse failed: {msg}"
         -- Build primitive bounds at the central point x using computed intervals

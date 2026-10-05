@@ -193,38 +193,16 @@ Corollary of the general DAG theorem: backprop equals `(fderiv eval)†` for the
 This is the formal statement that the tape reverse pass computes the VJP for the full attention
 computation.
 -/
-theorem backprop_eq_adjoint_fderiv_scaledDotProduct {m d : Nat} (c : ℝ) :
-    ∀ (xV : CtxVec (ΓQKV m d))
-      (seedV :
-        CtxVec (ΓQKV m d ++
-          [ .dim d (.dim m .scalar)
-          , .dim m (.dim m .scalar)
-          , .dim m (.dim m .scalar)
-          , .dim m (.dim m .scalar)
-          , .dim m (.dim d .scalar)
-          ])),
-      Graph.backpropVec (Γ := ΓQKV m d)
-          (ss :=
-            [ .dim d (.dim m .scalar)
-            , .dim m (.dim m .scalar)
-            , .dim m (.dim m .scalar)
-            , .dim m (.dim m .scalar)
-            , .dim m (.dim d .scalar)
-            ])
-          (scaledDotProductDGraph (m := m) (d := d) c).g xV seedV
-        =
-      (fderiv ℝ
-          (Graph.evalVec (Γ := ΓQKV m d)
-            (ss :=
-              [ .dim d (.dim m .scalar)
-              , .dim m (.dim m .scalar)
-              , .dim m (.dim m .scalar)
-              , .dim m (.dim m .scalar)
-              , .dim m (.dim d .scalar)
-              ])
-            (scaledDotProductDGraph (m := m) (d := d) c).g)
-          xV).adjoint seedV :=
-  DGraph.backpropVec_eq_adjoint_fderiv (dg := scaledDotProductDGraph (m := m) (d := d) c)
+theorem backprop_eq_adjoint_fderiv_scaledDotProduct {m d : Nat} (c : ℝ)
+    (xV : CtxVec (ΓQKV m d)) (seedV : CtxVec (ΓQKV m d ++ ssScaledDotProduct m d)) :
+    Graph.backpropVec (Γ := ΓQKV m d) (ss := ssScaledDotProduct m d)
+        (scaledDotProductDGraph (m := m) (d := d) c).g xV seedV
+      =
+    (fderiv ℝ
+        (Graph.evalVec (Γ := ΓQKV m d) (ss := ssScaledDotProduct m d)
+          (scaledDotProductDGraph (m := m) (d := d) c).g)
+        xV).adjoint seedV :=
+  DGraph.backpropVec_eq_adjoint_fderiv (dg := scaledDotProductDGraph (m := m) (d := d) c) xV seedV
 
 end Attention
 

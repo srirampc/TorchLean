@@ -7,7 +7,6 @@ Authors: TorchLean Team
 module
 
 public import NN.Runtime.Autograd.Model.Session.Autograd
-public import NN.Runtime.Autograd.Model.Session.Eager
 public import NN.Runtime.Autograd.Model.Session.Neural
 public import NN.Runtime.Autograd.Model.Session.Ops
 public import NN.Runtime.Autograd.Model.Session.ShapeIndex

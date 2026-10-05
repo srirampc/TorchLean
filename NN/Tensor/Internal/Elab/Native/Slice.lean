@@ -22,24 +22,13 @@ namespace TorchLean.Tensor.Internal.Elab.Impl
 
 universe u
 
-/-!
-Contiguous copying reuses `TorchLean.appendArraySlice` and
-`appendArraySlice_eq_append_extract` from the storage layer.
--/
-
 /-- Flatten one row and column index into a rectangular row-major index. -/
 def rectangularIndex (rowCount rowLength : Nat)
     (row : Fin rowCount) (column : Fin rowLength) :
     Fin (rowCount * rowLength) :=
   ⟨row * rowLength + column, by
-    calc
-      row * rowLength + column < row * rowLength + rowLength :=
-        Nat.add_lt_add_left column.isLt _
-      _ = (row + 1) * rowLength := by
-        rw [Nat.add_mul, Nat.one_mul]
-      _ ≤ rowCount * rowLength :=
-        Nat.mul_le_mul_right rowLength
-          (Nat.succ_le_iff.mpr row.isLt)⟩
+    simpa [finProdFinEquiv, Nat.add_comm, Nat.mul_comm] using
+      (finProdFinEquiv (row, column)).isLt⟩
 
 /--
 Appending fixed-width rows in finite-index order reconstructs their flattened
@@ -92,93 +81,6 @@ theorem fin_foldl_append_rows_eq_array_ofFn
           rfl
     _ = (Array.ofFn values).toList :=
       Array.toList_ofFn.symm
-
-/--
-Build an array by appending one fixed-width source slice for each row.
-
-The executable path uses an unboxed outer counter and the runtime array slice
-fold. Source range proofs remain confined to the correctness theorem.
--/
-@[inline] def nativeArrayOfSlices
-    {α : Type u} (rowCount rowLength sourceStride sourceOffset : Nat)
-    (rowBound : USize) (hRowBound : rowBound.toNat = rowCount)
-    (source : Array α) : Array α :=
-  nativeFinFoldl rowCount rowBound hRowBound
-    (fun output row _ =>
-      let start := row.toNat * sourceStride + sourceOffset
-      appendArraySlice source start (start + rowLength) output)
-    (Array.emptyWithCapacity (rowCount * rowLength))
-
-/--
-The native slice builder equals `Array.ofFn` when every extracted row agrees
-with the corresponding finite-function row.
--/
-theorem nativeArrayOfSlices_eq_array_ofFn
-    {α : Type u} (rowCount rowLength sourceStride sourceOffset : Nat)
-    (rowBound : USize) (hRowBound : rowBound.toNat = rowCount)
-    (source : Array α) (values : Fin (rowCount * rowLength) → α)
-    (hRanges :
-      ∀ row : Fin rowCount,
-        row * sourceStride + sourceOffset + rowLength ≤ source.size)
-    (hValues :
-      ∀ (row : Fin rowCount) (column : Fin rowLength),
-        source[row * sourceStride + sourceOffset + column]'(by
-          have hRange := hRanges row
-          have hColumn := column.isLt
-          omega) =
-        values (rectangularIndex rowCount rowLength row column)) :
-    nativeArrayOfSlices rowCount rowLength sourceStride sourceOffset
-        rowBound hRowBound source =
-      Array.ofFn values := by
-  rw [nativeArrayOfSlices]
-  rw [nativeFinFoldl_eq_fin_foldl_of_eq rowCount rowBound hRowBound
-    (fun output row _ =>
-      let start := row.toNat * sourceStride + sourceOffset
-      appendArraySlice source start (start + rowLength) output)
-    (fun output row =>
-      output ++ Array.ofFn fun column : Fin rowLength =>
-        values (rectangularIndex rowCount rowLength row column))
-    (Array.emptyWithCapacity (rowCount * rowLength)) (by
-      intro output row hRow
-      rw [appendArraySlice_eq_append_extract]
-      apply congrArg (output ++ ·)
-      apply Array.ext
-      · rw [Array.size_extract,
-          Nat.min_eq_left (hRanges ⟨row.toNat, hRow⟩),
-          Array.size_ofFn]
-        change
-          row.toNat * sourceStride + sourceOffset + rowLength -
-              (row.toNat * sourceStride + sourceOffset) =
-            rowLength
-        omega
-      · intro column hColumnLeft hColumnRight
-        simp only [Array.getElem_extract, Array.getElem_ofFn]
-        exact hValues ⟨row.toNat, hRow⟩
-          ⟨column, by simpa only [Array.size_ofFn] using hColumnRight⟩)]
-  exact fin_foldl_append_rows_eq_array_ofFn rowCount rowLength values
-
-/-- The native slice builder produces the requested flattened size. -/
-theorem nativeArrayOfSlices_size
-    {α : Type u} (rowCount rowLength sourceStride sourceOffset : Nat)
-    (rowBound : USize) (hRowBound : rowBound.toNat = rowCount)
-    (source : Array α) (values : Fin (rowCount * rowLength) → α)
-    (hRanges :
-      ∀ row : Fin rowCount,
-        row * sourceStride + sourceOffset + rowLength ≤ source.size)
-    (hValues :
-      ∀ (row : Fin rowCount) (column : Fin rowLength),
-        source[row * sourceStride + sourceOffset + column]'(by
-          have hRange := hRanges row
-          have hColumn := column.isLt
-          omega) =
-        values (rectangularIndex rowCount rowLength row column)) :
-    (nativeArrayOfSlices rowCount rowLength sourceStride sourceOffset
-      rowBound hRowBound source).size =
-      rowCount * rowLength := by
-  rw [nativeArrayOfSlices_eq_array_ofFn
-    rowCount rowLength sourceStride sourceOffset rowBound hRowBound
-    source values hRanges hValues]
-  · exact Array.size_ofFn
 
 /--
 Build a physical buffer by appending one fixed-width source slice per row.

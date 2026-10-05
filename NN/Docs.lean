@@ -28,7 +28,7 @@ their own runnable `main` alongside the declarations being documented.
 Build the complete API documentation with:
 
 ```text
-lake build TorchLeanDocs:docs
+scripts/lake.sh -Kenv=dev build TorchLeanDocs:docs
 ```
 -/
 

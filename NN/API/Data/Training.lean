@@ -21,6 +21,17 @@ namespace TorchLean
 
 namespace Data
 
+/-- Runtime-polymorphic dataset from an indexed stream of Float samples.
+
+Samples are constructed and cast when accessed, so generated windows need not be materialized
+as an array before training begins.
+-/
+def fromStream {σ τ : Spec.Shape}
+    (values : SampleStream (Sample.Supervised Float σ τ)) : Trainer.Dataset σ τ :=
+  { materialize := fun {_} _ _ =>
+      pure <| values.map fun sample =>
+        Sample.map (Tensor.map Runtime.ofFloat) (Tensor.map Runtime.ofFloat) sample }
+
 /--
 Runtime-polymorphic supervised dataset for `Float` tensors.
 
@@ -48,10 +59,9 @@ def fromTensors
     (inputs : Tensor Float (σ.prependDim n))
     (targets : Tensor Float (τ.prependDim n)) :
     Trainer.Dataset σ τ :=
-  { materialize := fun {_α} _ =>
-      pure <| SampleStream.fromFunction n fun sampleIndex =>
-        { input := Tensor.map Runtime.ofFloat (Spec.get inputs sampleIndex)
-          target := Tensor.map Runtime.ofFloat (Spec.get targets sampleIndex) } }
+  fromStream <| SampleStream.fromFunction n fun sampleIndex =>
+    { input := Spec.get inputs sampleIndex
+      target := Spec.get targets sampleIndex }
 
 /--
 Runtime-polymorphic supervised dataset from an explicit sample builder.
@@ -80,17 +90,6 @@ def generate
     Trainer.Dataset σ τ :=
   { materialize := fun {α} _ _ =>
       pure <| TorchLean.Data.SampleStream.fromArray (generateSamples (α := α)) }
-
-/-- Runtime-polymorphic dataset from an indexed stream of Float samples.
-
-Samples are constructed and cast when accessed, so generated windows need not be materialized
-as an array before training begins.
--/
-def fromStream {σ τ : Spec.Shape}
-    (values : SampleStream (Sample.Supervised Float σ τ)) : Trainer.Dataset σ τ :=
-  { materialize := fun {_} _ _ =>
-      pure <| values.map fun sample =>
-        Sample.map (Tensor.map Runtime.ofFloat) (Tensor.map Runtime.ofFloat) sample }
 
 /--
 Runtime-polymorphic dataset from an in-memory array of `Float` supervised samples.
@@ -158,6 +157,14 @@ def defer
             (Tensor.map Runtime.ofFloat)
             sample ] }
 
+/-- Shuffle before collating, retaining the constructor's name in batch validation errors. -/
+def Internal.collateShuffled {α : Type} [Storage α] {σ τ : Spec.Shape}
+    (context : String) (batchSize : Nat) (shuffle : Bool) (seed : Nat)
+    (samples : SampleStream (Sample.Supervised α σ τ)) :
+    IO (SampleStream (Sample.Supervised α (σ.prependDim batchSize) (τ.prependDim batchSize))) :=
+  let samples := if shuffle then SampleStream.shuffled seed samples else samples
+  IO.ofExcept <| (collateStream batchSize samples).mapError fun message => s!"{context}: {message}"
+
 /--
 Convert an unbatched supervised dataset into a fixed-size batched dataset.
 
@@ -181,14 +188,7 @@ def batch
     Trainer.Dataset (σ.prependDim batchSize) (τ.prependDim batchSize) :=
   { materialize := fun {α} _ => do
       let samples ← dataset.materialize (α := α)
-      let samples :=
-        if shuffle then
-          SampleStream.shuffled seed samples
-        else
-          samples
-      match collateStream (α := α) batchSize samples with
-      | .ok batchedSamples => pure batchedSamples
-      | .error message => throw <| IO.userError s!"Data.batch: {message}" }
+      Internal.collateShuffled "Data.batch" batchSize shuffle seed samples }
 
 /-- Named train/test views produced by a dataset split. -/
 structure DatasetSplit (input target : Spec.Shape) where
@@ -255,14 +255,7 @@ def fromCsv
   { materialize := fun {α} _ => do
       let source := TabularSupervisedSource.fromCsv path inputWidth targetWidth csvOptions
       let samples ← source.load (α := α)
-      let samples :=
-        if shuffle then
-          SampleStream.shuffled seed samples
-        else
-          samples
-      match collateStream (α := α) batchSize samples with
-      | .ok batchedSamples => pure batchedSamples
-      | .error message => throw <| IO.userError s!"Data.fromCsv: {message}" }
+      Internal.collateShuffled "Data.fromCsv" batchSize shuffle seed samples }
 
 /--
 Runtime-polymorphic supervised regression dataset from a tensor source.

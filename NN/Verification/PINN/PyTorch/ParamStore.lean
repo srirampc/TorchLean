@@ -26,22 +26,15 @@ checkpoint bridge for PINN verification.
 namespace Import
 namespace PINNPyTorch
 
-open Spec TorchLean
-open TorchLean TorchLean.Tensor
-open Shape
+open Spec TorchLean TorchLean.Tensor Shape
 
 open NN.MLTheory.CROWN
 open NN.MLTheory.CROWN.Graph
 open NN.Verification.PINN
 
-/- Convert a `PinnLayer` into the graph backend's `LinParams` container. -/
 namespace Internal
 
-/--
-Convert a `PinnLayer` into the graph backend's `LinParams` container.
-
-The declaration remains a named helper because exported PINN graph assembly refers to it directly.
--/
+/-- Convert a `PinnLayer` into the graph backend's `LinParams` container. -/
 def layerToLinParams (layer : PinnLayer) : LinParams Float :=
   { m := layer.outDim, n := layer.inDim, w := layer.weights, b := layer.bias }
 

@@ -37,13 +37,15 @@ Core shapes:
 
 In many transformer blocks `dV = d`, and this file uses that common choice for simplicity.
 
-The optional Boolean mask has shape `(nQ × nK)`. In the main spec, masks use the true `-∞`
-semantics: blocked entries receive zero numerator before row normalization, so their attention
-weight is definitionally zero. This is the finite-scalar encoding of the PyTorch pattern
+The optional Boolean mask has shape `(nQ × nK)`. Blocked entries receive zero numerator before
+row normalization. Over real scalars with a nonzero denominator, their attention weight is zero.
+This is the finite-scalar encoding of the PyTorch pattern
 `scores.masked_fill(~mask, -torch.inf)`.
 
-Rows with no allowed entries evaluate to the zero vector. This total convention agrees with the
-native TorchLean and SDPA paths and avoids the undefined `0 / 0` normalization of an empty row.
+Rows with no allowed entries return zero weights directly, avoiding division by zero. This
+guarantees zero weights even for exceptional scores; the final multiplication by `V` still obeys
+the scalar backend's arithmetic. For IEEE scalars, `0 * ∞` can produce NaN. On a partially allowed
+row, exceptional allowed scores can also make the denominator and blocked weights NaN.
 
 
 PyTorch analogy:
@@ -121,8 +123,7 @@ def futureMask (n : Nat) : Tensor Bool [n, n] :=
       Tensor.scalar (decide (i.1 < j.1))))
 
 /-- Bundled inputs and mask needed for scaled dot-product attention. -/
-structure AttentionContext (α : Type) [TorchLean.Storage α] [Context α]
-  [DecidableRel ((· > ·) : α → α → Prop)]
+structure AttentionContext (α : Type) [TorchLean.Storage α]
   (nQ nK dModel : Nat) (h1 : nQ ≠ 0) (h2 : nK ≠ 0) where
   Q : Tensor α [nQ, dModel]
   K : Tensor α [nK, dModel]
@@ -141,15 +142,16 @@ def attentionScaleDenom (dModel : Nat) : α :=
 /-!
 ## Exact hard masking
 
-TorchLean encodes the usual "true `-∞` before softmax" behavior without requiring the tensor scalar
+TorchLean encodes the usual "true `-∞` before softmax" behavior without requiring the
+tensor scalar
 type itself to contain infinities. Instead of replacing blocked logits by a finite sentinel, we form
 stable softmax numerators directly. If `rowMax` is the greatest allowed score in the row, then
 
 `numerator_j = if mask_j then exp(score_j - rowMax) else 0`.
 
-This is exactly what `exp(-∞)=0` contributes to softmax. Blocked positions therefore have exactly
-zero attention mass, which is the property causal proofs need. A row with no allowed positions is
-defined to contain only zeros.
+This models the zero numerator contributed by `exp(-∞)`. The zero-mass conclusion used in causal
+proofs requires the scalar division laws and a nonzero denominator. A row with no allowed positions
+returns zeros directly.
 -/
 
 /-- Maximum allowed score in one hard-masked row, or `none` when every entry is blocked. -/
@@ -173,7 +175,8 @@ ordinary finite-scalar encoding of softmax with true `-∞` masked logits.
 
 The maximum and denominator are computed only over allowed entries. Subtracting the allowed-row
 maximum gives the usual numerically stable softmax formula. If every mask entry is false, the result
-is the zero vector, matching PyTorch SDPA and TorchLean's native CUDA providers.
+is the zero vector, matching PyTorch SDPA and the LibTorch CUDA attention bridge
+(`NN/Backend/LibTorch.lean`).
 -/
 def hardMaskedSoftmaxVecSpec {n : Nat}
     (scores : Tensor α [n])
@@ -202,8 +205,9 @@ def hardMaskedSoftmaxSpec : {s : Shape} → Tensor α s → Tensor Bool s → Te
 
 /-- VJP/JVP helper for a softmax-like row-normalization when the forward weights are already known.
 
-For ordinary softmax, `weights = softmax(scores)`. For hard-masked softmax, blocked entries have
-`weights = 0`, and the same formula gives zero gradient through blocked logits:
+For ordinary softmax, `weights = softmax(scores)`. For hard-masked softmax over real scalars with
+`weights = 0` at blocked entries, the same formula gives zero gradient through blocked logits.
+Exceptional floating-point operands need not satisfy that zero-product conclusion:
 
 `dScores = weights ⊙ (dWeights - Σⱼ dWeightsⱼ * weightsⱼ)`.
 -/
@@ -236,9 +240,9 @@ Mask convention:
 
 `mask[i,j] = true` means "this key position is allowed", and `false` means "mask it out".
 
-For unmasked attention, each attention row sums to `1`. A masked row with at least one allowed key
-has the same normalization. A fully blocked row is defined to have all-zero weights, matching
-PyTorch SDPA and avoiding a `0/0` result.
+Over real scalars, each unmasked attention row sums to `1`; a masked row with at least one allowed
+key has the same normalization. These equalities are not promised for arbitrary numeric contexts.
+A fully blocked row returns all-zero weights directly, avoiding a `0/0` result.
 
 PyTorch analogy: `torch.softmax(scores.masked_fill(~mask, -torch.inf), dim=-1)` row-wise, then a
 final matrix multiply by `V`.
@@ -263,8 +267,8 @@ Returns `(dQ, dK, dV)` given an upstream gradient `dOut`.
 We recompute the forward intermediates locally so this spec stays self-contained and does not rely
 on a global tape.
 
-For masked calls, this is the VJP for true hard masking. Blocked logits have zero forward weight,
-and `softmaxBackwardFromWeightsSpec` therefore gives zero gradient through those blocked positions.
+Over real scalars, masked calls use the VJP for hard masking: blocked logits have zero forward
+weight and therefore zero gradient. The executable formula retains backend exception behavior.
  -/
 def scaledDotProductAttentionBackward
   {nQ nK dModel : Nat} {h1 : nQ ≠ 0} {h2 : nK ≠ 0}
@@ -285,8 +289,7 @@ def scaledDotProductAttentionBackward
   let dAttentionWeights := matMulSpec dOut (swapAdjacentAxes ctx.V 0)
   let dV := matMulSpec (swapAdjacentAxes attentionWeights 0) dOut
 
-  -- Backprop through row normalization. Hard-masked blocked entries already have zero weight, so
-  -- their score gradients are zero by the formula.
+  -- Backprop through row normalization using the forward weights.
   let dScaledScores := softmaxBackwardFromWeightsSpec attentionWeights dAttentionWeights
 
   -- Backprop through scaling: `scaledScores = scores * (1 / scale)`.
@@ -305,8 +308,9 @@ This differentiates the pure attention equation
 
 `Out = softmax(mask(Q Kᵀ / sqrt(d))) V`
 
-in the direction `(dQ,dK,dV)`. For hard-masked calls, blocked logits have zero forward weight, so
-their tangent contribution is zero in `softmaxBackwardFromWeightsSpec`. The row-wise softmax
+in the direction `(dQ,dK,dV)`. Over real scalars, hard-masked blocked logits have zero
+forward weight,
+so their tangent contribution is zero in `softmaxBackwardFromWeightsSpec`. The row-wise softmax
 Jacobian is symmetric, so the same formula serves as both VJP and JVP once the forward weights are
 known.
 -/
@@ -371,7 +375,7 @@ The feature coordinate is interpreted as `(head, coordinate-within-head)`: first
 `(numHeads, n, headDim)` would preserve the wrong row-major coordinate order.
 -/
   def splitHeadsSpec
-    {α : Type} [TorchLean.Storage α] [Context α]
+    {α : Type} [TorchLean.Storage α]
     {n dModel : Nat}
   (x : Tensor α [n, dModel])
   (numHeads headDim : Nat)
@@ -396,7 +400,7 @@ Implementation detail:
 2. `reshapeSpec` flattens the final two axes into `(n, numHeads * headDim)`.
 -/
   def combineHeadsSpec
-    {α : Type} [TorchLean.Storage α] [Context α]
+    {α : Type} [TorchLean.Storage α]
     {n numHeads headDim : Nat}
     (heads : Tensor α [numHeads, n, headDim]) :
     Tensor α [n, (numHeads * headDim)] :=
@@ -457,10 +461,9 @@ High-level structure:
 /--
 Parameter gradients for multi-head attention: one per projection matrix.
 
-The record lives here, beside the backward pass that produces it, rather than in the transformer
-model file where it was originally declared. All four fields are named after the corresponding field
-of `MultiHeadAttention`, so `{ queryWeight, keyWeight, valueWeight, outputWeight }` works with the
-anonymous constructor at every call site.
+The record lives beside the backward pass that produces it. All four fields are named after the
+corresponding field of `MultiHeadAttention`, so `{ queryWeight, keyWeight, valueWeight,
+outputWeight }` works with the anonymous constructor at every call site.
 
 PyTorch analogue: the `.grad` of `nn.MultiheadAttention.in_proj_weight` split into its three blocks,
 plus `out_proj.weight.grad`.
@@ -669,52 +672,5 @@ def selfAttention
   let ctx : AttentionContext α n n projDim h1 h1 :=
     { Q := Q, K := K, V := V, mask := none }
   exact matMulSpec (scaledDotProductAttention ctx) Wo
-
-/-- Cross-attention between two sequences.
-
-`query` is length `n1` and attends to `key/value` of length `n2`.
-
-PyTorch analogue: the attention block in a Transformer decoder layer (`nn.MultiheadAttention`
-with distinct query and key/value inputs).
--/
-def crossAttention {α : Type} [TorchLean.Storage α] [Context α]
-  [DecidableRel ((· > ·) : α → α → Prop)]
-  {n1 n2 dModel projDim : Nat}
-  (query : Tensor α [n1, dModel])
-  (key : Tensor α [n2, dModel])
-  (value : Tensor α [n2, dModel])
-  (Wq : Tensor α [dModel, projDim])
-  (Wk : Tensor α [dModel, projDim])
-  (Wv : Tensor α [dModel, projDim])
-  (Wo : Tensor α [projDim, dModel])
-  (h1 : n1 ≠ 0) (h2 : n2 ≠ 0) :
-  Tensor α [n1, dModel] :=
-  let Q := matMulSpec query Wq
-  let K := matMulSpec key Wk
-  let V := matMulSpec value Wv
-  let ctx : AttentionContext α n1 n2 projDim h1 h2 :=
-    { Q := Q, K := K, V := V, mask := none }
-  let attention := scaledDotProductAttention ctx
-  matMulSpec attention Wo
-
-/-- Sparse attention using a Boolean attention pattern. -/
-def sparseAttention {α : Type} [TorchLean.Storage α] [Context α]
-  [DecidableRel ((· > ·) : α → α → Prop)]
-  {n dModel projDim : Nat}
-  (x : Tensor α [n, dModel])
-  (sparsityPattern : Tensor Bool [n, n])
-  (Wq : Tensor α [dModel, projDim])
-  (Wk : Tensor α [dModel, projDim])
-  (Wv : Tensor α [dModel, projDim])
-  (Wo : Tensor α [projDim, dModel])
-  (h1 : n ≠ 0) :
-  Tensor α [n, dModel] :=
-  let Q := matMulSpec x Wq
-  let K := matMulSpec x Wk
-  let V := matMulSpec x Wv
-  let ctx : AttentionContext α n n projDim h1 h1 :=
-    { Q := Q, K := K, V := V, mask := sparsityPattern }
-  let attention := scaledDotProductAttention ctx
-  matMulSpec attention Wo
 
 end Spec

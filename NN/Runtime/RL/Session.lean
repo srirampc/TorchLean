@@ -19,7 +19,7 @@ TorchLean supports two “sources of experience”:
 To avoid duplicating rollout/data-collection infrastructure per example or per algorithm, this
 module defines a small **unified session interface**:
 
-- it is stateful (has a session state type `Sess`),
+- it is stateful (has a session state type `State`),
 - it exposes the current observation, and
 - it steps with a discrete `Fin nActions` action and returns a fully-observed, contract-checked
   `Runtime.RL.Boundary.Transition`.
@@ -59,13 +59,13 @@ The intention is that `stepChecked`:
 -/
 structure CheckedSession (obsShape : Shape) (nActions : Nat) where
   /-- Session state type. -/
-  Sess : Type
+  State : Type
   /-- Initialize a fresh session (typically a reset). -/
-  start : IO Sess
+  start : IO State
   /-- Read the current observation (before taking an action). -/
-  observe : Sess → Tensor Float obsShape
+  observe : State → Tensor Float obsShape
   /-- One checked step. -/
-  stepChecked : Sess → Fin nActions → IO (Boundary.Transition obsShape nActions × Sess)
+  stepChecked : State → Fin nActions → IO (Boundary.Transition obsShape nActions × State)
 
 namespace CheckedSession
 
@@ -85,7 +85,7 @@ def gymnasium {obsShape : Shape} {nActions : Nat}
     (seed? : Option Nat := none)
     (resetOnDone : Bool := true) :
     CheckedSession obsShape nActions :=
-  { Sess := Gymnasium.Session obsShape nActions
+  { State := Gymnasium.Session obsShape nActions
     start :=
       Gymnasium.Session.start (obsShape := obsShape) (nActions := nActions) gym (seed? := seed?)
     observe := fun s => s.observation
@@ -105,18 +105,16 @@ def ofEnv {State : Type} {obsShape : Shape} {nActions : Nat}
     (contract : Boundary.Contract obsShape nActions)
     (resetOnDone : Bool := true) :
     CheckedSession obsShape nActions :=
-  { Sess := State
+  { State := State
     start := pure env.initialState
     observe := env.observe
     stepChecked := fun st a => do
       let obs : Tensor Float obsShape := env.observe st
       let out := env.step st a
       let nextObs : Tensor Float obsShape := env.observe out.state
-      let tr ←
-        match Boundary.checkTransitionFin (obsShape := obsShape) (nActions := nActions) contract
-            obs nextObs a out.reward out.terminated out.truncated with
-        | .ok t => pure t
-        | .error e => throw <| IO.userError e
+      let tr ← IO.ofExcept (Boundary.checkTransitionFin
+        (obsShape := obsShape) (nActions := nActions)
+        contract obs nextObs a out.reward out.terminated out.truncated)
       let done : Bool := Boundary.Transition.done tr
       let st' :=
         if resetOnDone && done then

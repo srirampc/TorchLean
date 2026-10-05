@@ -13,7 +13,7 @@ public import NN.Verification.PINN.Core
 
 Derivative-residual regression test for the PINN certificate pipeline.
 
-This checks that Lean's `runScalarSecondDerivative` enclosure contains each derivative-residual
+This checks that Lean's `runSecondDirectionalDerivative` enclosure contains each derivative-residual
 interval stored in the Python-produced certificate. Equality is neither required nor expected:
 the executable CROWN pass may use a coarser sound relaxation than the certificate producer.
 
@@ -58,7 +58,7 @@ def run : IO Unit := do
       let ps := seedInput basePs center config.radius
       let boxes := runIBP (α:=Float) g ps
       let d1 := runScalarDerivative (α:=Float) g ps boxes
-      let d2 := runScalarSecondDerivative (α:=Float) g ps boxes d1
+      let d2 := runSecondDirectionalDerivative (α:=Float) g ps boxes d1
       let some d2B := d2[5]! | throw <| IO.userError "No d2 box at output"
       let d2lo := TorchLean.Tensor.sumSpec d2B.lo
       let d2hi := TorchLean.Tensor.sumSpec d2B.hi

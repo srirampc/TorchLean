@@ -7,7 +7,6 @@ module
 
 public meta import NN.Tactic.Einops.Report.Analysis.Common
 public import NN.Tactic.Einops.Report.Analysis.Common
-import Mathlib.Algebra.Order.Field.Basic
 
 /-!
 # Symbolic reports

@@ -6,7 +6,7 @@ Authors: TorchLean Team
 
 module
 
-public import NN.Runtime.Autograd.Engine.Cuda.Ops
+public import NN.Runtime.Autograd.Engine.LibTorch.Ops
 public import NN.Tensor
 public import NN.Tests.Runtime.Cuda.Utils
 
@@ -14,11 +14,10 @@ public import NN.Tests.Runtime.Cuda.Utils
 # CUDA Kernel Coverage: Transposed Convolution
 
 Compares CPU eager tape with CUDA eager tape for the same rank-polymorphic `conv_transpose`
-operation at spatial ranks two and three.
+operation at spatial ranks one, two and three.
 
-Both cases check forward output and gradients (including `dInput`) via `backwardDenseAll`.
-Inputs are small so stub-mode remains lightweight and float64/float32 roundoff differences stay
-limited.
+The nonempty cases check forward output and gradients (including `dInput`) via `backwardDenseAll`.
+Inputs are small so float64/float32 roundoff differences stay limited.
 -/
 
 @[expose] public section
@@ -113,25 +112,26 @@ def runPlanarFixture : IO Unit := do
   let dXCpu ← Utils.cpuGrad (s := inputShape2) gradsCpu xId
 
   -- CUDA tape
-  let t0c : Runtime.Autograd.Cuda.Tape := Runtime.Autograd.Cuda.Tape.empty
-  let (t1c, kIdc) := Runtime.Autograd.Cuda.Tape.leaf (t := t0c) (Utils.tensorToAnyBuffer kernel2)
+  let t0c : Runtime.Autograd.LibTorch.Tape := Runtime.Autograd.LibTorch.Tape.empty
+  let (t1c, kIdc) := Runtime.Autograd.LibTorch.Tape.leaf (t := t0c)
+    (Utils.tensorToAnyBuffer kernel2)
     (name := some "kernel")
-  let (t2c, bIdc) := Runtime.Autograd.Cuda.Tape.leaf (t := t1c) (Utils.tensorToAnyBuffer bias2)
+  let (t2c, bIdc) := Runtime.Autograd.LibTorch.Tape.leaf (t := t1c) (Utils.tensorToAnyBuffer bias2)
     (name := some "bias")
-  let (t3c, xIdc) := Runtime.Autograd.Cuda.Tape.leaf (t := t2c) (Utils.tensorToAnyBuffer input2)
+  let (t3c, xIdc) := Runtime.Autograd.LibTorch.Tape.leaf (t := t2c) (Utils.tensorToAnyBuffer input2)
     (name := some "input")
   let (t4c, yIdc) ← Utils.okOrThrow
-    (Runtime.Autograd.Cuda.Tape.convTranspose (t := t3c)
+    (Runtime.Autograd.LibTorch.Tape.convTranspose (t := t3c)
       (d := d2) (inC := inC2) (outC := outC2)
       (kernel := kernel2Dims) (stride := stride2Dims) (padding := padding2Dims)
       (inSpatial := inSpatial2Dims)
       kIdc bIdc xIdc)
   let yCuda ← Utils.cudaValue (s := outShape2) t4c yIdc
-  let seedCuda : Runtime.Autograd.Cuda.AnyBuffer :=
+  let seedCuda : Runtime.Autograd.LibTorch.AnyBuffer :=
     { s := outShape2
-      buf := Runtime.Autograd.Cuda.Buffer.full (UInt32.ofNat (Spec.Shape.size outShape2)) 1.0 }
+      buf := Runtime.Autograd.LibTorch.Buffer.full (UInt32.ofNat (Spec.Shape.size outShape2)) 1.0 }
   let gradsCuda ← Utils.okOrThrow
-    (Runtime.Autograd.Cuda.Tape.backwardDenseAll (t := t4c) yIdc seedCuda)
+    (Runtime.Autograd.LibTorch.Tape.backwardDenseAll (t := t4c) yIdc seedCuda)
   let dKCuda ← Utils.cudaGrad (s := kernelShape2) gradsCuda kIdc
   let dBCuda ← Utils.cudaGrad (s := [outC2]) gradsCuda bIdc
   let dXCuda ← Utils.cudaGrad (s := inputShape2) gradsCuda xIdc
@@ -227,25 +227,26 @@ def runVolumetricFixture : IO Unit := do
   let dXCpu ← Utils.cpuGrad (s := inputShape3) gradsCpu xId
 
   -- CUDA tape
-  let t0c : Runtime.Autograd.Cuda.Tape := Runtime.Autograd.Cuda.Tape.empty
-  let (t1c, kIdc) := Runtime.Autograd.Cuda.Tape.leaf (t := t0c) (Utils.tensorToAnyBuffer kernel3)
+  let t0c : Runtime.Autograd.LibTorch.Tape := Runtime.Autograd.LibTorch.Tape.empty
+  let (t1c, kIdc) := Runtime.Autograd.LibTorch.Tape.leaf (t := t0c)
+    (Utils.tensorToAnyBuffer kernel3)
     (name := some "kernel")
-  let (t2c, bIdc) := Runtime.Autograd.Cuda.Tape.leaf (t := t1c) (Utils.tensorToAnyBuffer bias3)
+  let (t2c, bIdc) := Runtime.Autograd.LibTorch.Tape.leaf (t := t1c) (Utils.tensorToAnyBuffer bias3)
     (name := some "bias")
-  let (t3c, xIdc) := Runtime.Autograd.Cuda.Tape.leaf (t := t2c) (Utils.tensorToAnyBuffer input3)
+  let (t3c, xIdc) := Runtime.Autograd.LibTorch.Tape.leaf (t := t2c) (Utils.tensorToAnyBuffer input3)
     (name := some "input")
   let (t4c, yIdc) ← Utils.okOrThrow
-    (Runtime.Autograd.Cuda.Tape.convTranspose (t := t3c)
+    (Runtime.Autograd.LibTorch.Tape.convTranspose (t := t3c)
       (d := d3) (inC := inC3) (outC := outC3)
       (kernel := kernel3Dims) (stride := stride3Dims) (padding := padding3Dims)
       (inSpatial := inSpatial3Dims)
       kIdc bIdc xIdc)
   let yCuda ← Utils.cudaValue (s := outShape3) t4c yIdc
-  let seedCuda : Runtime.Autograd.Cuda.AnyBuffer :=
+  let seedCuda : Runtime.Autograd.LibTorch.AnyBuffer :=
     { s := outShape3
-      buf := Runtime.Autograd.Cuda.Buffer.full (UInt32.ofNat (Spec.Shape.size outShape3)) 1.0 }
+      buf := Runtime.Autograd.LibTorch.Buffer.full (UInt32.ofNat (Spec.Shape.size outShape3)) 1.0 }
   let gradsCuda ← Utils.okOrThrow
-    (Runtime.Autograd.Cuda.Tape.backwardDenseAll (t := t4c) yIdc seedCuda)
+    (Runtime.Autograd.LibTorch.Tape.backwardDenseAll (t := t4c) yIdc seedCuda)
   let dKCuda ← Utils.cudaGrad (s := kernelShape3) gradsCuda kIdc
   let dBCuda ← Utils.cudaGrad (s := [outC3]) gradsCuda bIdc
   let dXCuda ← Utils.cudaGrad (s := inputShape3) gradsCuda xIdc
@@ -265,7 +266,7 @@ def runSaturatedOutputGeometry : IO Unit := do
     (Tensor.from #[1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]).reshape [1, 1, 3, 3]
       (by dsimp; decide)
   let bias : Tensor Float [1] := (Tensor.from #[0.0]).reshape [1] (by dsimp; decide)
-  let (t1, kernelId) := Runtime.Autograd.Cuda.Tape.empty.leaf (Utils.tensorToAnyBuffer kernel)
+  let (t1, kernelId) := Runtime.Autograd.LibTorch.Tape.empty.leaf (Utils.tensorToAnyBuffer kernel)
   let (t2, biasId) := t1.leaf (Utils.tensorToAnyBuffer bias)
   let (t3, inputId) := t2.leaf (Utils.tensorToAnyBuffer input)
   let inSpatial : TorchLean.Tensor Nat [2] := [1, 1]
@@ -273,15 +274,27 @@ def runSaturatedOutputGeometry : IO Unit := do
   let strideDims : TorchLean.Tensor Nat [2] := [1, 1]
   let paddingDims : TorchLean.Tensor Nat [2] := [2, 2]
   let (t4, outputId) ← Utils.okOrThrow
-    (Runtime.Autograd.Cuda.Tape.convTranspose (t := t3)
+    (Runtime.Autograd.LibTorch.Tape.convTranspose (t := t3)
       (d := 2) (inC := 1) (outC := 1) (inSpatial := inSpatial)
       (kernel := kernelDims) (stride := strideDims) (padding := paddingDims)
       kernelId biasId inputId)
   let emptyShape : Shape := [1, 0, 0]
   let output ← Utils.okOrThrow <|
-    Runtime.Autograd.Cuda.Tape.requireValue t4 outputId emptyShape
-  unless Runtime.Autograd.Cuda.Buffer.size output = 0 do
+    Runtime.Autograd.LibTorch.Tape.requireValue t4 outputId emptyShape
+  unless Runtime.Autograd.LibTorch.Buffer.size output = 0 do
     throw <| IO.userError "conv_transpose excessive padding produced a nonempty buffer"
+
+  let emptySeed := Utils.tensorToAnyBuffer (Tensor.full emptyShape (0.0 : Float))
+  let gradients ← Utils.okOrThrow <|
+    Runtime.Autograd.LibTorch.Tape.backwardDenseAll t4 outputId emptySeed
+  Utils.assertTensorApprox "empty conv_transpose dKernel"
+    (← Utils.cudaGrad (s := [1, 1, 3, 3]) gradients kernelId)
+    (Tensor.full [1, 1, 3, 3] 0.0) (tol := 0)
+  Utils.assertTensorApprox "empty conv_transpose dBias"
+    (← Utils.cudaGrad (s := [1]) gradients biasId) (Tensor.full [1] 0.0) (tol := 0)
+  Utils.assertTensorApprox "empty conv_transpose dInput"
+    (← Utils.cudaGrad (s := [1, 1, 1]) gradients inputId)
+    (Tensor.full [1, 1, 1] 0.0) (tol := 0)
 
   let inSpatial1 : TorchLean.Tensor Nat [1] := [1]
   let kernelDims1 : TorchLean.Tensor Nat [1] := [3]
@@ -291,23 +304,77 @@ def runSaturatedOutputGeometry : IO Unit := do
   let kernelNd : Tensor Float [1, 1, 3] :=
     (Tensor.from #[1.0, 1.0, 1.0]).reshape [1, 1, 3] (by dsimp; decide)
   let (tn1, kernelNdId) :=
-    Runtime.Autograd.Cuda.Tape.empty.leaf (Utils.tensorToAnyBuffer kernelNd)
+    Runtime.Autograd.LibTorch.Tape.empty.leaf (Utils.tensorToAnyBuffer kernelNd)
   let (tn2, biasNdId) := tn1.leaf (Utils.tensorToAnyBuffer bias)
   let (tn3, inputNdId) := tn2.leaf (Utils.tensorToAnyBuffer inputNd)
   let (tn4, outputNdId) ← Utils.okOrThrow
-    (Runtime.Autograd.Cuda.Tape.convTranspose (t := tn3)
+    (Runtime.Autograd.LibTorch.Tape.convTranspose (t := tn3)
       (d := 1) (inC := 1) (outC := 1) (inSpatial := inSpatial1) (kernel := kernelDims1)
       (stride := strideDims1) (padding := paddingDims1) kernelNdId biasNdId inputNdId)
   let emptyNdShape : Shape := Shape.ofList [1, 0]
   let outputNd ← Utils.okOrThrow <|
-    Runtime.Autograd.Cuda.Tape.requireValue tn4 outputNdId emptyNdShape
-  unless Runtime.Autograd.Cuda.Buffer.size outputNd = 0 do
+    Runtime.Autograd.LibTorch.Tape.requireValue tn4 outputNdId emptyNdShape
+  unless Runtime.Autograd.LibTorch.Buffer.size outputNd = 0 do
     throw <| IO.userError "spatial conv_transpose excessive padding produced a nonempty buffer"
+
+  let emptyNdSeed := Utils.tensorToAnyBuffer (Tensor.full emptyNdShape (0.0 : Float))
+  let ndGradients ← Utils.okOrThrow <|
+    Runtime.Autograd.LibTorch.Tape.backwardDenseAll tn4 outputNdId emptyNdSeed
+  Utils.assertTensorApprox "empty spatial conv_transpose dKernel"
+    (← Utils.cudaGrad (s := [1, 1, 3]) ndGradients kernelNdId)
+    (Tensor.full [1, 1, 3] 0.0) (tol := 0)
+  Utils.assertTensorApprox "empty spatial conv_transpose dBias"
+    (← Utils.cudaGrad (s := [1]) ndGradients biasNdId) (Tensor.full [1] 0.0) (tol := 0)
+  Utils.assertTensorApprox "empty spatial conv_transpose dInput"
+    (← Utils.cudaGrad (s := [1, 1]) ndGradients inputNdId)
+    (Tensor.full [1, 1] 0.0) (tol := 0)
+
+/--
+Distinct channels, strided windows and nonuniform cotangents expose channel/axis permutations.
+-/
+def Internal.runStridedChannels : IO Unit := do
+  let spatial : Tensor Nat [1] := [2]
+  let window : Tensor Nat [1] := [2]
+  let stride : Tensor Nat [1] := [2]
+  let padding : Tensor Nat [1] := [0]
+  let x : Tensor Float [2, 2] := [[1.0, -2.0], [0.5, 3.0]]
+  let k : Tensor Float [2, 2, 2] :=
+    [[[0.5, -1.0], [2.0, 0.25]], [[-0.5, 0.75], [1.0, -2.0]]]
+  let b : Tensor Float [2] := [0.25, -0.5]
+  let seed : Tensor Float [2, 4] := [[1.0, -2.0, 3.0, 4.0], [0.5, 2.0, -1.0, 3.0]]
+  let (cpu1, ck) := Tape.empty.leaf k
+  let (cpu2, cb) := cpu1.leaf b
+  let (cpu3, cx) := cpu2.leaf x
+  let (cpu, cy) ← Utils.okOrThrow <| Tape.convTranspose (t := cpu3)
+    (inC := 2) (outC := 2) (kernel := window) (stride := stride)
+    (padding := padding) (inSpatial := spatial) ck cb cx
+  let cpuGradients ← Utils.okOrThrow <|
+    Tape.backwardDenseAll cpu cy (Spec.SomeTensor.ofTensor seed)
+  let (gpu1, gk) := Runtime.Autograd.LibTorch.Tape.empty.leaf (Utils.tensorToAnyBuffer k)
+  let (gpu2, gb) := gpu1.leaf (Utils.tensorToAnyBuffer b)
+  let (gpu3, gx) := gpu2.leaf (Utils.tensorToAnyBuffer x)
+  let (gpu, gy) ← Utils.okOrThrow <| Runtime.Autograd.LibTorch.Tape.convTranspose (t := gpu3)
+    (inC := 2) (outC := 2) (kernel := window) (stride := stride)
+    (padding := padding) (inSpatial := spatial) gk gb gx
+  let gpuGradients ← Utils.okOrThrow <|
+    Runtime.Autograd.LibTorch.Tape.backwardDenseAll gpu gy (Utils.tensorToAnyBuffer seed)
+  Utils.assertTensorApprox "strided multichannel transposed conv output"
+    (← Utils.cudaValue (s := [2, 4]) gpu gy) (← Utils.cpuValue cpu cy) (tol := 5e-3)
+  Utils.assertTensorApprox "strided multichannel transposed conv dKernel"
+    (← Utils.cudaGrad (s := [2, 2, 2]) gpuGradients gk)
+    (← Utils.cpuGrad cpuGradients ck) (tol := 5e-3)
+  Utils.assertTensorApprox "strided multichannel transposed conv dBias"
+    (← Utils.cudaGrad (s := [2]) gpuGradients gb)
+    (← Utils.cpuGrad cpuGradients cb) (tol := 5e-3)
+  Utils.assertTensorApprox "strided multichannel transposed conv dInput"
+    (← Utils.cudaGrad (s := [2, 2]) gpuGradients gx)
+    (← Utils.cpuGrad cpuGradients cx) (tol := 5e-3)
 
 def run : IO Unit := do
   IO.println "=== CUDA kernel coverage: conv_transpose ==="
   runPlanarFixture
   runVolumetricFixture
+  Internal.runStridedChannels
   runSaturatedOutputGeometry
 
 end ConvTranspose

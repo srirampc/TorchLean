@@ -62,7 +62,7 @@ choose subgradient conventions at kinks; TorchLean can model those conventions, 
 The larger block proofs are built by composing the tape-node theorems:
 
 * `DGraph.append`, the reusable graph-composition adapter for globally proof-carrying SSA graphs,
-  plus `graphFDerivCorrectAtOfCorrect` for reading such graphs at a point before composing with
+  plus `GraphFDerivCorrect.at` for reading such graphs at a point before composing with
   domain-sensitive blocks;
 * `DGraph.weakenContext`, the reusable adapter for running a proved graph while carrying extra
   unused inputs such as LayerNorm `gamma`/`beta` through an attention or FFN graph;

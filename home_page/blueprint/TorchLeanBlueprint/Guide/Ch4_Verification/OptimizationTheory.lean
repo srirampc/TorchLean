@@ -136,7 +136,7 @@ $`p_{t+1}=0.95p_t-0.1`. Its first three values are $`0.85`, $`0.7075`, and $`0.5
 The shrinkage acts on the current parameter each time; it is not one subtraction of $`0.05`
 repeated independently of the parameter.
 
-The corresponding PyTorch experiment uses double precision to match Lean's `Float` format
+The recorded PyTorch comparison uses double precision to match Lean's `Float` format
 {Informal.citep pytorch2019}[]:
 
 ```
@@ -307,11 +307,11 @@ agreement over a stream of gradients. Concrete optimizer equations remain in
 `NN.Runtime.Optim.Optimizers`, while optimizer-specific theory files establish algebraic invariants
 and comparisons that are not restatements of those definitions.
 
-GaLore-style projected SGD follows the same rule. The executable projection interface and the
-identity-projection agreement theorem live together in
-{src "NN/Runtime/Optim/Optimizers.lean"}[NN.Runtime.Optim.Optimizers].
-The theorem says that choosing the identity projector recovers ordinary SGD; it does not claim that
-an arbitrary learned low-rank projector preserves the update.
+GaLore-style projected SGD follows the same rule. The executable projection interface lives in
+{src "NN/Runtime/Optim/Optimizers.lean"}[NN.Runtime.Optim.Optimizers]. Choosing the identity
+projector
+recovers the ordinary SGD parameter update by definition; there is no separate agreement theorem.
+An arbitrary learned low-rank projector needs its own contract.
 
 # Optimizer Extension Points: Muon And GaLore-Style Updates
 
@@ -332,7 +332,7 @@ $$`Q^\top Q = I`
 
 or an approximate Gram-residual bound
 
-$$`\|Q^\top Q-I\|_\infty \le \varepsilon.`
+$$`\max_{i,j}|(Q^\top Q-I)_{ij}| \le \varepsilon.`
 
 Those two predicates, and the residual matrix that separates them, are the whole vocabulary:
 
@@ -377,7 +377,7 @@ The Newton-Schulz orthogonalizer forms the right Gram matrix $`G=Q^\top Q` and e
 $`aQ+b\,QG+c\,(QG)G` repeatedly. Over the reals this is the same odd polynomial as the left-Gram
 form; the two evaluation orders need not agree in floating arithmetic. Compare the Muon
 coefficient set below with the classical cubic $`\tfrac32 Q-\tfrac12 QQ^\top Q`.
-The exact fixed-point theorem
+The exact Gram-preservation theorem
 in the library, `newtonSchulzStep_hasExactColumnGram_of_exact_column_gram_of_sum_square_one`, needs
 $`(a+b+c)^2=1`, so start by asking whether each coefficient set even qualifies:
 
@@ -416,7 +416,7 @@ def otScaled : Tensor Float [2, 2] :=
    [0.0, 0.6666666666666666]]
 
 /-- Largest absolute entry of `columnGramResidual`, the
-$`\|\cdot\|_\infty` that `HasApproxColumnGram` bounds. -/
+entrywise maximum that `HasApproxColumnGram` bounds. -/
 def otResidualMax {m n : ℕ}
     (Q : Tensor Float [m, n]) : Float :=
   (columnGramResidual Q).foldl
@@ -511,7 +511,7 @@ singular value $`s`, the matrix polynomial applies $`s\mapsto as+bs^3+cs^5` in r
 arithmetic. For the cubic coefficients, this is $`s\mapsto(3s-s^3)/2`, with a fixed point
 at $`s=1`. For large $`s`, the highest-degree term can dominate instead of moving the value
 toward one. Dividing by the Frobenius norm limits the initial singular values, but that alone
-is not a proof of convergence for an arbitrary coefficient choice. The fixed-point theorem
+is not a proof of convergence for an arbitrary coefficient choice. The Gram-preservation theorem
 above answers the narrower algebraic question of what one step does when the Gram matrix is
 already exactly the identity.
 
@@ -524,7 +524,9 @@ separate obligations.
 The
 {src "NN/MLTheory/Optimization/Muon.lean"}[Muon theory file] packages these cases as exact,
 approximate, and checked-backend contracts. QR-backed directions give an exact path under
-positive-pivot hypotheses. Newton-Schulz-style directions give a residual-checked approximate path,
+positive-pivot hypotheses. This QR backend is a noncomputable real-valued specification; a
+floating-point QR kernel would need its own bridge. Newton-Schulz-style directions give a
+residual-checked approximate path,
 together with fixed-point exact statements when the iteration has reached the corresponding
 algebraic condition.
 
@@ -602,7 +604,8 @@ example :
 This case supplies the whole certificate without an unproved backend hypothesis. Its identity
 backend works because the chosen buffer already has a unit column; it does not orthogonalize
 arbitrary gradients or establish convergence. Build the tutorial with
-`lake build NN.Examples.Optimization` and inspect `Concrete.step_certified` in the Infoview.
+`scripts/lake.sh build NN.Examples.Optimization` and inspect `Concrete.step_certified` in the
+Infoview.
 The later wrappers explain how to consume certificates for general QR and Newton–Schulz backends:
 
 ```lean (name := otQrCert)
@@ -651,8 +654,8 @@ name. The runtime object is a projector/lift pair around a base update:
 
 $$`p_{t+1}=p_t-\eta\,\mathrm{lift}(\mathrm{project}(g_t)).`
 
-The current checked baseline says that if the projector is the identity, projected SGD is ordinary
-SGD. A future low-rank projector or refresh policy can optimize memory and matrix structure, but it
+With the identity projector, the projected parameter update is ordinary SGD by definition. A
+future low-rank projector or refresh policy can optimize memory and matrix structure, but it
 has to state its own projection contract instead of being hidden inside the word "optimizer."
 
 This naming is reflected in the trainer API. Standard trainer configs use names such as
@@ -934,8 +937,9 @@ inner product. Applying the convergence theorem still requires a Lipschitz bound
 the step-size hypotheses.
 
 The first-order inequality itself mentions Mathlib's `gradient f x`. To obtain it from a usual
-convex-analysis specification, the same source provides a bridge from `StrongConvexOn` on the
-whole space together with differentiability. This supplies the mathematical justification for
+convex-analysis specification, the same source provides a pointwise bridge from `StrongConvexOn`
+on the whole space and differentiability at the base point. Differentiability everywhere supplies
+the global first-order hypothesis. This supplies the mathematical justification for
 treating the named gradient as the tangent term. Once first-order inequalities are available at
 both $`x` and $`y`, adding them cancels $`f(x)` and $`f(y)`, and the two quadratic terms add to
 $`\mu\|x-y\|^2`. Neither that cancellation nor strong monotonicity supplies the separate
@@ -994,8 +998,10 @@ premises and connect its mutable state to the stated recurrence.
 
 The files behind this chapter:
 
-- {src "NN/MLTheory/Optimization/FirstOrder.lean"}[FirstOrder.lean], the Adam and AdamW update
-  equations and the zero-decay agreement theorem.
+- {src "NN/MLTheory/Optimization/FirstOrder.lean"}[FirstOrder.lean], the zero-decay AdamW/Adam
+  agreement theorem.
+- {src "NN/Runtime/Optim/Optimizers.lean"}[Optimizers.lean], the executable optimizer update
+  equations.
 - {src "NN/MLTheory/Optimization/OptimizerLaws.lean"}[OptimizerLaws.lean], `TensorOptimizer`, the
   packaged optimizers used in the run above, and `StepSpec`.
 - {srcDir "NN/MLTheory/Optimization/Muon"}[the Muon directory], the Gram predicates,

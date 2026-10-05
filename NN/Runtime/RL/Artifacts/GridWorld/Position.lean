@@ -6,7 +6,7 @@ Authors: TorchLean Team
 
 module
 
-public import NN.Runtime.Training.Log -- shake: keep
+public import Lean.Data.Json.Basic
 
 /-!
 # GridWorld Artifact Positions
@@ -22,7 +22,6 @@ namespace Runtime.RL.Artifacts.GridWorld
 
 open Lean
 open Json
-open Runtime.Training.JsonCodec
 
 /-- Encode a GridWorld position `(row, col)` as JSON `[row, col]`. -/
 def posToJson (p : Nat × Nat) : Json :=

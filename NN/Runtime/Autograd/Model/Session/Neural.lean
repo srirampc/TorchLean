@@ -25,6 +25,7 @@ namespace Autograd
 namespace Model
 
 open Spec TorchLean
+open Runtime.Autograd.Torch.Internal (EagerSession)
 open TorchLean TorchLean.Tensor
 
 namespace Session
@@ -169,31 +170,32 @@ def convTranspose {α : Type} [TorchLean.Storage α] (s : Session α) [Context �
         w b x
 
 /--
-Multi-head self-attention (single sequence, single batch).
+Self-attention with shared projections and an optional leading batch dimension.
 
-This is a convenience op used by the transformer examples; it corresponds approximately to the
-forward pass of `torch.nn.MultiheadAttention` in "self-attention" mode.
+Use `batch := none` for `[n, dModel]` or `batch := some b` for `[b, n, dModel]`.
+The session's execution mode selects eager execution or typed-graph recording.
 -/
-def multiHeadAttention {α : Type} [TorchLean.Storage α] (s : Session α) [Context α]
-  [DecidableRel ((· > ·) : α → α → Prop)]
-  {n numHeads dModel headDim : Nat} (h1 : n ≠ 0)
-  (wq : Runtime.Autograd.Torch.TensorRef α [dModel, numHeads * headDim])
-  (wk : Runtime.Autograd.Torch.TensorRef α [dModel, numHeads * headDim])
-  (wv : Runtime.Autograd.Torch.TensorRef α [dModel, numHeads * headDim])
-  (wo : Runtime.Autograd.Torch.TensorRef α [numHeads * headDim, dModel])
-  (x : Runtime.Autograd.Torch.TensorRef α [n, dModel])
-  (mask : Option (Tensor Bool [n, n]) := none) :
-  IO (Runtime.Autograd.Torch.TensorRef α [n, dModel]) := do
+def attention {α : Type} [TorchLean.Storage α] (s : Session α) [Context α]
+    [Runtime.Autograd.Torch.TensorTransfer α]
+    [DecidableRel ((· > ·) : α → α → Prop)]
+    {n numHeads dModel headDim : Nat} (h1 : n ≠ 0)
+    (wq wk wv : Runtime.Autograd.Torch.TensorRef α [dModel, numHeads * headDim])
+    (wo : Runtime.Autograd.Torch.TensorRef α [numHeads * headDim, dModel])
+    (batch : Option Nat := none)
+    (x : Runtime.Autograd.Torch.TensorRef α
+      (match batch with | none => [n, dModel] | some b => [b, n, dModel]))
+    (mask : Option (Tensor Bool [n, n]) := none)
+    (hBatch : batch.getD 1 ≠ 0 := by decide) :
+    IO (Runtime.Autograd.Torch.TensorRef α
+      (match (generalizing := false) batch with
+        | none => [n, dModel] | some b => [b, n, dModel])) :=
   match s.state with
   | .eager sess =>
-      EagerSession.multiHeadAttention (α := α) sess
-        (n := n) (numHeads := numHeads) (dModel := dModel) (headDim := headDim) (h1 := h1)
-        wq wk wv wo x (mask := mask)
+      Runtime.Autograd.Torch.Internal.EagerSession.attention (α := α) sess
+        (batch := batch) h1 wq wk wv wo x (mask := mask) (hBatch := hBatch)
   | .typedGraph sess =>
-      Runtime.Autograd.Torch.Internal.TypedGraphSession.multiHeadAttention (α := α) sess
-        (n := n) (numHeads := numHeads) (dModel := dModel) (headDim := headDim) (h1 := h1)
-        wq wk wv wo x (mask := mask)
-
+      Runtime.Autograd.Torch.Internal.TypedGraphSession.attention (α := α) sess
+        h1 wq wk wv wo (batch := batch) x (mask := mask)
 
 end Session
 

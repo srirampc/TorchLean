@@ -37,8 +37,8 @@ namespace NN.Verification.LiRPA.Cnn
 
 open NN.MLTheory.CROWN
 open NN.MLTheory.CROWN.Graph
-open _root_.Spec _root_.TorchLean
-open _root_.TorchLean.Tensor
+open Spec TorchLean
+open TorchLean.Tensor
 
 /--
 Small fixed graph:
@@ -81,7 +81,9 @@ def seedParamsFloat : ParamStore Float :=
   let inputSpatial : TorchLean.Tensor Nat [2] :=
     Tensor.from #[inH, inW]
   let inShape := Shape.ofList (inC :: Tensor.to inputSpatial (List Nat))
-  let outSpatial := Spec.convOutSpatial inputSpatial kernelShape strides paddings
+  let outSpatial :=
+    Spec.convOutSpatialDilated inputSpatial kernelShape strides (Tensor.full [2] 1)
+      paddings paddings
   let outShape := Shape.ofList (outC :: Tensor.to outSpatial (List Nat))
   let nIn := inShape.size
   let nConv := outShape.size
@@ -89,26 +91,25 @@ def seedParamsFloat : ParamStore Float :=
     Tensor.generate [outC, inC, kH, kW] fun
       | [_, _, i, j] => Float.ofNat (1 + i + j)
       | _ => 0.0
+  -- `ConvSpec` indexes the kernel by the runtime spatial-shape tensor, so the literal kernel is
+  -- transported along the shape equation instead of being rebuilt by `simpa`.
   let kernel :
-      Tensor Float (Shape.ofList (outC :: inC :: Tensor.to kernelShape (List Nat))) := by
-    have hKernelShape : Tensor.to kernelShape (List Nat) = [kH, kW] := by
-      change Tensor.to (Tensor.from #[kH, kW]) (List Nat) = [kH, kW]
-      exact Tensor.to_list_from_array #[kH, kW]
-    simpa [hKernelShape] using kernelValues
+      Tensor Float (Shape.ofList (outC :: inC :: Tensor.to kernelShape (List Nat))) :=
+    Tensor.castShape kernelValues (by
+      change [outC, inC, kH, kW] = outC :: inC :: Tensor.to (Tensor.from #[kH, kW]) (List Nat)
+      rw [Tensor.to_list_from_array])
   let bias : Tensor Float [outC] := Tensor.generate [outC] fun _ => 0.0
   let conv : Spec.ConvSpec 2 inC outC kernelShape strides paddings Float :=
     { kernel := kernel, bias := bias }
   -- Seed input box (center ones, eps)
   let inputCenter : Tensor Float inShape := Tensor.full inShape 1.0
   let eps : Float := 0.1
-  let rad := Tensor.full (α := Float) inShape eps
-  let xB : Box Float inShape :=
-    { lo := Tensor.subSpec inputCenter rad, hi := Tensor.addSpec inputCenter rad }
+  let inFlat := FlatBox.lInfBall inputCenter eps
   let convWeight : Tensor Float [nConv, nIn] :=
     NN.MLTheory.CROWN.convLinearMatrix (α := Float)
-    (inSpatial := inputSpatial) conv
+      (inSpatial := inputSpatial) conv (Tensor.full [2] 1) paddings 1 .scalar
   let convBias : Tensor Float [nConv] :=
-    NN.MLTheory.CROWN.convBiasBroadcast (α := Float) (outSpatial := outSpatial) conv.bias
+    NN.MLTheory.CROWN.convBiasBroadcast (α := Float) (outSpatial := outSpatial) conv.bias .scalar
   -- Linear head 4→2
   let headWeight : Tensor Float [2, nConv] :=
     Tensor.generate [2, nConv] fun
@@ -120,8 +121,6 @@ def seedParamsFloat : ParamStore Float :=
       | _ => 0.0
   let emptyStore : ParamStore Float := {}
   -- set input box
-  let inFlat : FlatBox Float :=
-    { dim := nIn, lo := Tensor.flattenSpec xB.lo, hi := Tensor.flattenSpec xB.hi }
   let withInputBox := emptyStore.seedInputBox 0 inFlat
   -- Store the exact flattened convolution as a linear node.
   let withConvAffine :=
@@ -147,6 +146,6 @@ This is wired into `lake exe verify -- lirpa-cnn [path]`.
 def verifyCert (path : String) : IO Unit := do
   let g := buildGraph
   let ps := seedParamsFloat
-  NN.Verification.IBPCert.checkOrThrow g ps (outId := 3) path
+  NN.Verification.Cert.IBPCert.checkOrThrow g ps (outId := 3) path
 
 end NN.Verification.LiRPA.Cnn

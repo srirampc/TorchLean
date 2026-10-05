@@ -34,25 +34,33 @@ open scoped BigOperators
 noncomputable section
 
 /--
-Package a coordinate function `Fin n → ℝ` as a Euclidean vector `Vec n`.
-
-This is just `(EuclideanSpace.equiv …).symm`, but it is convenient to name in analytic proofs.
--/
-def softmaxVecOfFun {n : Nat} (f : Fin n → ℝ) : Vec n :=
-  (EuclideanSpace.equiv (𝕜 := ℝ) (ι := Fin n)).symm f
-
-/-- Coordinates of `softmaxVecOfFun f` are the values of `f`. -/
-@[simp] theorem softmaxVecOfFun_apply {n : Nat} (f : Fin n → ℝ) (i : Fin n) :
-    softmaxVecOfFun (n := n) f i = f i := by
-  simp [softmaxVecOfFun]
-
-/--
 `sumExp x = ∑ᵢ exp(xᵢ)`.
 
 This is the normalizing denominator in softmax.
 -/
 def sumExp {n : Nat} (x : Vec n) : ℝ :=
   ∑ i : Fin n, Real.exp (x i)
+
+/-- `sumExp x` is strictly positive when the index type is nonempty. -/
+theorem sumExp_pos {n : Nat} (x : Vec (Nat.succ n)) : 0 < sumExp (n := Nat.succ n) x := by
+  simpa [sumExp] using Finset.sum_pos (fun i _ => Real.exp_pos (x i)) Finset.univ_nonempty
+
+/-- Convenience corollary: `sumExp x ≠ 0` (for `n = succ _`). -/
+theorem sumExp_ne_zero {n : Nat} (x : Vec (Nat.succ n)) : sumExp (n := Nat.succ n) x ≠ 0 :=
+  ne_of_gt (sumExp_pos (n := n) x)
+
+/-- The coordinate exponential `x ↦ exp (x j)` has derivative `dx ↦ exp (x j) * dx j`. -/
+theorem hasFDerivAt_exp_apply {n : Nat} (x : Vec n) (j : Fin n) :
+    HasFDerivAt (fun x : Vec n => Real.exp (x j)) (Real.exp (x j) • evalCLM (n := n) j) x := by
+  simpa only [evalCLM_apply] using ((evalCLM (n := n) j).hasFDerivAt (x := x)).exp
+
+/-- `sumExp` has derivative `dx ↦ ∑ j, exp (x j) * dx j`. -/
+theorem hasFDerivAt_sumExp {n : Nat} (x : Vec n) :
+    HasFDerivAt (sumExp (n := n)) (∑ j : Fin n, Real.exp (x j) • evalCLM (n := n) j) x := by
+  change HasFDerivAt (fun y : Vec n => ∑ j : Fin n, Real.exp (y j))
+    (∑ j : Fin n, Real.exp (x j) • evalCLM (n := n) j) x
+  exact HasFDerivAt.fun_sum (u := (Finset.univ : Finset (Fin n)))
+    (fun j _ => hasFDerivAt_exp_apply x j)
 
 /--
 Softmax on Euclidean vectors.
@@ -64,7 +72,7 @@ The `n = 0` branch is the identity on the trivial space.
 -/
 def softmaxVec : {n : Nat} → Vec n → Vec n
   | 0, x => x
-  | Nat.succ n, x => softmaxVecOfFun (n := Nat.succ n) fun i => Real.exp (x i) / sumExp x
+  | Nat.succ n, x => vecOfFun (n := Nat.succ n) fun i => Real.exp (x i) / sumExp x
 
 /--
 The dot-product functional `x ↦ ∑ᵢ yᵢ * xᵢ`, packaged as a continuous linear map.
@@ -95,15 +103,6 @@ def softmaxDerivCLM {n : Nat} (x : Vec n) : Vec n →L[ℝ] Vec n :=
   (euclideanEquiv n).symm.toContinuousLinearMap.comp <|
     ContinuousLinearMap.pi (fun i : Fin n => softmaxDerivCoord (n := n) x i)
 
-/-- Coordinate `i` of a map assembled by `ContinuousLinearMap.pi` is its `i`th component.
-
-Needed because the softmax derivative is built coordinate by coordinate and then bundled; without
-this
-the Jacobian could not be read entrywise. -/
-@[simp] theorem pi_apply_vec {n : Nat} (f : Fin n → Vec n →L[ℝ] ℝ) (x : Vec n) (i : Fin n) :
-    (ContinuousLinearMap.pi f x) i = f i x := by
-  rfl
-
 /--
 Closed-form JVP (directional derivative) for softmax.
 
@@ -114,7 +113,7 @@ def softmaxJvp : {n : Nat} → Vec n → Vec n → Vec n
   | Nat.succ n, x, dx =>
       let y := softmaxVec (n := Nat.succ n) x
       let s : ℝ := dotCLM (n := Nat.succ n) y dx
-      softmaxVecOfFun (n := Nat.succ n) fun i => y i * (dx i - s)
+      vecOfFun (n := Nat.succ n) fun i => y i * (dx i - s)
 
 /-- The closed-form JVP `softmaxJvp` agrees with the CLM derivative `softmaxDerivCLM`. -/
 theorem softmaxJvp_eq_deriv {n : Nat} (x dx : Vec n) :
@@ -141,112 +140,35 @@ This lemma is used to show the VJP can be expressed by reusing the JVP formula.
 -/
 theorem inner_softmaxJvp_comm {n : Nat} (x dx δ : Vec n) :
     inner ℝ (softmaxJvp (n := n) x dx) δ = inner ℝ dx (softmaxJvp (n := n) x δ) := by
-  classical
   cases n with
   | zero =>
       -- all vectors are `0`, so both sides are `0`
       simp [softmaxJvp]
   | succ n =>
-      let y : Vec (Nat.succ n) := softmaxVec (n := Nat.succ n) x
-      let sdx : ℝ := dotCLM (n := Nat.succ n) y dx
-      let sδ : ℝ := dotCLM (n := Nat.succ n) y δ
-      have hsdx : sdx = ∑ i : Fin (Nat.succ n), y i * dx i := by
-        simp [sdx, dotCLM_apply, mul_comm]
-      have hsδ : sδ = ∑ i : Fin (Nat.succ n), y i * δ i := by
-        simp [sδ, dotCLM_apply, mul_comm]
-      calc
-        inner ℝ (softmaxJvp (n := Nat.succ n) x dx) δ
-            = ∑ i : Fin (Nat.succ n), (softmaxJvp (n := Nat.succ n) x dx i) * δ i := by
-                simp [inner_eq_sum_mul]
-        _ = ∑ i : Fin (Nat.succ n), (y i * (dx i - sdx)) * δ i := by
-              simp [softmaxJvp, y, sdx]
-        _ =
-            (∑ i : Fin (Nat.succ n), (y i * dx i) * δ i) - sdx * (∑ i : Fin (Nat.succ n), y i * δ i)
-              := by
-              -- expand and factor the constant `sdx`
-              have hsplit :
-                  (∑ i : Fin (Nat.succ n), (y i * (dx i - sdx)) * δ i)
-                    =
-                  (∑ i : Fin (Nat.succ n), (y i * dx i) * δ i) -
-                    (∑ i : Fin (Nat.succ n), (y i * sdx) * δ i) := by
-                -- pointwise `ring_nf`, then use `sum_sub_distrib`
-                calc
-                  (∑ i : Fin (Nat.succ n), (y i * (dx i - sdx)) * δ i)
-                      =
-                      ∑ i : Fin (Nat.succ n), ((y i * dx i) * δ i - (y i * sdx) * δ i) := by
-                        refine Finset.sum_congr rfl ?_
-                        intro i _hi
-                        ring_nf
-                  _ =
-                      (∑ i : Fin (Nat.succ n), (y i * dx i) * δ i) -
-                        (∑ i : Fin (Nat.succ n), (y i * sdx) * δ i) := by
-                        simp [Finset.sum_sub_distrib]
-              have hfactor :
-                  (∑ i : Fin (Nat.succ n), (y i * sdx) * δ i) = sdx * (∑ i : Fin (Nat.succ n), y i *
-                    δ i) := by
-                calc
-                  (∑ i : Fin (Nat.succ n), (y i * sdx) * δ i)
-                      = ∑ i : Fin (Nat.succ n), sdx * (y i * δ i) := by
-                          refine Finset.sum_congr rfl ?_
-                          intro i _hi
-                          ring_nf
-                  _ = sdx * (∑ i : Fin (Nat.succ n), y i * δ i) := by
-                        simp [Finset.mul_sum]
-              simpa [hfactor] using hsplit
-        _ = (∑ i : Fin (Nat.succ n), (y i * dx i) * δ i) - sdx * sδ := by
-              simp [hsδ]
-        _ = (∑ i : Fin (Nat.succ n), (y i * dx i) * δ i) - sδ * sdx := by
-              ring_nf
-        _ =
-            (∑ i : Fin (Nat.succ n), (y i * dx i) * δ i) -
-              sδ * (∑ i : Fin (Nat.succ n), y i * dx i) := by
-              simp [hsdx]
-        _ = ∑ i : Fin (Nat.succ n), dx i * (y i * (δ i - sδ)) := by
-              -- reverse the previous calculation for the RHS form
-              have hsplit :
-                  (∑ i : Fin (Nat.succ n), dx i * (y i * (δ i - sδ)))
-                    =
-                  (∑ i : Fin (Nat.succ n), (y i * dx i) * δ i) - sδ * (∑ i : Fin (Nat.succ n), y i *
-                    dx i) := by
-                -- expand and factor the constant `sδ`
-                have hsplit0 :
-                    (∑ i : Fin (Nat.succ n), dx i * (y i * (δ i - sδ)))
-                      =
-                    (∑ i : Fin (Nat.succ n), (y i * dx i) * δ i) -
-                      (∑ i : Fin (Nat.succ n), (y i * dx i) * sδ) := by
-                  calc
-                    (∑ i : Fin (Nat.succ n), dx i * (y i * (δ i - sδ)))
-                        =
-                        ∑ i : Fin (Nat.succ n), ((y i * dx i) * δ i - (y i * dx i) * sδ) := by
-                          refine Finset.sum_congr rfl ?_
-                          intro i _hi
-                          ring_nf
-                    _ =
-                        (∑ i : Fin (Nat.succ n), (y i * dx i) * δ i) -
-                          (∑ i : Fin (Nat.succ n), (y i * dx i) * sδ) := by
-                          simp [Finset.sum_sub_distrib]
-                have hfactor0 :
-                    (∑ i : Fin (Nat.succ n), (y i * dx i) * sδ) = sδ * (∑ i : Fin (Nat.succ n), y i
-                      * dx i) := by
-                  calc
-                    (∑ i : Fin (Nat.succ n), (y i * dx i) * sδ)
-                        = ∑ i : Fin (Nat.succ n), sδ * (y i * dx i) := by
-                            refine Finset.sum_congr rfl ?_
-                            intro i _hi
-                            ring_nf
-                    _ = sδ * (∑ i : Fin (Nat.succ n), y i * dx i) := by
-                          simp [Finset.mul_sum]
-                simpa [hfactor0] using hsplit0
-              simpa using hsplit.symm
-        _ = ∑ i : Fin (Nat.succ n), dx i * (softmaxJvp (n := Nat.succ n) x δ i) := by
-              simp [softmaxJvp, y, sδ, mul_comm]
-        _ = inner ℝ dx (softmaxJvp (n := Nat.succ n) x δ) := by
-              simp [inner_eq_sum_mul]
+      rw [inner_eq_sum_mul, inner_eq_sum_mul]
+      simp only [softmaxJvp, vecOfFun_apply, dotCLM_apply]
+      set y := softmaxVec x
+      -- Both sides expand to `∑ yᵢ dxᵢ δᵢ - (∑ yⱼ dxⱼ) (∑ yᵢ δᵢ)`.
+      have hleft :
+          (∑ i, y i * (dx i - ∑ j, y j * dx j) * δ i) =
+            (∑ i, y i * dx i * δ i) - (∑ j, y j * dx j) * ∑ i, y i * δ i := by
+        rw [Finset.mul_sum, ← Finset.sum_sub_distrib]
+        apply Finset.sum_congr rfl
+        intro i _
+        ring
+      have hright :
+          (∑ i, dx i * (y i * (δ i - ∑ j, y j * δ j))) =
+            (∑ i, y i * dx i * δ i) - (∑ j, y j * δ j) * ∑ i, y i * dx i := by
+        rw [Finset.mul_sum, ← Finset.sum_sub_distrib]
+        apply Finset.sum_congr rfl
+        intro i _
+        ring
+      rw [hleft, hright]
+      ring
 
 /-- Softmax is Fréchet-differentiable everywhere, with derivative `softmaxDerivCLM`. -/
 theorem hasFDerivAt_softmaxVec {n : Nat} (x : Vec n) :
     HasFDerivAt (softmaxVec (n := n)) (softmaxDerivCLM (n := n) x) x := by
-  classical
   cases n with
   | zero =>
       -- `softmaxVec` is the identity on the trivial space, and all CLMs coincide.
@@ -257,226 +179,54 @@ theorem hasFDerivAt_softmaxVec {n : Nat} (x : Vec n) :
       change HasFDerivAt (fun x : Vec 0 => x) (1 : (Vec 0) →L[ℝ] (Vec 0)) x
       exact ((1 : (Vec 0) →L[ℝ] (Vec 0)).hasFDerivAt (x := x))
   | succ n =>
-      -- Coordinatewise proof: `softmaxVec x i = exp(x i) * (sumExp x)⁻¹`.
-      have hsum_ne : sumExp (n := Nat.succ n) x ≠ 0 := by
-        have hpos : 0 < sumExp (n := Nat.succ n) x := by
-          -- sum of strictly positive terms over a nonempty index set
-          have hterm : ∀ i : Fin (Nat.succ n), 0 < Real.exp (x i) := fun i => Real.exp_pos (x i)
-          simpa [sumExp] using Finset.sum_pos (fun i _ => hterm i) (Finset.univ_nonempty)
-        exact ne_of_gt hpos
-
-      -- Derivative of `sumExp`.
-      let sumDeriv : Vec (Nat.succ n) →L[ℝ] ℝ :=
-        ∑ j : Fin (Nat.succ n), (evalCLM (n := Nat.succ n) j).smulRight (Real.exp (x j))
-      have hsumF :
-          HasFDerivAt (sumExp (n := Nat.succ n)) sumDeriv x := by
-        -- `sumExp` is a finite sum of `x ↦ exp(x j)`.
-        have hcoord :
-            ∀ j : Fin (Nat.succ n),
-              HasFDerivAt (fun x : Vec (Nat.succ n) => Real.exp (x j))
-                ((evalCLM (n := Nat.succ n) j).smulRight (Real.exp (x j))) x := by
-          intro j
-          have hexp : HasDerivAt Real.exp (Real.exp (x j)) (x j) := Real.hasDerivAt_exp (x j)
-          have hexpF :
-              HasFDerivAt Real.exp
-                (ContinuousLinearMap.smulRight (M₁ := ℝ) (M₂ := ℝ) (R := ℝ) (S := ℝ)
-                  (1 : ℝ →L[ℝ] ℝ) (Real.exp (x j))) (x j) :=
-            hexp.hasFDerivAt
-          have happly :
-              HasFDerivAt (fun x : Vec (Nat.succ n) => x j) (evalCLM (n := Nat.succ n) j) x := by
-            exact ((evalCLM (n := Nat.succ n) j).hasFDerivAt (x := x))
-          have hcomp := hexpF.comp x happly
-          -- simplify the composed CLM
-          have hlin :
-              (ContinuousLinearMap.smulRight (M₁ := ℝ) (M₂ := ℝ) (R := ℝ) (S := ℝ)
-                  (1 : ℝ →L[ℝ] ℝ) (Real.exp (x j))).comp (evalCLM (n := Nat.succ n) j)
-                =
-              (evalCLM (n := Nat.succ n) j).smulRight (Real.exp (x j)) := by
-            ext dx
-            simp [ContinuousLinearMap.smulRight_apply]
-          exact hcomp.congr_fderiv hlin
-        have hsum :=
-          (HasFDerivAt.sum (u := (Finset.univ : Finset (Fin (Nat.succ n))))
-            (A := fun j : Fin (Nat.succ n) => fun x : Vec (Nat.succ n) => Real.exp (x j))
-            (A' := fun j : Fin (Nat.succ n) => (evalCLM (n := Nat.succ n) j).smulRight (Real.exp (x
-              j)))
-            (x := x))
-            (by
-              intro j _hj
-              simpa using (hcoord j))
-        -- transport the goal function from "sum of coordinate functions" to `sumExp`
-        have hEq :
-            (∑ j : Fin (Nat.succ n), (fun x : Vec (Nat.succ n) => Real.exp (x j)))
-              =
-            (sumExp (n := Nat.succ n)) := by
-          funext x
-          simp [sumExp]
-        -- rewrite the summed derivative map to `sumDeriv`
-        have hsum' :
-            HasFDerivAt (sumExp (n := Nat.succ n)) (∑ j : Fin (Nat.succ n),
-                (evalCLM (n := Nat.succ n) j).smulRight (Real.exp (x j))) x :=
-          hsum.congr_of_eventuallyEq hEq.symm.eventuallyEq
-        simpa [sumDeriv] using hsum'
-
-      -- Derivative of the inverse `x ↦ (sumExp x)⁻¹`.
-      have hinv :
-          HasFDerivAt (fun x : Vec (Nat.succ n) => (sumExp (n := Nat.succ n) x)⁻¹)
-            ((ContinuousLinearMap.smulRight (1 : ℝ →L[ℝ] ℝ) (-(sumExp (n := Nat.succ n) x ^
-              2)⁻¹)).comp sumDeriv) x := by
-        have hinv0 := (hasFDerivAt_inv (𝕜 := ℝ) (x := sumExp (n := Nat.succ n) x) hsum_ne)
-        exact hinv0.comp x hsumF
-
-      -- Multiply `exp(x i)` by `(sumExp x)⁻¹` coordinatewise, then assemble via `hasFDerivAt_pi`.
-      have hcoord_soft :
-          ∀ i : Fin (Nat.succ n),
-            HasFDerivAt (fun x : Vec (Nat.succ n) => softmaxVec (n := Nat.succ n) x i)
-              (softmaxDerivCoord (n := Nat.succ n) x i) x := by
-        intro i
-        let u : Vec (Nat.succ n) → ℝ := fun x => Real.exp (x i)
-        let u' : Vec (Nat.succ n) →L[ℝ] ℝ :=
-          (evalCLM (n := Nat.succ n) i).smulRight (Real.exp (x i))
-        have hu : HasFDerivAt u u' x := by
-          -- same proof as above for a fixed coordinate
-          have hexp : HasDerivAt Real.exp (Real.exp (x i)) (x i) := Real.hasDerivAt_exp (x i)
-          have hexpF :
-              HasFDerivAt Real.exp
-                (ContinuousLinearMap.smulRight (M₁ := ℝ) (M₂ := ℝ) (R := ℝ) (S := ℝ)
-                  (1 : ℝ →L[ℝ] ℝ) (Real.exp (x i))) (x i) :=
-            hexp.hasFDerivAt
-          have happly :
-              HasFDerivAt (fun x : Vec (Nat.succ n) => x i) (evalCLM (n := Nat.succ n) i) x := by
-            exact ((evalCLM (n := Nat.succ n) i).hasFDerivAt (x := x))
-          have hcomp := hexpF.comp x happly
-          have hlin :
-              (ContinuousLinearMap.smulRight (M₁ := ℝ) (M₂ := ℝ) (R := ℝ) (S := ℝ)
-                  (1 : ℝ →L[ℝ] ℝ) (Real.exp (x i))).comp (evalCLM (n := Nat.succ n) i)
-                =
-              u' := by
-            ext dx
-            simp [u', ContinuousLinearMap.smulRight_apply]
-          exact hcomp.congr_fderiv hlin
-
-        let v : Vec (Nat.succ n) → ℝ := fun x => (sumExp (n := Nat.succ n) x)⁻¹
-        let v' : Vec (Nat.succ n) →L[ℝ] ℝ :=
-          (ContinuousLinearMap.smulRight (1 : ℝ →L[ℝ] ℝ) (-(sumExp (n := Nat.succ n) x ^ 2)⁻¹)).comp
-            sumDeriv
-
-        let B := (ContinuousLinearMap.mul ℝ ℝ)
-        have hmul :=
-          ContinuousLinearMap.hasFDerivAt_of_bilinear (B := B) (hf := hu) (hg := hinv)
-        -- rewrite `u*v` to the softmax coordinate and the derivative to `softmaxDerivCoord`.
-        have hfun :
-            (fun x : Vec (Nat.succ n) => (B (u x)) (v x)) =
-              (fun x : Vec (Nat.succ n) => softmaxVec (n := Nat.succ n) x i) := by
-          funext x
-          simp [B, softmaxVec, sumExp, u, v, ContinuousLinearMap.mul_apply', div_eq_mul_inv]
-        -- now show the derivative CLM matches our closed form by ext on directions
-        have hderiv :
-            (B.precompR (Vec (Nat.succ n)) (u x) v' + B.precompL (Vec (Nat.succ n)) u' (v x))
-              =
+      -- Each coordinate is the quotient `exp (x i) / sumExp x`. Differentiate it as a product
+      -- with the reciprocal of the positive denominator, then assemble the coordinates.
+      have hsum_ne : sumExp (n := Nat.succ n) x ≠ 0 := sumExp_ne_zero x
+      have hinv := (hasFDerivAt_inv (𝕜 := ℝ) hsum_ne).comp x (hasFDerivAt_sumExp x)
+      have hcoord (i : Fin (Nat.succ n)) :
+          HasFDerivAt (fun y : Vec (Nat.succ n) => softmaxVec (n := Nat.succ n) y i)
+            (softmaxDerivCoord (n := Nat.succ n) x i) x := by
+        have hmul := (hasFDerivAt_exp_apply x i).mul hinv
+        have hmap :
+            Real.exp (x i) •
+                ((ContinuousLinearMap.toSpanSingleton ℝ (-(sumExp x ^ 2)⁻¹)).comp
+                  (∑ j : Fin (Nat.succ n), Real.exp (x j) • evalCLM (n := Nat.succ n) j)) +
+              (sumExp x)⁻¹ • (Real.exp (x i) • evalCLM (n := Nat.succ n) i) =
             softmaxDerivCoord (n := Nat.succ n) x i := by
           ext dx
-          -- expand everything and keep powers factored (`inv_pow` avoids expanding squares)
-          simp [softmaxDerivCoord, dotCLM, softmaxVec, sumExp, u, v, u', v', sumDeriv,
-            B, ContinuousLinearMap.mul_apply', ContinuousLinearMap.precompR_apply,
-            ContinuousLinearMap.precompL_apply, ContinuousLinearMap.comp_apply,
-            ContinuousLinearMap.smulRight_apply, evalCLM_apply, div_eq_mul_inv,
-            mul_assoc, mul_left_comm, mul_comm, add_comm,
-            sub_eq_add_neg]
-          -- remaining goal is just factoring the constant `((∑ exp)⁻¹)^2` through the finite sum
-          classical
-          set a : ℝ := (∑ i : Fin (Nat.succ n), Real.exp (x i))⁻¹ with ha
-          -- rewrite powers and associate/commute multiplications
-          simp (config := { failIfUnchanged := false })
-            [ha.symm, pow_two] at *
-
-          -- Normalize the two sums so we can use `Finset.sum_mul` to factor out constants on the
-          -- right.
-          have hnorm₂ :
-              (∑ x_1 : Fin (Nat.succ n), Real.exp (x x_1) * (dx x_1 * (a * a)))
-                =
-              ∑ x_1 : Fin (Nat.succ n), (Real.exp (x x_1) * dx x_1) * (a * a) := by
-            classical
-            refine Finset.sum_congr rfl ?_
-            intro x_1 _hx_1
-            ac_rfl
-
-          have hnorm₁ :
-              (∑ x_1 : Fin (Nat.succ n), Real.exp (x x_1) * (dx x_1 * a))
-                =
-              ∑ x_1 : Fin (Nat.succ n), (Real.exp (x x_1) * dx x_1) * a := by
-            classical
-            refine Finset.sum_congr rfl ?_
-            intro x_1 _hx_1
-            ac_rfl
-
-          have hsum_mul₂ :
-              (∑ x_1 : Fin (Nat.succ n), (Real.exp (x x_1) * dx x_1) * (a * a))
-                =
-              (∑ x_1 : Fin (Nat.succ n), Real.exp (x x_1) * dx x_1) * (a * a) := by
-            simpa [mul_assoc, mul_left_comm, mul_comm] using
-              (Finset.sum_mul (s := (Finset.univ : Finset (Fin (Nat.succ n))))
-                (f := fun x_1 : Fin (Nat.succ n) => Real.exp (x x_1) * dx x_1)
-                (a := a * a)).symm
-
-          have hsum_mul₁ :
-              (∑ x_1 : Fin (Nat.succ n), (Real.exp (x x_1) * dx x_1) * a)
-                =
-              (∑ x_1 : Fin (Nat.succ n), Real.exp (x x_1) * dx x_1) * a := by
-            simpa [mul_assoc, mul_left_comm, mul_comm] using
-              (Finset.sum_mul (s := (Finset.univ : Finset (Fin (Nat.succ n))))
-                (f := fun x_1 : Fin (Nat.succ n) => Real.exp (x x_1) * dx x_1)
-                (a := a)).symm
-
-          -- Finish by factoring, then commuting multiplications in ℝ.
-          calc
-            (∑ x_1 : Fin (Nat.succ n), Real.exp (x x_1) * (dx x_1 * (a * a)))
-                = (∑ x_1 : Fin (Nat.succ n), (Real.exp (x x_1) * dx x_1) * (a * a)) := hnorm₂
-            _ = (∑ x_1 : Fin (Nat.succ n), Real.exp (x x_1) * dx x_1) * (a * a) := hsum_mul₂
-            _ = a * ((∑ x_1 : Fin (Nat.succ n), Real.exp (x x_1) * dx x_1) * a) := by
-                  simp [mul_left_comm]
-            _ = a * (∑ x_1 : Fin (Nat.succ n), Real.exp (x x_1) * (dx x_1 * a)) := by
-                  -- rewrite the inner `(...)*a` back into a sum form
-                  rw [← hsum_mul₁]
-                  rw [hnorm₁]
-        -- apply the congruence results
-        refine (hmul.congr_of_eventuallyEq hfun.eventuallyEq).congr_fderiv hderiv
-
-      -- assemble into vector-valued derivative
-      -- First: prove the derivative of the coordinate function `x ↦ (fun i => softmaxVec x i)`.
-      have hpi :
-          HasFDerivAt
-            (fun x : Vec (Nat.succ n) => (fun i : Fin (Nat.succ n) => softmaxVec (n := Nat.succ n) x
-              i))
-            (ContinuousLinearMap.pi (fun i : Fin (Nat.succ n) => softmaxDerivCoord (n := Nat.succ n)
-              x i)) x := by
-        refine (hasFDerivAt_pi (𝕜 := ℝ)
-          (φ := fun i : Fin (Nat.succ n) => fun x : Vec (Nat.succ n) => softmaxVec (n := Nat.succ n)
-            x i)
-          (φ' := fun i : Fin (Nat.succ n) => softmaxDerivCoord (n := Nat.succ n) x i)
-          (x := x)).2 ?_
-        intro i
-        simpa using (hcoord_soft i)
-
-      -- Second: convert the `Fin n → ℝ` statement into a `Vec n` statement via the linear isometry
-      -- `(e _).symm`.
-      have hcomp :
-          HasFDerivAt (fun x : Vec (Nat.succ n) => (euclideanEquiv (Nat.succ n)).symm fun i =>
-            softmaxVec (n := Nat.succ n) x i)
-            ((euclideanEquiv (Nat.succ n)).symm.toContinuousLinearMap.comp
-              (ContinuousLinearMap.pi (fun i : Fin (Nat.succ n) => softmaxDerivCoord (n := Nat.succ
-                n) x i))) x :=
-        (((euclideanEquiv (Nat.succ n)).symm.hasFDerivAt (x := fun i => softmaxVec (n := Nat.succ n)
-          x i)).comp x hpi)
-
-      -- Finally, simplify the LHS to `softmaxVec` and the derivative to `softmaxDerivCLM`.
-      change HasFDerivAt
-        (fun x : Vec (Nat.succ n) => WithLp.toLp 2 fun i : Fin (Nat.succ n) =>
-          Real.exp (x.ofLp i) / sumExp x)
-        ((euclideanEquiv (Nat.succ n)).symm.toContinuousLinearMap.comp
-          (ContinuousLinearMap.pi (fun i : Fin (Nat.succ n) => softmaxDerivCoord (n := Nat.succ n) x
-            i))) x
-      simpa [softmaxVec, softmaxDerivCLM, softmaxVecOfFun, euclideanEquiv] using hcomp
+          -- Pull the common denominator out of the dot product before comparing coefficients.
+          have hsum :
+              (∑ j : Fin (Nat.succ n), Real.exp (x j) / sumExp x * dx j) =
+                (∑ j : Fin (Nat.succ n), Real.exp (x j) * dx j) / sumExp x := by
+            rw [div_eq_mul_inv, Finset.sum_mul]
+            exact Finset.sum_congr rfl fun j _ => by ring
+          simp only [_root_.add_apply, smul_apply, ContinuousLinearMap.comp_apply,
+            ContinuousLinearMap.toSpanSingleton_apply, sub_apply, sum_apply, evalCLM_apply,
+            dotCLM_apply, ContinuousLinearMap.smulRight_apply, smul_eq_mul, softmaxDerivCoord,
+            softmaxVec, vecOfFun_apply]
+          rw [hsum]
+          ring
+        have hfun :
+            (fun y : Vec (Nat.succ n) => softmaxVec (n := Nat.succ n) y i) =
+              (fun y : Vec (Nat.succ n) => Real.exp (y i)) *
+                ((fun s : ℝ => s⁻¹) ∘ sumExp (n := Nat.succ n)) := by
+          funext y
+          simp only [softmaxVec, vecOfFun_apply, div_eq_mul_inv, Pi.mul_apply,
+            Function.comp_apply]
+        exact (hmul.congr_of_eventuallyEq hfun.eventuallyEq).congr_fderiv hmap
+      have hpi := (hasFDerivAt_pi (𝕜 := ℝ)
+        (φ := fun i (y : Vec (Nat.succ n)) => softmaxVec (n := Nat.succ n) y i)
+        (φ' := fun i => softmaxDerivCoord (n := Nat.succ n) x i) (x := x)).2 hcoord
+      have hfun :
+          softmaxVec (n := Nat.succ n) =
+            (euclideanEquiv (Nat.succ n)).symm ∘
+              (fun (y : Vec (Nat.succ n)) i => softmaxVec (n := Nat.succ n) y i) := by
+        funext y
+        ext i
+        rfl
+      have hcomp :=
+        (euclideanEquiv (Nat.succ n)).symm.toContinuousLinearMap.hasFDerivAt.comp x hpi
+      exact hcomp.congr_of_eventuallyEq hfun.eventuallyEq
 
 end
 end Autograd

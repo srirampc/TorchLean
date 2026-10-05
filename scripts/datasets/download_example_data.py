@@ -21,14 +21,13 @@ Only stdlib + NumPy are required.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import pickle
 import tarfile
-import urllib.request
 import warnings
 import zipfile
 from pathlib import Path
-from urllib.parse import urlparse
+
+from download_io import download_atomic
 
 import numpy as np
 
@@ -49,13 +48,6 @@ AUTO_MPG_URL = "https://archive.ics.uci.edu/static/public/9/auto+mpg.zip"
 DEFAULT_TIMEOUT_SECONDS = 60.0
 
 
-def require_https(url: str) -> None:
-    """Reject non-HTTPS dataset URLs before any network request is made."""
-    scheme = urlparse(url).scheme
-    if scheme != "https":
-        raise SystemExit(f"refusing non-https URL: {url}")
-
-
 def download(
     url: str,
     out: Path,
@@ -64,31 +56,10 @@ def download(
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
 ) -> Path:
     """Download `url` to `out`, reusing a cached copy when the checksum matches."""
-    require_https(url)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    if out.exists() and (md5 is None or file_md5(out) == md5):
-        print(f"[skip] {out}")
-        return out
     print(f"[download] {url}")
-    with urllib.request.urlopen(url, timeout=timeout) as resp:
-        data = resp.read()
-    out.write_bytes(data)
-    if md5 is not None:
-        got = hashlib.md5(data).hexdigest()
-        if got != md5:
-            out.unlink(missing_ok=True)
-            raise SystemExit(f"md5 mismatch for {out}: expected {md5}, got {got}")
+    download_atomic(url, out, timeout=timeout, md5=md5)
     print(f"[ok] {out}")
     return out
-
-
-def file_md5(path: Path) -> str:
-    """Compute an MD5 digest by streaming the file in chunks."""
-    h = hashlib.md5()
-    with path.open("rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            h.update(chunk)
-    return h.hexdigest()
 
 
 def load_cifar_batch(path: Path) -> tuple[np.ndarray, np.ndarray]:

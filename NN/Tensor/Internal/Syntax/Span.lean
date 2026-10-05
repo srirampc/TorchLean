@@ -9,8 +9,8 @@ module
 # Source locations
 
 TorchLean.Tensor.Internal records source locations as half-open ranges measured in Unicode
-scalar values. A span stores an offset and a length, so malformed ranges
-cannot be represented.
+scalar values. A span stores a natural-number offset and length, so its endpoint
+cannot precede its start. The type does not certify bounds within a particular source string.
 -/
 
 @[expose] public section
@@ -37,11 +37,16 @@ def stop (span : Span) : Nat :=
 def point (offset : Nat) : Span :=
   ⟨offset, 0⟩
 
-/-- The half-open range from `start` to `stop`. -/
+/-- The half-open range from `start` to `stop`, empty at `start` when `stop < start`. -/
 def between (start stop : Nat) : Span :=
   ⟨start, stop - start⟩
 
-/-- The smallest span containing two spans that occur in source order. -/
+/--
+The range from `left.offset` to `right.stop`.
+
+This is the smallest containing span when `left.offset ≤ right.offset` and
+`left.stop ≤ right.stop`, as for the ordered delimiters supplied by the parsers.
+-/
 def join (left right : Span) : Span :=
   between left.offset right.stop
 

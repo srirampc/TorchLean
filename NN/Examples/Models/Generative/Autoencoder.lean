@@ -5,7 +5,7 @@ Authors: TorchLean Team
 
 Run:
   python3 scripts/datasets/download_example_data.py --cifar10
-  lake -R -K cuda=true exe torchlean autoencoder --device cuda --steps 1 --n-total 1
+  scripts/lake.sh -Kcuda=true exe torchlean autoencoder --device cuda --steps 1 --n-total 1
 -/
 
 module
@@ -63,13 +63,13 @@ def model : nn.Builder (nn.Sequential input output) :=
   ]
 
 /-- Public singleton dataset for compact CIFAR reconstruction. -/
-def data (flags : RealData.CifarModelTrainFlags) : Trainer.Dataset input output :=
+def data (flags : Support.Training.Options Support.Npy.Options) : Trainer.Dataset input output :=
   RealData.cifarFeatureDataset batchSize modelConfig exeName
     (fun tensor ↦ { input := tensor, target := tensor })
     flags.data.xPath flags.data.yPath flags.data.nRows flags.data.seed
 
 /-- Train the compact autoencoder with the public `Trainer` surface. -/
-def train (runtime : Runtime.Config) (flags : RealData.CifarModelTrainFlags) :
+def train (runtime : Runtime.Config) (flags : Support.Training.Options Support.Npy.Options) :
     IO (Trainer.Result input output) := do
   Data.requirePairedFiles exeName
     "CIFAR-10 images" flags.data.xPath
@@ -80,13 +80,13 @@ def train (runtime : Runtime.Config) (flags : RealData.CifarModelTrainFlags) :
       Trainer.RunConfig.forObjective
         (Trainer.RunConfig.fromRuntime runtime
           { optimizer := optim.adam { learningRate := flags.training.learningRate } })
-        .meanSquaredError
+        .mse
         (seed := flags.data.seed)
   trainer.train
     (data flags)
     (flags.training.trainOptions
       (logTitle := "Autoencoder CIFAR reconstruction")
-      (logNotes := RealData.cifarClassifierNotes batchSize flags))
+      (logNotes := RealData.trainingNotes "cifar10" batchSize flags))
 
 /--
 Executable entrypoint for CIFAR reconstruction.
@@ -95,9 +95,10 @@ The command loads one real CIFAR minibatch, builds the supervised reconstruction
 trains the autoencoder for `--steps`, and writes the standard TorchLean training summary/log.
 -/
 def main (args : List String) : IO UInt32 :=
-  TrainCommand.regressionNpy exeName args
-    (fun rest => RealData.CifarModelTrainFlags.parse exeName rest defaultLogPath 10 1e-3)
-    (Support.bannerWithDevice exeName "CIFAR vector reconstruction")
-    train
+  TrainCommand.npy exeName args
+    (fun rest => Support.Training.Options.parse exeName rest defaultLogPath 10 1e-3
+      (parseData := RealData.NpyDatasets.parseCifar))
+    (Support.banner exeName "CIFAR vector reconstruction")
+    train (fun result => result.printSummary)
 
 end NN.Examples.Models.Generative.Autoencoder

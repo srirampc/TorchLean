@@ -33,7 +33,7 @@ Elementwise ops and reductions remain in:
 namespace TorchLean.Tensor
 
 -- Expose the semantic accessors and constructors through the canonical tensor API.
-export Spec (shapeOf getSpec get get2 getAtOrZero finZero getHead getTail
+export Spec (shapeOf getSpec get get2 getAtOrZero
   tensorCast replicate
   sliceRangeSpec
   singleton padLeft

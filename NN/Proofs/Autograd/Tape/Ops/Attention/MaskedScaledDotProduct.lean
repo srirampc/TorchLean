@@ -55,8 +55,6 @@ softmax.  Because the bias is fixed, its derivative is the identity on the scale
 def maskedScaledDotProductDGraph {m d : Nat}
     (c : ℝ) (bias : Vec (Spec.Shape.size (.dim m (.dim m .scalar))) := 0) :
     DGraph (ΓQKV m d) (ssMaskedScaledDotProduct m d) := by
-  classical
-
   let dg0 : DGraph (ΓQKV m d) [] := DGraph.nil
 
   let nodeKt : Node (ΓQKV m d) (.dim d (.dim m .scalar)) :=
@@ -194,24 +192,23 @@ def maskedScaledDotProductDGraph {m d : Nat}
             [ .dim d (.dim m .scalar), .dim m (.dim m .scalar), .dim m (.dim m .scalar)
             , .dim m (.dim m .scalar), .dim m (.dim m .scalar)])))
 
-  simpa using dg6
+  exact dg6
 
 /--
 Reverse-mode theorem for finite additive-mask scaled-dot-product attention.
 -/
 theorem backprop_eq_adjoint_fderiv_maskedScaledDotProduct
-    {m d : Nat} (c : ℝ) (bias : Vec (Spec.Shape.size (.dim m (.dim m .scalar))) := 0) :
-    ∀ (xV : CtxVec (ΓQKV m d))
-      (seedV : CtxVec (ΓQKV m d ++ ssMaskedScaledDotProduct m d)),
-      Graph.backpropVec (Γ := ΓQKV m d) (ss := ssMaskedScaledDotProduct m d)
-          (maskedScaledDotProductDGraph (m := m) (d := d) c bias).g xV seedV
-        =
-      (fderiv ℝ
-          (Graph.evalVec (Γ := ΓQKV m d) (ss := ssMaskedScaledDotProduct m d)
-            (maskedScaledDotProductDGraph (m := m) (d := d) c bias).g)
-          xV).adjoint seedV :=
+    {m d : Nat} (c : ℝ) (bias : Vec (Spec.Shape.size (.dim m (.dim m .scalar))))
+    (xV : CtxVec (ΓQKV m d)) (seedV : CtxVec (ΓQKV m d ++ ssMaskedScaledDotProduct m d)) :
+    Graph.backpropVec (Γ := ΓQKV m d) (ss := ssMaskedScaledDotProduct m d)
+        (maskedScaledDotProductDGraph (m := m) (d := d) c bias).g xV seedV
+      =
+    (fderiv ℝ
+        (Graph.evalVec (Γ := ΓQKV m d) (ss := ssMaskedScaledDotProduct m d)
+          (maskedScaledDotProductDGraph (m := m) (d := d) c bias).g)
+        xV).adjoint seedV :=
   DGraph.backpropVec_eq_adjoint_fderiv
-    (dg := maskedScaledDotProductDGraph (m := m) (d := d) c bias)
+    (dg := maskedScaledDotProductDGraph (m := m) (d := d) c bias) xV seedV
 
 end Attention
 

@@ -200,15 +200,14 @@ def IsBiboStable {s₁ s₂ : Shape}
 /--
 Incremental stability: distances between trajectories contract by `contractionFactor`.
 
-This is a discrete-time contraction condition phrased using `tensorDistance`.
+This is the contraction predicate `Robustness.Spec.IsContractive` under its dynamical-systems
+name: a discrete-time contraction condition phrased using `tensorDistance`.
 -/
 def IsIncrementallyStable {s : Shape}
     (f : Tensor α s → Tensor α s)
     (norm : ∀ {s : Shape}, Tensor α s → α)
     (contractionFactor : α) : Prop :=
-  contractionFactor < 1 ∧
-  ∀ x₁ x₂ : Tensor α s,
-    tensorDistance norm (f x₁) (f x₂) ≤ contractionFactor * tensorDistance norm x₁ x₂
+  IsContractive f norm contractionFactor
 
 /--
 Return the configured stability-margin value. The real instance uses a supremum, which need not
@@ -226,7 +225,6 @@ Finite-time stability: trajectories reach `equilibrium` exactly within a fixed s
 -/
 def IsFiniteTimeStable {s : Shape}
     (f : Tensor α s → Tensor α s)
-    (_norm : ∀ {s : Shape}, Tensor α s → α)
     (equilibrium : Tensor α s)
     (settlingTimeSteps : Nat) : Prop :=
   ∀ x₀ : Tensor α s, ∃ T ≤ settlingTimeSteps, ∀ t ≥ T,

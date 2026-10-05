@@ -10,6 +10,12 @@ public import NN.Proofs.Autograd.Tape.Nodes.Reductions
 public import Mathlib.Analysis.InnerProductSpace.Calculus
 public import NN.Proofs.Autograd.FDeriv.Elementwise
 
+/-!
+# KL Divergence
+
+Batchmean KL-divergence for log-probability inputs and probability targets.
+-/
+
 @[expose] public section
 
 namespace Proofs
@@ -24,12 +30,6 @@ open scoped BigOperators
 
 namespace TapeNodes
 
-/-!
-# KL Divergence
-
-Batchmean KL-divergence for log-probability inputs and probability targets.
--/
-
 /-- KL-divergence loss for `logProbs` and `target` probabilities of shape `(m×n)`.
 
 Forward (batchmean reduction):
@@ -40,8 +40,8 @@ This matches PyTorch `KLDivLoss` / `F.kl_div` with:
 - `target` = probabilities (not log-target),
 - `reduction="batchmean"`.
 
-We use the `Real.log`/`x⁻¹` derivative spec, so the node's VJP is correct on points
-where `target` entries are nonzero.
+The JVP uses the `Real.log`/`x⁻¹` derivative spec. The adjointness proof `correct_inner` is
+unconditional; only the analytic certificate `klDivLastFderivAt` needs nonzero `target` entries.
 -/
 def klDivLast {Γ : List Shape} {m n : Nat}
     (logProbs target : Idx Γ (.dim m (.dim n .scalar))) : Node Γ Shape.scalar :=
@@ -210,76 +210,12 @@ def klDivLast {Γ : List Shape} {m n : Nat}
         _ =
           inner ℝ (CtxVec.get (Γ := Γ) (s := s) logProbs dxV) (castVec hsz.symm dLogProbs) +
             inner ℝ (CtxVec.get (Γ := Γ) (s := s) target dxV) (castVec hsz.symm dTarget) := by
-            have h1 :
-                inner ℝ dlp dLogProbs + inner ℝ dq dTarget =
-                  inner ℝ (CtxVec.get (Γ := Γ) (s := s) logProbs dxV) (castVec hsz.symm dLogProbs) +
-                    inner ℝ dq dTarget := by
-              simpa using congrArg (fun t => t + inner ℝ dq dTarget) hAc.symm
-            have h2 :
-                inner ℝ (CtxVec.get (Γ := Γ) (s := s) logProbs dxV) (castVec hsz.symm dLogProbs) +
-                    inner ℝ dq dTarget =
-                  inner ℝ (CtxVec.get (Γ := Γ) (s := s) logProbs dxV) (castVec hsz.symm dLogProbs) +
-                    inner ℝ (CtxVec.get (Γ := Γ) (s := s) target dxV) (castVec hsz.symm dTarget) :=
-                      by
-              simpa using
-                congrArg
-                  (fun t =>
-                    inner ℝ (CtxVec.get (Γ := Γ) (s := s) logProbs dxV) (castVec hsz.symm dLogProbs)
-                      + t)
-                  hBc.symm
-            exact h1.trans h2
+            simp [hAc, hBc]
         _ =
           inner ℝ dxV
               (CtxVec.single (Γ := Γ) (s := s) logProbs (castVec hsz.symm dLogProbs) +
                 CtxVec.single (Γ := Γ) (s := s) target (castVec hsz.symm dTarget)) := by
-            -- rewrite each term using `inner_get_single`, then combine with additivity
-            have hA' :
-                inner ℝ (CtxVec.get (Γ := Γ) (s := s) logProbs dxV) (castVec hsz.symm dLogProbs) +
-                    inner ℝ (CtxVec.get (Γ := Γ) (s := s) target dxV) (castVec hsz.symm dTarget)
-                  =
-                inner ℝ dxV (CtxVec.single (Γ := Γ) (s := s) logProbs (castVec hsz.symm dLogProbs))
-                  +
-                    inner ℝ (CtxVec.get (Γ := Γ) (s := s) target dxV) (castVec hsz.symm dTarget) :=
-                      by
-              simpa using
-                congrArg
-                  (fun t =>
-                    t +
-                      inner ℝ (CtxVec.get (Γ := Γ) (s := s) target dxV) (castVec hsz.symm dTarget))
-                  hA.symm
-            have hB' :
-                inner ℝ dxV (CtxVec.single (Γ := Γ) (s := s) logProbs (castVec hsz.symm dLogProbs))
-                  +
-                    inner ℝ (CtxVec.get (Γ := Γ) (s := s) target dxV) (castVec hsz.symm dTarget)
-                  =
-                inner ℝ dxV (CtxVec.single (Γ := Γ) (s := s) logProbs (castVec hsz.symm dLogProbs))
-                  +
-                    inner ℝ dxV (CtxVec.single (Γ := Γ) (s := s) target (castVec hsz.symm dTarget))
-                      := by
-              simpa using
-                congrArg
-                  (fun t =>
-                    inner ℝ dxV (CtxVec.single (Γ := Γ) (s := s) logProbs (castVec hsz.symm
-                      dLogProbs)) + t)
-                  hB.symm
-            calc
-              inner ℝ (CtxVec.get (Γ := Γ) (s := s) logProbs dxV) (castVec hsz.symm dLogProbs) +
-                  inner ℝ (CtxVec.get (Γ := Γ) (s := s) target dxV) (castVec hsz.symm dTarget)
-                  =
-                inner ℝ dxV (CtxVec.single (Γ := Γ) (s := s) logProbs (castVec hsz.symm dLogProbs))
-                  +
-                    inner ℝ (CtxVec.get (Γ := Γ) (s := s) target dxV) (castVec hsz.symm dTarget) :=
-                      hA'
-              _ =
-                inner ℝ dxV (CtxVec.single (Γ := Γ) (s := s) logProbs (castVec hsz.symm dLogProbs))
-                  +
-                  inner ℝ dxV (CtxVec.single (Γ := Γ) (s := s) target (castVec hsz.symm dTarget)) :=
-                    hB'
-              _ =
-                inner ℝ dxV
-                    (CtxVec.single (Γ := Γ) (s := s) logProbs (castVec hsz.symm dLogProbs) +
-                      CtxVec.single (Γ := Γ) (s := s) target (castVec hsz.symm dTarget)) := by
-                simp [inner_add_right])
+            simp [inner_add_right, hA, hB])
 
 /-- Pointwise `NodeFDerivCorrectAt` for `klDivLast`, assuming `target` entries are nonzero. -/
 def klDivLastFderivAt {Γ : List Shape} {m n : Nat}
@@ -329,20 +265,11 @@ def klDivLastFderivAt {Γ : List Shape} {m n : Nat}
     exact Real.hasDerivAt_log this
   let logqMN : CtxVec Γ → Vec (m * n) := fun x => elemwiseVec (n := m * n) (f := Real.log) (qMN x)
   let logqDeriv : CtxVec Γ →L[ℝ] Vec (m * n) := logDerivVecCLM.comp qMNCLM
-  have hlogq :
-      HasFDerivAt logqMN logqDeriv xV := by
-    -- compose the vector-log derivative with `qMN`
-    have hcomp := hlogq0.comp xV hq0
-    refine hcomp.congr_of_eventuallyEq ?_
-    exact Filter.Eventually.of_forall fun _ => rfl
+  have hlogq : HasFDerivAt logqMN logqDeriv xV := hlogq0.comp xV hq0
 
   let rhsMN : CtxVec Γ → Vec (m * n) := fun x => logqMN x - lpMN x
   let rhsDeriv : CtxVec Γ →L[ℝ] Vec (m * n) := logqDeriv - lpMNCLM
-  have hrhs :
-      HasFDerivAt rhsMN rhsDeriv xV := by
-    have hsub := hlogq.sub hlp0
-    refine hsub.congr_of_eventuallyEq ?_
-    exact Filter.Eventually.of_forall fun _ => rfl
+  have hrhs : HasFDerivAt rhsMN rhsDeriv xV := hlogq.sub hlp0
 
   have hinter :
       HasFDerivAt (fun x => inner ℝ (qMN x) (rhsMN x))

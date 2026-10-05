@@ -8,9 +8,6 @@ module
 
 public import NN.Proofs.Analysis.Softmax
 public import NN.Spec.Layers.Attention
-public import Mathlib.Analysis.SpecialFunctions.Pow.NNReal
-public import Mathlib.Data.Sym.Sym2.Init
-import Mathlib.Tactic.NormNum.GCD
 
 /-!
 # Permutation Equivariance of Self-Attention (No Positional Encoding)
@@ -27,13 +24,15 @@ permutes tensor axes, but they are not part of the general `TorchLean.Tensor` AP
 operations should live under `NN.Spec`, while model theorems and their proof scaffolding live here.
 -/
 
+@[expose] public section
+
 open scoped BigOperators
 
 noncomputable section
 
 namespace NN.Proofs.Models.Attention
 
-open _root_.Spec _root_.TorchLean
+open Spec TorchLean
 open TorchLean.Tensor
 
 /-!
@@ -112,7 +111,7 @@ private def softmaxVecPlain {n : Nat} (t : Tensor ℝ [n]) : Tensor ℝ [n] :=
   Tensor.dim (fun i => Tensor.scalar (Real.exp (x i) / denom))
 
 /-- The stabilized spec `softmaxVecSpec` agrees with `softmaxVecPlain` over `ℝ`. -/
-private theorem softmax_vec_spec_eq_plain {n : Nat} (t : Tensor ℝ [Nat.succ n]) :
+private theorem softmaxVecSpec_eq_softmaxVecPlain {n : Nat} (t : Tensor ℝ [Nat.succ n]) :
     Activation.softmaxVecSpec (α := ℝ) (n := Nat.succ n) t = softmaxVecPlain t := by
   apply TorchLean.Tensor.ext_vector
   intro i
@@ -139,7 +138,7 @@ private theorem softmaxVecPlain_reindexOuter {n : Nat} (σ : Equiv.Perm (Fin n))
   simp [softmaxVecPlain, reindexOuter, TorchLean.Tensor.getScalar, Spec.get, hden']
 
 /-- Spec vector softmax commutes with reindexing, including for an empty vector. -/
-theorem softmax_vec_spec_reindexOuter {n : Nat} (σ : Equiv.Perm (Fin n))
+theorem softmaxVecSpec_reindexOuter {n : Nat} (σ : Equiv.Perm (Fin n))
     (t : Tensor ℝ [n]) :
     Activation.softmaxVecSpec (α := ℝ) (n := n)
         (reindexOuter (α := ℝ) (n := n) (s := .scalar) σ t)
@@ -149,11 +148,11 @@ theorem softmax_vec_spec_reindexOuter {n : Nat} (σ : Equiv.Perm (Fin n))
   cases n with
   | zero => simp [Activation.softmaxVecSpec]
   | succ n =>
-      simpa [softmax_vec_spec_eq_plain] using
+      simpa [softmaxVecSpec_eq_softmaxVecPlain] using
         (softmaxVecPlain_reindexOuter (σ := σ) (t := t))
 
 /-- Matrix axis-`1` softmax commutes with simultaneous row/column permutations. -/
-theorem softmax_spec_permMatrix {n : Nat} (σ : Equiv.Perm (Fin n))
+theorem softmaxSpec_permMatrix {n : Nat} (σ : Equiv.Perm (Fin n))
     (A : TorchLean.Tensor ℝ [n, n]) :
     Activation.softmaxSpec (α := ℝ) (s := [n, n]) 1
         (permMatrix (α := ℝ) (n := n) σ A)
@@ -189,7 +188,7 @@ theorem softmax_spec_permMatrix {n : Nat} (σ : Equiv.Perm (Fin n))
   rw [Activation.unstack_softmaxInnermostSpec_matrix]
   rw [Activation.unstack_softmaxInnermostSpec_matrix]
   have h := congrArg (fun vector : Tensor ℝ [n] => vector.getScalar j)
-    (softmax_vec_spec_reindexOuter σ (rows (σ i)))
+    (softmaxVecSpec_reindexOuter σ (rows (σ i)))
   simpa [permMatrix, reindexOuter, reindexCols, Spec.get,
     TorchLean.Tensor.getScalar] using h
 
@@ -206,7 +205,7 @@ This is the most general bookkeeping lemma used below: reindexing rows of the le
 the rows of the product, while reindexing columns of the right factor controls the columns of the
 product.
 -/
-theorem mat_mul_reindexOuter_reindexCols {m n p : Nat}
+theorem matMulSpec_reindexOuter_reindexCols {m n p : Nat}
     (σ : Equiv.Perm (Fin m)) (τ : Equiv.Perm (Fin p))
     (A : Tensor ℝ [m, n])
     (B : Tensor ℝ [n, p]) :
@@ -227,7 +226,7 @@ This is the projection-layer version of token equivariance: the same learned wei
 applied independently to every token, so changing token order before the projection merely changes
 the output token order.
 -/
-theorem mat_mul_reindexOuter_left {m n p : Nat}
+theorem matMulSpec_reindexOuter_left {m n p : Nat}
     (σ : Equiv.Perm (Fin m))
     (A : Tensor ℝ [m, n])
     (B : Tensor ℝ [n, p]) :
@@ -245,7 +244,7 @@ Transposition converts a row permutation into a column permutation.
 The attention-score proof uses this to turn `(P Q) (P K)ᵀ` into a simultaneous row/column
 permutation of `Q Kᵀ`.
 -/
-theorem matrix_transpose_reindexOuter {m n : Nat}
+theorem swapAdjacentAxes_reindexOuter {m n : Nat}
     (σ : Equiv.Perm (Fin m)) (A : Tensor ℝ [m, n]) :
     TorchLean.Tensor.swapAdjacentAxes
         (reindexOuter (α := ℝ) (n := m) (s := .dim n .scalar) σ A) 0
@@ -266,21 +265,20 @@ Elementwise scaling commutes with simultaneous row/column reindexing.
 Scaled dot-product attention divides all score entries by the same scalar, so this lemma lets the
 token-permutation proof move the scale step past the score-matrix conjugation.
 -/
-theorem scale_spec_permMatrix {n : Nat} (σ : Equiv.Perm (Fin n))
+theorem scaleSpec_permMatrix {n : Nat} (σ : Equiv.Perm (Fin n))
     (A : Tensor ℝ [n, n]) (c : ℝ) :
     TorchLean.Tensor.scaleSpec (permMatrix (α := ℝ) (n := n) σ A) c
       =
     permMatrix (α := ℝ) (n := n) σ (TorchLean.Tensor.scaleSpec A c) := by
   classical
-  -- Helper: extract a `scale_spec` entry.
-  have get2_scale_spec {m n : Nat}
+  have get2_scaleSpec {m n : Nat}
       (M : Tensor ℝ [m, n]) (c : ℝ) (i : Fin m) (j : Fin n) :
       get2 (TorchLean.Tensor.scaleSpec M c) i j = (get2 M i j) * c := by
     simp [TorchLean.Tensor.scaleSpec]
   apply Spec.matrix_ext
   intro i j
   -- Both sides reduce to `(A[σ i, σ j]) * c`.
-  simp [get2_permMatrix, get2_scale_spec]
+  simp [get2_permMatrix, get2_scaleSpec]
 
 /--
 Multiplying a simultaneously row/column-permuted attention matrix by a row-permuted value matrix
@@ -289,7 +287,7 @@ produces a row-permuted output.
 This is the final linear-algebra step in self-attention equivariance: the permutation of the
 attention weights and the permutation of the value rows cancel on the internal summation index.
 -/
-theorem mat_mul_permMatrix_reindexOuter
+theorem matMulSpec_permMatrix_reindexOuter
     {n d : Nat} (σ : Equiv.Perm (Fin n))
     (A : Tensor ℝ [n, n])
     (B : Tensor ℝ [n, d]) :
@@ -347,19 +345,19 @@ theorem selfAttention_reindexOuter
             =
           reindexOuter (α := ℝ) (n := Nat.succ n') (s := .dim projDim .scalar) σ Q := by
         simpa [Q] using
-          (mat_mul_reindexOuter_left (σ := σ) (A := x) (B := Wq))
+          (matMulSpec_reindexOuter_left (σ := σ) (A := x) (B := Wq))
       have hK :
           matMulSpec (reindexOuter (α := ℝ) (n := Nat.succ n') (s := .dim dModel .scalar) σ x) Wk
             =
           reindexOuter (α := ℝ) (n := Nat.succ n') (s := .dim projDim .scalar) σ K := by
         simpa [K] using
-          (mat_mul_reindexOuter_left (σ := σ) (A := x) (B := Wk))
+          (matMulSpec_reindexOuter_left (σ := σ) (A := x) (B := Wk))
       have hV :
           matMulSpec (reindexOuter (α := ℝ) (n := Nat.succ n') (s := .dim dModel .scalar) σ x) Wv
             =
           reindexOuter (α := ℝ) (n := Nat.succ n') (s := .dim projDim .scalar) σ V := by
         simpa [V] using
-          (mat_mul_reindexOuter_left (σ := σ) (A := x) (B := Wv))
+          (matMulSpec_reindexOuter_left (σ := σ) (A := x) (B := Wv))
 
       -- Build the (unpermuted) attention context for the scaled dot-product block.
       let ctx : Spec.AttentionContext ℝ (Nat.succ n') (Nat.succ n') projDim h1 h1 :=
@@ -392,13 +390,13 @@ theorem selfAttention_reindexOuter
                 (reindexOuter (α := ℝ) (n := Nat.succ n') (s := .dim projDim .scalar) σ Q)
                 (reindexCols (α := ℝ) (m := projDim) (n := Nat.succ n') σ
                   (TorchLean.Tensor.swapAdjacentAxes K 0)) := by
-                    simp [matrix_transpose_reindexOuter]
+                    simp [swapAdjacentAxes_reindexOuter]
             _ =
               reindexOuter (α := ℝ) (n := Nat.succ n') (s := .dim (Nat.succ n') .scalar) σ
                 (reindexCols (α := ℝ) (m := Nat.succ n') (n := Nat.succ n') σ
                   (matMulSpec Q (TorchLean.Tensor.swapAdjacentAxes K 0))) := by
                     simpa using
-                      (mat_mul_reindexOuter_reindexCols (σ := σ) (τ := σ) (A := Q)
+                      (matMulSpec_reindexOuter_reindexCols (σ := σ) (τ := σ) (A := Q)
                         (B := TorchLean.Tensor.swapAdjacentAxes K 0))
             _ = _ := rfl
 
@@ -413,7 +411,7 @@ theorem selfAttention_reindexOuter
               (TorchLean.Tensor.scaleSpec (matMulSpec Q (TorchLean.Tensor.swapAdjacentAxes K 0))
                 (Spec.attentionScaleDenom (α := ℝ) projDim)⁻¹) := by
           simpa using
-            (scale_spec_permMatrix (σ := σ)
+            (scaleSpec_permMatrix (σ := σ)
               (A := matMulSpec Q (TorchLean.Tensor.swapAdjacentAxes K 0))
               (c := (Spec.attentionScaleDenom (α := ℝ) projDim)⁻¹))
 
@@ -429,7 +427,7 @@ theorem selfAttention_reindexOuter
                 (TorchLean.Tensor.scaleSpec (matMulSpec Q (TorchLean.Tensor.swapAdjacentAxes K 0))
                   (Spec.attentionScaleDenom (α := ℝ) projDim)⁻¹)) := by
           simpa using
-            (SoftmaxEquivariance.softmax_spec_permMatrix (n := Nat.succ n') (σ := σ)
+            (SoftmaxEquivariance.softmaxSpec_permMatrix (n := Nat.succ n') (σ := σ)
               (A := TorchLean.Tensor.scaleSpec
                 (matMulSpec Q (TorchLean.Tensor.swapAdjacentAxes K 0))
                 (Spec.attentionScaleDenom (α := ℝ) projDim)⁻¹))
@@ -451,7 +449,7 @@ theorem selfAttention_reindexOuter
                     (Spec.attentionScaleDenom (α := ℝ) projDim)⁻¹))
                 V) := by
           simpa using
-            (mat_mul_permMatrix_reindexOuter (σ := σ)
+            (matMulSpec_permMatrix_reindexOuter (σ := σ)
               (A := Activation.softmaxSpec (α := ℝ) (s := [Nat.succ n', Nat.succ n']) 1
                 (TorchLean.Tensor.scaleSpec (matMulSpec Q (TorchLean.Tensor.swapAdjacentAxes K 0))
                   (Spec.attentionScaleDenom (α := ℝ) projDim)⁻¹))
@@ -485,7 +483,7 @@ theorem selfAttention_reindexOuter
             (matMulSpec (Spec.scaledDotProductAttention (α := ℝ) (ctx := ctx)) Wo) := by
               -- push `σ` through the final projection `Wo`
               exact
-                (mat_mul_reindexOuter_left (σ := σ)
+                (matMulSpec_reindexOuter_left (σ := σ)
                   (A := Spec.scaledDotProductAttention (α := ℝ) (ctx := ctx)) (B := Wo))
         _ =
           reindexOuter (α := ℝ) (n := Nat.succ n') (s := .dim dModel .scalar) σ

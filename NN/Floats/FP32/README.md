@@ -15,17 +15,24 @@ real spec value
 Bit-level binary32 behavior, including special values, is defined by FloatLib's configured
 `ExecFloat.Binary 8 23` format.
 
-## Files
+## Proof APIs
 
-- `Core.lean`: canonical binary32 configuration (`fexp32`, `rnd32`) and the `FP32` type alias.
-- `Notation.lean`: aliases over `ℝ` for the model, including `round32`, `ulp32`, and `eps32`.
-- `Error.lean`: per-operation absolute error bounds.
-- `NN/Proofs/RuntimeApprox/FP32.lean`: error bounds restated through the generic tolerance relation
-  `≈[t]`.
-- `Sterbenz.lean`: exact subtraction for nearby representable binary32 values.
+`NN/Floats/FP32.lean` defines `FP32` by specializing `NF` with
+`Model.fexpOf FloatFormat.binary32` and `nearestEven`.
 
-Interval enclosures live in `NN/Floats/Interval/FP32.lean` and are available through the separate
-`NN.Floats.Interval` umbrella.
+FloatLib supplies the descriptor-generic rounding theorems:
+
+- `Model.abs_roundAt_sub_le` and `Model.roundAt_mem_Icc` in
+  `FloatLib/Floats/Formats/BinaryInterchange/Analysis/Error.lean` give the half-ULP error bound
+  and enclosure. Instantiate them with `FloatFormat.binary32`.
+- `Model.relativeError_roundAt_le_of_normal` in the same module gives the relative error bound
+  under its normal-range hypothesis.
+- `Model.roundAt_sub_eq_of_sterbenz` in
+  `FloatLib/Floats/Formats/BinaryInterchange/Analysis/Sterbenz.lean` gives exact subtraction
+  for nearby representable values.
+
+`NN/Proofs/RuntimeApprox/FP32.lean` expresses the per-operation bounds through the generic
+tolerance relation `≈[t]`.
 
 ## Relationship To Runtime
 

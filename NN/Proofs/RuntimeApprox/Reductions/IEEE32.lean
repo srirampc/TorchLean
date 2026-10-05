@@ -31,13 +31,12 @@ parameters depend only on:
 - $A=\sum_i|\mathtt{leaf}_i|$ (a scale factor).
 
 This matches the standard $\gamma_k$-style summation bounds where order-dependence is absorbed by
-$A$
-(sum of absolute values) and a growth factor in `n`.
+$A$ (sum of absolute values) and a growth factor in `n`.
 
-For `ExecFloat.Binary 8 23`, we connect the executable `add` to the real model `fp32Round (a + b)`,
-but only on
-the *finite* branch. If `Inf`/`NaN`/overflow is possible, the right semantics is the special-value
-semantics from FloatLib, so this file keeps those cases out of scope via `FiniteEval*`.
+For `ExecFloat.Binary 8 23`, we connect the executable `add` to the real model
+`Model.roundAt FloatFormat.binary32 (a + b)`, but only on the *finite* branch. If `Inf`/`NaN`/
+overflow is possible, the right semantics is the special-value semantics from FloatLib, so this
+file keeps those cases out of scope via `FiniteEval*`.
 
 ### Inspiration and related work
 
@@ -66,7 +65,6 @@ accumulators/binned sums. That literature is a complement to this file:
 open FloatLib.Floats (ExecFloat)
 open FloatLib.Floats.ExecFloat.Binary (isFinite toModel)
 open FloatLib.Floats.Formats.BinaryInterchange (Model FloatFormat)
-
 
 namespace TorchLean.Floats.IEEE754
 
@@ -98,14 +96,15 @@ def evalIEEE : SumTree (ExecFloat.Binary 8 23) → (ExecFloat.Binary 8 23)
 - every internal `add` evaluates on the finite branch (no `Inf`/`NaN` result).
 
 We need this hypothesis when relating the executable semantics to the real model
-`fp32Round (toReal a + toReal b)`: if an `add` can overflow to `Inf` or produce a NaN, the correct
-semantic layer is FloatLib's special-value semantics, not a small-error enclosure.
+`Model.roundAt FloatFormat.binary32 (toReal a + toReal b)`: if an `add` can overflow to `Inf` or
+produce a NaN, the correct semantic layer is FloatLib's special-value semantics, not a small-error
+enclosure.
 -/
 def FiniteEvalSumTree : SumTree (ExecFloat.Binary 8 23) → Prop
   | .leaf x => isFinite x = true
   | .node a b =>
-      FiniteEvalSumTree a ∧ FiniteEvalSumTree b ∧ isFinite (ExecFloat.add (evalIEEE a) (evalIEEE b))
-        = true
+      FiniteEvalSumTree a ∧ FiniteEvalSumTree b ∧
+        isFinite (ExecFloat.add (evalIEEE a) (evalIEEE b)) = true
 
 /--
 If the whole reduction evaluates on the finite branch, then the final result is finite.
@@ -128,22 +127,24 @@ def sumTreeResult (xs : Array (ExecFloat.Binary 8 23)) (r : ExecFloat.Binary 8 2
 /--
 Real-valued “finite-branch model” of `evalIEEE`.
 
-Every internal node uses `fp32Round (a+b)`. This is the usual floating-point model
-  (round-to-nearest)
-*when the result stays finite*; our bridge lemmas justify this model under `FiniteEvalSumTree`.
+Every internal node uses `Model.roundAt FloatFormat.binary32 (a+b)`. This is the usual
+round-to-nearest floating-point model *when the result stays finite*; our bridge lemmas justify
+this model under `FiniteEvalSumTree`.
 -/
 def evalRealIEEE (t : SumTree (ExecFloat.Binary 8 23)) : ℝ :=
-  evalRound (fun a b => fp32Round (a + b)) (fun x => (toModel x).toReal) t
+  evalRound (fun a b => Model.roundAt FloatFormat.binary32 (a + b)) (fun x => (toModel x).toReal) t
 
 /-- Every internal rounded sum has the canonical effective mantissa/exponent representation. -/
 theorem evalRealIEEE_node_eq_computed (a b : SumTree (ExecFloat.Binary 8 23)) :
     evalRealIEEE (.node a b) =
       FloatLib.Floats.Formats.Flocq.toReal (β := binaryRadix) {
         mantissa := nearestEvenMantissa
-          (scaledMantissa binaryRadix fexp32 (evalRealIEEE a + evalRealIEEE b))
-        exponent := cexp binaryRadix fexp32 (evalRealIEEE a + evalRealIEEE b) } := by
-  change fp32Round (evalRealIEEE a + evalRealIEEE b) = _
-  exact fp32Round_eq_computed (evalRealIEEE a + evalRealIEEE b)
+          (scaledMantissa binaryRadix (Model.fexpOf FloatFormat.binary32)
+            (evalRealIEEE a + evalRealIEEE b))
+        exponent := cexp binaryRadix (Model.fexpOf FloatFormat.binary32)
+          (evalRealIEEE a + evalRealIEEE b) } := by
+  change Model.roundAt FloatFormat.binary32 (evalRealIEEE a + evalRealIEEE b) = _
+  exact round_nearestEven_computed (evalRealIEEE a + evalRealIEEE b)
 
 /-- Exact real sum of the decoded leaves. -/
 def exactSumIEEE (t : SumTree (ExecFloat.Binary 8 23)) : ℝ :=
@@ -157,7 +158,8 @@ def sumAbsIEEE (t : SumTree (ExecFloat.Binary 8 23)) : ℝ :=
 Under `FiniteEvalSumTree`, the decoded executable sum agrees with the real-valued rounding model.
 
 Informal: as long as all intermediate `add`s stay finite, `ExecFloat.add` refines
-`fp32Round (toReal a + toReal b)` at each node, so the whole tree refines `evalRealIEEE`.
+`Model.roundAt FloatFormat.binary32 (toReal a + toReal b)` at each node, so the whole tree refines
+`evalRealIEEE`.
 -/
 theorem toReal_evalIEEE_eq_evalRealIEEE_of_FiniteEvalSumTree :
     ∀ t : SumTree (ExecFloat.Binary 8 23), FiniteEvalSumTree t → (toModel (evalIEEE t)).toReal =
@@ -167,19 +169,22 @@ theorem toReal_evalIEEE_eq_evalRealIEEE_of_FiniteEvalSumTree :
       have ha : FiniteEvalSumTree a := h.1
       have hb : FiniteEvalSumTree b := h.2.1
       have hfin : isFinite (ExecFloat.add (evalIEEE a) (evalIEEE b)) = true := h.2.2
-      have hrecA : (toModel (evalIEEE a)).toReal = evalRealIEEE a := by
-        simpa using (toReal_evalIEEE_eq_evalRealIEEE_of_FiniteEvalSumTree a ha)
-      have hrecB : (toModel (evalIEEE b)).toReal = evalRealIEEE b := by
-        simpa using (toReal_evalIEEE_eq_evalRealIEEE_of_FiniteEvalSumTree b hb)
+      have hrecA : (toModel (evalIEEE a)).toReal = evalRealIEEE a :=
+        toReal_evalIEEE_eq_evalRealIEEE_of_FiniteEvalSumTree a ha
+      have hrecB : (toModel (evalIEEE b)).toReal = evalRealIEEE b :=
+        toReal_evalIEEE_eq_evalRealIEEE_of_FiniteEvalSumTree b hb
       have hadd :
           (toModel (ExecFloat.add (evalIEEE a) (evalIEEE b))).toReal =
-            fp32Round ((toModel (evalIEEE a)).toReal + (toModel (evalIEEE b)).toReal) :=
-        toReal_add_eq_fp32Round_of_isFinite (x := evalIEEE a) (y := evalIEEE b) hfin
+            Model.roundAt FloatFormat.binary32
+              ((toModel (evalIEEE a)).toReal + (toModel (evalIEEE b)).toReal) :=
+        toReal_add_eq_round_of_isFinite (x := evalIEEE a) (y := evalIEEE b) hfin
       calc
         (Model.toReal ∘ toModel) (evalIEEE (SumTree.node a b))
             = (toModel (ExecFloat.add (evalIEEE a) (evalIEEE b))).toReal := by simp [evalIEEE]
-        _ = fp32Round ((toModel (evalIEEE a)).toReal + (toModel (evalIEEE b)).toReal) := hadd
-        _ = fp32Round (evalRealIEEE a + evalRealIEEE b) := by rw [hrecA, hrecB]
+        _ = Model.roundAt FloatFormat.binary32
+          ((toModel (evalIEEE a)).toReal + (toModel (evalIEEE b)).toReal) := hadd
+        _ = Model.roundAt FloatFormat.binary32 (evalRealIEEE a + evalRealIEEE b)
+            := by rw [hrecA, hrecB]
         _ = evalRealIEEE (SumTree.node a b) := by simp [evalRealIEEE, evalRound]
 
 /--
@@ -196,24 +201,24 @@ theorem sumTreeResult_enclosure
     (xs : Array (ExecFloat.Binary 8 23)) (r : ExecFloat.Binary 8 23)
     (hres : sumTreeResult xs r)
     (u : ℝ)
-    (H : RelativeLocalAddBound (fun a b => fp32Round (a + b)) u)
+    (H : RelativeLocalAddBound (fun a b => Model.roundAt FloatFormat.binary32 (a + b)) u)
     (hu : 0 ≤ u) :
     ∃ t : SumTree (ExecFloat.Binary 8 23),
       List.Perm t.leaves.toList xs.toList ∧ evalIEEE t = r ∧
-      _root_.abs ((toModel r).toReal - exactSumIEEE t) ≤ (growth u t.leafCount - 1) * sumAbsIEEE t
-        := by
+      _root_.abs ((toModel r).toReal - exactSumIEEE t) ≤
+        (growth u t.leafCount - 1) * sumAbsIEEE t := by
   rcases hres with ⟨t, hperm, hr, hfin⟩
   refine ⟨t, hperm, hr, ?_⟩
   have hto : (toModel (evalIEEE t)).toReal = evalRealIEEE t :=
     toReal_evalIEEE_eq_evalRealIEEE_of_FiniteEvalSumTree t hfin
   have hE :
-      _root_.abs (evalRealIEEE t - exactSumIEEE t) ≤ (growth u t.leafCount - 1) * sumAbsIEEE t := by
-    exact evalRound_enclosure_of_relativeLocalAddBound
-      (α := ExecFloat.Binary 8 23) (roundAdd := fun a b => fp32Round (a + b))
+      _root_.abs (evalRealIEEE t - exactSumIEEE t) ≤ (growth u t.leafCount - 1) * sumAbsIEEE t :=
+    evalRound_enclosure_of_relativeLocalAddBound
+      (α := ExecFloat.Binary 8 23)
+      (roundAdd := fun a b => Model.roundAt FloatFormat.binary32 (a + b))
       (leafVal := fun x : ExecFloat.Binary 8 23 => (toModel x).toReal) (u := u) H hu t
-  -- rewrite `evalRealIEEE t` as `toReal r` using `r = evalIEEE t`.
   have htr : (toModel r).toReal = evalRealIEEE t := by simpa [hr] using hto
-  -- avoid `simp` here: `simp` unfolds `toReal` and obscures rewriting.
+  -- `simp` would unfold `toReal` here and obscure the rewrite, so use `rw`.
   rw [htr]
   exact hE
 
@@ -239,19 +244,16 @@ Two important notes (to avoid over-claiming):
 1) Our enclosure bounds the *accumulation* error (the rounded adds) relative to the real
    sum of the **already-rounded** products `toReal (mul x y)`. If you want a bound relative to the
    exact real dot product `Σᵢ (toReal xᵢ) * (toReal yᵢ)`, you also need a per-product error bound
-     for
-   `mul` (provided elsewhere).
+   for `mul` (provided elsewhere).
 2) Some runtimes use fused multiply-add (FMA) for dot products. `ExecFloat.Binary 8 23` has an
-`fma`, but this
-   particular model uses the more basic “mul then add” semantics.
+   `fma`, but this particular model uses the more basic “mul then add” semantics.
 -/
 
 /-!
 ### Executable semantics
 
 `evalDotIEEE` is the concrete reduction semantics: it returns an `ExecFloat.Binary 8 23` result and
-therefore
-includes all IEEE special-value behavior and rounding.
+therefore includes all IEEE special-value behavior and rounding.
 -/
 
 /--
@@ -259,8 +261,8 @@ Evaluate a dot-product reduction tree using executable `mul` at leaves and `add`
 
 This is the “concrete” semantics of a sum-of-products accumulation.
 -/
-def evalDotIEEE : SumTree ((ExecFloat.Binary 8 23) × (ExecFloat.Binary 8 23)) → (ExecFloat.Binary 8
-  23)
+def evalDotIEEE :
+    SumTree ((ExecFloat.Binary 8 23) × (ExecFloat.Binary 8 23)) → ExecFloat.Binary 8 23
   | .leaf (x, y) => ExecFloat.mul x y
   | .node a b => ExecFloat.add (evalDotIEEE a) (evalDotIEEE b)
 
@@ -277,13 +279,13 @@ add errors”.
 def FiniteEvalDot : SumTree ((ExecFloat.Binary 8 23) × (ExecFloat.Binary 8 23)) → Prop
   | .leaf (x, y) => isFinite (ExecFloat.mul x y) = true
   | .node a b =>
-      FiniteEvalDot a ∧ FiniteEvalDot b ∧ isFinite (ExecFloat.add (evalDotIEEE a) (evalDotIEEE b)) =
-        true
+      FiniteEvalDot a ∧ FiniteEvalDot b ∧
+        isFinite (ExecFloat.add (evalDotIEEE a) (evalDotIEEE b)) = true
 
 /-- If a dot-product reduction stays finite at every step, then the final result is finite. -/
 theorem isFinite_evalDotIEEE_of_FiniteEvalDot :
-    ∀ t : SumTree ((ExecFloat.Binary 8 23) × (ExecFloat.Binary 8 23)), FiniteEvalDot t → isFinite
-      (evalDotIEEE t) = true
+    ∀ t : SumTree ((ExecFloat.Binary 8 23) × (ExecFloat.Binary 8 23)),
+      FiniteEvalDot t → isFinite (evalDotIEEE t) = true
   | .leaf _, hx => by simpa [evalDotIEEE, FiniteEvalDot] using hx
   | .node a b, hx => by simpa [evalDotIEEE] using hx.2.2
 
@@ -291,11 +293,10 @@ theorem isFinite_evalDotIEEE_of_FiniteEvalDot :
 Nondeterministic dot-product result relation.
 
 `dotTreeResult xs r` means: there exists a reduction tree over leaf pairs in `xs` (up to
-  permutation)
-whose executable evaluation `evalDotIEEE` yields `r` and stays finite throughout.
+permutation) whose executable evaluation `evalDotIEEE` yields `r` and stays finite throughout.
 -/
-def dotTreeResult (xs : Array ((ExecFloat.Binary 8 23) × (ExecFloat.Binary 8 23))) (r :
-  ExecFloat.Binary 8 23) : Prop :=
+def dotTreeResult (xs : Array ((ExecFloat.Binary 8 23) × (ExecFloat.Binary 8 23)))
+    (r : ExecFloat.Binary 8 23) : Prop :=
   ∃ t : SumTree ((ExecFloat.Binary 8 23) × (ExecFloat.Binary 8 23)),
     List.Perm t.leaves.toList xs.toList ∧ evalDotIEEE t = r ∧ FiniteEvalDot t
 
@@ -303,12 +304,13 @@ def dotTreeResult (xs : Array ((ExecFloat.Binary 8 23) × (ExecFloat.Binary 8 23
 Real-valued finite-branch model of `evalDotIEEE`.
 
 - Leaves contribute `toReal (mul x y)` (the real meaning of the executable product).
-- Internal nodes add those contributions using `fp32Round (a+b)`.
+- Internal nodes add those contributions using `Model.roundAt FloatFormat.binary32 (a+b)`.
 
 This matches the standard floating-point model for accumulation, under `FiniteEvalDot`.
 -/
 def evalRealDotIEEE (t : SumTree ((ExecFloat.Binary 8 23) × (ExecFloat.Binary 8 23))) : ℝ :=
-  evalRound (fun a b => fp32Round (a + b)) (fun p => (toModel (ExecFloat.mul p.1 p.2)).toReal) t
+  evalRound (fun a b => Model.roundAt FloatFormat.binary32 (a + b))
+    (fun p => (toModel (ExecFloat.mul p.1 p.2)).toReal) t
 
 /-- A finite executable dot-product leaf has the effective rounded-product representation. -/
 theorem evalRealDotIEEE_leaf_eq_computed (x y : ExecFloat.Binary 8 23)
@@ -316,8 +318,10 @@ theorem evalRealDotIEEE_leaf_eq_computed (x y : ExecFloat.Binary 8 23)
     evalRealDotIEEE (.leaf (x, y)) =
       FloatLib.Floats.Formats.Flocq.toReal (β := binaryRadix) {
         mantissa := nearestEvenMantissa
-          (scaledMantissa binaryRadix fexp32 ((toModel x).toReal * (toModel y).toReal))
-        exponent := cexp binaryRadix fexp32 ((toModel x).toReal * (toModel y).toReal) } := by
+          (scaledMantissa binaryRadix (Model.fexpOf FloatFormat.binary32)
+            ((toModel x).toReal * (toModel y).toReal))
+        exponent := cexp binaryRadix (Model.fexpOf FloatFormat.binary32)
+          ((toModel x).toReal * (toModel y).toReal) } := by
   change (toModel (ExecFloat.mul x y)).toReal = _
   exact toReal_mul_eq_computed_of_isFinite x y hfin
 
@@ -327,12 +331,12 @@ theorem evalRealDotIEEE_node_eq_computed
     evalRealDotIEEE (.node a b) =
       FloatLib.Floats.Formats.Flocq.toReal (β := binaryRadix) {
         mantissa := nearestEvenMantissa
-          (scaledMantissa binaryRadix fexp32
+          (scaledMantissa binaryRadix (Model.fexpOf FloatFormat.binary32)
             (evalRealDotIEEE a + evalRealDotIEEE b))
-        exponent := cexp binaryRadix fexp32
+        exponent := cexp binaryRadix (Model.fexpOf FloatFormat.binary32)
           (evalRealDotIEEE a + evalRealDotIEEE b) } := by
-  change fp32Round (evalRealDotIEEE a + evalRealDotIEEE b) = _
-  exact fp32Round_eq_computed (evalRealDotIEEE a + evalRealDotIEEE b)
+  change Model.roundAt FloatFormat.binary32 (evalRealDotIEEE a + evalRealDotIEEE b) = _
+  exact round_nearestEven_computed (evalRealDotIEEE a + evalRealDotIEEE b)
 
 /--
 Exact real sum of the rounded leaf products.
@@ -370,14 +374,17 @@ theorem toReal_evalDotIEEE_eq_evalRealDotIEEE_of_FiniteEvalDot :
         toReal_evalDotIEEE_eq_evalRealDotIEEE_of_FiniteEvalDot b hb
       have hadd :
           (toModel (ExecFloat.add (evalDotIEEE a) (evalDotIEEE b))).toReal =
-            fp32Round ((toModel (evalDotIEEE a)).toReal + (toModel (evalDotIEEE b)).toReal) :=
-        toReal_add_eq_fp32Round_of_isFinite (x := evalDotIEEE a) (y := evalDotIEEE b) hfin
+            Model.roundAt FloatFormat.binary32
+              ((toModel (evalDotIEEE a)).toReal + (toModel (evalDotIEEE b)).toReal) :=
+        toReal_add_eq_round_of_isFinite (x := evalDotIEEE a) (y := evalDotIEEE b) hfin
       calc
         (Model.toReal ∘ toModel) (evalDotIEEE (SumTree.node a b))
-            = (toModel (ExecFloat.add (evalDotIEEE a) (evalDotIEEE b))).toReal := by simp
-              [evalDotIEEE]
-        _ = fp32Round ((toModel (evalDotIEEE a)).toReal + (toModel (evalDotIEEE b)).toReal) := hadd
-        _ = fp32Round (evalRealDotIEEE a + evalRealDotIEEE b) := by rw [hrecA, hrecB]
+            = (toModel (ExecFloat.add (evalDotIEEE a) (evalDotIEEE b))).toReal := by
+              simp [evalDotIEEE]
+        _ = Model.roundAt FloatFormat.binary32
+          ((toModel (evalDotIEEE a)).toReal + (toModel (evalDotIEEE b)).toReal) := hadd
+        _ = Model.roundAt FloatFormat.binary32 (evalRealDotIEEE a + evalRealDotIEEE b)
+            := by rw [hrecA, hrecB]
         _ = evalRealDotIEEE (SumTree.node a b) := by simp [evalRealDotIEEE, evalRound]
 
 /--
@@ -395,22 +402,23 @@ theorem dotTreeResult_enclosure
     (xs : Array ((ExecFloat.Binary 8 23) × (ExecFloat.Binary 8 23))) (r : ExecFloat.Binary 8 23)
     (hres : dotTreeResult xs r)
     (u : ℝ)
-    (H : RelativeLocalAddBound (fun a b => fp32Round (a + b)) u)
+    (H : RelativeLocalAddBound (fun a b => Model.roundAt FloatFormat.binary32 (a + b)) u)
     (hu : 0 ≤ u) :
     ∃ t : SumTree ((ExecFloat.Binary 8 23) × (ExecFloat.Binary 8 23)),
       List.Perm t.leaves.toList xs.toList ∧ evalDotIEEE t = r ∧
-      _root_.abs ((toModel r).toReal - exactSumDotIEEE t) ≤ (growth u t.leafCount - 1) *
-        sumAbsDotIEEE t := by
+      _root_.abs ((toModel r).toReal - exactSumDotIEEE t) ≤
+        (growth u t.leafCount - 1) * sumAbsDotIEEE t := by
   rcases hres with ⟨t, hperm, hr, hfin⟩
   refine ⟨t, hperm, hr, ?_⟩
   have hto : (toModel (evalDotIEEE t)).toReal = evalRealDotIEEE t :=
     toReal_evalDotIEEE_eq_evalRealDotIEEE_of_FiniteEvalDot t hfin
   have hE :
-      _root_.abs (evalRealDotIEEE t - exactSumDotIEEE t) ≤ (growth u t.leafCount - 1) *
-        sumAbsDotIEEE t := by
-    simpa [evalRealDotIEEE, exactSumDotIEEE, sumAbsDotIEEE] using
-      (evalRound_enclosure_of_relativeLocalAddBound (roundAdd := fun a b => fp32Round (a + b))
-        (leafVal := fun p => (toModel (ExecFloat.mul p.1 p.2)).toReal) (u := u) H hu t)
+      _root_.abs (evalRealDotIEEE t - exactSumDotIEEE t) ≤
+        (growth u t.leafCount - 1) * sumAbsDotIEEE t :=
+    evalRound_enclosure_of_relativeLocalAddBound
+      (α := (ExecFloat.Binary 8 23) × (ExecFloat.Binary 8 23))
+      (roundAdd := fun a b => Model.roundAt FloatFormat.binary32 (a + b))
+      (leafVal := fun p => (toModel (ExecFloat.mul p.1 p.2)).toReal) (u := u) H hu t
   have htr : (toModel r).toReal = evalRealDotIEEE t := by simpa [hr] using hto
   rw [htr]
   exact hE

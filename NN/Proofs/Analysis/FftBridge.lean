@@ -56,11 +56,6 @@ section ComplexContext
 
 open Complex
 
-local instance : Coe Nat ℂ where
-  coe n := (Nat.cast n : ℂ)
-
-@[simp] private theorem coeNat_eq_natCast (n : Nat) : (Coe.coe n : ℂ) = (n : ℂ) := rfl
-
 local instance : LT ℂ := ⟨fun x y => x.re < y.re⟩
 local instance : LE ℂ := ⟨fun x y => x.re ≤ y.re⟩
 
@@ -134,10 +129,9 @@ $\omega_n^{jk}=\exp(-2\pi ijk/n)$.
 
 The proof is just Euler's formula plus scalar normalization of the exponent.
 -/
-theorem twiddle_eq_omega_pow (n j k : Nat) (hn : n ≠ 0) :
+theorem twiddle_eq_omega_pow (n j k : Nat) :
     Runtime.Autograd.Model.Layers.FFT.twiddle (α := ℂ) n j k =
       Proofs.Fft.ω n ^ (j * k) := by
-  have hn0 : (n : ℂ) ≠ 0 := by exact_mod_cast hn
   set θ : ℂ := (2 : ℂ) * MathFunctions.pi * (j : ℂ) * (k : ℂ) / (n : ℂ)
 
   have hEuler :
@@ -204,10 +198,9 @@ development.
 This is the inverse-direction analogue of `twiddle_eq_omega_pow`: the runtime
 $\cos\theta+i\sin\theta$ term is $\zeta_n^{jk}$.
 -/
-theorem twiddleInv_eq_zeta_pow (n j k : Nat) (hn : n ≠ 0) :
+theorem twiddleInv_eq_zeta_pow (n j k : Nat) :
     Runtime.Autograd.Model.Layers.FFT.twiddleInv (α := ℂ) n j k =
       Proofs.Fft.ζ n ^ (j * k) := by
-  have hn0 : (n : ℂ) ≠ 0 := by exact_mod_cast hn
   set θ : ℂ := (2 : ℂ) * MathFunctions.pi * (j : ℂ) * (k : ℂ) / (n : ℂ)
 
   have hEuler :
@@ -268,13 +261,13 @@ Entrywise bridge from the runtime tensor DFT matrix to the exact mathlib DFT mat
 This is the first point where we leave pure root-of-unity algebra and connect to TorchLean's
 shape-indexed tensor representation.
 -/
-theorem dftMatrix_entry_eq (n : Nat) (hn : n ≠ 0) (k j : Fin n) :
+theorem dftMatrix_entry_eq (n : Nat) (k j : Fin n) :
     Spec.get2 (Runtime.Autograd.Model.Layers.FFT.dftMatrix (α := ℂ) n) k j =
       Proofs.Fft.dftMatrix n k j := by
   -- `get2` reduces the tensor constructor and exposes `twiddle`.
   simp [Spec.get2, Spec.get,
     Runtime.Autograd.Model.Layers.FFT.dftMatrix, Proofs.Fft.dftMatrix,
-    twiddle_eq_omega_pow (n := n) (j := j.val) (k := k.val) hn]
+    twiddle_eq_omega_pow (n := n) (j := j.val) (k := k.val)]
 
 /--
 Entrywise bridge from the runtime tensor IDFT matrix to the exact mathlib inverse DFT matrix.
@@ -282,13 +275,13 @@ Entrywise bridge from the runtime tensor IDFT matrix to the exact mathlib invers
 Together with `dftMatrix_entry_eq`, this is the transport layer needed to reuse the pure DFT
 inversion theorem for runtime FFT matrix definitions.
 -/
-theorem idftMatrix_entry_eq (n : Nat) (hn : n ≠ 0) (j k : Fin n) :
+theorem idftMatrix_entry_eq (n : Nat) (j k : Fin n) :
     Spec.get2 (Runtime.Autograd.Model.Layers.FFT.idftMatrix (α := ℂ) n) j k =
       Proofs.Fft.idftMatrix n j k := by
   -- `get2` reduces the tensor constructor and exposes `twiddleInv`.
   simp [Spec.get2, Spec.get,
     Runtime.Autograd.Model.Layers.FFT.idftMatrix, Proofs.Fft.idftMatrix,
-    twiddleInv_eq_zeta_pow (n := n) (j := j.val) (k := k.val) hn]
+    twiddleInv_eq_zeta_pow (n := n) (j := j.val) (k := k.val)]
 
 end ComplexContext
 

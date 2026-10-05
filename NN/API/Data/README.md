@@ -16,11 +16,16 @@ For data already represented as Lean values:
 
 - `Data.fromTensors xs ys` splits two batched `Float` tensors along their leading axis.
 - `Data.fromSamples values` wraps an array of concrete `Float` samples.
+- `Data.fromStream samples` wraps a lazily indexed stream of concrete `Float` samples.
 - `Data.fromSample sample` wraps one concrete `Float` sample.
 - `Data.defer action` materializes one concrete `Float` sample from an `IO` action.
 - `Data.generate builder` constructs samples using the arithmetic selected by the trainer.
 
 These are source constructors for one dataset abstraction, not separate dataset types.
+
+`Data.CausalLM.byteSamples` returns a `SampleStream`, not an array. With `α := Float`, pass
+that result to `Data.fromStream`; samples are constructed and converted to the trainer's scalar
+when accessed. `Data.fromSamples` is for an existing array of samples.
 
 Manual loops that already own a runtime scalar can import `NN.Data.SampleStream`. A sample stream is
 finite and lazily indexed: wrapping an array does not copy it, and slicing a batched tensor happens

@@ -48,30 +48,31 @@ def maxPool {α : Type} {Δ : Type} [TorchLean.Storage α] [Context α]
   if hKernel : (∀ i : Fin d, kernel.getScalar i ≠ 0) then
     if hStride : (∀ i : Fin d, stride.getScalar i ≠ 0) then
       let ⟨ss, g, _⟩ ← get
-      let ix ← liftM (mkIdx (_α := α) (Γ := Γ) ss x)
+      let ix ← liftM (mkIdx (Γ := Γ) ss x)
       let layer : Spec.MaxPoolSpec d kernel stride padding hKernel hStride := {}
       let outSpatial := Spec.poolOutSpatialPad inSpatial kernel stride padding
       let outShape : Shape := Shape.ofList (C :: Tensor.to outSpatial (List Nat))
       let inShape : Shape := Shape.ofList (C :: Tensor.to inSpatial (List Nat))
       let node : NodeData α Δ (Γ ++ ss) outShape :=
-        { forward := fun ctx _d =>
-            let xv := getIdx (α := α) (xs := ctx) ix
+        NodeData.ofLocalCompact (fun lookup => lookup.read ix)
+          (forward := fun ctx _d =>
+            let xv := ctx
             Spec.maxPoolSpec (α := α) (d := d) (C := C)
               (inSpatial := inSpatial) (kernel := kernel) (stride := stride) (padding := padding)
-              (layer := layer) xv
-          jvp := fun ctx dctx _d =>
-            let xv := getIdx (α := α) (xs := ctx) ix
-            let dx := getIdx (α := α) (xs := dctx) ix
+              (layer := layer) xv)
+          (jvp := fun ctx dctx _d =>
+            let xv := ctx
+            let dx := dctx
             Spec.maxPoolLinearizationSpec (α := α) (d := d) (C := C)
               (inSpatial := inSpatial) (kernel := kernel) (stride := stride) (padding := padding)
-              (layer := layer) xv dx
-          vjp := fun ctx _d δ =>
-            let xv := getIdx (α := α) (xs := ctx) ix
+              (layer := layer) xv dx)
+          (vjp := fun ctx _d δ =>
+            let xv := ctx
             let dx :=
               Spec.maxPoolBackwardSpec (α := α) (d := d) (C := C)
                 (inSpatial := inSpatial) (kernel := kernel) (stride := stride) (padding := padding)
                 (layer := layer) (input := xv) (gradOutput := δ)
-            TensorPack.single (α := α) (Γ := Γ ++ ss) (s := inShape) ix dx }
+            Contributions.single (α := α) (Γ := Γ ++ ss) (s := inShape) ix dx)
       push (α := α) (Δ := Δ) (Γ := Γ) (ss := ss) (s := outShape) g node
     else
       throw "typed GraphM: max_pool requires stride > 0 on every spatial axis"
@@ -96,28 +97,29 @@ def avgPool {α : Type} {Δ : Type} [TorchLean.Storage α] [Context α]
   if hKernel : (∀ i : Fin d, kernel.getScalar i ≠ 0) then
     if hStride : (∀ i : Fin d, stride.getScalar i ≠ 0) then
       let ⟨ss, g, _⟩ ← get
-      let ix ← liftM (mkIdx (_α := α) (Γ := Γ) ss x)
+      let ix ← liftM (mkIdx (Γ := Γ) ss x)
       let layer : Spec.AvgPoolSpec d kernel stride padding hKernel hStride := {}
       let outSpatial := Spec.poolOutSpatialPad inSpatial kernel stride padding
       let outShape : Shape := Shape.ofList (C :: Tensor.to outSpatial (List Nat))
       let inShape : Shape := Shape.ofList (C :: Tensor.to inSpatial (List Nat))
       let node : NodeData α Δ (Γ ++ ss) outShape :=
-        { forward := fun ctx _d =>
-            let xv := getIdx (α := α) (xs := ctx) ix
+        NodeData.ofLocalCompact (fun lookup => lookup.read ix)
+          (forward := fun ctx _d =>
+            let xv := ctx
             Spec.avgPoolSpec (α := α) (d := d) (C := C)
               (inSpatial := inSpatial) (kernel := kernel) (stride := stride) (padding := padding)
-              (layer := layer) xv
-          jvp := fun _ctx dctx _d =>
-            let dx := getIdx (α := α) (xs := dctx) ix
+              (layer := layer) xv)
+          (jvp := fun _ctx dctx _d =>
+            let dx := dctx
             Spec.avgPoolSpec (α := α) (d := d) (C := C)
               (inSpatial := inSpatial) (kernel := kernel) (stride := stride) (padding := padding)
-              (layer := layer) dx
-          vjp := fun _ctx _d δ =>
+              (layer := layer) dx)
+          (vjp := fun _ctx _d δ =>
             let dx :=
               Spec.avgPoolBackwardSpec (α := α) (d := d) (C := C)
                 (inSpatial := inSpatial) (kernel := kernel) (stride := stride) (padding := padding)
                 (layer := layer) (gradOutput := δ)
-            TensorPack.single (α := α) (Γ := Γ ++ ss) (s := inShape) ix dx }
+            Contributions.single (α := α) (Γ := Γ ++ ss) (s := inShape) ix dx)
       push (α := α) (Δ := Δ) (Γ := Γ) (ss := ss) (s := outShape) g node
     else
       throw "typed GraphM: avg_pool requires stride > 0 on every spatial axis"
@@ -152,31 +154,32 @@ def smoothMaxPool {α : Type} {Δ : Type} [TorchLean.Storage α] [Context α] [D
     if hKernel : (∀ i : Fin d, kernel.getScalar i ≠ 0) then
       if hStride : (∀ i : Fin d, stride.getScalar i ≠ 0) then
         let ⟨ss, g, _⟩ ← get
-        let ix ← liftM (mkIdx (_α := α) (Γ := Γ) ss x)
+        let ix ← liftM (mkIdx (Γ := Γ) ss x)
         let layer : Spec.MaxPoolSpec d kernel stride padding hKernel hStride := {}
         let outSpatial := Spec.poolOutSpatialPad inSpatial kernel stride padding
         let outShape : Shape := Shape.ofList (C :: Tensor.to outSpatial (List Nat))
         let inShape : Shape := Shape.ofList (C :: Tensor.to inSpatial (List Nat))
         let node : NodeData α Δ (Γ ++ ss) outShape :=
-          { forward := fun ctx _d =>
-              let xv := getIdx (α := α) (xs := ctx) ix
+          NodeData.ofLocalCompact (fun lookup => lookup.read ix)
+            (forward := fun ctx _d =>
+              let xv := ctx
               Spec.smoothMaxPoolSpec (α := α) (d := d) (C := C)
                 (inSpatial := inSpatial) (kernel := kernel) (stride := stride) (padding := padding)
-                (layer := layer) (beta := beta) (hBeta := hBeta) xv
-            jvp := fun ctx dctx _d =>
-              let xv := getIdx (α := α) (xs := ctx) ix
-              let dx := getIdx (α := α) (xs := dctx) ix
+                (layer := layer) (beta := beta) (hBeta := hBeta) xv)
+            (jvp := fun ctx dctx _d =>
+              let xv := ctx
+              let dx := dctx
               Spec.smoothMaxPoolJvpSpec (α := α) (d := d) (C := C)
                 (inSpatial := inSpatial) (kernel := kernel) (stride := stride)
-                (padding := padding) (layer := layer) (beta := beta) (hBeta := hBeta) xv dx
-            vjp := fun ctx _d δ =>
-              let xv := getIdx (α := α) (xs := ctx) ix
+                (padding := padding) (layer := layer) (beta := beta) (hBeta := hBeta) xv dx)
+            (vjp := fun ctx _d δ =>
+              let xv := ctx
               let dx :=
                 Spec.smoothMaxPoolBackwardSpec (α := α) (d := d) (C := C)
                   (inSpatial := inSpatial) (kernel := kernel) (stride := stride)
                   (padding := padding) (layer := layer) (beta := beta) (hBeta := hBeta)
                   (input := xv) (gradOutput := δ)
-              TensorPack.single (α := α) (Γ := Γ ++ ss) (s := inShape) ix dx }
+              Contributions.single (α := α) (Γ := Γ ++ ss) (s := inShape) ix dx)
         push (α := α) (Δ := Δ) (Γ := Γ) (ss := ss) (s := outShape) g node
       else
         throw "typed GraphM: smooth_max_pool requires stride > 0 on every spatial axis"

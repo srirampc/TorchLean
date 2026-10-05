@@ -34,13 +34,12 @@ variable {rnd : ℝ → ℤ} [ValidRndToNearest rnd]
 
 local notation "R" => NF β fexp rnd
 
--- Elementwise bounds lifted to tensors via `linf_norm`.
+-- Elementwise bounds lifted to tensors via `linfNorm`.
 
 /--
 Per-entry bound tensor for addition.
 
-`add_bound_tensor epsx epsy xR yR` computes an elementwise error budget for `xR + yR`. Its
-  `linfNorm`
+`addBoundTensor epsx epsy xR yR` computes an elementwise error budget for `xR + yR`. Its `linfNorm`
 is used as the output epsilon in `approxTensor_add_spec`.
 -/
 def addBoundTensor {s : Shape} (epsx epsy : ℝ) (xR yR : Tensor R s) : SpecTensor s :=
@@ -78,7 +77,7 @@ def mulBoundTensor {s : Shape} (epsx epsy : ℝ) (xR yR : Tensor R s) : SpecTens
 /--
 Per-entry bound tensor for scaling by a runtime constant.
 
-`scale_bound_tensor eps c xR` bounds the error of `xR * c` assuming the input is approximated within
+`scaleBoundTensor eps c xR` bounds the error of `xR * c` assuming the input is approximated within
 `eps` and treating `c` as exact (relative to its own `toSpec` value).
 -/
 def scaleBoundTensor {s : Shape} (eps : ℝ) (c : R) (xR : Tensor R s) : SpecTensor s :=
@@ -137,7 +136,7 @@ Per-entry bound tensor for hyperbolic tangent (`tanh`).
 
 Currently uses the coarse unconditional bound from `approx_tanh_nf` (boundedness of `tanh`).
 -/
-def tanhBoundTensor {s : Shape} (_eps : ℝ) (xR : Tensor R s) : SpecTensor s :=
+def tanhBoundTensor {s : Shape} (xR : Tensor R s) : SpecTensor s :=
   mapSpec
     (fun a => (2 : ℝ) + ulp β fexp (Real.tanh a) / 2)
     (tensorToSpec (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd)) xR)
@@ -147,7 +146,7 @@ def tanhBoundTensor {s : Shape} (_eps : ℝ) (xR : Tensor R s) : SpecTensor s :=
 /--
 Per-entry bound tensor for `safeLog`.
 
-`safeLog_bound_tensor ε eps xR` is the elementwise bound used by `approxTensor_safeLog_spec`,
+`safeLogBoundTensor ε eps xR` is the elementwise bound used by `approxTensor_safeLog_spec`,
 combining a `(1/ε)` Lipschitz propagation term with one rounding-ULP term.
 -/
 def safeLogBoundTensor {s : Shape} (ε eps : ℝ) (xR : Tensor R s) : SpecTensor s :=
@@ -169,8 +168,8 @@ theorem approxTensor_safeLog_spec {s : Shape} (ε : ℝ) (hε : 0 < ε) :
         approxTensor (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd))
           (mapSpec (s := s) (safeLog (ε := ε)) xS)
           (mapSpec (s := s) (safeLogR (β := β) (fexp := fexp) (rnd := rnd) ε) xR)
-          (linfNorm (safeLogBoundTensor (β := β) (fexp := fexp) (rnd := rnd) (s := s) ε eps xR))
-            := by
+          (linfNorm (safeLogBoundTensor (β := β) (fexp := fexp) (rnd := rnd)
+            (s := s) ε eps xR)) := by
   intro xS xR eps hx
   have h :=
     approxTensor_map_spec_of_scalar_bound
@@ -183,6 +182,7 @@ theorem approxTensor_safeLog_spec {s : Shape} (ε : ℝ) (hε : 0 < ε) :
         intro x xR hx
         exact approx_safeLog_nf (β := β) (fexp := fexp) (rnd := rnd) hε hx)
   simpa [safeLogBoundTensor] using h
+
 end NFBackend
 
 end

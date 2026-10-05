@@ -24,8 +24,8 @@ lemmas keep additional deterministic random primitives mechanical.
 
 ## Main definitions
 
-- `buildFrom_denoteAllFrom_rand_uniform`
-- `buildFrom_denoteAllFrom_bernoulli_mask`
+- `buildFrom_denoteAllFrom_randUniform`
+- `buildFrom_denoteAllFrom_bernoulliMask`
 -/
 
 @[expose] public section
@@ -43,7 +43,7 @@ open Internal
 open Proofs (Idx getIdx)
 
 /-- Correctness lemma for `.randUniform seed` lowering. -/
-theorem buildFrom_denoteAllFrom_rand_uniform
+theorem buildFrom_denoteAllFrom_randUniform
     {α : Type} [TorchLean.Storage α] [Context α]
     (g : NN.IR.Graph) (payload : Payload α) {inShape : Shape} {ss : List Shape}
     (gd : ForwardData α [inShape] ss) (i : Nat) (st' : State α inShape)
@@ -98,23 +98,15 @@ theorem buildFrom_denoteAllFrom_rand_uniform
           key, t,
           throw_eq_error]
         rfl
-      have hStep :
-          denoteAllState (α := α) inShape st1 x =
-            vals0.push
-              (Spec.SomeTensor.mk (α := α) n.outShape (nodeData.eval ctx)) := by
-        simpa [vals0, st1, nodeData, ctx] using
-          (denoteAllState_snoc (α := α) (inShape := inShape) (ss := ss)
-            (τ := n.outShape) (gd := gd) (nodeData := nodeData) (x := x))
       have hTail := ih st1 hRec
-      exact buildFrom_denoteAllFrom_finish (α := α) (g := g) (payload := payload)
-        (i := i) (x := x) (hi := hi) (τ := n.outShape)
-        (nodeData := nodeData) (st1 := st1) (st' := st')
-        (ctx := ctx) (vals0 := vals0) (input := input) hTail hEval hStep
+      exact buildFrom_denoteAllFrom_nodeData_exact (α := α) (g := g) (payload := payload)
+        (gd := gd) (i := i) (st' := st') (x := x) (hi := hi)
+        (τ := n.outShape) (nodeData := nodeData) hTail hEval
   | false =>
       exact False.elim <| throw_bind_ne_ok (by simpa [hp] using hBuild)
 
 /-- Correctness lemma for `.bernoulliMask seed` lowering. -/
-theorem buildFrom_denoteAllFrom_bernoulli_mask
+theorem buildFrom_denoteAllFrom_bernoulliMask
     {α : Type} [TorchLean.Storage α] [Context α]
     (g : NN.IR.Graph) (payload : Payload α) {inShape : Shape} {ss : List Shape}
     (gd : ForwardData α [inShape] ss) (i : Nat) (st' : State α inShape)
@@ -159,7 +151,7 @@ theorem buildFrom_denoteAllFrom_bernoulli_mask
               let key := Spec.Random.keyOf seed i
               let nodeData : ForwardNode α ([inShape] ++ ss) n.outShape :=
                 mkForwardNode (α := α) (Γ := [inShape] ++ ss) (τ := n.outShape) (fun ctx =>
-                  let kpT := getIdx (α := α) (xs := ctx) ip
+                  let kpT := readTensor (α := α) (xs := ctx) ip
                   let kp : α := kpT.item
                   Spec.Random.mask (α := α) key kp (s := n.outShape))
               let st1 : State α inShape := ⟨ss ++ [n.outShape], .snoc (ss := ss) gd nodeData⟩
@@ -167,19 +159,6 @@ theorem buildFrom_denoteAllFrom_bernoulli_mask
                   buildFrom (α := α) (g := g) (payload := payload) (inShape := inShape)
                       (i := i + 1) st1 =
                     .ok st' := by
-                change
-                  buildFrom (α := α) (g := g) (payload := payload) (inShape := inShape)
-                      (i := i + 1)
-                      ⟨ss ++ [n.outShape],
-                        ForwardData.snoc (α := α) (Γ := [inShape]) (ss := ss)
-                          (τ := n.outShape) gd
-                          (mkForwardNode (α := α) (Γ := [inShape] ++ ss) (τ := n.outShape)
-                            (fun ctx =>
-                              Spec.Random.mask (α := α)
-                                (Spec.Random.keyOf seed i)
-                                (getIdx (α := α) (xs := ctx) ip).item
-                                (s := n.outShape)))⟩ =
-                    .ok st'
                 exact hBuild
               have hGet :
                   vals0[pId]? =
@@ -196,18 +175,10 @@ theorem buildFrom_denoteAllFrom_bernoulli_mask
                   NN.IR.Graph.normalizeNodeOutput, hN, hk, hp, hGet, nodeData,
                   mkForwardNode, throw_eq_error, key]
                 rfl
-              have hStep :
-                  denoteAllState (α := α) inShape st1 x =
-                    vals0.push
-                      (Spec.SomeTensor.mk (α := α) n.outShape (nodeData.eval ctx)) := by
-                simpa [vals0, st1, nodeData, ctx] using
-                  (denoteAllState_snoc (α := α) (inShape := inShape) (ss := ss)
-                    (τ := n.outShape) (gd := gd) (nodeData := nodeData) (x := x))
               have hTail := ih st1 hRec
-              exact buildFrom_denoteAllFrom_finish (α := α) (g := g) (payload := payload)
-                (i := i) (x := x) (hi := hi) (τ := n.outShape)
-                (nodeData := nodeData) (st1 := st1) (st' := st')
-                (ctx := ctx) (vals0 := vals0) (input := input) hTail hEval hStep
+              exact buildFrom_denoteAllFrom_nodeData_exact (α := α) (g := g) (payload := payload)
+                (gd := gd) (i := i) (st' := st') (x := x) (hi := hi)
+                (τ := n.outShape) (nodeData := nodeData) hTail hEval
 
 end IRExec
 end Autograd

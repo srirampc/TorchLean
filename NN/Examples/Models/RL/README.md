@@ -21,7 +21,7 @@ live in `NN/Spec/RL/`, runtime sessions in `NN/Runtime/RL/`, and proof hooks in 
 Lean-native GridWorld:
 
 ```bash
-lake -R -K cuda=true exe torchlean ppo_gridworld --device cuda \
+scripts/lake.sh -Kcuda=true exe torchlean ppo_gridworld --device cuda \
   --updates 1 --eval-every 1 --eval-episodes 1 --eval-max-steps 8
 ```
 
@@ -29,21 +29,21 @@ Gymnasium CartPole:
 
 ```bash
 python3 -m pip install --user 'gymnasium>=1.0'
-lake -R -K cuda=true exe torchlean ppo_cartpole --device cuda \
+scripts/lake.sh -Kcuda=true exe torchlean ppo_cartpole --device cuda \
   --updates 1 --eval-every 1 --eval-episodes 1 --eval-max-steps 8
 ```
 
 DQN replay mini-example:
 
 ```bash
-lake exe torchlean dqn_replay
+scripts/lake.sh exe torchlean dqn_replay
 ```
 
 Optional Pong RAM path:
 
 ```bash
 python3 -m pip install --user 'gymnasium>=1.0' ale-py
-lake -R -K cuda=true exe torchlean ppo_pong_ram --device cuda --updates 1
+scripts/lake.sh -Kcuda=true exe torchlean ppo_pong_ram --device cuda --updates 1
 ```
 
 ## Artifacts
@@ -56,11 +56,14 @@ PPO commands write JSON artifacts under `data/rl/` by default. Open the correspo
 The RL examples are executable algorithm examples with formal hooks. The checked surface is the
 environment/rollout boundary and the Lean-native MDP structure that downstream code consumes:
 
-- Gymnasium observations, rewards, actions, and done flags are checked before entering the typed
-  rollout stream.
+- Gymnasium transitions are decoded into typed observations and actions, then checked against the
+  configured contract. CartPole requires finite observations and rewards; Pong additionally checks
+  that RAM values lie in `[0, 255]`. Both permit simultaneous termination and truncation.
 - Lean-native GridWorld also goes through the boundary checker so downstream code sees one data
   shape.
-- MDP and boundary facts live in `NN/Spec/RL` and `NN/Proofs/RL`.
+- MDP and boundary facts live in `NN/Spec/RL` and `NN/Proofs/RL`. The example's `proofGridWorld`
+  uses sparse rewards, while its executable trains with shaped rewards; the validity theorem
+  concerns the former.
 
 That separation lets the same rollout data be used for runtime training, widget inspection, and
 future theorem statements. External simulators stay named producers; TorchLean owns the typed

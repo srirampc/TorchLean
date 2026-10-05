@@ -72,6 +72,14 @@ def tail {shape : Shape} {shapes : List Shape}
   match xs with
   | .cons _ rest => rest
 
+/-- A family of nonempty packs is determined by its heads and tails. -/
+theorem eta_cons {ι : Type*} {shape : Shape} {shapes : List Shape}
+    (f : ι → TensorPack α (shape :: shapes)) :
+    f = fun y => .cons (f y).head (f y).tail := by
+  funext y
+  cases f y
+  rfl
+
 /-- Return the tensor at position `i`; its shape is determined by the pack's shape list. -/
 def get : {ss : List Shape} →
     TensorPack α ss → (i : Fin ss.length) → TorchLean.Tensor α (ss.get i)
@@ -120,13 +128,24 @@ def stackLeadingM {m : Type → Type} [Monad m] (leading : Shape) {shapes : List
   pure (stackLeading leading rows)
 
 /-- Apply a shape-preserving function to every tensor in a pack. -/
-def map (f : ∀ {shape : Shape}, TorchLean.Tensor α shape → TorchLean.Tensor β shape) :
+@[simp] def map
+    (f : ∀ {shape : Shape}, TorchLean.Tensor α shape → TorchLean.Tensor β shape) :
     {ss : List Shape} → TensorPack α ss → TensorPack β ss
   | [], .nil => .nil
   | _ :: ss, .cons x xs => .cons (f x) (map (f := f) (ss := ss) xs)
 
+/-- Apply a shape-preserving effectful function to each tensor, from left to right. -/
+def mapM {m : Type → Type} [Monad m]
+    (f : ∀ {shape : Shape}, Tensor α shape → m (Tensor β shape)) :
+    {shapes : List Shape} → TensorPack α shapes → m (TensorPack β shapes)
+  | [], .nil => pure .nil
+  | _ :: _, .cons x xs => do
+      let y ← f x
+      let ys ← mapM f xs
+      pure (.cons y ys)
+
 /-- Combine two packs pointwise with a shape-preserving binary function. -/
-def zipWith
+@[simp] def zipWith
     (f : ∀ {shape : Shape},
       TorchLean.Tensor α shape → TorchLean.Tensor β shape → TorchLean.Tensor γ shape) :
     {ss : List Shape} →
@@ -180,15 +199,14 @@ def split : {ss₁ ss₂ : List Shape} →
   cases xs
   rfl
 
-/-- Construct the all-zero tensor pack. -/
-def zero [Zero α] : {ss : List Shape} → TensorPack α ss
-  | [] => .nil
-  | shape :: ss => .cons (TorchLean.Tensor.zeros shape) (zero (ss := ss))
-
 /-- Construct a tensor pack whose every entry contains `value`. -/
-def fill (value : α) : {ss : List Shape} → TensorPack α ss
+@[simp] def fill (value : α) : {ss : List Shape} → TensorPack α ss
   | [] => .nil
   | shape :: ss => .cons (TorchLean.Tensor.full shape value) (fill value (ss := ss))
+
+/-- Construct the all-zero tensor pack. -/
+def zero [Zero α] {ss : List Shape} : TensorPack α ss :=
+  fill 0
 
 /-- Print every tensor in a pack in state order, with its statically known shape. -/
 instance [Repr α] {shapes : List Shape} : Repr (TensorPack α shapes) where
@@ -202,25 +220,19 @@ instance [Repr α] {shapes : List Shape} : Repr (TensorPack α shapes) where
       "]"
 
 /-- Add two tensor packs pointwise. -/
-def add [Add α] : {ss : List Shape} →
-    TensorPack α ss → TensorPack α ss → TensorPack α ss
-  | [], .nil, .nil => .nil
-  | _ :: ss, .cons x xs, .cons y ys =>
-      .cons (TorchLean.Tensor.addSpec x y) (add (ss := ss) xs ys)
+def add [Add α] {ss : List Shape}
+    (xs ys : TensorPack α ss) : TensorPack α ss :=
+  zipWith TorchLean.Tensor.addSpec xs ys
 
 /-- Multiply every tensor entry by the same scalar. -/
-def scale [Mul α] (c : α) : {ss : List Shape} →
-    TensorPack α ss → TensorPack α ss
-  | [], .nil => .nil
-  | _ :: ss, .cons x xs =>
-      .cons (TorchLean.Tensor.scaleSpec x c) (scale c (ss := ss) xs)
+def scale [Mul α] (c : α) {ss : List Shape}
+    (xs : TensorPack α ss) : TensorPack α ss :=
+  xs.map (fun tensor => TorchLean.Tensor.scaleSpec tensor c)
 
 /-- Subtract two tensor packs pointwise. -/
-def sub [Sub α] : {ss : List Shape} →
-    TensorPack α ss → TensorPack α ss → TensorPack α ss
-  | [], .nil, .nil => .nil
-  | _ :: ss, .cons x xs, .cons y ys =>
-      .cons (TorchLean.Tensor.subSpec x y) (sub (ss := ss) xs ys)
+def sub [Sub α] {ss : List Shape}
+    (xs ys : TensorPack α ss) : TensorPack α ss :=
+  zipWith TorchLean.Tensor.subSpec xs ys
 
 /-- Append one tensor to the end of a pack. -/
 def snoc {τ : Shape} : {ss : List Shape} →
@@ -252,6 +264,14 @@ def cast {ss₁ ss₂ : List Shape} (h : ss₁ = ss₂)
     cast h₂ (cast h₁ xs) = cast (h₁.trans h₂) xs := by
   cases h₁
   cases h₂
+  rfl
+
+/-- Transport through a nonempty pack preserves its head and casts its tail. -/
+theorem cast_cons {s : Shape} {ss₁ ss₂ : List Shape}
+    (h : s :: ss₁ = s :: ss₂) (h' : ss₁ = ss₂)
+    (x : Tensor α s) (xs : TensorPack α ss₁) :
+    cast h (.cons x xs) = .cons x (cast h' xs) := by
+  cases h'
   rfl
 
 /-- A cast followed by its inverse is the identity.

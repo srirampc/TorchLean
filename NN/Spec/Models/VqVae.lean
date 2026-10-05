@@ -51,18 +51,17 @@ variable {α : Type} [TorchLean.Storage α] [Context α]
 variable {obs latent : Shape} {numCodes : Nat}
 
 /-- Encoder producing the pre-quantized latent vector `z_e(x)`. -/
-structure Encoder (α : Type) (obs latent : Shape) [TorchLean.Storage α] [Context α] where
+structure Encoder (α : Type) (obs latent : Shape) [TorchLean.Storage α] where
   /-- Continuous encoder output before codebook lookup. -/
   forward : Tensor α obs → Tensor α latent
 
 /-- Decoder mapping a codebook vector back to observation space. -/
-structure Decoder (α : Type) (latent obs : Shape) [TorchLean.Storage α] [Context α] where
+structure Decoder (α : Type) (latent obs : Shape) [TorchLean.Storage α] where
   /-- Decode a quantized latent vector. -/
   forward : Tensor α latent → Tensor α obs
 
 /-- VQ-VAE model: encoder, codebook, and decoder. -/
-structure Model (α : Type) (obs latent : Shape) (numCodes : Nat) [TorchLean.Storage α]
-    [Context α] where
+structure Model (α : Type) (obs latent : Shape) (numCodes : Nat) [TorchLean.Storage α] where
   /-- Continuous encoder. -/
   encoder : Encoder α obs latent
   /-- Finite codebook. -/
@@ -144,6 +143,7 @@ def trainingGradients (encoded selected reconstructionCotangent : Tensor α late
       Tensor.scaleSpec (Spec.mseDerivSpec encoded selected) beta
     codebook := Spec.mseDerivSpec selected encoded }
 
+omit [Context α] in
 /-- Quantization by explicit index is exactly codebook lookup. -/
 @[simp] theorem quantized_eq_embedding
     (model : Model α obs latent numCodes) (idx : Fin numCodes) :

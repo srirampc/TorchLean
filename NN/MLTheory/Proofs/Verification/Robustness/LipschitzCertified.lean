@@ -6,7 +6,6 @@ Authors: TorchLean Team
 
 module
 
-import Mathlib.Tactic.Positivity.Finset
 public import NN.Proofs.Analysis.Lipschitz.Norm
 
 /-!
@@ -45,7 +44,7 @@ theorem is_adversarially_robust_of_lipschitz
     {f : Tensor ℝ s₁ → Tensor ℝ s₂}
     {norm₁ norm₂ : ∀ {s : Shape}, Tensor ℝ s → ℝ}
     {L : ℝ} (hL : 0 ≤ L)
-    (hLip : isLipschitzContinuous f norm₁ norm₂ L)
+    (hLip : IsLipschitzContinuous f norm₁ norm₂ L)
     (x₀ : Tensor ℝ s₁) (ε : ℝ) :
     IsAdversariallyRobust f norm₁ norm₂ x₀ ε (L * ε) := by
   intro x hx
@@ -68,15 +67,15 @@ theorem is_lipschitz_continuous_linf_of_l2
     {f : Tensor ℝ s₁ → Tensor ℝ [n]}
     {normIn : ∀ {s : Shape}, Tensor ℝ s → ℝ}
     {L : ℝ}
-    (hLip2 : isLipschitzContinuous f normIn Proofs.tensorL2Norm L) :
-    isLipschitzContinuous f normIn (tensorLinfNorm (α := ℝ)) L := by
+    (hLip2 : IsLipschitzContinuous f normIn Proofs.tensorL2Norm L) :
+    IsLipschitzContinuous f normIn (tensorLinfNorm (α := ℝ)) L := by
   intro x y
   have hnorm :
       tensorDistance (α := ℝ) (tensorLinfNorm (α := ℝ)) (f x) (f y) ≤
         tensorDistance (α := ℝ) Proofs.tensorL2Norm (f x) (f y) := by
     simpa [tensorDistance] using
       (Proofs.tensor_linf_norm_le_tensor_l2_norm
-        (y := tensorDistance.tensorSub (α := ℝ) (f x) (f y)))
+        (y := TorchLean.Tensor.subSpec (α := ℝ) (f x) (f y)))
   exact le_trans hnorm (hLip2 x y)
 
 /-! ## Argmax stability from a positive logit margin -/
@@ -112,30 +111,15 @@ private theorem abs_getScalar_sub_le_of_linf_distance
     {n : Nat} {y₀ y : Tensor ℝ [n]} {δ : ℝ} (i : Fin n)
     (h : tensorDistance (α := ℝ) (tensorLinfNorm (α := ℝ)) y₀ y ≤ δ) :
     |Tensor.getScalar y₀ i - Tensor.getScalar y i| ≤ δ := by
-  -- `tensor_distance` is the `L∞` norm of the entrywise difference.
+  -- `tensorDistance` is the `L∞` norm of the entrywise difference.
   have hcoord :
-      |Tensor.getScalar (tensorDistance.tensorSub (α := ℝ) y₀ y) i| ≤
-        tensorLinfNorm (α := ℝ) (tensorDistance.tensorSub (α := ℝ) y₀ y) := by
+      |Tensor.getScalar (TorchLean.Tensor.subSpec (α := ℝ) y₀ y) i| ≤
+        tensorLinfNorm (α := ℝ) (TorchLean.Tensor.subSpec (α := ℝ) y₀ y) := by
     simpa using
-      (abs_getScalar_le_tensor_linf_norm (y := tensorDistance.tensorSub (α := ℝ) y₀ y) (i := i))
-  have : |Tensor.getScalar (tensorDistance.tensorSub (α := ℝ) y₀ y) i| ≤ δ :=
+      (abs_getScalar_le_tensor_linf_norm (y := TorchLean.Tensor.subSpec (α := ℝ) y₀ y) (i := i))
+  have : |Tensor.getScalar (TorchLean.Tensor.subSpec (α := ℝ) y₀ y) i| ≤ δ :=
     le_trans hcoord (by simpa [tensorDistance] using h)
-  simpa [NN.MLTheory.Robustness.Spec.tensor_distance_tensor_sub_eq_sub_spec,
-    TorchLean.Tensor.subSpec] using this
-
-private theorem le_getScalar_add_of_abs_sub_le
-    {n : Nat} {y₀ y : Tensor ℝ [n]} {δ : ℝ} (i : Fin n)
-    (h : |Tensor.getScalar y₀ i - Tensor.getScalar y i| ≤ δ) :
-    Tensor.getScalar y i ≤ Tensor.getScalar y₀ i + δ := by
-  have h' := abs_sub_le_iff.1 (by simpa [abs_sub_comm] using h)
-  linarith
-
-private theorem ge_getScalar_sub_of_abs_sub_le
-    {n : Nat} {y₀ y : Tensor ℝ [n]} {δ : ℝ} (i : Fin n)
-    (h : |Tensor.getScalar y₀ i - Tensor.getScalar y i| ≤ δ) :
-    Tensor.getScalar y₀ i - δ ≤ Tensor.getScalar y i := by
-  have h' := abs_sub_le_iff.1 (by simpa using h)
-  linarith
+  simpa [TorchLean.Tensor.subSpec] using this
 
 private theorem argmax_eq_some_of_strictMax
     {n : Nat} {y : Tensor ℝ [n]} {c : Fin n}
@@ -173,15 +157,11 @@ theorem argmaxClassifier_eq_of_linf_distance_lt_half_margin
       abs_getScalar_sub_le_of_linf_distance (i := k) hdist
     have habs_c : |Tensor.getScalar y₀ c - Tensor.getScalar y c| ≤ δ :=
       abs_getScalar_sub_le_of_linf_distance (i := c) hdist
-    have hk_le : Tensor.getScalar y k ≤ Tensor.getScalar y₀ k + δ :=
-      le_getScalar_add_of_abs_sub_le (i := k) habs_k
-    have hc_ge : Tensor.getScalar y₀ c - δ ≤ Tensor.getScalar y c :=
-      ge_getScalar_sub_of_abs_sub_le (i := c) habs_c
+    have hk' := abs_sub_le_iff.1 habs_k
+    have hc' := abs_sub_le_iff.1 habs_c
     have hcomp : Tensor.getScalar y₀ k ≤ Tensor.getScalar y₀ c - m := hmargin k hk
-    -- Combine inequalities; `2*δ < m` yields strictness.
-    have : Tensor.getScalar y k < Tensor.getScalar y c := by
-      linarith
-    exact this
+    -- `y k ≤ y₀ k + δ ≤ y₀ c - m + δ < y₀ c - δ ≤ y c`, using `2δ < m`.
+    linarith [hk'.1, hk'.2, hc'.1, hc'.2]
   have harg : List.argmax (fun i : Fin n => Tensor.getScalar y i) (List.finRange n) = some c :=
     argmax_eq_some_of_strictMax (n := n) (y := y) (c := c) hstrict
   simp [argmaxClassifier, harg]
@@ -215,7 +195,7 @@ theorem is_certified_robust_of_lipschitz_of_logitMargin
     {f : Tensor ℝ s₁ → Tensor ℝ [n]}
     {normIn : ∀ {s : Shape}, Tensor ℝ s → ℝ}
     {L : ℝ} (hL : 0 ≤ L)
-    (hLip : isLipschitzContinuous f normIn (tensorLinfNorm (α := ℝ)) L)
+    (hLip : IsLipschitzContinuous f normIn (tensorLinfNorm (α := ℝ)) L)
     {x₀ : Tensor ℝ s₁} {ε m : ℝ} {c : Fin n}
     (hRadius : 0 ≤ ε)
     (hm : 0 < m)
@@ -239,9 +219,7 @@ theorem is_certified_robust_of_lipschitz_of_logitMargin
       (c := c) (m := m) (δ := L * ε) hmargin hε hdist
   have hx0_class : argmaxClassifier (n := n) (f x₀) = c.val :=
     argmaxClassifier_eq_of_hasLogitMargin (n := n) (y₀ := f x₀) (c := c) (m := m) hm hmargin
-  calc
-    argmaxClassifier (n := n) (f x) = c.val := hx_class
-    _ = argmaxClassifier (n := n) (f x₀) := by simp [hx0_class]
+  exact hx_class.trans hx0_class.symm
 
 /--
 Certified robustness, but starting from an output-$\ell_2$ Lipschitz assumption.
@@ -249,12 +227,12 @@ Certified robustness, but starting from an output-$\ell_2$ Lipschitz assumption.
 This avoids requiring the user to manually insert the norm-equivalence step
 $\lVert\cdot\rVert_\infty\leq\lVert\cdot\rVert_2$.
 -/
-  theorem is_certified_robust_of_l2_lipschitz_of_logitMargin
+theorem is_certified_robust_of_l2_lipschitz_of_logitMargin
     {s₁ : Shape} {n : Nat}
     {f : Tensor ℝ s₁ → Tensor ℝ [n]}
     {normIn : ∀ {s : Shape}, Tensor ℝ s → ℝ}
     {L : ℝ} (hL : 0 ≤ L)
-    (hLip2 : isLipschitzContinuous f normIn Proofs.tensorL2Norm L)
+    (hLip2 : IsLipschitzContinuous f normIn Proofs.tensorL2Norm L)
     {x₀ : Tensor ℝ s₁} {ε m : ℝ} {c : Fin n}
     (hRadius : 0 ≤ ε)
     (hm : 0 < m)
@@ -262,7 +240,7 @@ $\lVert\cdot\rVert_\infty\leq\lVert\cdot\rVert_2$.
     (hε : 2 * (L * ε) < m) :
     IsCertifiedRobust (classifier := fun x => argmaxClassifier (n := n) (f x))
       (norm := normIn) x₀ ε := by
-  have hLipLinf : isLipschitzContinuous f normIn (tensorLinfNorm (α := ℝ)) L :=
+  have hLipLinf : IsLipschitzContinuous f normIn (tensorLinfNorm (α := ℝ)) L :=
     is_lipschitz_continuous_linf_of_l2 (hLip2 := hLip2)
   exact
     is_certified_robust_of_lipschitz_of_logitMargin (n := n) (hL := hL) (hLip := hLipLinf)

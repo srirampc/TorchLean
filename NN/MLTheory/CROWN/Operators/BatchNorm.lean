@@ -32,7 +32,6 @@ References:
 
 @[expose] public section
 
-
 namespace NN.MLTheory.CROWN.Operators.BatchNorm
 
 open Spec TorchLean
@@ -46,9 +45,9 @@ structure BatchNormParams (α : Type) [TorchLean.Storage α] [Context α] where
   /-- Number of channels/features -/
   dim : Nat
   /-- Running mean μ -/
-  running_mean : Tensor α [dim]
+  runningMean : Tensor α [dim]
   /-- Running variance σ² -/
-  running_var : Tensor α [dim]
+  runningVar : Tensor α [dim]
   /-- Learnable scale γ -/
   gamma : Tensor α [dim]
   /-- Learnable bias β -/
@@ -59,7 +58,7 @@ structure BatchNormParams (α : Type) [TorchLean.Storage α] [Context α] where
 /-- Compute the equivalent affine scale: `γ / sqrt(max(σ², 0) + ε)`. -/
 def computeScale (params : BatchNormParams α) : Tensor α [params.dim] :=
   Tensor.dim (fun i =>
-    let v := params.running_var.getScalar i
+    let v := params.runningVar.getScalar i
     let g := params.gamma.getScalar i
     let denom := MathFunctions.sqrt (max v 0 + params.eps)
     Tensor.scalar (g / denom))
@@ -67,8 +66,8 @@ def computeScale (params : BatchNormParams α) : Tensor α [params.dim] :=
 /-- Compute the equivalent affine offset: `β - γ * μ / sqrt(max(σ², 0) + ε)`. -/
 def computeOffset (params : BatchNormParams α) : Tensor α [params.dim] :=
   Tensor.dim (fun i =>
-    let m := params.running_mean.getScalar i
-    let v := params.running_var.getScalar i
+    let m := params.runningMean.getScalar i
+    let v := params.runningVar.getScalar i
     let g := params.gamma.getScalar i
     let b := params.beta.getScalar i
     let denom := MathFunctions.sqrt (max v 0 + params.eps)

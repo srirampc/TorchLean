@@ -8,16 +8,16 @@ title: Performance
   How long does TorchLean take to build and test on its ordinary continuous-integration runner?
 </p>
 
-The charts use timing records from successful `main`-branch CI runs; opening them does not start
-another workflow or contact a benchmark server. Because GitHub-hosted machines vary,
+The charts fetch timing records from successful `main`-branch CI runs through GitHub's API and
+cache them in your browser for 30 minutes. Opening this page does not start another workflow.
+Because GitHub-hosted machines vary,
 these numbers are useful for spotting changes worth investigating, not for comparing hardware or
 making fine-grained runtime claims.
 
 <aside class="performance-provenance">
   The commit-by-commit view is inspired by
-  <a href="https://radar.lean-lang.org/about">Lean Radar</a>. Radar runs controlled benchmark
-  suites on dedicated machines; this smaller page reports TorchLean's existing GitHub Actions
-  timings and labels them accordingly.
+  <a href="https://radar.lean-lang.org/about">Lean Radar</a>. This page reports TorchLean's
+  existing GitHub Actions timings and labels them accordingly.
 </aside>
 
 <div class="performance-dashboard" id="performance-dashboard">
@@ -117,7 +117,8 @@ making fine-grained runtime claims.
   const metrics = {
     native: {
       label: "Modules and native commands build",
-      step: "Build library, CI, examples, tests, and native commands",
+      step: "Build CPU library, CI, examples, tests, and native commands",
+      previousStep: "Build library, CI, examples, tests, and native commands",
     },
     current: {
       label: "Earlier maintained modules build",
@@ -128,7 +129,11 @@ making fine-grained runtime claims.
       step: "Build maintained library, CI, example, and test modules",
     },
     build: { label: "Legacy library build", step: "Build curated library surface" },
-    tests: { label: "Test suite", step: "Run curated test suite" },
+    tests: {
+      label: "Test suite",
+      step: "Run curated CPU test suite",
+      previousStep: "Run curated test suite",
+    },
     broad: { label: "Legacy broad CI import", step: "Build broad CI import surface" },
     lint: { label: "Repository lint", step: "Repo lint (TorchLean policies)" },
     total: { label: "Complete CI job", step: null },
@@ -182,8 +187,11 @@ making fine-grained runtime claims.
     return (end - begin) / 1000;
   };
 
-  const stepSeconds = (job, name) => {
-    const step = (job.steps || []).find(candidate => candidate.name === name);
+  const matchesStep = (step, metric) =>
+    step.name === metric.step || step.name === metric.previousStep;
+
+  const stepSeconds = (job, metric) => {
+    const step = (job.steps || []).find(candidate => matchesStep(candidate, metric));
     return step ? durationSeconds(step.started_at, step.completed_at) : null;
   };
 
@@ -253,11 +261,13 @@ making fine-grained runtime claims.
       const jobData = await requestJson(
         `${apiRoot}/actions/runs/${run.id}/jobs?filter=latest&per_page=100`
       );
-      const job = (jobData.jobs || []).find(candidate => candidate.name === "build_and_test");
+      const job = (jobData.jobs || []).find(candidate =>
+        candidate.name === "CPU build and checks" || candidate.name === "build_and_test"
+      );
       if (!job || job.conclusion !== "success") return null;
       const durations = { total: durationSeconds(job.started_at, job.completed_at) };
       for (const [key, metric] of Object.entries(metrics)) {
-        if (metric.step) durations[key] = stepSeconds(job, metric.step);
+        if (metric.step) durations[key] = stepSeconds(job, metric);
       }
       return {
         id: run.id,
@@ -266,7 +276,7 @@ making fine-grained runtime claims.
         url: run.html_url,
         startedAt: job.started_at || run.run_started_at,
         durations,
-        scope: (job.steps || []).some(step => step.name === metrics.native.step) ? "native" :
+        scope: (job.steps || []).some(step => matchesStep(step, metrics.native)) ? "native" :
           (job.steps || []).some(step => step.name === metrics.current.step) ? "current" :
           (job.steps || []).some(step => step.name === metrics.maintained.step) ?
           "maintained" : (job.steps || []).some(step =>
@@ -283,7 +293,7 @@ making fine-grained runtime claims.
       return { text: "Waiting for another run", direction: "flat" };
     }
     const change = ((current - previous) / previous) * 100;
-    if (Math.abs(change) < 0.1) return { text: "No measurable change", direction: "flat" };
+    if (Math.abs(change) < 0.1) return { text: "Less than 0.1% change", direction: "flat" };
     return {
       text: `${change < 0 ? "↓" : "↑"} ${Math.abs(change).toFixed(1)}% from previous`,
       direction: change < 0 ? "shorter" : "longer",

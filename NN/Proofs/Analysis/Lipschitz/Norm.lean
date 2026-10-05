@@ -21,7 +21,7 @@ their algebraic properties. Neural-network Lipschitz bounds build on these facts
 - Everything here is **spec-level** and **real-valued** (`ℝ`), so we can freely use Mathlib's
   analysis and order theory.
 - `Tensor ℝ s` is an `InnerProductSpace ℝ` (see `NN.Proofs.Tensor.Euclidean`). The bridge lemmas
-  `tensorL2Norm_eq_norm`, `tensorL2Dist_eq_dist`, and `dot_eq_inner` identify the historical
+  `tensorL2Norm_eq_norm`, `tensorL2Dist_eq_dist`, and `dot_eq_inner` identify
   `tensorL2Norm`, `tensorL2Dist`, and `Spec.dot` with `‖·‖`, `dist`, and `⟪·, ·⟫_ℝ`; every norm
   inequality below is then a direct instance of the Mathlib theorem.
 - `NN.MLTheory.Robustness.Spec` also has scalar-polymorphic norm definitions for runtime and
@@ -29,8 +29,7 @@ their algebraic properties. Neural-network Lipschitz bounds build on these facts
   theorems and includes bridge lemmas where those polymorphic specs need theorem-level support.
 
 ## PyTorch correspondence / citations
-- $\ell_2$/$\ell_1$/$\ell_\infty$ norms correspond to PyTorch's `torch.linalg.*_norm` /
-  `torch.linalg.norm` APIs.
+- The $\ell_2$ norm corresponds to PyTorch's `torch.linalg.vector_norm` / `torch.linalg.norm`.
   https://pytorch.org/docs/stable/generated/torch.linalg.vector_norm.html
   https://pytorch.org/docs/stable/generated/torch.linalg.norm.html
 
@@ -46,7 +45,7 @@ open Spec TorchLean
 open TorchLean TorchLean.Tensor
 open scoped BigOperators RealInnerProductSpace
 
-open Spec (dot tensorNormSquared tensor_norm_squared_nonneg tensor_norm_squared_zero_iff dot_comm)
+open Spec (dot tensorNormSquared)
 
 /-! ## Tensor norms and distance functions -/
 
@@ -58,28 +57,10 @@ noncomputable def tensorL2Norm {s : Shape} (t : Tensor ℝ s) : ℝ :=
   Real.sqrt (tensorNormSquared t)
 
 /--
-$\ell_\infty$ norm (maximum norm) for tensors.
-Important for uniform convergence and pointwise bounds.
--/
-noncomputable def tensorLInftyNorm {s : Shape} (t : Tensor ℝ s) : ℝ :=
-  foldlSpec (fun acc x => max acc (|x|)) (0 : ℝ) t
-
-/--
-$\ell_1$ norm (Manhattan norm) for tensors.
-Useful for sparsity-inducing regularization.
--/
-noncomputable def tensorL1Norm {s : Shape} (t : Tensor ℝ s) : ℝ :=
-  sumSpec (absSpec t)
-
-/--
 Distance function based on the $\ell_2$ norm.
 -/
 noncomputable def tensorL2Dist {s : Shape} (x y : Tensor ℝ s) : ℝ :=
   tensorL2Norm (subSpec x y)
-
-/-- Distance function based on the $\ell_\infty$ norm. -/
-noncomputable def tensorLInftyDist {s : Shape} (x y : Tensor ℝ s) : ℝ :=
-  tensorLInftyNorm (subSpec x y)
 
 /-! ## Bridges to the inner product space structure -/
 
@@ -113,6 +94,11 @@ theorem tensorNormSquared_eq_norm_sq {s : Shape} (t : Tensor ℝ s) :
 /-- `tensorL2Norm` is the Euclidean norm. -/
 theorem tensorL2Norm_eq_norm {s : Shape} (t : Tensor ℝ s) : tensorL2Norm t = ‖t‖ := by
   rw [tensorL2Norm, tensorNormSquared_eq_norm_sq, Real.sqrt_sq (norm_nonneg t)]
+
+/-- Squaring the $\ell_2$ norm recovers the squared-norm spec. -/
+theorem sq_tensorL2Norm {s : Shape} (t : Tensor ℝ s) :
+    tensorL2Norm t ^ 2 = tensorNormSquared t := by
+  rw [tensorL2Norm_eq_norm, tensorNormSquared_eq_norm_sq]
 
 /-- `tensorL2Dist` is the Euclidean distance. -/
 theorem tensorL2Dist_eq_dist {s : Shape} (x y : Tensor ℝ s) : tensorL2Dist x y = dist x y := by
@@ -158,7 +144,7 @@ theorem tensor_linf_norm_le_tensor_l2_norm {n : Nat} (y : Tensor ℝ [n]) :
 The $\ell_2$ norm is nonnegative.
 -/
 theorem tensor_l2_norm_nonneg {s : Shape} (t : Tensor ℝ s) :
-    tensorL2Norm t ≥ (0 : ℝ) := by
+    (0 : ℝ) ≤ tensorL2Norm t := by
   rw [tensorL2Norm_eq_norm]
   exact norm_nonneg t
 
@@ -168,31 +154,6 @@ The $\ell_2$ norm is zero if and only if the tensor is zero.
 theorem tensor_l2_norm_zero_iff {s : Shape} (t : Tensor ℝ s) :
     tensorL2Norm t = (0 : ℝ) ↔ t = Tensor.full s (0 : ℝ) := by
   rw [tensorL2Norm_eq_norm, full_zero_eq_zero, norm_eq_zero]
-
-/--
-Basic lemma: dot product with zero tensor is zero.
--/
-theorem dot_zero_right {s : Shape} (x : Tensor ℝ s) :
-    dot x (Tensor.full s (0 : ℝ)) = (0 : ℝ) := by
-  rw [dot_eq_inner, full_zero_eq_zero, inner_zero_right]
-
-/--
-Bilinearity of dot product over addition (distributive property).
--/
-theorem dot_add_add {s : Shape} (x y : Tensor ℝ s) :
-    dot (addSpec x y) (addSpec x y) =
-      dot x x + 2 * dot x y + dot y y := by
-  simp only [dot_eq_inner, addSpec_eq_add, inner_add_left, inner_add_right, real_inner_comm x y]
-  ring
-
-/-- Bilinearity of the dot product:
-$\operatorname{dot}(x+ty,x+ty)=\lVert x\rVert^2+2t\langle x,y\rangle+t^2\lVert y\rVert^2$. -/
-theorem dot_quadratic_expand {s : Shape} (x y : Tensor ℝ s) (t : ℝ) :
-    dot (addSpec x (scaleSpec y t)) (addSpec x (scaleSpec y t)) =
-      dot x x + 2 * t * dot x y + t^2 * dot y y := by
-  simp only [dot_eq_inner, addSpec_eq_add, scaleSpec_eq_smul, inner_add_left, inner_add_right,
-    real_inner_smul_left, real_inner_smul_right, real_inner_comm x y]
-  ring
 
 /--
 Cauchy-Schwarz inequality for tensors.

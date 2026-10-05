@@ -35,13 +35,13 @@ structure Primitive (ps : List Shape) (σ τ : Shape) where
   name : String
   /-- Pure reference semantics of the primitive. -/
   specFwd :
-    ∀ {α : Type 0}, [TorchLean.Storage α] → [Context α] →
-      TorchLean.TensorPack α ps → TorchLean.Tensor α σ → TorchLean.Tensor α τ
+    ∀ {α : Type 0}, [Storage α] → [Context α] →
+      TensorPack α ps → Tensor α σ → Tensor α τ
   /--
   Executable TorchLean forward program, with parameters followed by the data input.
   -/
   program :
-    ∀ {α : Type 0}, [TorchLean.Storage α] → [Context α] →
+    ∀ {α : Type 0}, [Storage α] → [Context α] →
       Runtime.Autograd.Model.Program α (ps ++ [σ]) τ
   /--
   Optional conversion to a TorchLean layer, indexed by its occurrence in the surrounding chain.

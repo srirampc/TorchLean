@@ -20,6 +20,9 @@ This file defines the basic matrix/vector operations used across model specifica
 
 All operations are *shape-indexed* in their types, so misuse is caught by elaboration.
 
+Each contraction multiplies in increasing index order and adds into a zero-seeded left fold.
+No associativity or additive-identity law is assumed of the scalar backend.
+
 These are kept simple, “obvious” definitions (folding over `List.finRange`) so that:
 
 - they are easy to reason about in proofs, and
@@ -46,8 +49,7 @@ Create an identity matrix (n x n).
 
 Notes:
 - The `n = 0` case is an empty matrix; it still exists as a well-typed tensor.
-- We use `i.val == j.val` rather than `DecidableEq (Fin n)` to keep the definition directly
-  executable across backends.
+- The diagonal test compares natural-number indices; it needs no scalar equality operation.
 -/
 def identityTensorSpec {α : Type} [TorchLean.Storage α] [Zero α] [One α]
     (n : Nat) : Tensor α [n, n] :=

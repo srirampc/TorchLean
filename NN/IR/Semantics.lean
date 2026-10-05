@@ -12,6 +12,7 @@ public import NN.Spec.Core.Random
 public import NN.Spec.Core.Sequence
 public import NN.Spec.Core.Tensor.SomeTensor
 public import NN.Spec.Layers.Attention
+public import NN.Spec.Layers.Loss
 public import NN.Spec.Layers.Normalization.BatchNorm
 public import NN.IR.OpContracts
 public import NN.Spec.Core.TensorReductionShape.ConcatSlice
@@ -40,7 +41,8 @@ the shape rules already require to be positive, and `mseLoss` divides by the tot
 `denoteAll` runs the structural check but not `Graph.checkShapes`; each node instead checks its
 parents' shapes locally and `normalizeNodeOutput` compares the computed shape with the declared
 one. `NN.IR.ShapeSoundness` proves that on a graph accepted by `checkShapes` this final comparison
-never fails, so the two validation routes agree.
+never fails. This equates evaluation with and without the final normalization on accepted
+graphs; it does not prove that shape checking alone guarantees successful evaluation.
 
 Softmax and layer norm:
 - `softmax axis` normalizes independently along the zero-based tensor dimension named by `axis`.
@@ -88,11 +90,12 @@ namespace Graph
 /-! ## Permutation lowering -/
 
 /--
-Compute a sequence of adjacent swaps that realizes a target permutation.
+Compute a sequence of adjacent swaps that realizes a valid rank-`r` target permutation.
 
 This is used to implement `.permute` by repeatedly applying `swapAdjacentAtDepth`, which is already
-available in the spec tensor library. If the permutation is ill-formed, this returns an error
-explaining what went wrong.
+available in the spec tensor library. Callers must validate the permutation first, as
+`permuteSomeTensor` does with `Shape.permute?`. The errors below catch missing or out-of-range
+entries encountered during lowering; duplicate axes and extra entries are not rejected.
 -/
 def swapDepthsForPerm (perm : Array Nat) (r : Nat) : Except String (Array Nat) := do
   let mut cur : List Nat := List.range r
@@ -117,7 +120,7 @@ Permute a shape-tagged tensor according to `perm`.
 This checks that `perm` is a valid permutation for the input shape (using `Shape.permute?`), then
 lowers it to a sequence of adjacent swaps and applies them to the tensor.
 -/
-def permuteSomeTensor {α : Type} [TorchLean.Storage α] [Context α]
+def permuteSomeTensor {α : Type} [TorchLean.Storage α]
     (v : Spec.SomeTensor α) (perm : Array Nat) : Except String (Spec.SomeTensor α) := do
   let sIn := v.shape
   match Spec.Shape.permute? sIn perm.toList with
@@ -137,7 +140,7 @@ readable:
 
 /-- Check that a shape-erased tensor has the expected shape and recover its statically typed
 tensor. -/
-def expectShape {α : Type} [TorchLean.Storage α] [Context α]
+def expectShape {α : Type} [TorchLean.Storage α]
     (expected : Shape) (v : Spec.SomeTensor α) : Except String (Tensor α expected) := do
   if h : v.shape = expected then
     -- transport across the shape equality
@@ -151,11 +154,7 @@ def mseLossSomeTensor {α : Type} [TorchLean.Storage α] [Context α]
   if h : yVal.shape = tVal.shape then
     let yT : Tensor α yVal.shape := yVal.tensor
     let tT : Tensor α yVal.shape := h.symm ▸ tVal.tensor
-    let s := yVal.shape
-    let diff := Tensor.subSpec (α := α) yT tT
-    let sq := Tensor.mulSpec (α := α) diff diff
-    let total : α := Tensor.sumSpec (α := α) sq
-    let mean : α := total / (↑(meanDenominator s) : α)
+    let mean : α := Spec.mseSpec yT tT
     pure (Spec.SomeTensor.mk (α := α) Shape.scalar (Tensor.scalar mean))
   else
     throw <|
@@ -178,7 +177,7 @@ it can subtract them. This equation says nothing else happens on the way. -/
   rfl
 
 /-- Transport a `Tensor α (dim n scalar)` across an equality `n = n'` (helper for payload casts). -/
-def castDimScalar {α : Type} [TorchLean.Storage α] [Context α] {n n' : Nat}
+def castDimScalar {α : Type} [TorchLean.Storage α] {n n' : Nat}
     (h : n = n') (t : Tensor α [n]) : Tensor α [n'] :=
       by
   simpa [h] using t
@@ -199,13 +198,77 @@ def matmulLeading {α : Type} [TorchLean.Storage α] [Context α] (leading : Sha
     Tensor α (leading.concat [m, p]) :=
   Tensor.zipEach leading [m, p] Spec.matMulSpec left right
 
+/-- Row-major matrix contraction using the shared broadcast and vector-promotion layout. -/
+def matmulFlat {α : Type} [TorchLean.Storage α] [Context α]
+    (dims : OpContracts.MatmulDims) {leftDim rightDim : Nat}
+    (left : Tensor α [leftDim]) (right : Tensor α [rightDim]) :
+    Tensor α [dims.outShape.size] :=
+  Tensor.ofFn fun output =>
+    (List.range dims.inner).foldl (fun acc inner =>
+      acc + getAtOrZero left [dims.leftIndex output.val inner] *
+        getAtOrZero right [dims.rightIndex output.val inner]) 0
+
+/--
+`matmulFlat` with the batch offsets computed once per output entry and the contraction run by
+`Nat.fold`. The products are added in the same order, so the results are bit-identical.
+-/
+def matmulFlatFast {α : Type} [TorchLean.Storage α] [Context α]
+    (dims : OpContracts.MatmulDims) {leftDim rightDim : Nat}
+    (left : Tensor α [leftDim]) (right : Tensor α [rightDim]) :
+    Tensor α [dims.outShape.size] :=
+  Tensor.ofFn fun output =>
+    let batch := output.val / (dims.rows * dims.cols)
+    let leftBase :=
+      OpContracts.MatmulDims.batchIndex dims.leftLeading dims.leading batch *
+          (dims.rows * dims.inner) +
+        output.val % (dims.rows * dims.cols) / dims.cols * dims.inner
+    let rightBase :=
+      OpContracts.MatmulDims.batchIndex dims.rightLeading dims.leading batch *
+        (dims.inner * dims.cols)
+    let col := output.val % dims.cols
+    Nat.fold dims.inner (fun inner _ acc =>
+      acc + getAtOrZero left [leftBase + inner] *
+        getAtOrZero right [rightBase + inner * dims.cols + col]) 0
+
+/-- A left fold over `List.range n` is the same computation as `Nat.fold n`. -/
+private theorem foldl_range_eq_fold {β : Type} (f : β → Nat → β) (init : β) :
+    ∀ n : Nat, (List.range n).foldl f init = Nat.fold n (fun i _ acc => f acc i) init := by
+  intro n
+  have hRange : List.range n = (List.finRange n).map Fin.val := by
+    apply List.ext_getElem <;> simp
+  rw [Nat.fold_eq_finRange_foldl, hRange, List.foldl_map]
+
+/-- Compiled code runs `matmulFlatFast` in place of `matmulFlat`. -/
+@[csimp] theorem matmulFlat_eq_matmulFlatFast : @matmulFlat = @matmulFlatFast := by
+  funext α storage context dims leftDim rightDim left right
+  unfold matmulFlat matmulFlatFast
+  congr 1
+  funext output
+  rw [foldl_range_eq_fold]
+  rfl
+
+/-- Evaluate a checked matmul layout, retaining the typed matrix kernel for equal batch shapes. -/
+@[simp] def matmulWithDims {α : Type} [TorchLean.Storage α] [Context α]
+    (dims : OpContracts.MatmulDims)
+    (left : Tensor α dims.leftShape) (right : Tensor α dims.rightShape) :
+    Tensor α dims.outShape :=
+  if h : dims.leftShape = dims.leading.concat [dims.rows, dims.inner] ∧
+      dims.rightShape = dims.leading.concat [dims.inner, dims.cols] ∧
+      dims.outShape = dims.leading.concat [dims.rows, dims.cols] then
+    Tensor.castShape
+      (matmulLeading dims.leading (Tensor.castShape left h.1)
+        (Tensor.castShape right h.2.1)) h.2.2.symm
+  else
+    Tensor.unflattenSpec dims.outShape
+      (matmulFlat dims (Tensor.flattenSpec left) (Tensor.flattenSpec right))
+
 /--
 Evaluate a `const` node from the external payload.
 
 Constants are stored “flat” (1D) for convenience, so we check the flattened length matches
 `Spec.Shape.size s` and then `unflatten` to the requested shape.
 -/
-def evalConst {α : Type} [TorchLean.Storage α] [Context α]
+def evalConst {α : Type} [TorchLean.Storage α]
     (payload : Payload α) (id : Nat) (s : Shape) : Except String (Tensor α s) := do
   match payload.const? id with
   | none => throw s!"IR eval: missing const payload for node {id}"
@@ -324,22 +387,29 @@ def evalBatchNorm {α : Type} [TorchLean.Storage α] [Context α]
           s!"IR eval: batch_norm_eval {id}: payload input shape {repr inputShape} \
             does not match parent shape {repr x.shape}"
 
-/-- Layer normalization of a matrix with explicit scale, bias, and epsilon. -/
+/-- Normalize every present row; an empty batch has no coordinates to change. -/
+def layerNormMatrixValue {α : Type} [TorchLean.Storage α] [Context α]
+    (seqLen embedDim : Nat) (x : Tensor α [seqLen, embedDim])
+    (gamma beta : Tensor α [embedDim]) (epsilon : α) (hEmb : embedDim > 0) :
+    Tensor α [seqLen, embedDim] :=
+  if hSeq : seqLen > 0 then
+    Spec.layerNorm (α := α) (seqLen := seqLen) (embedDim := embedDim)
+      (x := x) (gamma := gamma) (beta := beta) (h_seq_pos := hSeq) (h_embed_pos := hEmb)
+      (epsilon := epsilon)
+  else
+    x
+
+/-- Layer normalization with a nonempty normalized dimension and explicit affine parameters. -/
 def layerNormMatrix {α : Type} [TorchLean.Storage α] [Context α]
     (seqLen embedDim : Nat) (x : Tensor α [seqLen, embedDim])
     (gamma beta : Tensor α [embedDim]) (epsilon : α) :
     Except String (Tensor α [seqLen, embedDim]) := do
-  if hSeq : seqLen > 0 then
-    if hEmb : embedDim > 0 then
-      pure (Spec.layerNorm (α := α) (seqLen := seqLen) (embedDim := embedDim)
-        (x := x) (gamma := gamma) (beta := beta) (h_seq_pos := hSeq) (h_embed_pos := hEmb)
-        (epsilon := epsilon))
-    else
-      throw s!"layernorm: embedDim must be > 0 (got {embedDim})"
+  if hEmb : embedDim > 0 then
+    pure (layerNormMatrixValue seqLen embedDim x gamma beta epsilon hEmb)
   else
-    throw s!"layernorm: seqLen must be > 0 (got {seqLen})"
+    throw s!"layernorm: embedDim must be > 0 (got {embedDim})"
 
-/-- Layer normalization with the historical unit affine transform and default epsilon. -/
+/-- Layer normalization with unit scale, zero bias, and default epsilon. -/
 def layerNormWithoutAffine {α : Type} [TorchLean.Storage α] [Context α]
     (seqLen embedDim : Nat) (x : Tensor α [seqLen, embedDim]) :
     Except String (Tensor α [seqLen, embedDim]) :=
@@ -347,7 +417,7 @@ def layerNormWithoutAffine {α : Type} [TorchLean.Storage α] [Context α]
     TorchLean.normalizationEpsilon
 
 /-- Affine data for a LayerNorm matrix view after validating its normalized suffix. -/
-structure LayerNormAffine (α : Type) [TorchLean.Storage α] [Context α] (embedDim : Nat) where
+structure LayerNormAffine (α : Type) [TorchLean.Storage α] (embedDim : Nat) where
   gamma : Tensor α [embedDim]
   beta : Tensor α [embedDim]
   epsilon : α
@@ -388,10 +458,11 @@ def resolveLayerNormAffine {α : Type} [TorchLean.Storage α] [Context α]
 
 /--
 Decode a dynamic concat parent as a tensor with an existential leading dimension and the requested
-tail shape. This is the checked boundary shared by concat evaluation and its proofs.
+tail shape. `permuted` selects the diagnostic for parents moved from another axis; it does not
+change the shape check or tensor transport.
 -/
-def expectLeadingAxisInput {α : Type} [TorchLean.Storage α] [Context α]
-    (i : Nat) (rest : Shape) (value : Spec.SomeTensor α) :
+def expectLeadingAxisInput {α : Type} [TorchLean.Storage α]
+    (i : Nat) (rest : Shape) (value : Spec.SomeTensor α) (permuted : Bool := false) :
     Except String (Sigma fun size => Tensor α (Shape.dim size rest)) := do
   match value with
   | ⟨Shape.dim size actualRest, tensor⟩ =>
@@ -400,16 +471,19 @@ def expectLeadingAxisInput {α : Type} [TorchLean.Storage α] [Context α]
           simpa [hRest] using tensor
         pure ⟨size, tensor'⟩
       else
+        let tailLabel := if permuted then "permuted tail" else "tail"
         throw <|
-          s!"IR eval: node {i}: concat: tail mismatch: {repr actualRest} vs {repr rest}"
+          s!"IR eval: node {i}: concat: {tailLabel} mismatch: {repr actualRest} vs {repr rest}"
   | ⟨_, _⟩ =>
       throw s!"IR eval: node {i}: concat expects rank≥1 parents, got {repr value.shape}"
 
-/-- Fold leading-axis concat over dynamic values that already share the same tail shape. -/
-def evalConcatLeadingAxisFold {α : Type} [TorchLean.Storage α] [Context α]
-    (i : Nat) (nOut : Nat) (rest : Shape) (parents : Array (Spec.SomeTensor α)) :
+/-- Fold leading-axis concat over dynamic values that already share the same tail shape.
+The `permuted` flag is passed only to the decoder's diagnostic. -/
+def evalConcatLeadingAxisFold {α : Type} [TorchLean.Storage α]
+    (i : Nat) (nOut : Nat) (rest : Shape) (parents : Array (Spec.SomeTensor α))
+    (permuted : Bool := false) :
     Except String (Spec.SomeTensor α) := do
-  let sigs ← parents.mapM (expectLeadingAxisInput (α := α) i rest)
+  let sigs ← parents.mapM (fun value => expectLeadingAxisInput (α := α) i rest value permuted)
   match sigs[0]? with
   | none =>
       throw s!"IR eval: node {i}: concat internal error"
@@ -437,11 +511,12 @@ def evalConcatLeadingAxisFold {α : Type} [TorchLean.Storage α] [Context α]
 /--
 Evaluate a `concat` node from already evaluated parent values.
 
-The IR concat operation accepts any valid axis.  The tensor primitive concatenates along axis `0`,
-so the evaluator implements the generic case by moving the requested axis to the front, folding
-`Tensor.concatAxisSpec .scalar` over the permuted parents, and moving the result back.
+The IR concat operation accepts any valid axis. `Tensor.concatAxisSpec` takes any leading prefix,
+but this evaluator only uses its axis-`0` form (`leading := .scalar`). For another axis it moves
+that axis to the front, folds `Tensor.concatAxisSpec .scalar` over the permuted parents, and moves
+the result back. The IR execution and CROWN concat proofs are stated against this form.
 -/
-def evalConcat {α : Type} [TorchLean.Storage α] [Context α]
+def evalConcat {α : Type} [TorchLean.Storage α]
     (i : Nat) (n : Node) (axis : Nat) (parents : Array (Spec.SomeTensor α)) :
     Except String (Spec.SomeTensor α) := do
   let expected ←
@@ -482,56 +557,19 @@ def evalConcat {α : Type} [TorchLean.Storage α] [Context α]
       | .error msg => throw s!"IR eval: node {i}: concat: {msg} ({n.summary})")
   match outPermShape with
   | Shape.dim nOut rest =>
-      let toSigma (pv : Spec.SomeTensor α) :
-          Except String (Sigma fun n => Tensor α (Shape.dim n rest)) := do
-        match pv with
-        | ⟨Shape.dim nP restP, t⟩ =>
-            if hRest : restP = rest then
-              let t' : Tensor α (Shape.dim nP rest) := by
-                simpa [hRest] using t
-              pure ⟨nP, t'⟩
-            else
-              throw <|
-                s!"IR eval: node {i}: concat: permuted tail mismatch: {repr restP} vs \
-                  {repr rest}"
-        | ⟨_, _⟩ =>
-            throw s!"IR eval: node {i}: concat expects rank≥1 parents, got {repr pv.shape}"
-      let sigs ← parentsPerm.mapM toSigma
-      match sigs[0]? with
-      | none =>
-          throw s!"IR eval: node {i}: concat internal error"
-      | some s0 =>
-          let outSigma :=
-            (sigs.extract 1).foldl
-              (fun acc nxt =>
-                match acc, nxt with
-                | ⟨n1, t1⟩, ⟨n2, t2⟩ =>
-                    ⟨n1 + n2, Tensor.concatAxisSpec .scalar (α := α) (n := n1) (m := n2)
-                      (suffix := rest)
-                      t1 t2⟩)
-              s0
-          match outSigma with
-          | ⟨nSum, tSum⟩ =>
-              if h : nSum = nOut then
-                let yPerm : Tensor α (Shape.dim nOut rest) := by
-                  simpa [h] using tSum
-                let outPerm : Spec.SomeTensor α :=
-                  Spec.SomeTensor.mk (α := α) (Shape.dim nOut rest) yPerm
-                let out0 ←
-                  match permuteSomeTensor (α := α) outPerm permBack with
-                  | .ok v => pure v
-                  | .error msg => throw s!"IR eval: node {i}: concat: {msg} ({n.summary})"
-                let y ← expectShape (α := α) (expected := n.outShape) out0
-                pure (Spec.SomeTensor.mk (α := α) n.outShape y)
-              else
-                throw <|
-                  s!"IR eval: node {i}: concat out dim mismatch: declared {nOut}, \
-                    computed {nSum}"
+      let outPerm ← evalConcatLeadingAxisFold (α := α) i nOut rest parentsPerm
+        (permuted := true)
+      let out0 ←
+        match permuteSomeTensor (α := α) outPerm permBack with
+        | .ok v => pure v
+        | .error msg => throw s!"IR eval: node {i}: concat: {msg} ({n.summary})"
+      let y ← expectShape (α := α) (expected := n.outShape) out0
+      pure (Spec.SomeTensor.mk (α := α) n.outShape y)
   | _ =>
       throw s!"IR eval: node {i}: concat expects rank≥1 outShape, got {repr n.outShape}"
 
 /-- Normalize a node result to the node's declared shape, rejecting inconsistent implementations. -/
-def normalizeNodeOutput {α : Type} [TorchLean.Storage α] [Context α]
+def normalizeNodeOutput {α : Type} [TorchLean.Storage α]
     (i : Nat) (n : Node) (v : Spec.SomeTensor α) : Except String (Spec.SomeTensor α) :=
   if h : v.shape = n.outShape then
     pure (Spec.SomeTensor.mk (α := α) n.outShape (h ▸ v.tensor))
@@ -542,7 +580,7 @@ def normalizeNodeOutput {α : Type} [TorchLean.Storage α] [Context α]
 
 /-- A result whose shape matches the node declaration passes normalization unchanged. -/
 @[simp]
-theorem normalizeNodeOutput_declared {α : Type} [TorchLean.Storage α] [Context α]
+theorem normalizeNodeOutput_declared {α : Type} [TorchLean.Storage α]
     (i : Nat) (n : Node) (t : Tensor α n.outShape) :
     normalizeNodeOutput (α := α) i n (Spec.SomeTensor.mk (α := α) n.outShape t) =
       .ok (Spec.SomeTensor.mk (α := α) n.outShape t) := by
@@ -553,7 +591,7 @@ theorem normalizeNodeOutput_declared {α : Type} [TorchLean.Storage α] [Context
 Both spellings show up in proofs depending on whether the node came from a builder or was written
 inline, and simp will not see through the record projection on its own. -/
 @[simp]
-theorem normalizeNodeOutput_nodeShape {α : Type} [TorchLean.Storage α] [Context α]
+theorem normalizeNodeOutput_nodeShape {α : Type} [TorchLean.Storage α]
     (i id : Nat) (parents : Array Nat) (kind : OpKind) (s : Shape) (t : Tensor α s) :
     normalizeNodeOutput (α := α) i { id := id, parents := parents, kind := kind, outShape := s }
         ⟨s, t⟩ =
@@ -721,7 +759,7 @@ selected branch exactly as before the split.
         | .ok dims =>
             let aT ← expectShape (α := α) (expected := dims.leftShape) aV
             let bT ← expectShape (α := α) (expected := dims.rightShape) bV
-            let y : Tensor α dims.outShape := matmulLeading dims.leading aT bT
+            let y : Tensor α dims.outShape := matmulWithDims dims aT bT
             pure (Spec.SomeTensor.ofTensor y : Spec.SomeTensor α)
     | .linear => do
         let pId ← unaryParentId i n
@@ -755,12 +793,12 @@ selected branch exactly as before the split.
         let pId ← unaryParentId i n
         let p ← expectShape (α := α) (expected := n.outShape) (← getParent pId)
         pure (Spec.SomeTensor.mk (α := α) n.outShape
-          (Tensor.mapSpec (fun x => MathFunctions.sin x) p))
+          (Tensor.sinSpec p))
     | .cos => do
         let pId ← unaryParentId i n
         let p ← expectShape (α := α) (expected := n.outShape) (← getParent pId)
         pure (Spec.SomeTensor.mk (α := α) n.outShape
-          (Tensor.mapSpec (fun x => MathFunctions.cos x) p))
+          (Tensor.cosSpec p))
     | .sigmoid => do
         let pId ← unaryParentId i n
         let p ← expectShape (α := α) (expected := n.outShape) (← getParent pId)
@@ -785,14 +823,14 @@ selected branch exactly as before the split.
         let pId ← unaryParentId i n
         let p ← expectShape (α := α) (expected := n.outShape) (← getParent pId)
         -- Domain discipline: raw `log` is undefined on nonpositive inputs. The evaluator
-        -- rejects that case explicitly; use `safeLogSpec`/`safeLogOp` in models that require
-        -- epsilon protection.
+        -- rejects that case explicitly; use `safeLogSpec`/`safeLogOp` in models whose
+        -- inputs can be nonpositive.
         if Tensor.allSpec (α := α) (s := n.outShape) (fun v => decide (0 < v)) p then
           pure (Spec.SomeTensor.mk (α := α) n.outShape (Tensor.logSpec (α := α) p))
         else
           throw
             ("IR eval: log: input contains values <= 0 (or NaN); \
-              use `safe_log` if you want epsilon protection")
+              use `safe_log`, which is log(softplus(x) + eps)")
     | .inv => do
         let pId ← unaryParentId i n
         let p ← expectShape (α := α) (expected := n.outShape) (← getParent pId)

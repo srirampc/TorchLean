@@ -39,12 +39,6 @@ abbrev swapCoordinate (s : Shape) (depth : Nat) :
     Shape.Coord (s.swapAdjacentAtDepth depth) → Shape.Coord s :=
   TorchLean.Tensor.Internal.swapAdjacentAxesCoordinate s depth
 
-/-- The tensor swap reads exactly the coordinate selected by `swapCoordinate`. -/
-theorem swapAdjacentAxes_apply {α : Type} [TorchLean.Storage α] {s : Shape}
-    (x : Tensor α s) (depth : Nat) (p : Shape.Coord (s.swapAdjacentAtDepth depth)) :
-    swapAdjacentAxes x depth p = x (swapCoordinate s depth p) := by
-  exact TorchLean.Tensor.swapAdjacentAxes_apply x depth p
-
 /-- Source coordinate read after a sequence of adjacent-axis swaps. -/
 def permutedCoordinate : (s : Shape) → (swaps : List Nat) →
     Shape.Coord (s.applyAdjacentSwaps swaps) → Shape.Coord s
@@ -64,17 +58,16 @@ theorem permuteByAdjacentSwaps_apply {α : Type} [TorchLean.Storage α] {s : Sha
       change permuteByAdjacentSwaps (swapAdjacentAxes x depth) swaps p =
         x (swapCoordinate s depth
           (permutedCoordinate (s.swapAdjacentAtDepth depth) swaps p))
-      exact (ih (swapAdjacentAxes x depth) p).trans (swapAdjacentAxes_apply x depth _)
+      exact (ih (swapAdjacentAxes x depth) p).trans
+        (TorchLean.Tensor.swapAdjacentAxes_apply x depth _)
 
-/-- Axis permutation on finite coordinate functions, bundled as a continuous linear map. -/
+/-- Axis permutation on finite coordinate functions, bundled as a continuous linear map.
+
+This is the pullback `x ↦ x ∘ permutedCoordinate s swaps`, which is linear for free
+(`LinearMap.funLeft`) and continuous because the domain is finite-dimensional. -/
 def permuteCLM {s : Shape} (swaps : List Nat) :
-    (Shape.Coord s → ℝ) →L[ℝ] (Shape.Coord (s.applyAdjacentSwaps swaps) → ℝ) := by
-  let linear :
-      (Shape.Coord s → ℝ) →ₗ[ℝ] (Shape.Coord (s.applyAdjacentSwaps swaps) → ℝ) :=
-    { toFun := fun x p => x (permutedCoordinate s swaps p)
-      map_add' := fun _ _ => rfl
-      map_smul' := fun _ _ => rfl }
-  exact ⟨linear, LinearMap.continuous_of_finiteDimensional (f := linear)⟩
+    (Shape.Coord s → ℝ) →L[ℝ] (Shape.Coord (s.applyAdjacentSwaps swaps) → ℝ) :=
+  LinearMap.toContinuousLinearMap (LinearMap.funLeft ℝ ℝ (permutedCoordinate s swaps))
 
 /-- The continuous linear map computes the library's tensor permutation. -/
 theorem permuteCLM_apply {s : Shape} (swaps : List Nat) (x : Shape.Coord s → ℝ) :
@@ -83,18 +76,6 @@ theorem permuteCLM_apply {s : Shape} (swaps : List Nat) (x : Shape.Coord s → �
   funext p
   rw [permuteByAdjacentSwaps_apply]
   exact (TorchLean.Tensor.Internal.Rep.get_ofFn x _).symm
-
-/-- Transporting coordinate functions through a shape equality is continuous and linear. -/
-def castCLM {s t : Shape} (h : s = t) :
-    (Shape.Coord s → ℝ) →L[ℝ] (Shape.Coord t → ℝ) := by
-  cases h
-  exact ContinuousLinearMap.id ℝ _
-
-/-- The coordinate transport agrees with the shape transport used by the tensor API. -/
-theorem castCLM_apply {s t : Shape} (h : s = t) (x : Tensor ℝ s) :
-    castCLM h (fun p => x p) = fun p => (h ▸ x) p := by
-  cases h
-  rfl
 
 /-- Differentiating the actual tensor permutation permutes its input direction. -/
 theorem hasFDerivAt_permuteByAdjacentSwaps {s : Shape}

@@ -7,7 +7,7 @@ Authors: TorchLean Team
 module
 
 public import NN.MLTheory.CROWN.Graph.Engine.Refinement
-public import NN.MLTheory.CROWN.BoundOps.Lawful
+public import NN.Spec.Core.Context.Real
 
 /-!
 # Coverage of input subdivision
@@ -44,7 +44,7 @@ theorem splitAt_covers (box : FlatBox ℝ) (axis : Fin box.dim) (cut : ℝ)
     intro i
     by_cases hi : i = axis
     · subst i
-      simpa [splitAt] using And.intro (le_of_lt (lt_of_not_ge hcut)) (hx axis).2
+      simpa [splitAt] using And.intro (le_of_not_ge hcut) (hx axis).2
     · simpa only [splitAt, Tensor.getScalar_ofFn, ite_eq_right hi] using hx i
 
 end NN.MLTheory.CROWN.Graph.Refinement

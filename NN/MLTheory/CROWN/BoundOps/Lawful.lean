@@ -32,8 +32,8 @@ variable {α : Type} [TorchLean.Storage α] [Context α]
 /--
 Real-semantic enclosure laws for `BoundOps`.
 
-The executable interface above is intentionally available without this class: a backend may be
-useful for diagnostics before its arithmetic has been connected to a proof.  Sound CROWN theorems
+The executable interface `BoundOps` is intentionally available without this class: a backend may
+be useful for diagnostics before its arithmetic has been connected to a proof.  Sound CROWN theorems
 require `LawfulBoundOps` in addition to `BoundOps`. The interpretation `toReal` says what a scalar
 endpoint means mathematically, and the laws compare each directed operation with exact arithmetic
 on those real values. This is stronger than merely surrounding the backend's ordinary rounded
@@ -50,12 +50,32 @@ class LawfulBoundOps (α : Type) [TorchLean.Storage α] [Context α] [BoundOps �
   toReal : α → ℝ
   /-- Executable endpoint comparisons agree with the mathematical order. -/
   lt_iff (a b : α) : a < b ↔ toReal a < toReal b
+  /-- The endpoint `0` means the real number `0`. -/
+  toReal_zero : toReal 0 = 0
+  /-- The endpoint `1` means the real number `1`. -/
+  toReal_one : toReal 1 = 1
+  /-- The backend maximum is the real maximum. -/
+  toReal_max (a b : α) : toReal (max a b) = max (toReal a) (toReal b)
+  /-- Endpoints that test equal denote the same real number. -/
+  toReal_eq_of_beq {a b : α} : (a == b) = true → toReal a = toReal b
   addDown_le (a b : α) : toReal (BoundOps.addDown a b) ≤ toReal a + toReal b
   le_addUp (a b : α) : toReal a + toReal b ≤ toReal (BoundOps.addUp a b)
   subDown_le (a b : α) : toReal (BoundOps.subDown a b) ≤ toReal a - toReal b
   le_subUp (a b : α) : toReal a - toReal b ≤ toReal (BoundOps.subUp a b)
   mulDown_le (a b : α) : toReal (BoundOps.mulDown a b) ≤ toReal a * toReal b
   le_mulUp (a b : α) : toReal a * toReal b ≤ toReal (BoundOps.mulUp a b)
+
+/-- The backend minimum denotes the real minimum.
+
+This supplements `LawfulBoundOps` for transfers that use the context's `min` operation.
+The comparison-based `BoundOps.min2` needs no additional law. Ordinary negation and absolute
+value may round on a backend, so their exactness is deliberately not assumed here.
+-/
+class LawfulMinBoundOps (α : Type) [TorchLean.Storage α] [Context α] [BoundOps α]
+    [LawfulBoundOps α] : Prop where
+  toReal_min (a b : α) :
+    LawfulBoundOps.toReal (min a b) =
+      min (LawfulBoundOps.toReal a) (LawfulBoundOps.toReal b)
 
 /--
 Soundness predicate for a unary interval transfer.
@@ -127,12 +147,32 @@ noncomputable instance instBoundOpsReal : BoundOps ℝ where
 noncomputable instance instLawfulBoundOpsReal : LawfulBoundOps ℝ where
   toReal := id
   lt_iff _ _ := Iff.rfl
+  toReal_zero := rfl
+  toReal_one := rfl
+  toReal_max _ _ := rfl
+  toReal_eq_of_beq h := beq_iff_eq.mp h
   addDown_le _ _ := le_rfl
   le_addUp _ _ := le_rfl
   subDown_le _ _ := le_rfl
   le_subUp _ _ := le_rfl
   mulDown_le _ _ := le_rfl
   le_mulUp _ _ := le_rfl
+
+/-- The exact real backend preserves minimum. -/
+noncomputable instance instLawfulMinBoundOpsReal : LawfulMinBoundOps ℝ where
+  toReal_min _ _ := rfl
+
+/-- Over `ℝ`, the comparison-based `BoundOps.min2` is `min`. -/
+theorem min2_eq_min (a b : ℝ) : BoundOps.min2 a b = min a b := by
+  by_cases h : a > b
+  · simp [BoundOps.min2, h, min_eq_right (le_of_lt h)]
+  · simp [BoundOps.min2, h, min_eq_left (le_of_not_gt h)]
+
+/-- Over `ℝ`, the comparison-based `BoundOps.max2` is `max`. -/
+theorem max2_eq_max (a b : ℝ) : BoundOps.max2 a b = max a b := by
+  by_cases h : a > b
+  · simp [BoundOps.max2, h, max_eq_left (le_of_lt h)]
+  · simp [BoundOps.max2, h, max_eq_right (le_of_not_gt h)]
 
 /-- Exact nonlinear interval transfers over the real numbers. -/
 noncomputable instance instNonlinearBoundOpsReal : NonlinearBoundOps ℝ where

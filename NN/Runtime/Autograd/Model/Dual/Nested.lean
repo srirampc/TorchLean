@@ -126,7 +126,7 @@ theorem seedTensor_succ {α : Type} [Storage α] [Context α] {shape : Shape} {n
     (DualTensor.withTangents (seedTensor (Fin.init directions) input)
       (Tensor.map (ofPrimal n) (directions (Fin.last n)))) i
   simp only [DualTensor.withTangents, Tensor.map2Spec_apply, seedTensor_apply, seed,
-    Tensor.map, Tensor.Internal.Rep.map_apply, Dual.mk']
+    Tensor.map, Tensor.Internal.Rep.map_apply]
   rfl
 
 end Nested

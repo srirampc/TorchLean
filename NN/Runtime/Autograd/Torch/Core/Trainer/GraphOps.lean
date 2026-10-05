@@ -51,11 +51,12 @@ instance {α Δ : Type} [TorchLean.Storage α] [Context α] {Γ : List Shape} :
       let values ← update (← readState getState) (← getValue input.id)
       let rec writes : {ss : List Shape} →
           RefList Runtime.Autograd.TypedGraph.GraphM.Var ss → TensorPack α ss →
+          Array (Nat × Spec.SomeTensor α) →
           Array (Nat × Spec.SomeTensor α)
-        | [], .nil, .nil => #[]
-        | _ :: _, .cons ref rest, .cons value values =>
-            #[(ref.id, Spec.SomeTensor.ofTensor value)] ++ writes rest values
-      pure (writes refs values)
+        | [], .nil, .nil, acc => acc
+        | _ :: _, .cons ref rest, .cons value values, acc =>
+            writes rest values (acc.push (ref.id, Spec.SomeTensor.ofTensor value))
+      pure (writes refs values #[])
     modify fun state => { state with bufferUpdates := state.bufferUpdates.push observer }
   const := fun {s} t => Runtime.Autograd.TypedGraph.GraphM.const (α := α) (Γ := Γ) (s := s) t
   add := fun {s} a b => Runtime.Autograd.TypedGraph.GraphM.add (α := α) (Γ := Γ) (s := s) a b
@@ -92,11 +93,11 @@ instance {α Δ : Type} [TorchLean.Storage α] [Context α] {Γ : List Shape} :
       (batchA := batchA) (batchB := batchB) (batch := batch)
       (m := mDim) (n := nDim) (p := pDim)
       (broadcastA := broadcastA) (broadcastB := broadcastB) a b
-  concatLeadingAxis := fun {nDim mDim} {s} a b =>
-    Runtime.Autograd.TypedGraph.GraphM.concatLeadingAxis (α := α) (Γ := Γ) (n := nDim) (m := mDim)
+  concat := fun {nDim mDim} {s} a b =>
+    Runtime.Autograd.TypedGraph.GraphM.concat (α := α) (Γ := Γ) (n := nDim) (m := mDim)
       (s := s) a b
-  sliceLeadingAxisRange := fun {nDim} {s} start len h x =>
-    Runtime.Autograd.TypedGraph.GraphM.sliceLeadingAxisRange (α := α) (Γ := Γ) (n := nDim) (s := s)
+  slice := fun {nDim} {s} start len h x =>
+    Runtime.Autograd.TypedGraph.GraphM.slice (α := α) (Γ := Γ) (n := nDim) (s := s)
       x start len h
   maxPool := fun {d C} {inSpatial kernel stride padding} x =>
     Runtime.Autograd.TypedGraph.GraphM.maxPool (α := α) (Γ := Γ)
@@ -145,15 +146,10 @@ instance {α Δ : Type} [TorchLean.Storage α] [Context α] {Γ : List Shape} :
   batchNorm := fun {channels sSpatial} hWellFormed x gamma beta epsilon =>
     Runtime.Autograd.TypedGraph.GraphM.batchNorm (α := α) (Γ := Γ)
       (channels := channels) (sSpatial := sSpatial) hWellFormed x gamma beta (epsilon := epsilon)
-  multiHeadAttention := fun {n numHeads dModel headDim} h1 wq wk wv wo x mask =>
-    Runtime.Autograd.TypedGraph.GraphM.multiHeadAttention (α := α) (Γ := Γ) (n := n) (numHeads :=
-      numHeads)
-      (dModel := dModel) (headDim := headDim) h1 wq wk wv wo x (mask := mask)
-  batchedMultiHeadAttention :=
-    fun {batch n numHeads dModel headDim} _hBatch h1 wq wk wv wo x mask =>
-      Runtime.Autograd.TypedGraph.GraphM.batchedMultiHeadAttention (α := α) (Γ := Γ)
-        (batch := batch) (n := n) (numHeads := numHeads) (dModel := dModel) (headDim := headDim)
-        h1 wq wk wv wo x (mask := mask)
+  attention := fun {n numHeads dModel headDim batch} _hBatch h1 wq wk wv wo x mask =>
+    Runtime.Autograd.TypedGraph.GraphM.attention (α := α) (Γ := Γ)
+      (batch := batch) (n := n) (numHeads := numHeads) (dModel := dModel) (headDim := headDim)
+      h1 wq wk wv wo x (mask := mask)
   conv := fun {d inC outC} {kernel stride padding} {inSpatial} w b x =>
     Runtime.Autograd.TypedGraph.GraphM.conv (α := α) (Γ := Γ)
       (d := d) (inC := inC) (outC := outC)

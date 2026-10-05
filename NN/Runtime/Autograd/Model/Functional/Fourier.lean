@@ -41,14 +41,14 @@ variable {α : Type} [Storage α] [Context α]
 namespace Fourier
 
 /-- Dense real-linear reference transform, used when the interpreter has no native FFT hook. -/
-def rfft1dReference {batch n : Nat} (x : RefTy m α [batch, n]) :
+def rfft {batch n : Nat} (x : RefTy m α [batch, n]) :
     m (RefTy m α [batch, n / 2 + 1, 2]) := do
   let basis ← const (m := m) (RealFFT.forwardMatrix (α := α) n)
   let packed ← matmul (batchA := []) (batchB := []) (batch := []) x basis
   reshape packed (by simp [Shape.size])
 
 /-- Dense normalized inverse, with explicit length so odd and even inputs remain distinct. -/
-def irfft1dReference {batch n : Nat} (x : RefTy m α [batch, n / 2 + 1, 2]) :
+def irfft {batch n : Nat} (x : RefTy m α [batch, n / 2 + 1, 2]) :
     m (RefTy m α [batch, n]) := do
   let packed ← reshape (s₂ := [batch, (n / 2 + 1) * 2]) x
     (by simp [Shape.size])
@@ -58,17 +58,23 @@ def irfft1dReference {batch n : Nat} (x : RefTy m α [batch, n / 2 + 1, 2]) :
 end Fourier
 
 /--
-Unnormalized real Fourier transform of each row, returned as `[batch, n / 2 + 1, 2]`.
+Unnormalized real Fourier transform along the last axis, preserving all leading batch dimensions.
 
 The last coordinate is `(real, imaginary)` and the phase convention is `exp(-2*pi*i*k*t/n)`.
 The positive-length witness rules out an undefined transform; an empty batch is allowed. This
 operation records differentiable references, including on interpreters that use the dense fallback.
 -/
-def rfft1d {batch n : Nat} (_hn : 0 < n) (x : RefTy m α [batch, n]) :
-    m (RefTy m α [batch, n / 2 + 1, 2]) := do
-  if let some native := _root_.Runtime.Autograd.Torch.Ops.rfft1dNative? (m := m) (α := α) then
-    if let some result ← native x then return result
-  Fourier.rfft1dReference x
+def rfft {batch : Shape} {n : Nat} (_hn : 0 < n)
+    (x : RefTy m α (batch.concat [n])) (path : SpectralPath := .automatic) :
+    m (RefTy m α (batch.concat [n / 2 + 1, 2])) := do
+  let rows ← reshape (s₂ := [Shape.size batch, n]) x
+    (by simp [Shape.size_concat, Shape.size])
+  let packed ← (show m (RefTy m α [Shape.size batch, n / 2 + 1, 2]) from do
+    if path == .automatic then
+      if let some native := _root_.Runtime.Autograd.Torch.Ops.rfft1dNative? (m := m) (α := α) then
+        if let some result ← native rows then return result
+    Fourier.rfft rows)
+  reshape packed (by simp [Shape.size_concat, Shape.size])
 
 /--
 Normalized inverse real transform with output length `n`.
@@ -77,10 +83,16 @@ Interior bins are completed by conjugate symmetry. Imaginary DC and even-length 
 are ignored, and their derivatives are zero. Passing `n` explicitly distinguishes lengths such
 as four and five, which have the same number of stored bins.
 -/
-def irfft1d {batch n : Nat} (_hn : 0 < n) (x : RefTy m α [batch, n / 2 + 1, 2]) :
-    m (RefTy m α [batch, n]) := do
-  if let some native := _root_.Runtime.Autograd.Torch.Ops.irfft1dNative? (m := m) (α := α) then
-    if let some result ← native x then return result
-  Fourier.irfft1dReference x
+def irfft {batch : Shape} {n : Nat} (_hn : 0 < n)
+    (x : RefTy m α (batch.concat [n / 2 + 1, 2]))
+    (path : SpectralPath := .automatic) : m (RefTy m α (batch.concat [n])) := do
+  let rows ← reshape (s₂ := [Shape.size batch, n / 2 + 1, 2]) x
+    (by simp [Shape.size_concat, Shape.size])
+  let values ← (show m (RefTy m α [Shape.size batch, n]) from do
+    if path == .automatic then
+      if let some native := _root_.Runtime.Autograd.Torch.Ops.irfft1dNative? (m := m) (α := α) then
+        if let some result ← native rows then return result
+    Fourier.irfft rows)
+  reshape values (by simp [Shape.size_concat, Shape.size])
 
 end Runtime.Autograd.Model.F

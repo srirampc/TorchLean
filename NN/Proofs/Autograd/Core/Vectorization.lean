@@ -41,6 +41,41 @@ noncomputable section
 abbrev Vec (n : Nat) := EuclideanSpace ℝ (Fin n)
 
 /--
+Build a Euclidean vector from its coordinate function.
+
+Used by analytic derivatives and by vector reindexing across context concatenation and shape casts.
+-/
+def vecOfFun {n : Nat} (f : Fin n → ℝ) : Vec n :=
+  (EuclideanSpace.equiv (𝕜 := ℝ) (ι := Fin n)).symm f
+
+/-- Coordinates of `vecOfFun f` are the values of `f`. -/
+@[simp] theorem vecOfFun_apply {n : Nat} (f : Fin n → ℝ) (i : Fin n) :
+    vecOfFun (n := n) f i = f i := by
+  simp [vecOfFun, EuclideanSpace.equiv]
+
+/-- The same statement through the `WithLp` wrapper, which is the form `simp` meets in practice. -/
+@[simp] theorem vecOfFun_ofLp {n : Nat} (f : Fin n → ℝ) (i : Fin n) :
+    (vecOfFun (n := n) f).ofLp i = f i := by
+  simp [vecOfFun, EuclideanSpace.equiv]
+
+/-- Removing the `WithLp` wrapper from `vecOfFun` recovers its coordinate function. -/
+theorem vecOfFun_ofLp_eq {n : Nat} (f : Fin n → ℝ) :
+    (vecOfFun (n := n) f).ofLp = f :=
+  funext (vecOfFun_ofLp f)
+
+/-- Rebuilding a vector from its own coordinates changes nothing. -/
+@[simp] theorem vecOfFun_eta {n : Nat} (v : Vec n) :
+    vecOfFun (n := n) (fun i => v i) = v := by
+  -- `vecOfFun` is `EuclideanSpace.equiv.symm`, whose forward map is coordinate evaluation.
+  simp [vecOfFun, EuclideanSpace.equiv]
+
+/-- The `ofLp` variant of eta. Both directions are needed because reindexing lemmas
+sometimes produce a bare coordinate function and sometimes an unwrapped one. -/
+@[simp] theorem vecOfFun_eta_ofLp {n : Nat} (v : Vec n) :
+    vecOfFun (n := n) (fun i => v.ofLp i) = v := by
+  simp [vecOfFun, EuclideanSpace.equiv]
+
+/--
 Convert a rank-one tensor (`Tensor ℝ [n]`) into a Euclidean vector `Vec n`.
 
 This is the “analysis-friendly” view of a length-`n` tensor as an element of $\mathbb R^n$.

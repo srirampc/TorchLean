@@ -36,30 +36,12 @@ open Spec TorchLean
 open TorchLean.Tensor
 
 /--
-`splitAppend` undoes `append` in the one-input case.
-
-This typed-list fact is used internally by `LowerToDAG.Primitive.toDAGPrimOp`.
--/
-theorem splitAppend_appendSingleton
-    {α : Type} [TorchLean.Storage α] [Context α] :
-    {ps : List Shape} → {σ : Shape} →
-      (params : TorchLean.TensorPack α ps) → (x : TorchLean.Tensor α σ) →
-        TorchLean.TensorPack.split (α := α)
-            (ss₁ := ps) (ss₂ := [σ])
-            (TorchLean.TensorPack.append (α := α)
-              (ss₁ := ps) (ss₂ := [σ]) params (.cons x .nil))
-          =
-        (params, .cons x .nil)
-  | ps, σ, params, x => by
-      simp
-
-/--
 Embedding a sequential primitive into DAG form preserves its pure `specFwd` semantics.
 
 This theorem states that “the DAG primitive is the sequential primitive with
 its parameters made explicit as ordinary inputs”.
 -/
-theorem toDAGPrimOp_specFwd_eq
+theorem toDAGPrimOp_specFwd
     {α : Type} [TorchLean.Storage α] [Context α]
     {ps : List Shape} {σ τ : Shape}
     (p : Primitive ps σ τ)
@@ -69,11 +51,7 @@ theorem toDAGPrimOp_specFwd_eq
           (ss₁ := ps) (ss₂ := [σ]) params (.cons x .nil))
     =
     p.specFwd (α := α) params x := by
-  -- Unfold the embedding and use `splitAppend_appendSingleton` to simplify the `splitAppend`.
-  simp
-    [ LowerToDAG.Primitive.toDAGPrimOp
-    , splitAppend_appendSingleton (α := α) (ps := ps) (σ := σ) params x
-    ]
+  simp only [LowerToDAG.Primitive.toDAGPrimOp, TensorPack.split_append]
 
 end Primitive
 end GraphSpec

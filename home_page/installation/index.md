@@ -13,7 +13,10 @@ right compiler for you: Lean 4.34.0. Mathlib uses the matching release. FloatLib
 `lakefile.lean`, with the exact revision recorded in `lake-manifest.json`. Run
 `scripts/lake.sh update floatlib` to adopt newer FloatLib changes, then rebuild and test TorchLean.
 
-## A Five-Minute CPU Install
+## CPU Installation
+
+The build wrapper requires Bash and Python 3. Install the compiler tools described for your
+platform below before building.
 
 First install [Elan](https://github.com/leanprover/elan), the Lean toolchain manager. On Linux or
 macOS:
@@ -28,57 +31,65 @@ TorchLean:
 ```bash
 git clone https://github.com/lean-dojo/TorchLean.git
 cd TorchLean
-lake exe cache get
-lake build
+scripts/lake.sh exe cache get
+scripts/lake.sh build
 ```
 
 The cache command downloads compatible prebuilt Lean dependencies when they are available. It is
-safe to omit; `lake build` will compile anything that is missing.
+safe to omit; `scripts/lake.sh build` will compile anything that is missing.
+
+Use `scripts/lake.sh` for commands in this checkout. It keeps CPU and CUDA artifacts in separate
+cache directories and holds a checkout lock while Lake runs. If you previously built with raw
+Lake and `.lake/build` is a real directory, move it aside once before using the wrapper.
 
 Run a small model to check the executable path:
 
 ```bash
-lake exe torchlean quickstart_mlp --device cpu --steps 10
+scripts/lake.sh exe torchlean quickstart_mlp --device cpu --steps 10
 ```
 
 If those commands succeed, TorchLean is installed. You can inspect the available examples and
 verification commands with:
 
 ```bash
-lake exe torchlean --help
-lake exe verify --help
+scripts/lake.sh exe torchlean --help
+scripts/lake.sh exe verify --help
 ```
 
-That CPU build is the common starting point on every platform. From there, TorchLean can build
-its native CUDA runtime or link an external provider without changing the Lean model being run.
+That CPU build is the common starting point on every platform. From there, TorchLean can link
+its LibTorch CUDA backend without changing the Lean model being run.
 The table below separates paths that work today from platforms that still need platform-specific
 runtime work.
 
 | Platform | CPU | NVIDIA GPU | LibTorch provider | Current status |
 | --- | --- | --- | --- | --- |
-| Linux | &#10003; | &#10003; Native CUDA | SDPA forward with TorchLean backward | Supported |
+| Linux | &#10003; | &#10003; Through LibTorch | Tensor operations and local gradients | Supported |
 | macOS, Intel or Apple silicon | &#10003; | Not applicable | Not yet | CPU supported; Metal is planned |
 | Windows with WSL2 | &#10003; Linux path | &#10003; CUDA on WSL2 | Linux path | Recommended Windows setup |
-| Native Windows (MSYS2) | &#10003; | &#10003; Native CUDA | SDPA forward with TorchLean backward | CPU, CUDA, and LibTorch build in a MinGW64 shell; see Native Windows |
+| Native Windows (MSYS2) | &#10003; | &#10003; LibTorch backend | `cuda=true` builds the LibTorch backend | CPU, CUDA, and LibTorch build natively; see Native Windows |
 
-Here, "LibTorch provider" means the current scaled-dot-product-attention bridge, not a requirement
-for ordinary TorchLean models and not a claim that every operation is delegated to PyTorch. The
-CPU, native CUDA, and LibTorch sections below give the corresponding build commands.
+LibTorch is the standard CUDA backend: build with `-Kcuda=true` and run with `--device cuda`.
+You can also request `--device gpu` (or `.gpu` in Lean). Currently it selects CUDA through
+LibTorch and fails if that GPU runtime is unavailable; it does not fall back to CPU.
+A plain build still uses the portable CPU runtime and does not link LibTorch.
+The GPU backend uses ATen, LibTorch's tensor library. TorchLean retains its own tape, backward
+traversal, and optimizer state. Native operations compute tensor values and local gradients with
+LibTorch autograd recording disabled. The CPU build remains independent of LibTorch.
 
 ## Linux
 
 ### CPU
 
-You need Git, `curl`, and a C/C++ compiler. On Ubuntu or Debian:
+You need Git, `curl`, Bash, Python 3, and a C/C++ compiler. On Ubuntu or Debian:
 
 ```bash
 sudo apt update
-sudo apt install -y git curl build-essential
+sudo apt install -y git curl bash python3 build-essential
 ```
 
-Then follow the five-minute install above. The default build uses the portable CPU runtime. It also
-builds harmless CUDA stub archives so that CPU-only machines can compile the complete Lean project;
-the stubs do not pretend that a GPU is present.
+Then follow the CPU installation steps above. The default build uses the portable CPU runtime.
+One unavailable-backend shim supplies the GPU symbols so CPU-only machines can compile the
+complete Lean project. GPU requests fail with instructions to rebuild with LibTorch.
 
 Linux native targets also build a private mimalloc 3.4.4 object from checksum-pinned source.
 Position-independent code and initial-exec thread-local storage let it link into executables and
@@ -91,67 +102,71 @@ describes the repair and its remaining assumptions.
 
 Install a supported NVIDIA driver and CUDA toolkit using NVIDIA's
 [CUDA Installation Guide for Linux](https://docs.nvidia.com/cuda/cuda-installation-guide-linux/).
-TorchLean needs `nvcc`, cuBLAS, and cuFFT. Check the machine before rebuilding:
+Download a CUDA-enabled SDK from the
+[LibTorch installation page](https://docs.pytorch.org/cppdocs/installing.html), using its supported
+C++ compiler and matching CUDA toolkit. The SDK must contain `include/`, `lib/`, and
+`share/cmake/Torch/TorchConfig.cmake`. The bridge needs CMake 3.22 or later, Make, and Python 3.
+Check the machine before rebuilding:
 
 ```bash
 nvidia-smi
 nvcc --version
 ```
 
-Build and run the CUDA configuration:
+Build and run the CUDA configuration, pointing to the extracted SDK:
 
 ```bash
-lake -R -K cuda=true build
-lake -R -K cuda=true exe torchlean quickstart_mlp \
+export TORCHLEAN_LIBTORCH_HOME=/absolute/path/to/libtorch
+scripts/lake.sh -Kcuda=true build
+scripts/lake.sh -Kcuda=true exe torchlean quickstart_mlp \
   --device cuda --steps 10 --show-backend
 ```
 
-The two CUDA choices happen at different times. `-K cuda=true` tells Lake to compile and link the
-native CUDA implementation. `--device cuda` asks the executable to use it. A CPU-linked executable
+The two CUDA choices happen at different times. `-Kcuda=true` tells Lake to compile the C++
+adapters and link LibTorch. `--device cuda` asks the executable to use it. A CPU-linked executable
 rejects `--device cuda` instead of silently moving the run back to the CPU.
 
-Use `-R` whenever you switch between CPU and CUDA configurations; it forces Lake to recompute the
-build description. The CUDA regression suite is:
+The wrapper selects the CUDA build cache and passes `-R` to Lake automatically, recomputing the
+build description when you switch configurations. The CUDA regression suite is:
 
 ```bash
-lake -R -K cuda=true exe nn_tests_suite
+TORCHLEAN_REQUIRE_CUDA=1 scripts/lake.sh -Kcuda=true exe nn_tests_suite
 ```
 
 The [CUDA guide]({{ '/cuda/' | relative_url }}) covers deterministic reductions, parity checks,
 sanitizers, and the remaining native-code trust boundary.
 
-### Optional LibTorch Attention
-
-The normal CPU and CUDA builds do not need LibTorch. TorchLean currently uses LibTorch only through
-an optional scaled-dot-product-attention bridge. Download a matching GPU-enabled distribution from
-the [official LibTorch installation page](https://docs.pytorch.org/cppdocs/installing.html) and
-extract it somewhere outside the repository.
-
-The extracted directory must contain `include/` and `lib/`. Pass its absolute path to Lake:
+The SDK's CMake configuration supplies its compiler ABI flags and library dependencies. TorchLean
+compiles C++ adapters; the SDK supplies GPU kernels and their supported architectures. You can
+also pass the SDK path directly to Lake:
 
 ```bash
-lake -R -K cuda=true -K libtorch=true \
-  -K libtorch_home=/absolute/path/to/libtorch build
-lake -R -K cuda=true -K libtorch=true \
-  -K libtorch_home=/absolute/path/to/libtorch exe libtorch_sdpa_test
+scripts/lake.sh -Kcuda=true \
+  -Klibtorch_home=/absolute/path/to/libtorch build
+scripts/lake.sh -Kcuda=true \
+  -Klibtorch_home=/absolute/path/to/libtorch exe libtorch_sdpa_test
 ```
 
-This enables the `libtorch_forward_cuda` profile for scaled-dot-product attention. The
+The maintained CUDA profile uses attention composed in Lean from matrix products, masking,
+softmax, and an explicit local VJP. LibTorch supplies the numerical primitives; TorchLean's tape
+owns Q/K/V and the saved probabilities. The full score matrices require quadratic memory in
+sequence length. The
 [backend chapter]({{ '/blueprint/Runtime___-Autograd___-and-Interop/Inside-The-Backend-Planner/' | relative_url }})
 explains its per-operation selection and backward boundary.
 
 ## macOS
 
-Install Apple's command-line developer tools, then Elan and TorchLean:
+Install Apple's command-line developer tools and ensure Python 3 is available, then install Elan
+and TorchLean:
 
 ```bash
 xcode-select --install
 curl https://elan.lean-lang.org/elan-init.sh -sSf | sh
 git clone https://github.com/lean-dojo/TorchLean.git
 cd TorchLean
-lake exe cache get
-lake build
-lake exe torchlean quickstart_mlp --device cpu --steps 10
+scripts/lake.sh exe cache get
+scripts/lake.sh build
+scripts/lake.sh exe torchlean quickstart_mlp --device cpu --steps 10
 ```
 
 The CPU path works on Intel and Apple silicon. Modern macOS has no NVIDIA CUDA execution path.
@@ -176,19 +191,21 @@ inside WSL.
 
 ### Native Windows (MSYS2)
 
-Native Windows builds run inside an [MSYS2](https://www.msys2.org/) MinGW64 shell. Lake invokes
-`cc` directly, and the standard Lean for Windows toolchain does not put a `cc` on `PATH`, so the
-build must run inside MSYS2 (which provides `gcc`/`cc`). First, install MSYS2 and Elan
-as described in the manual install instructions on the
-Lean [website](https://lean-lang.org/install/manual/).
-Then from a **MinGW64/UCRT64** shell install the `gcc` and `clang` toolchain:
+**NOTE: WSL2 remains the most regularly tested Windows route, but the native
+CPU, CUDA, and LibTorch paths below are built and run today.**
+
+Native Windows builds run inside an [MSYS2](https://www.msys2.org/) **UCRT64** shell. Install
+MSYS2, then Elan from the [manual install instructions](https://lean-lang.org/install/manual/).
+Lake invokes `cc` directly, and the standard Lean for Windows toolchain does not put a `cc` on
+`PATH`, so the build must run inside MSYS2 (which provides `gcc`/`cc`). From a **UCRT64** shell
+install the C/C++ toolchain:
 
 ```bash
-pacman -S --needed mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-clang mingw-w64-x86_64-toolchain
+pacman -S --needed mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-clang mingw-w64-x86_64-toolchain mingw-w64-ucrt-x86_64-cmake mingw-w64-ucrt-x86_64-ninja
 ```
 
-Open a new MinGW64/UCRT64 shell so `elan`, `lean`, `lake`, and `cc` are on `PATH`, 
-then clone and build the CPU configuration:
+Open a new UCRT64 shell so `elan`, `lean`, `lake`, and `cc` are on `PATH`, then clone and build
+the CPU configuration:
 
 ```bash
 git clone https://github.com/lean-dojo/TorchLean.git
@@ -198,82 +215,45 @@ lake build
 lake exe torchlean quickstart_mlp --device cpu --steps 10
 ```
 
-#### Native CUDA
+#### NVIDIA CUDA (LibTorch backend)
 
-The CUDA backend also builds natively, linking against the NVIDIA CUDA toolkit, the MSVC x64
-libraries, and the MSYS2 MinGW libraries. Install the
-[NVIDIA CUDA toolkit for Windows](https://developer.nvidia.com/cuda-downloads) and the Visual
-Studio C++ build tools.
-The CUDA source compilation requires MSVC — so start the MSYS2 shell from an environment
-where `vcvars64.bat` has already run (e.g. an *x64 Native Tools Command Prompt*, launching
-`msys2_shell.cmd -mingw64` from it), leaving `INCLUDE` and `LIB` set. 
-To build `torchlean` via `lake`, pass all the three directories Lake needs:
+The CUDA configuration builds the LibTorch backend natively. You need the Windows NVIDIA driver,
+the [NVIDIA CUDA toolkit for Windows](https://developer.nvidia.com/cuda-downloads), the Visual
+Studio C++ build tools, and a CUDA-enabled LibTorch SDK from the
+[LibTorch installation page](https://docs.pytorch.org/cppdocs/installing.html). The backend C++
+source is compiled with MSYS2's `clang-cl`, which needs the MSVC and Windows SDK headers — start
+the MSYS2 shell from an environment where `vcvars64.bat` has already run (e.g. an *x64 Native
+Tools Command Prompt*, launching `msys2_shell.cmd -ucrt64` from it), leaving `INCLUDE` and `LIB`
+set and `cl.exe` on `PATH`.
+
+The native Windows port uses Lake directly (artifacts stay in the in-repo `.lake/build`).
+Note that the `scripts/lake.sh` wrapper is *NOT* applicable here.
+Build, run, and test the attention smoke test with:
 
 ```bash
 lake -R -K cuda=true \
   -K cuda_home="C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.3" \
-  -K msvc_lib_dir="C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.51.36231\lib\x64" \
-  -K msys2_lib_dir="C:/msys64/mingw64/lib" \
-  -K cuda_arch=sm_89 \
+  -K msys2_lib_dir="C:/msys64/ucrt64/lib" \
+  -K libtorch_home="C:/path/to/libtorch" \
   build
-```
-
-`-K cuda_home=...` is the CUDA toolkit root, `-K msvc_lib_dir=...` is the MSVC `lib/x64` directory
-(used to satisfy the `LIBCMT`/`libcpmt`/`OLDNAMES` default-library records embedded in nvcc's
-MSVC-compiled host objects), and `-K msys2_lib_dir=...` is the MinGW library directory (providing
-`libuuid.a` and MinGW CRT symbols). All three are mandatory on Windows; the build fails early with
-a clear message when any is missing or points at a directory that does not exist. There is no
-`-Wl,-rpath` on Windows — the CUDA runtime DLLs (`cudart64_*`, `cublas64_*`, `cufft64_*`) must be
-on `PATH` at run time.
-
-To build the torchlean executable, run:
-
-```bash
 lake -R -K cuda=true \
   -K cuda_home="C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.3" \
-  -K msvc_lib_dir="C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.51.36231\lib\x64" \
-  -K msys2_lib_dir="C:/msys64/mingw64/lib" \
-  -K cuda_arch=sm_89 \
-  build torchlean
+  -K msys2_lib_dir="C:/msys64/ucrt64/lib" \
+  -K libtorch_home="C:/path/to/libtorch" \
+  exe torchlean quickstart_mlp --device cuda --steps 10 --show-backend
+PATH="/c/path/to/libtorch/lib:$PATH" ./.lake/build/bin/libtorch_sdpa_test.exe
 ```
 
+`-K cuda_home` and `-K msys2_lib_dir` are required on Windows; the build fails early with a clear
+message when either is missing. `-K msvc_lib_dir` is optional — the helper derives the MSVC `lib`
+directory from `cl.exe`'s location on `PATH` (pass it explicitly only for unusual installs).
+`-K cuda_arch` is not used: the SDK's CMake configuration supplies the supported GPU
+architectures.
 
-#### Native LibTorch
+At run time the CUDA toolkit `bin` directory (for `cudart64_*`, `cublas64_*`, `cufft64_*`) and
+the LibTorch `lib` directory (for `torch.dll`, `torch_cpu.dll`, `torch_cuda.dll`, `c10.dll`,
+`c10_cuda.dll`) must be on `PATH`; Windows has no rpath.
 
-The optional LibTorch attention bridge can also be built natively. Download the Windows (MSVC)
-LibTorch distribution from the
-[official LibTorch installation page](https://docs.pytorch.org/cppdocs/installing.html) and
-extract it outside the repository. The bridge C++ source is compiled with MSYS2's `clang-cl`,
-which needs the MSVC and Windows SDK headers — so start the MSYS2 shell from an environment
-where `vcvars64.bat` has already run (e.g. an *x64 Native Tools Command Prompt*, launching
-`msys2_shell.cmd -mingw64` from it), leaving `INCLUDE` and `LIB` set. Then add two options to
-the CUDA build:
-
-```bash
-lake -R -K cuda=true \
-  -K cuda_home="C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.3" \
-  -K msvc_lib_dir="C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.51.36231\lib\x64" \
-  -K msys2_lib_dir="C:/msys64/mingw64/lib" \
-  -K cuda_arch=sm_89 \
-  -K libtorch=true -K libtorch_home="C:/path/to/libtorch" \
-  build
-
-lake -R -K cuda=true \
-  -K cuda_home="C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.3" \
-  -K msvc_lib_dir="C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.51.36231\lib\x64" \
-  -K msys2_lib_dir="C:/msys64/mingw64/lib" \
-  -K cuda_arch=sm_89 \
-  -K libtorch=true -K libtorch_home="C:/path/to/libtorch" \
-  exe libtorch_sdpa_test
-```
-
-On Windows the bridge is linked as a static archive, so the executable itself imports the
-LibTorch DLLs — the LibTorch `lib` directory must be on `PATH` at run time (alongside the CUDA
-`bin` directory), providing `torch.dll`, `torch_cpu.dll`, `torch_cuda.dll`, `c10.dll`, and
-`c10_cuda.dll`.
-
-WSL2 remains the most regularly tested Windows route, but the native CPU, CUDA, and LibTorch
-paths above are built and run today.
 
 ## Use TorchLean From Another Lean Project
 
@@ -283,7 +263,7 @@ Add TorchLean to the downstream project's `lakefile.lean`:
 require TorchLean from git "https://github.com/lean-dojo/TorchLean.git" @ "main"
 ```
 
-Then update and build:
+Then update and build from the downstream project's root using its own Lake configuration:
 
 ```bash
 lake update
@@ -348,11 +328,11 @@ operation, provider, and device before running it. Unavailable providers fail at
 of quietly changing the request. `--show-backend` prints each selected capsule the first time a
 session uses it.
 
-The attention provider is the one place where the profile changes which implementation runs.
-`checked_cuda` prefers TorchLean's composed attention (CUDA batched matrix multiplication with
-TorchLean's hard-masked softmax). `libtorch_forward_cuda` prefers the LibTorch SDPA forward
-capsule. Both keep `vjpMode := .torchLeanTape`, so TorchLean records the tape node and owns the
-backward pass in either case.
+`checked_cuda` selects LibTorch numerical operations. Attention retains the capsule name
+`libtorch.direct_attention` and reports `torchlean-tape`: Lean composes its local VJP and manages
+the saved buffers. Capsules labelled `backend-vjp` instead call a native routine for their local
+reverse rule. TorchLean traverses the tape and accumulates gradients in both cases. Attention has
+one CUDA implementation; there is no separate fused-attention provider to select.
 
 Read [Inside the Backend Planner]({{ '/blueprint/Runtime___-Autograd___-and-Interop/Inside-The-Backend-Planner/' | relative_url }})
 for capsules, provider preference, VJP ownership, assurance policies, and backend reports. Read
@@ -364,14 +344,16 @@ for native CUDA dispatch, boundary checks, determinism, and the current operatio
 These commands cover the normal CPU installation:
 
 ```bash
-lake build
-lake lint
-lake exe nn_tests_suite
-lake exe torchlean --help
-lake exe verify --help
+scripts/lake.sh build
+scripts/lake.sh lint
+scripts/lake.sh exe nn_tests_suite
+scripts/lake.sh exe torchlean --help
+scripts/lake.sh exe verify --help
 ```
 
-For CUDA, rebuild and run the suite with `-R -K cuda=true`.
+For CUDA, rebuild with `scripts/lake.sh -Kcuda=true build`, then run the suite with
+`TORCHLEAN_REQUIRE_CUDA=1 scripts/lake.sh -Kcuda=true exe nn_tests_suite`. The environment
+variable makes an unavailable CUDA runtime a failure instead of allowing CUDA tests to skip.
 
 For a complete account of Lean axioms, executable checkers, CUDA and FFI code, external artifact
 producers, and floating-point assumptions, read

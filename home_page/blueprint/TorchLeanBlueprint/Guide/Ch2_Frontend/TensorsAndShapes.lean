@@ -44,10 +44,10 @@ From the repository root, run:
 ```terminal
 # Run the same tensor constructions across the executable
 # scalar types shown below.
-lake exe torchlean quickstart_tensors
+scripts/lake.sh exe torchlean quickstart_tensors
 ```
 
-The output is:
+The recorded output is:
 
 ```terminal +output
 == Quickstart: tensor basics ==
@@ -294,7 +294,7 @@ interoperability, and other APIs that explicitly request a different container:
 #[1.200000, 1.900000, 3.000000, 4.300000]
 ```
 
-The flattened array is the clearest evidence that the literal is stored in row-major order: the
+The flattened array exposes the literal's row-major traversal order: the
 last index changes fastest, so the flat order here is `1.2, 1.9, 3.0, 4.3`. `Tensor.to` also
 accepts `List Float` and `Vector Float (Spec.Shape.size [2, 2])`; a vector's length is part of its
 type, so the target states the tensor's certified element count. Packed targets are available when
@@ -423,7 +423,8 @@ Multiply and then sum is the dot product, and TorchLean defines it once under th
 ```
 ```leanOutput dotSignature (whitespace := lax)
 @Tensor.dotSpec : {α : Type} → [inst : Storage α] →
-  [Context α] → {s : Shape} → Tensor α s → Tensor α s → α
+  [Add α] → [Mul α] → [Zero α] →
+    {s : Shape} → Tensor α s → Tensor α s → α
 ```
 
 Two details in that signature are deliberate. The shape `s` is arbitrary rather than a single axis,
@@ -532,7 +533,9 @@ Whole-tensor reductions ignore the axis structure:
 ```
 
 The sum visits all six entries, giving `1 + 2 + 3 + 4 + 5 + 6 = 21`; the mean divides that
-total by six. Neither result retains a row or column axis. If the next calculation needs one
+total by six. For an empty tensor, the public mean uses denominator one and returns zero under
+the usual scalar operations; this is a totalized convention, not a statistical mean of samples.
+Neither result retains a row or column axis. If the next calculation needs one
 number per row, reducing the entire tensor loses the grouping it needs. The named-axis reduction
 below keeps the row axis and removes only the column axis.
 
@@ -872,10 +875,13 @@ rejects models with buffer-update hooks, including BatchNorm, whose running stat
 separate update.
 
 This workflow runs through typed CPU operations. The `NN.API.Precision` import, included in
-`NN.API`, supplies the configured scalar instances. A wider element type does not supply a CUDA
-kernel or widen the supervised trainer's `Float` datasets, initializer, checkpoints, and reports.
-For a computation that needs the extra digits throughout, construct its inputs and state in the
-chosen type and keep that type through the result boundary. The
+`NN.API`, supplies the configured scalar instances. A supervised loop can open
+`trainer.openTyped (α := TensorBinary128) (initialState? := some state)` to preserve typed samples,
+losses, predictions, and exact model-state checkpoints on CPU. The
+{ref "training-from-scratch"}[training chapter] checks that session interface on an affine model.
+Construct inputs and initial state in the chosen type: widening a stored `Float` cannot recover
+discarded digits, and seeded initialization still starts from `Float` when no state is supplied.
+A wider element type also does not supply a CUDA provider. The
 {ref "floats"}[floating-point chapter] explains exact input conversion, format limits, and which
 arithmetic operations have refinement or error theorems.
 
@@ -987,7 +993,7 @@ tensor shapes, as these checks show:
 #check transposed
 ```
 ```leanOutput transposedType
-transposed : TorchLean.Tensor Float [3, 2]
+transposed : Tensor Float (Shape.ofList [3, 2])
 ```
 
 ```lean (name := productType)
@@ -996,7 +1002,7 @@ transposed : TorchLean.Tensor Float [3, 2]
 #check product
 ```
 ```leanOutput productType
-product : TorchLean.Tensor Float [2, 4]
+product : Tensor Float (Shape.ofList [2, 4])
 ```
 
 For the definitions above, Lean infers:
@@ -1171,7 +1177,7 @@ returns the corresponding tensor value. It has no meaning in another session and
 tensor datatype. Session-backed runtime handles carry an owner token and recording generation;
 operations reject handles from another session and handles retained across `resetTape`.
 
-CUDA execution is the one place where the physical representation must differ. An `AnyBuffer`
+The maintained CUDA execution path uses a separate physical representation. An `AnyBuffer`
 contains a runtime shape and a native device buffer in contiguous row-major order. Upload and
 download functions connect it to `Tensor`; CUDA tape operations validate the stored shape and buffer
 size before dispatch. Proofs about graph evaluation and explicit kernel contracts cover the

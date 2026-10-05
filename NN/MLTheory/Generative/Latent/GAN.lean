@@ -50,6 +50,7 @@ open NN.MLTheory.Generative.Latent.Objective
 variable {α : Type} [TorchLean.Storage α] [Context α]
 variable {latent obs : Shape}
 
+omit [Context α] in
 /-- Generated samples are obtained by applying the generator to latent noise. -/
 @[simp] theorem generate_eq_generator
     (model : Model α latent obs) (z : Tensor α latent) :
@@ -76,7 +77,7 @@ private theorem mse_scalar_self_zero (x : Tensor ℝ .scalar) :
   have hdiff : Tensor.subSpec x x = Tensor.scalar 0 := by
     apply Tensor.ext_scalar
     simp [Tensor.subSpec]
-  simp [Spec.mseSpec, hdiff, Spec.toScalarSpec, Tensor.mulSpec,
+  simp [Spec.mseSpec, hdiff, Tensor.mulSpec,
     Spec.meanOver, TorchLean.Tensor.meanDenominator, Spec.Shape.size]
 
 /-- Package the LSGAN generator objective as a two-term objective with no regularizer. -/

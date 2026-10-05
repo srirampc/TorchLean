@@ -50,10 +50,11 @@ def runGraphM {α : Type} [TorchLean.Storage α] {Γ : List Shape} {β : Type}
   pure (value, ⟨state.nodeShapes, state.data⟩)
 
 /--
-Atomically apply a graph-building update to the session snapshot.
+Apply a successful graph-building update to the session snapshot.
 
 This is the central adapter used by each op wrapper below: it reads `s.state`, runs a builder that
-returns an updated `TypedGraphSessionState`, stores it back into `s.state`, and returns the result.
+returns an updated `TypedGraphSessionState`, commits that state only on success, and returns the
+result. The session's separate reference operations do not provide concurrent transaction isolation.
 -/
 def commitGraphM {α : Type} [TorchLean.Storage α]
     (s : TypedGraphSession α) {β : Type} [StampRefIdentity β]
@@ -67,10 +68,24 @@ def commitGraphM {α : Type} [TorchLean.Storage α]
     IO β := do
   s.validateRefIdentities refs
   let st0 ← s.state.get
-  let r ← okOrThrow (k (Γ := st0.Γ) (ss := st0.ss) st0.x st0.nat st0.g)
-  let (b, st1) := r
-  s.state.set { st1 with leafMetadata := st0.leafMetadata }
+  let (b, st1) ← okOrThrow (k (Γ := st0.Γ) (ss := st0.ss) st0.x st0.nat st0.g)
+  s.setState { st1 with leafMetadata := st0.leafMetadata }
   pure <| StampRefIdentity.stamp (← s.currentRefIdentity) b
+
+/--
+Record a tensor-valued builder after checking its input references.
+
+The builder changes only the graph nodes. `commitGraphM` preserves the leaf metadata, invalidates
+cached values after a successful build, and stamps the result with the current session identity.
+-/
+def recordGraphM {α : Type} [TorchLean.Storage α] {sh : Shape}
+    (s : TypedGraphSession α) (refs : Array (Option RefIdentity))
+    (build : ∀ {Γ : List Shape}, Runtime.Autograd.TypedGraph.GraphM.MWith α NatEnv Γ
+      (Runtime.Autograd.TypedGraph.GraphM.Var sh)) : IO (TensorRef α sh) :=
+  commitGraphM s (refs := refs) (fun {Γ} {ss} values nat graph => do
+    let (output, ⟨shapes, data⟩) ← runGraphM (Γ := Γ) build ss graph
+    pure ({ id := output.id },
+      { Γ, x := values, nat, ss := shapes, g := data }))
 
 /--
 Record a constant tensor.
@@ -84,7 +99,6 @@ graph; constants are treated as non-requires-grad.
 def const {α : Type} [TorchLean.Storage α]
     (s : TypedGraphSession α) {sh : Shape} [Zero α]
   (v : Tensor α sh) (name : Option String := none) : IO (TensorRef α sh) := do
-  let _ := name
   let st0 ← s.state.get
   match st0.ss with
   | [] =>
@@ -93,13 +107,9 @@ def const {α : Type} [TorchLean.Storage α]
       input (α := α) s (sh := sh) v (name := name) (requiresGrad := false)
   | _ :: _ =>
       -- Mid-graph: emit an explicit constant node.
-      commitGraphM (α := α) s (β := TensorRef α sh) (refs := #[]) (fun {Γ} {ss} xv nat g => do
-        let (vout, st') ← runGraphM (α := α) (Γ := Γ)
-          (Runtime.Autograd.TypedGraph.GraphM.const (α := α) (Γ := Γ) (s := sh) v)
-          ss g
-        let ⟨ss', g'⟩ := st'
-        let st1 : TypedGraphSessionState α := { Γ := Γ, x := xv, nat := nat, ss := ss', g := g' }
-        pure ({ id := vout.id }, st1))
+      recordGraphM (α := α) s (refs := #[])
+        (fun {Γ} =>
+          Runtime.Autograd.TypedGraph.GraphM.const (α := α) (Γ := Γ) (s := sh) v)
 
 /--
 Record elementwise addition `a + b`.
@@ -109,15 +119,10 @@ PyTorch comparison: `torch.add(a, b)` / the `+` operator.
 def add {α : Type} [TorchLean.Storage α]
     (s : TypedGraphSession α) [Add α] [Zero α] {sh : Shape}
   (a b : TensorRef α sh) : IO (TensorRef α sh) :=
-  commitGraphM (α := α) s (β := TensorRef α sh) (refs := #[a.identity?, b.identity?])
-      (fun {Γ} {ss} x nat g => do
-    let (v, st') ← runGraphM (α := α) (Γ := Γ)
-      (Runtime.Autograd.TypedGraph.GraphM.add (α := α) (Γ := Γ) (s := sh)
+  recordGraphM (α := α) s (refs := #[a.identity?, b.identity?])
+    (fun {Γ} =>
+      Runtime.Autograd.TypedGraph.GraphM.add (α := α) (Γ := Γ) (s := sh)
         { id := a.id } { id := b.id })
-      ss g
-    let ⟨ss', g'⟩ := st'
-    let st1 : TypedGraphSessionState α := { Γ := Γ, x := x, nat := nat, ss := ss', g := g' }
-    pure ({ id := v.id }, st1))
 
 /--
 Record elementwise subtraction `a - b`.
@@ -127,15 +132,10 @@ PyTorch comparison: `torch.sub(a, b)` / the `-` operator.
 def sub {α : Type} [TorchLean.Storage α]
     (s : TypedGraphSession α) [Sub α] [Add α] [Zero α] {sh : Shape}
   (a b : TensorRef α sh) : IO (TensorRef α sh) :=
-  commitGraphM (α := α) s (β := TensorRef α sh) (refs := #[a.identity?, b.identity?])
-      (fun {Γ} {ss} x nat g => do
-    let (v, st') ← runGraphM (α := α) (Γ := Γ)
-      (Runtime.Autograd.TypedGraph.GraphM.sub (α := α) (Γ := Γ) (s := sh)
+  recordGraphM (α := α) s (refs := #[a.identity?, b.identity?])
+    (fun {Γ} =>
+      Runtime.Autograd.TypedGraph.GraphM.sub (α := α) (Γ := Γ) (s := sh)
         { id := a.id } { id := b.id })
-      ss g
-    let ⟨ss', g'⟩ := st'
-    let st1 : TypedGraphSessionState α := { Γ := Γ, x := x, nat := nat, ss := ss', g := g' }
-    pure ({ id := v.id }, st1))
 
 /--
 Record elementwise multiplication `a * b`.
@@ -145,15 +145,10 @@ PyTorch comparison: `torch.mul(a, b)` / the `*` operator.
 def mul {α : Type} [TorchLean.Storage α]
     (s : TypedGraphSession α) [Mul α] [Add α] [Zero α] {sh : Shape}
   (a b : TensorRef α sh) : IO (TensorRef α sh) :=
-  commitGraphM (α := α) s (β := TensorRef α sh) (refs := #[a.identity?, b.identity?])
-      (fun {Γ} {ss} x nat g => do
-    let (v, st') ← runGraphM (α := α) (Γ := Γ)
-      (Runtime.Autograd.TypedGraph.GraphM.mul (α := α) (Γ := Γ) (s := sh)
+  recordGraphM (α := α) s (refs := #[a.identity?, b.identity?])
+    (fun {Γ} =>
+      Runtime.Autograd.TypedGraph.GraphM.mul (α := α) (Γ := Γ) (s := sh)
         { id := a.id } { id := b.id })
-      ss g
-    let ⟨ss', g'⟩ := st'
-    let st1 : TypedGraphSessionState α := { Γ := Γ, x := x, nat := nat, ss := ss', g := g' }
-    pure ({ id := v.id }, st1))
 
 /--
 Record scaling by a scalar constant: `x * c`.
@@ -163,14 +158,9 @@ PyTorch comparison: like `x * c` (where `c` is a Python scalar).
 def scale {α : Type} [TorchLean.Storage α]
     (s : TypedGraphSession α) [Mul α] [Add α] [Zero α] {sh : Shape}
   (x : TensorRef α sh) (c : α) : IO (TensorRef α sh) :=
-  commitGraphM (α := α) s (β := TensorRef α sh) (refs := #[x.identity?])
-      (fun {Γ} {ss} xv nat g => do
-    let (v, st') ← runGraphM (α := α) (Γ := Γ)
-      (Runtime.Autograd.TypedGraph.GraphM.scale (α := α) (Γ := Γ) (s := sh) { id := x.id } c)
-      ss g
-    let ⟨ss', g'⟩ := st'
-    let st1 : TypedGraphSessionState α := { Γ := Γ, x := xv, nat := nat, ss := ss', g := g' }
-    pure ({ id := v.id }, st1))
+  recordGraphM (α := α) s (refs := #[x.identity?])
+    (fun {Γ} =>
+      Runtime.Autograd.TypedGraph.GraphM.scale (α := α) (Γ := Γ) (s := sh) { id := x.id } c)
 
 /--
 Record elementwise absolute value.
@@ -180,14 +170,9 @@ PyTorch comparison: `torch.abs(x)`.
 def abs {α : Type} [TorchLean.Storage α] (s : TypedGraphSession α)
   [Context α] [DecidableRel ((· > ·) : α → α → Prop)]
   {sh : Shape} (x : TensorRef α sh) : IO (TensorRef α sh) :=
-  commitGraphM (α := α) s (β := TensorRef α sh) (refs := #[x.identity?])
-      (fun {Γ} {ss} xv nat g => do
-    let (v, st') ← runGraphM (α := α) (Γ := Γ)
-      (Runtime.Autograd.TypedGraph.GraphM.abs (α := α) (Γ := Γ) (s := sh) { id := x.id })
-      ss g
-    let ⟨ss', g'⟩ := st'
-    let st1 : TypedGraphSessionState α := { Γ := Γ, x := xv, nat := nat, ss := ss', g := g' }
-    pure ({ id := v.id }, st1))
+  recordGraphM (α := α) s (refs := #[x.identity?])
+    (fun {Γ} =>
+      Runtime.Autograd.TypedGraph.GraphM.abs (α := α) (Γ := Γ) (s := sh) { id := x.id })
 
 /--
 Stop-gradient boundary.
@@ -199,14 +184,9 @@ PyTorch comparison: `x.detach()`.
 def detach {α : Type} [TorchLean.Storage α]
     (s : TypedGraphSession α) [Context α] {sh : Shape}
     (x : TensorRef α sh) : IO (TensorRef α sh) :=
-  commitGraphM (α := α) s (β := TensorRef α sh) (refs := #[x.identity?])
-      (fun {Γ} {ss} xv nat g => do
-    let (v, st') ← runGraphM (α := α) (Γ := Γ)
-      (Runtime.Autograd.TypedGraph.GraphM.detach (α := α) (Γ := Γ) (s := sh) { id := x.id })
-      ss g
-    let ⟨ss', g'⟩ := st'
-    let st1 : TypedGraphSessionState α := { Γ := Γ, x := xv, nat := nat, ss := ss', g := g' }
-    pure ({ id := v.id }, st1))
+  recordGraphM (α := α) s (refs := #[x.identity?])
+    (fun {Γ} =>
+      Runtime.Autograd.TypedGraph.GraphM.detach (α := α) (Γ := Γ) (s := sh) { id := x.id })
 
 /--
 Record elementwise square root.
@@ -216,14 +196,9 @@ PyTorch comparison: `torch.sqrt(x)`.
 def sqrt {α : Type} [TorchLean.Storage α] (s : TypedGraphSession α)
   [Context α] [DecidableRel ((· > ·) : α → α → Prop)]
   {sh : Shape} (x : TensorRef α sh) : IO (TensorRef α sh) :=
-  commitGraphM (α := α) s (β := TensorRef α sh) (refs := #[x.identity?])
-      (fun {Γ} {ss} xv nat g => do
-    let (v, st') ← runGraphM (α := α) (Γ := Γ)
-      (Runtime.Autograd.TypedGraph.GraphM.sqrt (α := α) (Γ := Γ) (s := sh) { id := x.id })
-      ss g
-    let ⟨ss', g'⟩ := st'
-    let st1 : TypedGraphSessionState α := { Γ := Γ, x := xv, nat := nat, ss := ss', g := g' }
-    pure ({ id := v.id }, st1))
+  recordGraphM (α := α) s (refs := #[x.identity?])
+    (fun {Γ} =>
+      Runtime.Autograd.TypedGraph.GraphM.sqrt (α := α) (Γ := Γ) (s := sh) { id := x.id })
 
 /--
 Record elementwise clamp to the interval `[minVal, maxVal]`.
@@ -233,15 +208,10 @@ PyTorch comparison: `torch.clamp(x, min=minVal, max=maxVal)`.
 def clamp {α : Type} [TorchLean.Storage α] (s : TypedGraphSession α)
   [Context α] [DecidableRel ((· > ·) : α → α → Prop)]
   {sh : Shape} (x : TensorRef α sh) (minVal maxVal : α) : IO (TensorRef α sh) :=
-  commitGraphM (α := α) s (β := TensorRef α sh) (refs := #[x.identity?])
-      (fun {Γ} {ss} xv nat g => do
-    let (v, st') ← runGraphM (α := α) (Γ := Γ)
-      (Runtime.Autograd.TypedGraph.GraphM.clamp (α := α) (Γ := Γ) (s := sh) { id := x.id } minVal
+  recordGraphM (α := α) s (refs := #[x.identity?])
+    (fun {Γ} =>
+      Runtime.Autograd.TypedGraph.GraphM.clamp (α := α) (Γ := Γ) (s := sh) { id := x.id } minVal
         maxVal)
-      ss g
-    let ⟨ss', g'⟩ := st'
-    let st1 : TypedGraphSessionState α := { Γ := Γ, x := xv, nat := nat, ss := ss', g := g' }
-    pure ({ id := v.id }, st1))
 
 /--
 Record elementwise maximum of `a` and `b`.
@@ -251,15 +221,10 @@ PyTorch comparison: `torch.maximum(a, b)`.
 def max {α : Type} [TorchLean.Storage α] (s : TypedGraphSession α)
   [Context α] [DecidableRel ((· > ·) : α → α → Prop)]
   {sh : Shape} (a b : TensorRef α sh) : IO (TensorRef α sh) :=
-  commitGraphM (α := α) s (β := TensorRef α sh) (refs := #[a.identity?, b.identity?])
-      (fun {Γ} {ss} x nat g => do
-    let (v, st') ← runGraphM (α := α) (Γ := Γ)
-      (Runtime.Autograd.TypedGraph.GraphM.max (α := α) (Γ := Γ) (s := sh)
+  recordGraphM (α := α) s (refs := #[a.identity?, b.identity?])
+    (fun {Γ} =>
+      Runtime.Autograd.TypedGraph.GraphM.max (α := α) (Γ := Γ) (s := sh)
         { id := a.id } { id := b.id })
-      ss g
-    let ⟨ss', g'⟩ := st'
-    let st1 : TypedGraphSessionState α := { Γ := Γ, x := x, nat := nat, ss := ss', g := g' }
-    pure ({ id := v.id }, st1))
 
 /--
 Record elementwise minimum of `a` and `b`.
@@ -269,15 +234,10 @@ PyTorch comparison: `torch.minimum(a, b)`.
 def min {α : Type} [TorchLean.Storage α] (s : TypedGraphSession α)
   [Context α] [DecidableRel ((· > ·) : α → α → Prop)]
   {sh : Shape} (a b : TensorRef α sh) : IO (TensorRef α sh) :=
-  commitGraphM (α := α) s (β := TensorRef α sh) (refs := #[a.identity?, b.identity?])
-      (fun {Γ} {ss} x nat g => do
-    let (v, st') ← runGraphM (α := α) (Γ := Γ)
-      (Runtime.Autograd.TypedGraph.GraphM.min (α := α) (Γ := Γ) (s := sh)
+  recordGraphM (α := α) s (refs := #[a.identity?, b.identity?])
+    (fun {Γ} =>
+      Runtime.Autograd.TypedGraph.GraphM.min (α := α) (Γ := Γ) (s := sh)
         { id := a.id } { id := b.id })
-      ss g
-    let ⟨ss', g'⟩ := st'
-    let st1 : TypedGraphSessionState α := { Γ := Γ, x := x, nat := nat, ss := ss', g := g' }
-    pure ({ id := v.id }, st1))
 
 /-- Record matrix multiplication with broadcasted batch prefixes. -/
 def matmul {α : Type} [TorchLean.Storage α]
@@ -288,37 +248,27 @@ def matmul {α : Type} [TorchLean.Storage α]
   (a : TensorRef α (batchA.concat [m, n]))
   (b : TensorRef α (batchB.concat [n, p])) :
   IO (TensorRef α (batch.concat [m, p])) :=
-  commitGraphM (α := α) s (β := TensorRef α (batch.concat [m, p]))
-      (refs := #[a.identity?, b.identity?]) (fun {Γ} {ss} x nat g => do
-    let (v, st') ← runGraphM (α := α) (Γ := Γ)
-      (Runtime.Autograd.TypedGraph.GraphM.matmul (α := α) (Γ := Γ)
+  recordGraphM (α := α) s (refs := #[a.identity?, b.identity?])
+    (fun {Γ} =>
+      Runtime.Autograd.TypedGraph.GraphM.matmul (α := α) (Γ := Γ)
         (batchA := batchA) (batchB := batchB) (batch := batch)
         (m := m) (n := n) (p := p) { id := a.id } { id := b.id })
-      ss g
-    let ⟨ss', g'⟩ := st'
-    let st1 : TypedGraphSessionState α := { Γ := Γ, x := x, nat := nat, ss := ss', g := g' }
-    pure ({ id := v.id }, st1))
 
 /--
 Concatenate two tensors along dimension 0.
 
 PyTorch comparison: `torch.cat([a, b], dim=0)`.
 -/
-def concatLeadingAxis {α : Type} [TorchLean.Storage α]
+def concat {α : Type} [TorchLean.Storage α]
     (s : TypedGraphSession α) [Context α]
   {n m : Nat} {sh : Shape}
   (a : TensorRef α (.dim n sh))
   (b : TensorRef α (.dim m sh)) :
   IO (TensorRef α (.dim (n + m) sh)) :=
-  commitGraphM (α := α) s (β := TensorRef α (.dim (n + m) sh))
-      (refs := #[a.identity?, b.identity?]) (fun {Γ} {ss} x nat g => do
-    let (v, st') ← runGraphM (α := α) (Γ := Γ)
-      (Runtime.Autograd.TypedGraph.GraphM.concatLeadingAxis (α := α) (Γ := Γ) (n := n) (m := m)
+  recordGraphM (α := α) s (refs := #[a.identity?, b.identity?])
+    (fun {Γ} =>
+      Runtime.Autograd.TypedGraph.GraphM.concat (α := α) (Γ := Γ) (n := n) (m := m)
         (s := sh) { id := a.id } { id := b.id })
-      ss g
-    let ⟨ss', g'⟩ := st'
-    let st1 : TypedGraphSessionState α := { Γ := Γ, x := x, nat := nat, ss := ss', g := g' }
-    pure ({ id := v.id }, st1))
 
 /--
 Slice a tensor along dimension 0.
@@ -326,20 +276,15 @@ Slice a tensor along dimension 0.
 This returns `x[start : start+len]`. The proof argument `h` enforces bounds.
 PyTorch comparison: `x[start:start+len]` for tensors with a leading dimension.
 -/
-def sliceLeadingAxisRange {α : Type} [TorchLean.Storage α]
+def slice {α : Type} [TorchLean.Storage α]
     (s : TypedGraphSession α) [Zero α]
   {n : Nat} {sh : Shape}
   (x : TensorRef α (.dim n sh)) (start len : Nat) (h : start + len ≤ n) :
   IO (TensorRef α (.dim len sh)) :=
-  commitGraphM (α := α) s (β := TensorRef α (.dim len sh)) (refs := #[x.identity?])
-      (fun {Γ} {ss} xv nat g => do
-    let (v, st') ← runGraphM (α := α) (Γ := Γ)
-      (Runtime.Autograd.TypedGraph.GraphM.sliceLeadingAxisRange (α := α) (Γ := Γ) (n := n) (s := sh)
+  recordGraphM (α := α) s (refs := #[x.identity?])
+    (fun {Γ} =>
+      Runtime.Autograd.TypedGraph.GraphM.slice (α := α) (Γ := Γ) (n := n) (s := sh)
         { id := x.id } start len h)
-      ss g
-    let ⟨ss', g'⟩ := st'
-    let st1 : TypedGraphSessionState α := { Γ := Γ, x := xv, nat := nat, ss := ss', g := g' }
-    pure ({ id := v.id }, st1))
 end TypedGraphSession
 
 end Internal

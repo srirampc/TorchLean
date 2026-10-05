@@ -28,7 +28,7 @@ open TorchLean
 open FloatLib.Floats
 
 /-- The concrete scalar selected for the runnable example. -/
-abbrev Binary128 := ExecFloat.Binary (exponentBits := 15) (fractionBits := 112)
+abbrev Scalar := ExecFloat.Binary (exponentBits := 15) (fractionBits := 112)
 
 /-- A scalar affine model with caller-supplied typed weight and bias. -/
 def model : nn.Sequential [1] [1] :=
@@ -50,14 +50,14 @@ def fit {α : Type} [Storage α] [Context α]
 
 /-- Train from a coefficient that cannot be represented in binary64, then print exact rationals. -/
 def run : IO Unit := do
-  let initial : nn.State Binary128 (nn.stateShapes model) :=
+  let initial : nn.State Scalar (nn.stateShapes model) :=
     nn.State.full (Rat.cast (1 + 1 / (2 ^ 100 : Nat) : Rat))
-  let input : Tensor Binary128 [1] := Tensor.full [1] 2
+  let input : Tensor Scalar [1] := Tensor.full [1] 2
   let trained ← fit initial input (Tensor.zeros [1]) (Rat.cast (1 / 8 : Rat)) 2
-  let graph ← nn.lowerToTypedGraph model (α := Binary128)
+  let graph ← nn.lowerToTypedGraph model (α := Scalar)
   let before := nn.TypedGraphModel.forward graph initial input
   let after := nn.TypedGraphModel.forward graph trained input
-  IO.println s!"initial prediction: {ExecFloat.Binary.toRat? (before.getScalar ⟨0, by decide⟩)}"
-  IO.println s!"trained prediction: {ExecFloat.Binary.toRat? (after.getScalar ⟨0, by decide⟩)}"
+  IO.println s!"initial prediction: {ExecFloat.Binary.toRat? before[0]}"
+  IO.println s!"trained prediction: {ExecFloat.Binary.toRat? after[0]}"
 
 end NN.Examples.Quickstart.TypedTraining

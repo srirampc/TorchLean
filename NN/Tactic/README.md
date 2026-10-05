@@ -188,8 +188,8 @@ example {shape : Shape} (n : Nat) (directions : Fin n → Tensor ℝ shape)
 For a custom reduction, use an ordinary `List.foldl`. The sum and product rules preserve the
 order you supply, allow repeated indices and empty lists, and differentiate the initial
 accumulator as well as the entries. Products need no assumption that their factors are nonzero.
-`Dual.jet_foldl` extends this to other smooth update rules with a proved jet law. The traversal
-must be fixed while differentiating; these results do not justify an input-dependent sorting or
+`Dual.jet_foldl_at` extends this to other smooth update rules with a proved pointwise jet law.
+The traversal must be fixed while differentiating; these results do not justify an input-dependent sorting or
 selection step, or equate different floating-point reduction orders.
 
 Local domain conditions also work for tensor-valued outputs and their reductions. For example,
@@ -307,7 +307,7 @@ conditions. For a CROWN query:
 ```lean
 import NN.Verification.Cert.CROWNQuery
 
-example {n m : Nat} (q : NN.Verification.CROWNQuery.Query n m)
+example {n m : Nat} (q : NN.Verification.Cert.CROWNQuery.Query n m)
     (checked : q.check = true) : q.Safe := by
   verify
 ```

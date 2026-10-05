@@ -96,7 +96,7 @@ after conversion to the spec scalar. The key names are:
 
 - `tensorToSpec`: pointwise conversion from runtime tensor values to spec scalars.
 - `linfNorm`: max style tensor norm used for error statements.
-- `approxWith`: absolute tensor approximation using an explicit error tensor.
+- `approxWith`: absolute tensor approximation under a chosen norm with a scalar error budget.
 - `approxWithTol`: approximation using a tolerance object.
 - `approxTensorWithTol`: packaged tensor tolerance relation.
 - `Witness`: a small record for carrying a runtime value and its error evidence.
@@ -198,8 +198,10 @@ The tolerance determines the following real-valued budget:
 approxBound : ApproxTol → ℝ → ℝ → ℝ
 ```
 
-The proposition says every coordinate of `tensorToSpec toSpec runtime` is close to the matching
-coordinate of `spec` under `eps`. That makes the trusted boundary easy to locate. If `toSpec`
+The proposition bounds the L∞ distance by `approxBound tol ‖spec‖∞ ‖runtime‖∞`. Every coordinate
+shares that allowance: the relative component uses the whole tensor's maximum norm, rather than
+each entry's magnitude as in an elementwise tolerance comparison. That makes the trusted
+boundary easy to locate. If `toSpec`
 interprets an executable rounded-real model, the theorem is about that rounded-real model. If the
 actual deployment path is CUDA, cuBLAS, PyTorch, or a fused native kernel, a separate agreement
 statement is needed before the theorem says anything about that path.
@@ -432,7 +434,8 @@ Checking performs three independent executable validations:
 `GraphRangeRegistry` dispatches by primitive operation, not model family. The built-in transfers
 cover source and shape-only nodes, pooling, arithmetic, inverse, ReLU, absolute value, directed
 square root with a checked nonnegative domain, fixed-left reductions, matrix multiplication, MSE,
-LayerNorm, softmax, sigmoid, tanh, sine, and cosine. Exponential is currently unsupported.
+LayerNorm, softmax, sigmoid, tanh, sine, cosine, and interval-hull rules for max, min, and
+concatenation. Exponential is currently unsupported.
 An unsupported operation fails at its node id; it is not replaced by an uninformative whole
 interval.
 
@@ -494,7 +497,7 @@ therefore at most the upper endpoint minus the lower endpoint. This argument req
 both values. Checking the rounded replay alone leaves the real half of the argument unproved.
 
 Reduction order is read from the selected capsule. The portable reference capsules advertise the
-fixed left fold used by the canonical tensor semantics. Native CUDA and LibTorch accumulations are
+fixed left fold used by the canonical tensor semantics. LibTorch CUDA accumulations are
 marked implementation-defined, so a fixed-left certificate cannot accidentally certify a cuBLAS,
 cuDNN, fused-attention, or parallel-reduction schedule. Those paths require the order-independent
 reduction bounds described in the floating-point chapter or a stronger backend-specific contract.
@@ -527,7 +530,7 @@ ends with a two-layer MLP rather than a single isolated operator. Run it from th
 ```terminal
 # Run generation and replay for the primitive-composed MLP
 # certificate.
-lake exe torchlean numerical_certificate
+scripts/lake.sh exe torchlean numerical_certificate
 ```
 
 The model is a matrix pipeline with shapes that remain visible in the IR:
@@ -543,31 +546,19 @@ input [1,2]
   -> add bias [1,1]
 ```
 
-The report captured before the FloatLib migration shows generation, replay, and one deliberately
-corrupted artifact. It is a record of that run, not a validation of the migrated executable:
-
-```terminal +output
-TorchLean numerical runtime certificate
-  ok  base certificate
-  ok  base IEEE replay
-  ok  tampered range rejected
-  ok  two-layer MLP certificate
-  ok  two-layer MLP IEEE replay
-All numerical certificate checks passed.
-```
-
-The tampered-range check replaces the addition interval with `[0,0]`. The checker regenerates
-the range trace and rejects the mismatch. This establishes that this corrupted artifact is refused;
-it does not establish soundness of every registered transfer.
+The command generates and replays two certificates: a scalar example and this MLP. It also
+checks rejection of a deliberately corrupted scalar certificate, in which the addition interval
+is replaced with `[0,0]`. The checker regenerates the range trace and compares it with the stored
+one. The runner returns a nonzero exit status if generation or replay fails, or if the corrupted
+artifact is accepted.
 
 `mlpCertificate` checks that all ten graph nodes have a registered numerical rule. It derives every
 range, selects the CPU capsules, and stores the graph, registry identity, source assumptions,
 ranges, and backend audit in one artifact. `mlpReplay` then supplies concrete weights, biases, and
 input values, executes the stored graph with FloatLib binary32, and checks every intermediate
-tensor.
-The same file demonstrates rejection of a tampered range. These Boolean and `Except` checks are
-useful regression evidence; the example does not construct a `ProvedRealEnclosure`, so it is not
-by itself a proof that the MLP's exact real execution is enclosed.
+tensor. These Boolean and `Except` checks exercise range reconstruction, concrete replay, and
+tamper rejection separately. The example does not construct a `ProvedRealEnclosure`, so it is
+not by itself a proof that the MLP's exact real execution is enclosed.
 
 There is no MLP-specific branch in this process. The checker sees input, constant, matrix
 multiplication, addition, and ReLU nodes. Other architectures can use the same walk when their
@@ -578,17 +569,10 @@ contract's derived interval to the operation's real semantics.
 The
 [complete numerical-runtime
 walkthrough](https://lean-dojo.github.io/TorchLean/examples/numerical-runtime/) shows the model
-definitions, the five replay stages, the backend-capsule audit, and the handoff to backward and
+definitions, the five checks, the backend-capsule audit, and the handoff to backward and
 optimizer bounds. It also states the current lowering boundary explicitly: canonical IR has checked
 forward replay, while backward and optimizer composition currently begins from a proof-bearing
 `RevGraph`.
-
-Read the five successful lines as checks of two concrete artifacts and one rejection case.
-The base and MLP generation lines concern reconstruction of their ranges and execution plans;
-their replay lines concern the supplied values at every intermediate node. The tampering line
-confirms that changing a stored range is detected. These observations exercise different parts
-of the checker, which is why the example keeps them separate. None of the lines supplies the
-real denotation and enclosure fields required by the proof-bearing record above.
 
 # NF Operations: Rounded Real Arithmetic
 
@@ -611,7 +595,7 @@ The file includes scalar and tensor approximation lemmas for common operations:
 
 - arithmetic: `approx_add_nf`, `approx_sub_nf`, `approx_mul_nf`, `approx_div_nf_of_pos_lb`;
 - unary functions: `approx_exp_nf`, `approx_tanh_nf`, `approx_abs_nf`, `approx_neg_nf`;
-- guarded operations: `safeLog`, `safeDiv`, `safe_log`;
+- guarded operations: `safeLog`, `safeDiv`, `approx_safeLogSoftplus_nf`;
 - tensor rules: `approxTensor_add_spec`, `approxTensor_mul_spec`, `approxTensor_exp_spec`,
   `approxTensor_relu_spec`;
 - graph nodes: `addNode`, `mulNode`, `expNode`, `reluNode`, `safeDivNode`, `softmaxNode`, `sumNode`.
@@ -619,8 +603,9 @@ The file includes scalar and tensor approximation lemmas for common operations:
 Several of these lemmas make the numerical analysis tradeoff visible. Division requires a positive
 lower bound on the exact denominator that survives rounding (`approx_div_nf_of_pos_lb`) or a
 guarded form (`safeDiv`). The division budget has a name, `divPosErrorBound`: the numerator error
-scaled by the effective margin, the denominator error scaled by the squared margin, and half an ULP
-of the quotient. The sigmoid, logistic, and mean bounds are built on that one definition.
+divided by the surviving margin, the denominator error times the numerator magnitude plus its
+error divided by the squared margin, and half an ULP of the quotient. The sigmoid, logistic, and
+mean bounds are built on that one definition.
 `reciprocal_sigmoid_bound_scalar_le_one` bounds the budget for the rounded sequence
 $`1/(1+\exp(-x))` by one under explicit small-error hypotheses.
 `mean_row_bound_of_exact` gives the closed form of the row-mean budget when the row count is exactly
@@ -657,7 +642,7 @@ The five real arguments are the exact denominator lower bound `η`, the input-er
 `epsx` and `epsy`, and the interpreted runtime operands `xhat` and `yhat`. The associated theorem
 requires `epsy < η`: denominator error leaves an effective separation `η - epsy` from zero.
 The budget scales the numerator error by the reciprocal of that separation and the denominator
-error by its squared reciprocal, then adds rounding of the quotient.
+error by its squared reciprocal times `abs xhat + epsx`, then adds rounding of the quotient.
 
 As the surviving separation shrinks, the bound grows. A caller can compare this explicit expression
 with a desired margin, but it is a noncomputable real-valued bound, not an executable estimator.
@@ -672,7 +657,7 @@ sample. The squared reciprocal in the denominator-error term makes this loss of 
 especially costly.
 
 The remaining names in `nfOps` specialize this reasoning in different ways. The reciprocal
-sigmoid budget theorem bounds the old evaluation sequence under its stated small-error
+sigmoid budget theorem bounds evaluation of `1 / (1 + exp(-x))` under its stated small-error
 conditions. The stable sigmoid theorem instead follows the branch of the public implementation,
 including the exponential used as a numerator in the negative branch. The exact-count mean
 lemma removes uncertainty about representing the divisor; it still accounts for the rounded
@@ -815,7 +800,8 @@ real denominator lower bounds, and rounded denominator margins required by
 `approxTensor_softmaxBackwardFromWeightsVecSpec` and `approxTensor_softmaxBackwardVecSpec`. The
 analytic facts `sum_softmaxVec`, `sum_softmaxJvp`, and `abs_softmaxJvp_le_two_mul` establish
 normalization, zero-sum JVP coordinates, and the dimension-independent bound
-$`\lvert\operatorname{vjp}_i\rvert\le 2G`.
+$`\lvert\operatorname{jvp}_i\rvert\le 2G`. The softmax Jacobian is symmetric, so the same formula
+also serves as the VJP.
 
 These are NF rounded-real theorems, not automatic claims about FloatLib binary32, a fused attention
 kernel, or native binary32. The numerical-certificate registry's softmax rule only derives the
@@ -1087,7 +1073,8 @@ derived scalars, and domain margins for the square root and division.
 
 The optimizer's retained state determines which relations must survive an update.
 
-SGD keeps nothing between steps, so its conclusion is a single `approxTensor` on the updated
+SGD has no momentum buffer or step counter, so its conclusion is a single `approxTensor` on the
+updated
 parameters, and its only state hypothesis is `sgdStateApprox`, which relates two learning rates.
 Momentum SGD keeps one buffer, and its conclusion becomes a conjunction: a bound for the next
 momentum buffer *and* a bound for the parameters. The next update needs the bound on the buffer
@@ -1137,7 +1124,9 @@ computed from a machine-like epsilon times a local scale bound.
 
 A graph can then carry both "how close" and "at what scale" information. The lemmas
 `approxTensorWithTol_from_scale` and `approxCtx_get_tolFromEpsScale` connect scale estimates back to
-the tolerance API used by graph theorems.
+the tolerance API used by graph theorems. These two lemmas weaken an absolute bound to the
+derived absolute-plus-relative tolerance for any scale; the second retains an unused `scaleCtx`
+hypothesis to record that the relative component describes the tensors' actual scale.
 
 This remains a separate layer because not every proof needs scale aware reasoning. Small examples
 and operator proofs written by hand are often clearer with absolute tolerances. Larger deployment
@@ -1145,11 +1134,9 @@ claims usually need scale, because one global absolute epsilon is rarely meaning
 activations and gradients.
 
 A scale bound can simplify a value-dependent error expression before it enters the next node.
-For instance, an upper bound on operand magnitudes replaces those magnitudes in a product
-estimate by quantities already known throughout a region. The resulting estimate may be looser,
-but it can be reused for every input in that region. The scale relation is the evidence that
-permits this replacement. Recording a convenient number in `BList` is insufficient unless the
-actual tensor values satisfy the accompanying bound.
+Scale propagation has its own `FwdNodeScale.scaleSound` obligation. A number recorded in `BList`
+only describes the tensor magnitudes when the accompanying scale relation holds; the tolerance
+weakening lemmas alone do not prove that relation.
 
 # FP32 And Verification Margins
 
@@ -1374,8 +1361,8 @@ bounds, compose them over forward and backward graphs, and finally connect the r
 # Runtime Agreement
 
 For supported graph and operator fragments, runtime approximation proves that a runtime or rounded
-computation stays within a stated tolerance of a spec computation. CUDA kernels, vendor library
-paths, compiler rewrites, and PyTorch-exported graphs need their own agreement statements when a
+computation stays within a stated tolerance of a spec computation. LibTorch execution,
+compiler rewrites, and PyTorch-exported graphs need their own agreement statements when a
 claim is about those paths.
 
 For a deployment claim, identify the graph, scalar interpretation, execution path, and input

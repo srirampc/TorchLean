@@ -46,12 +46,12 @@ theorem approxTensor_scale_spec {s : Shape} (c : R) :
         approxTensor (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd))
           (scaleSpec (α := SpecScalar) (s := s) xS (toSpec (β := β) (fexp := fexp) (rnd := rnd) c))
           (scaleSpec (α := R) (s := s) xR c)
-          (linfNorm (scaleBoundTensor (β := β) (fexp := fexp) (rnd := rnd) (s := s) eps c xR)) :=
-            by
+          (linfNorm
+            (scaleBoundTensor (β := β) (fexp := fexp) (rnd := rnd) (s := s) eps c xR)) := by
   intro xS xR eps hx
   have h :=
-    approxTensor_map_spec_of_scalar_bound (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd :=
-      rnd))
+    approxTensor_map_spec_of_scalar_bound (α := R)
+      (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd))
       (s := s)
       (fS := fun x => x * toSpec (β := β) (fexp := fexp) (rnd := rnd) c)
       (fR := fun xR => xR * c)
@@ -106,8 +106,8 @@ theorem approxTensor_neg_spec {s : Shape} :
           (linfNorm (negBoundTensor (β := β) (fexp := fexp) (rnd := rnd) (s := s) eps xR)) := by
   intro xS xR eps hx
   have h :=
-    approxTensor_map_spec_of_scalar_bound (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd :=
-      rnd))
+    approxTensor_map_spec_of_scalar_bound (α := R)
+      (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd))
       (s := s)
       (fS := Neg.neg) (fR := Neg.neg)
       (bnd := fun a eps =>
@@ -128,8 +128,8 @@ theorem approxTensor_abs_spec {s : Shape} :
           (linfNorm (absBoundTensor (β := β) (fexp := fexp) (rnd := rnd) (s := s) eps xR)) := by
   intro xS xR eps hx
   have h :=
-    approxTensor_map_spec_of_scalar_bound (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd :=
-      rnd))
+    approxTensor_map_spec_of_scalar_bound (α := R)
+      (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd))
       (s := s)
       (fS := Numerics.MathFunctions.abs) (fR := Numerics.MathFunctions.abs)
       (bnd := fun a eps =>
@@ -154,8 +154,8 @@ theorem approxTensor_exp_spec {s : Shape} :
           (linfNorm (expBoundTensor (β := β) (fexp := fexp) (rnd := rnd) (s := s) eps xR)) := by
   intro xS xR eps hx
   have h :=
-    approxTensor_map_spec_of_scalar_bound (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd :=
-      rnd))
+    approxTensor_map_spec_of_scalar_bound (α := R)
+      (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd))
       (s := s)
       (fS := Numerics.MathFunctions.exp) (fR := Numerics.MathFunctions.exp)
       (bnd := fun a eps => expErrorBound (β := β) (fexp := fexp) a eps)
@@ -167,20 +167,21 @@ theorem approxTensor_exp_spec {s : Shape} :
 
 /-- Shape-generic square-root approximation on a certified positive tensor domain.
 
-The pointwise lower bound is carried by `Tensor.Forall`; the global condition `eps < η` guarantees
-that every rounded input remains positive. The output budget is assembled entrywise and reduced by
-the same infinity norm used throughout `approxTensor`.
+The pointwise lower bound `η ≤ x` is carried by `Tensor.Forall` over the exact tensor. Because the
+runtime operation is the clamped `sqrt (max · 0)`, no margin between `eps` and `η` is needed: the
+scalar bound `approx_sqrt_clamp_nf_of_lb` holds even when a rounded input falls below zero. The
+output budget is assembled entrywise and reduced by the same infinity norm used throughout
+`approxTensor`.
 -/
 theorem approxTensor_sqrt_spec_of_pos_lb {s : Shape} (η : ℝ) (hη : 0 < η) :
     ∀ {xS : SpecTensor s} {xR : Tensor R s} {eps : ℝ},
       approxTensor (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd)) xS xR eps →
       Tensor.Forall (fun x : ℝ => η ≤ x) xS →
-      eps < η →
         approxTensor (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd))
           (sqrtSpec xS) (sqrtSpec xR)
           (linfNorm (sqrtPosBoundTensor (β := β) (fexp := fexp) (rnd := rnd)
             (s := s) η eps xR)) := by
-  intro xS xR eps hx hdom _hbudget
+  intro xS xR eps hx hdom
   have h :=
     approxTensor_map_spec_of_scalar_bound_of_forall
       (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd))
@@ -209,11 +210,11 @@ theorem approxTensor_tanh_spec {s : Shape} :
         approxTensor (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd))
           (mapSpec (s := s) Numerics.MathFunctions.tanh xS)
           (mapSpec (s := s) Numerics.MathFunctions.tanh xR)
-          (linfNorm (tanhBoundTensor (β := β) (fexp := fexp) (rnd := rnd) (s := s) eps xR)) := by
+          (linfNorm (tanhBoundTensor (β := β) (fexp := fexp) (rnd := rnd) (s := s) xR)) := by
   intro xS xR eps hx
   have h :=
-    approxTensor_map_spec_of_scalar_bound (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd :=
-      rnd))
+    approxTensor_map_spec_of_scalar_bound (α := R)
+      (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd))
       (s := s)
       (fS := Numerics.MathFunctions.tanh) (fR := Numerics.MathFunctions.tanh)
       (bnd := fun a _eps => (2 : ℝ) + ulp β fexp (Real.tanh a) / 2)
@@ -225,9 +226,6 @@ theorem approxTensor_tanh_spec {s : Shape} :
 
 -- Real ReLU is non-expansive. The NF wrapper rounds afterward, so its generic bound
 -- includes that rounding unless representability of the selected value is established.
-
-private theorem abs_max0_sub_max0_le (x y : ℝ) : abs (max x 0 - max y 0) ≤ abs (x - y) := by
-  simpa using (abs_max_sub_max_le_abs x y (0 : ℝ))
 
 /-- Rounded ReLU scalar op for `NF`: apply `max · 0` then round. -/
 noncomputable def reluR (x : R) : R :=
@@ -280,7 +278,7 @@ theorem approxTensor_relu_spec {s : Shape} :
             (Proofs.RuntimeRoundingApprox.roundR_abs_error
               (β := β) (fexp := fexp) (rnd := rnd) (max xhat 0))
         have hmax : abs (max xhat 0 - max x 0) ≤ abs (xhat - x) :=
-          abs_max0_sub_max0_le xhat x
+          abs_max_sub_max_le_abs xhat x 0
         have hxhat : abs (xhat - x) ≤ eps := by
           simpa [xhat] using hx
         calc
@@ -301,7 +299,6 @@ theorem approxTensor_relu_spec {s : Shape} :
             exact add_le_add_right hxhat _
           _ = eps + ulp β fexp (max xhat 0) / 2 := by ring)
   simpa [reluBoundTensor] using h
-
 
 end NFBackend
 

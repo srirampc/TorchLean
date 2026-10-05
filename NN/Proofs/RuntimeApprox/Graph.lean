@@ -9,7 +9,7 @@ module
 public import NN.Proofs.RuntimeApprox.Graph.BackwardApprox
 public import NN.Proofs.RuntimeApprox.Graph.ForwardApprox
 public import NN.Proofs.RuntimeApprox.Graph.LinkAutogradAlgebra
-public import NN.Proofs.RuntimeApprox.Graph.NumericalCertificate.Certificate
+public import NN.Proofs.RuntimeApprox.Graph.NumericalCertificate
 
 /-!
 # Runtime Approximation Graphs

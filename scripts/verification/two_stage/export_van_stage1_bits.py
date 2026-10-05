@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
 
 import numpy as np
@@ -124,9 +125,12 @@ def main() -> None:
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", type=str, default="")
     args = ap.parse_args()
+    if args.width <= 0 or args.steps < 0:
+        ap.error("--width must be positive and --steps nonnegative")
+    if not all(math.isfinite(x) and x >= 0 for x in (args.lr, args.rad)):
+        ap.error("--lr and --rad must be finite and nonnegative")
 
     torch.manual_seed(args.seed)
-    np.random.seed(args.seed)
 
     width = int(args.width)
     params = build_parameters(width)

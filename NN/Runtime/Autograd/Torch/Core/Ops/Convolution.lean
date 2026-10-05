@@ -8,7 +8,7 @@ module
 
 public import NN.Runtime.Autograd.Torch.Core.Ops.Dispatch
 public import NN.Runtime.Autograd.Engine.Core.ConvPool
-public import NN.Runtime.Autograd.Engine.Cuda.Ops.ConvPool
+public import NN.Runtime.Autograd.Engine.LibTorch.Ops.ConvPool
 
 /-!
 # Eager Tensor Operations
@@ -48,22 +48,17 @@ def conv {α : Type} [TorchLean.Storage α] (s : EagerSession α) [Context α]
     (Shape.ofList (outC ::
       Tensor.to (Spec.convOutSpatial inSpatial kernel stride padding) (List Nat)))) := do
   let cpu := do
-    let t0 ← s.tape.get
-    let (t1, id) ← okOrThrow (Runtime.Autograd.Tape.conv (t := t0)
+    s.recordCpu fun t0 => keepTapeOnError t0 <| Runtime.Autograd.Tape.conv (t := t0)
       (d := d) (inC := inC) (outC := outC)
       (kernel := kernel) (stride := stride) (padding := padding) (inSpatial := inSpatial)
-      w.id b.id x.id)
-    s.tape.set t1
-    pure { id := id }
+      w.id b.id x.id
   let cuda := do
-    let t0 ← s.cudaTape.get
-    let (t1, id) ← okOrThrow (Runtime.Autograd.Cuda.Tape.conv (t := t0)
+    s.recordCuda fun t0 => keepTapeOnError t0 <|
+      Runtime.Autograd.LibTorch.Tape.conv (t := t0)
       (d := d) (inC := inC) (outC := outC)
       (kernel := kernel) (stride := stride) (padding := padding) (inSpatial := inSpatial)
-      w.id b.id x.id)
-    s.cudaTape.set t1
-    pure (some { id := id })
-  dispatchCudaOpt (α := α) s .conv #[w.identity?, b.identity?, x.identity?] cpu cuda
+      w.id b.id x.id
+  executeRecorded (α := α) s .conv #[w.identity?, b.identity?, x.identity?] cpu cuda
 
 /--
 N-D transpose convolution for channels-first tensors `(inC, spatial...)` (no batch axis).
@@ -82,22 +77,18 @@ def convTranspose {α : Type} [TorchLean.Storage α] (s : EagerSession α) [Cont
       Tensor.to (Spec.convTransposeOutSpatial inSpatial kernel stride padding) (List Nat))))
     := do
   let cpu := do
-    let t0 ← s.tape.get
-    let (t1, id) ← okOrThrow (Runtime.Autograd.Tape.convTranspose (t := t0)
+    s.recordCpu fun t0 => keepTapeOnError t0 <|
+      Runtime.Autograd.Tape.convTranspose (t := t0)
       (d := d) (inC := inC) (outC := outC)
       (kernel := kernel) (stride := stride) (padding := padding) (inSpatial := inSpatial)
-      w.id b.id x.id)
-    s.tape.set t1
-    pure { id := id }
+      w.id b.id x.id
   let cuda := do
-    let t0 ← s.cudaTape.get
-    let (t1, id) ← okOrThrow (Runtime.Autograd.Cuda.Tape.convTranspose (t := t0)
+    s.recordCuda fun t0 => keepTapeOnError t0 <|
+      Runtime.Autograd.LibTorch.Tape.convTranspose (t := t0)
       (d := d) (inC := inC) (outC := outC)
       (kernel := kernel) (stride := stride) (padding := padding) (inSpatial := inSpatial)
-      w.id b.id x.id)
-    s.cudaTape.set t1
-    pure (some { id := id })
-  dispatchCudaOpt (α := α) s .convTranspose #[w.identity?, b.identity?, x.identity?] cpu cuda
+      w.id b.id x.id
+  executeRecorded (α := α) s .convTranspose #[w.identity?, b.identity?, x.identity?] cpu cuda
 
 end EagerSession
 

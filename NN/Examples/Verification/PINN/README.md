@@ -8,10 +8,10 @@ and bounds were checked?
 Reusable Lean code for PINN verification lives under `NN/Verification/PINN`. The files in this
 folder are compact checked fixtures:
 
-- `pinn_cert.json`: a small residual certificate checked by `lake exe verify -- pinn-cert`.
+- `pinn_cert.json`: a small residual certificate checked by `scripts/lake.sh exe verify -- pinn-cert`.
 - `sample_dataset_1d.json`, `sample_dataset_2d.json`: pointwise dataset artifacts for
-  `lake exe verify -- pinn-dataset-check`. The dataset command is diagnostic by default: it prints
-  contained/missed counts and exits successfully unless `--strict` is passed.
+  `scripts/lake.sh exe verify -- pinn-dataset-check`. The dataset command is diagnostic by default:
+  it prints contained/missed counts and exits successfully unless `--strict` is passed.
 
 Python producers live under `scripts/verification/pinn/`:
 
@@ -24,13 +24,21 @@ Python producers live under `scripts/verification/pinn/`:
 Check the bundled residual fixture first; no training is required:
 
 ```bash
-lake exe verify -- pinn-cert
+scripts/lake.sh exe verify -- pinn-cert
 ```
 
 This recomputes the fixture's solution and residual intervals at its stated sample points and
 compares the reported intervals. It does not establish that an arbitrary trained network solves
 the PDE everywhere. `pinn-dataset-check` is a separate containment diagnostic: read the counts,
 or pass `--strict` when missed points should make the command fail.
+
+For custom certificates, supply `pinn.pde` as a residual expression, for example `"uxx"` for
+`u_xx = 0`. The expression parser does not accept equation notation. The legacy default used when
+`pinn.pde` is missing or null is `"u''(x) = 0"`, which fails at the PDE parsing stage.
+
+Weight import treats `meta.activation` as optional metadata: `relu` and `sin`/`sine`/`siren`
+select those activations; missing or unrecognized metadata selects `tanh`. Supply a supported
+activation name matching the trained network; this fallback does not validate its provenance.
 
 The producer commands are for recreating data, not prerequisites for the bundled check:
 

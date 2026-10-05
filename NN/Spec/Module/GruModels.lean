@@ -9,6 +9,7 @@ module
 public import NN.Spec.Layers.Dropout
 public import NN.Spec.Module.Linear
 public import NN.Spec.Module.Rnn
+public import NN.Spec.Module.RecurrentStack
 
 /-!
 # Gated Recurrent Models
@@ -33,11 +34,12 @@ References:
 - PyTorch `nn.GRUCell` docs: https://docs.pytorch.org/docs/stable/generated/torch.nn.GRUCell.html
 - PyTorch `nn.GRU` docs: https://pytorch.org/docs/stable/generated/torch.nn.GRU.html
 
-PyTorch analogy: this corresponds to wiring `torch.nn.GRU` with linear heads and pooling over time
-(e.g. last hidden state for classification). This is an architectural comparison only. The
-recurrent core is the original Cho reset-before GRU from `NN.Spec.Layers.Gru`; PyTorch uses a
-reset-after candidate-state equation, so its checkpoints are not equation-compatible with these
-models without an explicit conversion.
+The wiring matches `torch.nn.GRU` with linear heads and pooling over time (e.g. last hidden
+state for classification), and each definition below names its wiring analogue. The comparison is
+architectural only. The recurrent core is the original Cho reset-before GRU (`GRUSpec`), while
+PyTorch uses the reset-after candidate equation (`GRUResetAfterSpec`). For general recurrent
+matrices these are different function families, so PyTorch GRU weights cannot be converted into
+these models.
 -/
 
 @[expose] public section
@@ -58,7 +60,7 @@ namespace Gru
 Pipeline:
 `GRU(seqLen, inputSize → hiddenSize)` then `Linear` applied at each timestep.
 
-PyTorch analogy: `nn.GRU(..., batch_first=False)` followed by an `nn.linear` on the output sequence.
+Wiring analogue: `nn.GRU(..., batch_first=False)` followed by an `nn.linear` on the output sequence.
 -/
 def sequence
   [DecidableRel ((· > ·) : α → α → Prop)]
@@ -73,7 +75,7 @@ def sequence
 
 /-- A many-to-one GRU classifier (use the last hidden state, then a linear head).
 
-PyTorch analogy: run `nn.GRU` over the sequence and feed the last output/hidden state into
+Wiring analogue: run `nn.GRU` over the sequence and feed the last output/hidden state into
 `nn.Linear(hiddenSize, numClasses)`.
 -/
 def classifier
@@ -91,27 +93,22 @@ def classifier
     |>.append lastOutput
     |>.append classifierModule
 
-/-- A 2-layer GRU stack (sequence-to-sequence), followed by a per-timestep linear head. -/
+/-- A recurrent stack of arbitrary depth and widths, followed by a per-timestep linear head. -/
 def stacked
   [DecidableRel ((· > ·) : α → α → Prop)]
   {seqLen inputSize hiddenSize outputSize : Nat}
-  (firstSpec : GRUSpec α inputSize hiddenSize)
-  (secondSpec : GRUSpec α hiddenSize hiddenSize)
+  (layers : RecurrentStack (GRUSpec α) inputSize hiddenSize)
   (linearSpec : LinearSpec α hiddenSize outputSize) :
-  Spec.Module.Chain α ([seqLen, inputSize]) ([seqLen, outputSize]) :=
-  let firstModule := Spec.Module.gru firstSpec
-  let secondModule := Spec.Module.gru secondSpec
-  let linearModule := Spec.Module.liftLeading (Spec.Module.linear linearSpec)
-  Spec.Module.Chain.single firstModule
-    |>.append secondModule
-    |>.append linearModule
+  Spec.Module.Chain α [seqLen, inputSize] [seqLen, outputSize] :=
+  layers.toChain (fun cell => Spec.Module.gru cell)
+    (Spec.Module.liftLeading (Spec.Module.linear linearSpec))
 
 /-- A simple GRU language-model style pipeline:
 
 `Linear` as the embedding/projection map, then GRU, then a per-timestep projection back to
 `vocabularySize`.
 
-PyTorch analogy: embedding (often `nn.Embedding`), `nn.GRU`, and `nn.Linear(hiddenSize,
+Wiring analogue: embedding (often `nn.Embedding`), `nn.GRU`, and `nn.Linear(hiddenSize,
 vocabularySize)`. We use `LinearSpec` here as a spec-friendly stand-in for a one-hot embedding
 matrix.
 -/
@@ -176,21 +173,36 @@ structure Grads (α : Type) [TorchLean.Storage α] (inputSize hiddenSize outputS
   outputBias : Tensor α [outputSize]
 
 -- Multi-layer GRU model
-/--
-Bundle of parameters for a multi-layer GRU model.
+/-- Recurrent cells with independently chosen widths and a linear output head.
 
-The first layer consumes `inputSize`, and all subsequent layers consume `hiddenSize`.
+The endpoint `hiddenSize` is the width of the last cell.
+An empty stack has `hiddenSize = inputSize`.
 -/
 structure StackedModel (α : Type) [TorchLean.Storage α]
-    (inputSize hiddenSize outputSize numLayers : Nat) where
-  /-- First recurrent layer, whose input may differ from the hidden width. -/
-  firstLayer : GRUSpec α inputSize hiddenSize
-  /-- Remaining recurrent layers. -/
-  hiddenLayers : Fin (numLayers - 1) → GRUSpec α hiddenSize hiddenSize
+    (inputSize hiddenSize outputSize : Nat) where
+  /-- Layer dimensions determine the type of every intermediate hidden stream and state. -/
+  layers : RecurrentStack (GRUSpec α) inputSize hiddenSize
   /-- Linear output projection. -/
   outputLayer : LinearSpec α hiddenSize outputSize
 
--- GRU model for classification (many-to-one)
+/-- Run every layer with its own initial state, then project the final hidden stream.
+
+The result retains all final states. Empty sequences leave each initial state unchanged, and an
+empty stack applies the head directly to the input sequence.
+-/
+def StackedModel.forward {seqLen inputSize hiddenSize outputSize : Nat}
+    (model : StackedModel α inputSize hiddenSize outputSize)
+    (inputs : Tensor α [seqLen, inputSize])
+    (initialHiddens : model.layers.States (fun width => Tensor α [width])) :
+    Tensor α [seqLen, outputSize] × model.layers.States (fun width => Tensor α [width]) :=
+  let (hidden, finalStates) := model.layers.run
+    (fun cell input state =>
+      let outputs := gruSequenceSpec cell input state
+      let finalState := if h : seqLen = 0 then state else
+        get outputs ⟨seqLen - 1, Nat.sub_one_lt h⟩
+      (outputs, finalState)) inputs initialHiddens
+  (Tensor.mapLeading [seqLen] (linearSpec model.outputLayer) hidden, finalStates)
+
 /--
 Bundle of parameters for a many-to-one GRU classifier.
 
@@ -221,7 +233,7 @@ structure Generator (α : Type) [TorchLean.Storage α] (vocabularySize hiddenSiz
 Bundle of parameters for a bidirectional GRU model with an output head.
 
 The head consumes the concatenation of forward and backward hidden states.
-PyTorch analogue: `nn.GRU(..., bidirectional=true)` plus a linear projection.
+Wiring analogue: `nn.GRU(..., bidirectional=true)` plus a linear projection.
 -/
 structure BidirectionalModel (α : Type) [TorchLean.Storage α]
     (inputSize hiddenSize outputSize : Nat) where
@@ -253,7 +265,7 @@ structure LanguageModel (α : Type) [TorchLean.Storage α] (vocabularySize hidde
 Bundle of parameters for a GRU encoder-decoder model (seq2seq).
 
 This uses separate embeddings and GRU cores for encoder and decoder, plus an output projection.
-PyTorch analogue: an encoder `nn.GRU` and a decoder `nn.GRU` with teacher forcing.
+Wiring analogue: an encoder `nn.GRU` and a decoder `nn.GRU` with teacher forcing.
 -/
 structure EncoderDecoder (α : Type) [TorchLean.Storage α]
     (inputVocabSize hiddenSize outputVocabSize : Nat) where
@@ -283,22 +295,19 @@ def Model.forward {inputSize hiddenSize outputSize : Nat}
 
 /-- Sequence forward for `Gru.Model` (time-major).
 
-Returns `(outputs, final_hidden)`.
+Returns `(outputs, final_hidden)`. Empty sequences preserve the initial hidden state.
 
-PyTorch analogy: run `nn.GRU` over the sequence, then apply `nn.linear` at each timestep.
+Wiring analogue: run `nn.GRU` over the sequence, then apply `nn.linear` at each timestep.
 -/
 def Model.forwardSequence {seqLen inputSize hiddenSize outputSize : Nat}
   (model : Model α inputSize hiddenSize outputSize)
   (inputs : Tensor α [seqLen, inputSize])
-  (initialHidden : Tensor α [hiddenSize]) (h : 0 < seqLen) :
+  (initialHidden : Tensor α [hiddenSize]) :
   (Tensor α [seqLen, outputSize] × Tensor α [hiddenSize]) :=
-  let hiddenStates := gruSequenceSpec model.gru inputs initialHidden
-  let outputs := Tensor.mapLeading ([seqLen])
-    (linearSpec model.outputLayer) hiddenStates
-  have hLast : seqLen - 1 < seqLen := by
-    simpa [Nat.pred_eq_sub_one] using Nat.pred_lt (Nat.ne_of_gt h)
-  let finalHidden := get hiddenStates ⟨seqLen - 1, hLast⟩
-  (outputs, finalHidden)
+  let stack : StackedModel α inputSize hiddenSize outputSize :=
+    { layers := .cons model.gru .nil, outputLayer := model.outputLayer }
+  let (outputs, finalStates) := stack.forward inputs (initialHidden, ())
+  (outputs, finalStates.1)
 
 -- Forward pass for GRU classifier (many-to-one)
 /--
@@ -313,8 +322,8 @@ def Classifier.forward {seqLen inputSize hiddenSize numClasses : Nat}
   (initialHidden : Tensor α [hiddenSize]) (h : 0 < seqLen) :
   Tensor α [numClasses] :=
   let hiddenStates := gruSequenceSpec model.gru inputs initialHidden
-  have hLast : seqLen - 1 < seqLen := by
-    simpa [Nat.pred_eq_sub_one] using Nat.pred_lt (Nat.ne_of_gt h)
+  have hLast : seqLen - 1 < seqLen :=
+    Nat.sub_one_lt (Nat.ne_of_gt h)
   let finalHidden := get hiddenStates ⟨seqLen - 1, hLast⟩
   linearSpec model.classifier finalHidden
 
@@ -334,8 +343,8 @@ def Generator.forward {seqLen vocabularySize hiddenSize : Nat}
   let hiddenStates := gruSequenceSpec model.gru embedded initialHidden
   let outputs := Tensor.mapLeading ([seqLen])
     (linearSpec model.outputProjection) hiddenStates
-  have hLast : seqLen - 1 < seqLen := by
-    simpa [Nat.pred_eq_sub_one] using Nat.pred_lt (Nat.ne_of_gt h)
+  have hLast : seqLen - 1 < seqLen :=
+    Nat.sub_one_lt (Nat.ne_of_gt h)
   let finalHidden := get hiddenStates ⟨seqLen - 1, hLast⟩
   (outputs, finalHidden)
 
@@ -360,55 +369,6 @@ def BidirectionalModel.forward {seqLen inputSize hiddenSize outputSize : Nat}
     ([(hiddenSize + hiddenSize)])
     (Tensor.concatAxisSpec .scalar) forwardStates backwardStates
   Tensor.mapLeading ([seqLen]) (linearSpec model.outputLayer) combinedStates
-
--- Multi-layer GRU forward pass (stack multiple GRU layers)
-/--
-Forward pass for a `Gru.StackedModel`.
-
-This runs the first layer on the input sequence, then threads the resulting hidden stream through
-each additional hidden layer, and finally applies the output head per timestep.
--/
-def StackedModel.forward {seqLen inputSize hiddenSize outputSize numLayers : Nat}
-  (model : StackedModel α inputSize hiddenSize outputSize numLayers)
-  (inputs : Tensor α [seqLen, inputSize])
-  (initialHiddens : Fin numLayers → Tensor α [hiddenSize])
-  (hLayers : 0 < numLayers) (hSeq : 0 < seqLen) :
-  (Tensor α [seqLen, outputSize] × (Fin numLayers → Tensor α [hiddenSize])) :=
-  let rec processHiddenLayers (layer : Nat)
-    (layerInput : Tensor α [seqLen, hiddenSize])
-    (hiddens : Fin numLayers → Tensor α [hiddenSize]) :
-    (Tensor α [seqLen, hiddenSize] × (Fin numLayers → Tensor α [hiddenSize])) :=
-    if hLayer : layer < numLayers - 1 then
-      let layerIndex : Fin (numLayers - 1) := ⟨layer, hLayer⟩
-      have hState : layer + 1 < numLayers := by
-        have hState' : layer + 1 ≤ numLayers - 1 := Nat.succ_le_of_lt hLayer
-        exact lt_of_le_of_lt hState' (Nat.sub_one_lt (Nat.ne_of_gt hLayers))
-      let stateIndex : Fin numLayers := ⟨layer + 1, hState⟩
-      let layerHidden := hiddens stateIndex
-      let layerOutput :=
-        gruSequenceSpec (model.hiddenLayers layerIndex) layerInput layerHidden
-      have hLast : seqLen - 1 < seqLen := by
-        simpa [Nat.pred_eq_sub_one] using Nat.pred_lt (Nat.ne_of_gt hSeq)
-      let finalLayerHidden := get layerOutput ⟨seqLen - 1, hLast⟩
-      let updatedHiddens := Function.update hiddens stateIndex finalLayerHidden
-      processHiddenLayers (layer + 1) layerOutput updatedHiddens
-    else
-      (layerInput, hiddens)
-
-  let firstLayerIndex : Fin numLayers := ⟨0, hLayers⟩
-  let firstHidden := initialHiddens firstLayerIndex
-  let firstOutput := gruSequenceSpec model.firstLayer inputs firstHidden
-  have hLast : seqLen - 1 < seqLen := by
-    simpa [Nat.pred_eq_sub_one] using Nat.pred_lt (Nat.ne_of_gt hSeq)
-  let firstFinalHidden := get firstOutput ⟨seqLen - 1, hLast⟩
-  let updatedInitialHiddens :=
-    Function.update initialHiddens firstLayerIndex firstFinalHidden
-
-  let (finalHiddenStates, finalHiddens) :=
-    processHiddenLayers 0 firstOutput updatedInitialHiddens
-  let outputs := Tensor.mapLeading ([seqLen])
-    (linearSpec model.outputLayer) finalHiddenStates
-  (outputs, finalHiddens)
 
 -- GRU Language Model forward pass
 /--
@@ -437,8 +397,8 @@ def LanguageModel.forward {seqLen vocabularySize hiddenSize : Nat}
     | layer :: remainingLayers => do
       let hidden ← initialHiddens[index]?
       let layerOutput := gruSequenceSpec layer layerInput hidden
-      have hLast : seqLen - 1 < seqLen := by
-        simpa [Nat.pred_eq_sub_one] using Nat.pred_lt (Nat.ne_of_gt h)
+      have hLast : seqLen - 1 < seqLen :=
+        Nat.sub_one_lt (Nat.ne_of_gt h)
       let finalHidden := get layerOutput ⟨seqLen - 1, hLast⟩
       let (finalOutput, finalHiddens) ←
         processLayers remainingLayers (index + 1) layerOutput
@@ -458,7 +418,7 @@ This is a small reference architecture:
 - decode `targetTokens` starting from that hidden state (teacher forcing),
 - project decoder states into output-vocabulary logits.
 
-PyTorch analogy: `nn.GRU` encoder + `nn.GRU` decoder with a linear output projection.
+Wiring analogue: `nn.GRU` encoder + `nn.GRU` decoder with a linear output projection.
 -/
 def EncoderDecoder.forward {srcSeqLen tgtSeqLen inputVocabSize hiddenSize outputVocabSize :
   Nat}
@@ -472,14 +432,14 @@ def EncoderDecoder.forward {srcSeqLen tgtSeqLen inputVocabSize hiddenSize output
   let sourceEmbedded := Tensor.mapLeading ([srcSeqLen])
     (linearSpec model.encoderEmbedding) sourceTokens
   let encoderStates := gruSequenceSpec model.encoderGru sourceEmbedded encoderHidden
-  have hSourceLast : srcSeqLen - 1 < srcSeqLen := by
-    simpa [Nat.pred_eq_sub_one] using Nat.pred_lt (Nat.ne_of_gt hSource)
+  have hSourceLast : srcSeqLen - 1 < srcSeqLen :=
+    Nat.sub_one_lt (Nat.ne_of_gt hSource)
   let encoderFinal := get encoderStates ⟨srcSeqLen - 1, hSourceLast⟩
   let targetEmbedded := Tensor.mapLeading ([tgtSeqLen])
     (linearSpec model.decoderEmbedding) targetTokens
   let decoderStates := gruSequenceSpec model.decoderGru targetEmbedded encoderFinal
-  have hTargetLast : tgtSeqLen - 1 < tgtSeqLen := by
-    simpa [Nat.pred_eq_sub_one] using Nat.pred_lt (Nat.ne_of_gt hTarget)
+  have hTargetLast : tgtSeqLen - 1 < tgtSeqLen :=
+    Nat.sub_one_lt (Nat.ne_of_gt hTarget)
   let decoderFinal := get decoderStates ⟨tgtSeqLen - 1, hTargetLast⟩
   let outputs := Tensor.mapLeading ([tgtSeqLen])
     (linearSpec model.outputProjection) decoderStates
@@ -489,11 +449,12 @@ def EncoderDecoder.forward {srcSeqLen tgtSeqLen inputVocabSize hiddenSize output
 /-- Backward pass for `Gru.Model` using full backpropagation through time.
 
 This assumes you already ran a forward pass that saved:
-- `hidden_states`,
-- the GRU intermediates (`resetGates`, `updateGates`, `newCandidates`, `resetHiddens`).
+- `hiddenStates`,
+- the GRU intermediates `resetGates`, `updateGates`, and `candidates`.
 
 Those intermediates can be produced using `Spec.gruExtractIntermediateValues` from
-`NN.Spec.Layers.Gru`.
+`NN.Spec.Layers.Gru`. Supply the same `initialHidden` as the forward pass; omitting it retains
+the zero-initial-state convention.
 -/
 def Model.backward {seqLen inputSize hiddenSize outputSize : Nat}
   (model : Model α inputSize hiddenSize outputSize)
@@ -503,7 +464,8 @@ def Model.backward {seqLen inputSize hiddenSize outputSize : Nat}
   (resetGates : Tensor α [seqLen, hiddenSize])
   (updateGates : Tensor α [seqLen, hiddenSize])
   (candidates : Tensor α [seqLen, hiddenSize])
-  (h : seqLen ≠ 0) :
+  (h : seqLen ≠ 0)
+  (initialHidden : Tensor α [hiddenSize] := Tensor.full [hiddenSize] 0) :
   Grads α inputSize hiddenSize outputSize ×
     Tensor α [seqLen, inputSize] :=
   let hiddenGrad := Tensor.mapLeading ([seqLen])
@@ -515,10 +477,9 @@ def Model.backward {seqLen inputSize hiddenSize outputSize : Nat}
     (Shape.hasNonemptyAxisZeroOfNe h).proof
   let outputBiasGrad := Tensor.reduceSum 0 outputGrad
     (Shape.hasNonemptyAxisZeroOfNe h).proof
-  let initialHidden := Tensor.full ([hiddenSize]) 0
   let (resetWeight, resetBias, updateWeight, updateBias,
        candidateWeight, candidateBias, inputGrad, _) :=
-    gruSequenceBackwardFullSpec model.gru inputs hiddenStates hiddenGrad
+    gruSequenceBackwardSpec model.gru inputs hiddenStates hiddenGrad
       resetGates updateGates candidates initialHidden
   ({ cell := { resetWeight, resetBias, updateWeight, updateBias, candidateWeight, candidateBias }
      outputWeight := outputWeightGrad
@@ -543,7 +504,9 @@ structure ResidualModel (α : Type) [TorchLean.Storage α]
 Forward pass for `Gru.ResidualModel`.
 
 This runs the GRU, adds a projected version of the input as a residual connection, and applies the
-output head per timestep.
+output head per timestep. The second result is the last residual feature
+`hiddenStates[last] + projectedInputs[last]`. For a continuation chunk, retain the raw GRU hidden
+state before this residual addition and use that as `initialHidden`.
 -/
 def ResidualModel.forward {seqLen inputSize hiddenSize outputSize : Nat}
   (model : ResidualModel α inputSize hiddenSize outputSize)
@@ -557,10 +520,10 @@ def ResidualModel.forward {seqLen inputSize hiddenSize outputSize : Nat}
     addSpec hiddenStates projectedInputs
   let outputs := Tensor.mapLeading ([seqLen])
     (linearSpec model.outputLayer) residualStates
-  have hLast : seqLen - 1 < seqLen := by
-    simpa [Nat.pred_eq_sub_one] using Nat.pred_lt (Nat.ne_of_gt h)
-  let finalHidden := get residualStates ⟨seqLen - 1, hLast⟩
-  (outputs, finalHidden)
+  have hLast : seqLen - 1 < seqLen :=
+    Nat.sub_one_lt (Nat.ne_of_gt h)
+  let finalResidual := get residualStates ⟨seqLen - 1, hLast⟩
+  (outputs, finalResidual)
 
 /--
 Package `Gru.Model` as a shape-indexed module.
@@ -569,12 +532,12 @@ The Python expression records the intended runtime analogue; `forward` remains t
 meaning of the module.
 -/
 def Model.toModule {seqLen inputSize hiddenSize outputSize : Nat}
-  (model : Model α inputSize hiddenSize outputSize) (h : 0 < seqLen) :
+  (model : Model α inputSize hiddenSize outputSize) :
   Spec.Module α ([seqLen, inputSize]) ([seqLen, outputSize]) :=
 {
   forward := fun inputs =>
     let initialHidden := Tensor.full ([hiddenSize]) 0
-    (model.forwardSequence inputs initialHidden h).1,
+    (model.forwardSequence inputs initialHidden).1,
   kind := "SimpleGRU",
   pythonExpr :=
     s!"SimpleGRU(input_size={inputSize}, hidden_size={hiddenSize}, " ++
@@ -584,7 +547,7 @@ def Model.toModule {seqLen inputSize hiddenSize outputSize : Nat}
 /--
 Package `Gru.Classifier` as an `Spec.Module`.
 
-PyTorch analogue: `nn.GRU` feeding a `nn.linear` classifier head.
+Wiring analogue: `nn.GRU` feeding a `nn.linear` classifier head.
 -/
 def Classifier.toModule {seqLen inputSize hiddenSize numClasses : Nat}
   (model : Classifier α inputSize hiddenSize numClasses) (h : 0 < seqLen) :
@@ -602,7 +565,7 @@ def Classifier.toModule {seqLen inputSize hiddenSize numClasses : Nat}
 /--
 Package `Gru.BidirectionalModel` as an `Spec.Module`.
 
-PyTorch analogue: `nn.GRU(..., bidirectional=true)` feeding a per-timestep linear head.
+Wiring analogue: `nn.GRU(..., bidirectional=true)` feeding a per-timestep linear head.
 -/
 def BidirectionalModel.toModule {seqLen inputSize hiddenSize outputSize : Nat}
   (model : BidirectionalModel α inputSize hiddenSize outputSize) :
@@ -620,7 +583,7 @@ def BidirectionalModel.toModule {seqLen inputSize hiddenSize outputSize : Nat}
 /--
 Package `Gru.Generator` as an `Spec.Module`.
 
-PyTorch analogue: GRU language model (`nn.GRU` + vocabulary projection) producing a sequence of
+Wiring analogue: GRU language model (`nn.GRU` + vocabulary projection) producing a sequence of
 logits.
 -/
 def Generator.toModule {seqLen vocabularySize hiddenSize : Nat}

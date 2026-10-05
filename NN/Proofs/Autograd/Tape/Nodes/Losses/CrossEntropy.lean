@@ -10,6 +10,12 @@ public import NN.Proofs.Autograd.Tape.Nodes.Reductions
 public import NN.Proofs.Autograd.Tape.Nodes.Softmax
 public import Mathlib.Analysis.InnerProductSpace.Calculus
 
+/-!
+# Cross Entropy
+
+One-hot cross entropy over the last axis, written as `target · log_softmax(logits)`.
+-/
+
 @[expose] public section
 
 namespace Proofs
@@ -23,12 +29,6 @@ noncomputable section
 open scoped BigOperators
 
 namespace TapeNodes
-
-/-!
-# Cross Entropy
-
-One-hot cross entropy over the last axis, written as `target · log_softmax(logits)`.
--/
 
 /-- Cross-entropy loss for logits and one-hot targets of shape `(m×n)`.
 
@@ -337,10 +337,6 @@ def crossEntropyOneHotLastFderiv {Γ : List Shape} {m n : Nat}
           =
           (-c) * (inner ℝ tMN dlogp + inner ℝ dtMN logp) := hL
       _ = ((vecScalarCLM.comp ((-c) • innerDeriv)) dxV).ofLp i := hR.symm
-
--- ---------------------------------------------------------------------------
--- Loss: negative log-likelihood (one-hot targets; log-probs input; mean over batch)
--- ---------------------------------------------------------------------------
 
 end TapeNodes
 

@@ -16,7 +16,8 @@ The checks use `Float` with an explicit tolerance. Reduced QR uses
 `Q : Tensor Float [rows, min rows columns]` and
 `R : Tensor Float [min rows columns, columns]`.
 
-Run `lake exe torchlean factorizations`. The rank-deficient negative control still reconstructs
+Run `scripts/lake.sh exe torchlean factorizations`.
+The rank-deficient negative control still reconstructs
 the input, but fails orthonormality: reconstructing a matrix alone does not establish both QR
 properties. This file tests the implementation; it does not prove a real-arithmetic QR theorem.
 -/
@@ -37,18 +38,19 @@ def fullRankMatrix : Tensor Float [3, 3] :=
 /-- Compute both factors once. -/
 def fullRankFactors := Tensor.qr fullRankMatrix
 
-/-- Reconstruction error $\lVert A-QR\rVert_{\max}$. -/
-def reconstructionError : Float :=
-  Tensor.maxAbsDiff fullRankMatrix <|
-    einsum fullRankFactors.q, fullRankFactors.r
-      "row contracted, contracted column -> row column"
+/-- Reconstruction error $\lVert A-QR\rVert_{\max}$ for any reduced factor shape. -/
+def reconstructionError {rows columns : Nat}
+    (matrix : Tensor Float [rows, columns]) (factors : Tensor.QRFactors Float rows columns) :
+    Float :=
+  Tensor.maxAbsDiff matrix <|
+    einsum factors.q, factors.r "row contracted, contracted column -> row column"
 
 /-- Orthonormality error $\lVert Q^\mathsf{T}Q-I\rVert_{\max}$. -/
-def orthonormalityError : Float :=
-  let qtq : Tensor Float [3, 3] :=
-    einsum fullRankFactors.q, fullRankFactors.q
-      "contracted row, contracted column -> row column"
-  Tensor.maxAbsDiff qtq (Tensor.identity 3)
+def orthonormalityError {rows columns : Nat}
+    (factors : Tensor.QRFactors Float rows columns) : Float :=
+  let qtq : Tensor Float [min rows columns, min rows columns] :=
+    einsum factors.q, factors.q "contracted row, contracted column -> row column"
+  Tensor.maxAbsDiff qtq (Tensor.identity (min rows columns))
 
 /-! ## Wide Matrix
 
@@ -63,24 +65,11 @@ def wideMatrix : Tensor Float [2, 3] :=
 /-- Reduced QR of a wide matrix: `Q` is `2 x 2` and `R` is `2 x 3`. -/
 def wideFactors := Tensor.qr wideMatrix
 
-/-- How far `Q R` is from the original matrix; should be at rounding level. -/
-def wideReconstructionError : Float :=
-  Tensor.maxAbsDiff wideMatrix <|
-    einsum wideFactors.q, wideFactors.r
-      "row contracted, contracted column -> row column"
-
-/-- How far `Qᵀ Q` is from the identity, the other half of what QR promises. -/
-def wideOrthonormalityError : Float :=
-  let qtq : Tensor Float [2, 2] :=
-    einsum wideFactors.q, wideFactors.q
-      "contracted row, contracted column -> row column"
-  Tensor.maxAbsDiff qtq (Tensor.identity 2)
-
 /-! ## Negative Control
 
-The orthonormality property requires full column rank. The following matrix has one dependent
-column. Gram-Schmidt still reconstructs it, but the corresponding column of `Q` vanishes and
-$Q^\mathsf{T}Q\ne I$.
+The following square matrix has one dependent column. This implementation leaves a zero column in
+`Q` for the missing basis direction. Gram-Schmidt still reconstructs the matrix, but
+$Q^\mathsf{T}Q\ne I$ for the returned factors.
 -/
 
 /-- A matrix whose second column is twice its first. -/
@@ -95,28 +84,15 @@ dependent column contributes a zero column to `Q`.
 -/
 def rankDeficientFactors := Tensor.qr rankDeficientMatrix
 
-/-- Reconstruction still holds without full rank. -/
-def rankDeficientReconstructionError : Float :=
-  Tensor.maxAbsDiff rankDeficientMatrix <|
-    einsum rankDeficientFactors.q, rankDeficientFactors.r
-      "row contracted, contracted column -> row column"
-
-/-- Orthonormality fails because `Q` has a zero column. -/
-def rankDeficientOrthonormalityError : Float :=
-  let qtq : Tensor Float [3, 3] :=
-    einsum rankDeficientFactors.q, rankDeficientFactors.q
-      "contracted row, contracted column -> row column"
-  Tensor.maxAbsDiff qtq (Tensor.identity 3)
-
 /-- Run square and wide full-rank checks plus the dependent-column negative control. -/
 def check : IO Unit := do
-  assertBelow "QR A = Q·R" reconstructionError
-  assertBelow "QR Qᵀ·Q = I" orthonormalityError
-  assertBelow "QR(wide) A = Q·R" wideReconstructionError
-  assertBelow "QR(wide) Qᵀ·Q = I" wideOrthonormalityError
+  assertBelow "QR A = Q·R" (reconstructionError fullRankMatrix fullRankFactors)
+  assertBelow "QR Qᵀ·Q = I" (orthonormalityError fullRankFactors)
+  assertBelow "QR(wide) A = Q·R" (reconstructionError wideMatrix wideFactors)
+  assertBelow "QR(wide) Qᵀ·Q = I" (orthonormalityError wideFactors)
   assertBelow "QR(rank-deficient) A = Q·R still reconstructs"
-    rankDeficientReconstructionError
-  assertAtLeast "QR(rank-deficient) Qᵀ·Q = I correctly fails (needs full column rank)"
-    rankDeficientOrthonormalityError
+    (reconstructionError rankDeficientMatrix rankDeficientFactors)
+  assertAtLeast "QR(rank-deficient) Qᵀ·Q = I correctly fails (zero basis column)"
+    (orthonormalityError rankDeficientFactors)
 
 end NN.Examples.Factorization.QR

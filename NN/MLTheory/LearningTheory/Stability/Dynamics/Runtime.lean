@@ -319,13 +319,12 @@ def analyzeStability {s : Shape}
     (maxIterations : Nat) : Except String StabilityAnalysisResult := do
   let some x0 := testPoints[0]?
     | throw "stability analysis requires at least one test point"
-  let testPairs := testPoints.mapIdx fun i x =>
-    (x, testPoints.getD ((i + 1) % testPoints.size) x)
+  let testPairs := Sampling.adjacentPairs testPoints
   let isLyapunovStable ← testLyapunovStability f equilibrium testPoints maxIterations 0.1
   let isAsymptoticallyStable ←
     testAsymptoticStability f equilibrium testPoints maxIterations 0.01
   let isContractive ← testContractivity f testPairs 0.9
-  let isBiboStable ← testBiboStability (fun x => f x) testPoints 1.0 1.0
+  let isBiboStable ← testBiboStability f testPoints 1.0 1.0
   let stabilityMargin ←
     estimateStabilityMargin f equilibrium #[0.01, 0.05, 0.1, 0.2] maxIterations
   let convergenceRate ← estimateConvergenceRate f equilibrium x0 maxIterations

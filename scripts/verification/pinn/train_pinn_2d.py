@@ -43,10 +43,13 @@ from pinn_common import (
     parse_const_flags,
     parse_hidden_widths,
     torch,
+    validate_training_args,
 )
 
 
 def train(args):
+    validate_training_args(args)
+    constants = parse_const_flags(args.const or [])
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     x_lo, x_hi = -1.0, 1.0
@@ -58,8 +61,6 @@ def train(args):
     N_c = args.collocation_points
     N_b = args.boundary_points
     N_d = args.data_points
-
-    constants = parse_const_flags(args.const or [])
 
     dataset: Optional[PinnDataset] = None
     if args.dataset_json:
@@ -88,12 +89,8 @@ def train(args):
             sampled = dataset.sample_columns("boundary", N_b, 3)
             if sampled is not None:
                 return sampled
-        m = max(1, N_b // 4)
-        leftover = N_b - 4 * m
-        extras = [0, 0, 0, 0]
-        for k in range(leftover):
-            extras[k % 4] += 1
-        counts = [m + extras[i] for i in range(4)]
+        m, leftover = divmod(N_b, 4)
+        counts = [m + int(i < leftover) for i in range(4)]
         x_left = torch.full((counts[0], 1), x_lo, device=device)
         y_left = torch.empty_like(x_left).uniform_(y_lo, y_hi)
         x_right = torch.full((counts[1], 1), x_hi, device=device)
@@ -109,12 +106,14 @@ def train(args):
         return x, y, u_b
 
     def sample_data():
+        if N_d <= 0:
+            return None
         if dataset:
-            sampled = dataset.sample_columns("data", N_d if N_d > 0 else 1, 3)
+            sampled = dataset.sample_columns("data", N_d, 3)
             if sampled is not None:
                 return sampled
-        if N_d <= 0 or args.data_expr is None:
-            return None
+        if args.data_expr is None:
+            raise ValueError("--data-points > 0 requires --data-expr or dataset 'data' entries.")
         x = torch.empty(N_d, 1, device=device).uniform_(x_lo, x_hi)
         y = torch.empty(N_d, 1, device=device).uniform_(y_lo, y_hi)
         u_d = ensure_tensor(eval_pinn_expr(args.data_expr, x=x, y=y, **constants), x)

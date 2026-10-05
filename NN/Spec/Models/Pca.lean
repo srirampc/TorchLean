@@ -7,6 +7,7 @@ Authors: TorchLean Team
 module
 
 public import NN.Spec.Core.Tensor.Numerics
+public import NN.Spec.Core.Sequence
 
 /-!
 # PCA (spec model)
@@ -91,10 +92,7 @@ def pcaComponentsDerivSpec {inDim outDim : Nat}
   (gradOutput : Tensor α [outDim]) :
   Tensor α [outDim, inDim] :=
   let centered := subSpec input m.mean
-  Tensor.dim (fun i =>
-    Tensor.dim (fun j =>
-      Tensor.scalar (Tensor.getScalar gradOutput i * Tensor.getScalar centered j)
-    ))
+  outerProductSpec gradOutput centered
 
 /-- VJP contribution for `mean`: `dL/dmean = -componentsᵀ · dL/dy`. -/
 def pcaMeanDerivSpec {inDim outDim : Nat}
@@ -226,10 +224,9 @@ def pcaCumulativeExplainedVarianceSpec {α : Type} [Add α] [Zero α]
     [TorchLean.Storage α]
     {inDim outDim : Nat} (m : PCASpec α inDim outDim) :
     Tensor α [outDim] :=
-  Tensor.dim (fun i =>
-    let entries := (List.finRange outDim).take (i.val + 1)
-    Tensor.scalar <| entries.foldl
-      (fun acc j => acc + Tensor.getScalar m.explainedVariance j) 0)
+  (Sequence.mapAccum outDim (0 : α) fun i total =>
+    let next := total + Tensor.getScalar m.explainedVariance i
+    (next, next)).2
 
 
 end Spec

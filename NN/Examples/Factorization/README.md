@@ -3,7 +3,7 @@
 Run from the repository root:
 
 ```bash
-lake exe torchlean factorizations
+scripts/lake.sh exe torchlean factorizations
 ```
 
 No data files or GPU are needed. Each line should say `OK`; the command fails if a numerical

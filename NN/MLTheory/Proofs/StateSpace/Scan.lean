@@ -170,13 +170,6 @@ theorem scanArray_append {State Input Output : Type}
   rcases first with ⟨firstState, firstOutputs⟩
   exact scanArrayFrom_eq step firstState firstOutputs ys
 
-private theorem Array.take_append_left {α : Type} (xs ys : Array α) :
-    (xs ++ ys).take xs.size = xs := by
-  apply Array.ext
-  · simp
-  · intro i h₁ h₂
-    simp
-
 /-- Appending future inputs cannot change outputs already emitted by a stateful scan. -/
 theorem scanArray_append_outputs_take {State Input Output : Type}
     (step : State → Input → State × Output) (initial : State) (xs ys : Array Input) :
@@ -187,14 +180,8 @@ theorem scanArray_append_outputs_take {State Input Output : Type}
         (Spec.scanArray step
           (Spec.scanArray step initial xs).1 ys).2 by
     simpa using congrArg Prod.snd (scanArray_append step initial xs ys)]
-  rw [← Spec.scanArray_outputs_size step initial xs]
-  exact Array.take_append_left _ _
-
-/-- A stateful scan emits exactly one value for every input. -/
-@[simp] theorem scanArray_outputs_size {State Input Output : Type}
-    (step : State → Input → State × Output) (initial : State) (xs : Array Input) :
-    (Spec.scanArray step initial xs).2.size = xs.size :=
-  Spec.scanArray_outputs_size step initial xs
+  rw [← Spec.scanArray_outputs_size step initial xs, Array.take_eq_extract,
+    Array.extract_append_left, Array.extract_size]
 
 /-- Running appended scalar transitions factors through the state reached after the prefix. -/
 theorem runScalarAffine_append {α : Type} [Mul α] [Add α] (h0 : α)
@@ -268,21 +255,6 @@ theorem summarizeScalarAffine_append {α : Type} [Semiring α]
         Spec.ScalarAffineTransition.compose summary transition)
       Spec.ScalarAffineTransition.id ys) xs
 
-/-- Prefix summaries composed across append have the expected denotation. -/
-theorem summarizeScalarAffine_append_apply {α : Type} [Semiring α] (h0 : α)
-    (xs ys : Array (Spec.ScalarAffineTransition α)) :
-    (Spec.summarizeScalarAffine (xs ++ ys)).apply h0 =
-      (Spec.ScalarAffineTransition.compose
-        (Spec.summarizeScalarAffine ys)
-        (Spec.summarizeScalarAffine xs)).apply h0 := by
-  rw [summarizeScalarAffine_append]
-
-/-- The scalar affine scan has one state per transition. -/
-@[simp] theorem scalarAffineScan_size {α : Type} [Mul α] [Add α] (h0 : α)
-    (transitions : Array (Spec.ScalarAffineTransition α)) :
-    (Spec.scalarAffineScan h0 transitions).size = transitions.size := by
-  exact scanArray_outputs_size _ h0 transitions
-
 /-- Scanning appended scalar transitions is the prefix scan followed by the suffix scan. -/
 theorem scalarAffineScan_append {α : Type} [Mul α] [Add α] (h0 : α)
     (xs ys : Array (Spec.ScalarAffineTransition α)) :
@@ -294,13 +266,6 @@ theorem scalarAffineScan_append {α : Type} [Mul α] [Add α] (h0 : α)
       (fun state transition =>
         let nextState := transition.apply state
         (nextState, nextState)) h0 xs ys)
-
-/-- The diagonal tensor scan has one state per transition. -/
-@[simp] theorem diagonalSelectiveScan_size {α : Type} [Add α] [Mul α] {stateDim : Nat}
-    (h0 : TorchLean.Tensor α [stateDim])
-    (transitions : Array (Spec.DiagonalTransition α stateDim)) :
-    (Spec.diagonalSelectiveScan h0 transitions).size = transitions.size := by
-  exact scanArray_outputs_size _ h0 transitions
 
 /-- Running appended diagonal transitions factors through the state after the prefix. -/
 theorem runDiagonalTransitions_append {α : Type} [Add α] [Mul α] {stateDim : Nat}

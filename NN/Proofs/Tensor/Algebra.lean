@@ -22,8 +22,7 @@ not depend on the physical buffer selected by `Storage`.
 namespace Proofs
 namespace TensorAlgebra
 
-open Spec TorchLean
-open TorchLean TorchLean.Tensor
+open Spec TorchLean TorchLean.Tensor
 
 noncomputable section
 
@@ -37,40 +36,6 @@ def dot {α : Type} [TorchLean.Storage α] [Zero α] [Add α] [Mul α] :
           accumulator +
             dot (shape := inner) (left.unstack index) (right.unstack index))
         0
-
-/-! ## Fold bridges -/
-
-/-- Push an accumulator into an additive fold that starts at zero. -/
-theorem add_finRange_foldl_add_zero {α : Type} [AddMonoid α] {n : Nat}
-    (f : Fin n → α) (accumulator : α) :
-    accumulator + (List.finRange n).foldl (fun sum i => sum + f i) 0 =
-      (List.finRange n).foldl (fun sum i => sum + f i) accumulator := by
-  simpa using
-    List.add_foldl_add0
-      (l := List.finRange n) (f := f) (acc := accumulator)
-
-/-- A fold over scalar tensors is the corresponding fold over scalar values. -/
-theorem foldl_tensorScalar_mulAdd {α : Type} [TorchLean.Storage α]
-    [Add α] [Mul α] {n : Nat}
-    (columns values : Fin n → Tensor α .scalar)
-    (indices : List (Fin n)) (initial : α) :
-    indices.foldl
-        (fun accumulator index =>
-          Tensor.scalar
-            (accumulator.item +
-              (columns index).item * (values index).item))
-        (Tensor.scalar initial) =
-      Tensor.scalar
-        (indices.foldl
-          (fun accumulator index =>
-            accumulator +
-              (columns index).item * (values index).item)
-          initial) := by
-  induction indices generalizing initial with
-  | nil => rfl
-  | cons index indices inductionHypothesis =>
-      simp only [List.foldl_cons, Tensor.item_scalar]
-      exact inductionHypothesis _
 
 /-! ## Dot-product algebra -/
 
@@ -86,12 +51,8 @@ variable {α : Type} [TorchLean.Storage α] [CommSemiring α]
 
 /-- Dot is multiplicative with scalar scaling in its right argument. -/
 theorem dot_scale_right {s : Shape}
-    (a b : Tensor α s) (k : α) :
-    dot a (scaleSpec b k) = dot a b * k := by
-  let left := a
-  let right := b
-  let scalar := k
-  change dot left (scaleSpec right scalar) = dot left right * scalar
+    (left right : Tensor α s) (scalar : α) :
+    dot left (scaleSpec right scalar) = dot left right * scalar := by
   induction s with
   | scalar =>
       simp [dot, scaleSpec, Tensor.toScalar_mapSpec, mul_assoc]
@@ -150,11 +111,8 @@ theorem dot_scale_right {s : Shape}
       exact hCongruence.trans hScaleFold
 
 /-- Dot is symmetric over a commutative semiring. -/
-theorem dot_comm {s : Shape} (a b : Tensor α s) :
-    dot a b = dot b a := by
-  let left := a
-  let right := b
-  change dot left right = dot right left
+theorem dot_comm {s : Shape} (left right : Tensor α s) :
+    dot left right = dot right left := by
   induction s with
   | scalar => simp [dot, mul_comm]
   | dim length inner inductionHypothesis =>
@@ -164,12 +122,8 @@ theorem dot_comm {s : Shape} (a b : Tensor α s) :
 
 /-- Dot is multiplicative with scalar scaling in its left argument. -/
 theorem dot_scale_left {s : Shape}
-    (a b : Tensor α s) (k : α) :
-    dot (scaleSpec a k) b = dot a b * k := by
-  let left := a
-  let right := b
-  let scalar := k
-  change dot (scaleSpec left scalar) right = dot left right * scalar
+    (left right : Tensor α s) (scalar : α) :
+    dot (scaleSpec left scalar) right = dot left right * scalar := by
   calc
     dot (scaleSpec left scalar) right =
         dot right (scaleSpec left scalar) := dot_comm _ _
@@ -178,13 +132,8 @@ theorem dot_scale_left {s : Shape}
 
 /-- Dot distributes over addition in its left argument. -/
 theorem dot_add_left {s : Shape}
-    (a b c : Tensor α s) :
-    dot (addSpec a b) c = dot a c + dot b c := by
-  let left := a
-  let middle := b
-  let right := c
-  change dot (addSpec left middle) right =
-    dot left right + dot middle right
+    (left middle right : Tensor α s) :
+    dot (addSpec left middle) right = dot left right + dot middle right := by
   induction s with
   | scalar =>
       simp [dot, addSpec, map2Spec, Tensor.item,
@@ -240,13 +189,8 @@ theorem dot_add_left {s : Shape}
 
 /-- Dot distributes over addition in its right argument. -/
 theorem dot_add_right {s : Shape}
-    (a b c : Tensor α s) :
-    dot a (addSpec b c) = dot a b + dot a c := by
-  let left := a
-  let middle := b
-  let right := c
-  change dot left (addSpec middle right) =
-    dot left middle + dot left right
+    (left middle right : Tensor α s) :
+    dot left (addSpec middle right) = dot left middle + dot left right := by
   calc
     dot left (addSpec middle right) =
         dot (addSpec middle right) left := dot_comm _ _
@@ -255,10 +199,8 @@ theorem dot_add_right {s : Shape}
       rw [dot_comm middle left, dot_comm right left]
 
 /-- The dot product with an all-zero tensor is zero. -/
-theorem dot_full_zero_right {s : Shape} (a : Tensor α s) :
-    dot a (Tensor.full s 0) = 0 := by
-  let tensor := a
-  change dot tensor (Tensor.full s 0) = 0
+theorem dot_full_zero_right {s : Shape} (tensor : Tensor α s) :
+    dot tensor (Tensor.full s 0) = 0 := by
   induction s with
   | scalar =>
       simp only [dot]
@@ -306,18 +248,12 @@ theorem dot_vec_eq_sum {n : Nat} (a b : Tensor α [n]) :
     dot a b =
       ∑ index : Fin n,
         a.getScalar index * b.getScalar index := by
-  let left := a
-  let right := b
-  change dot left right =
-    ∑ index : Fin n, left.getScalar index * right.getScalar index
   change
     (List.finRange n).foldl
         (fun accumulator index =>
-          accumulator +
-            left.getScalar index * right.getScalar index)
+          accumulator + a.getScalar index * b.getScalar index)
         0 =
-      ∑ index : Fin n,
-        left.getScalar index * right.getScalar index
+      ∑ index : Fin n, a.getScalar index * b.getScalar index
   exact List.finRange_foldl_add_eq_finset_sum _
 
 /-! ## Indexing and matrix/vector bridges -/
@@ -336,23 +272,6 @@ theorem get_eq {m : Nat} {shape : Shape}
     (t : Tensor α (.dim m shape)) (i : Fin m) :
     Spec.get t i = Tensor.unstack t i :=
   rfl
-
-/-- Scalar-tensor multiply-add folds agree with their scalar-value folds. -/
-theorem foldl_matvec_scalar {n : Nat} (l : List (Fin n))
-    (a : α) (cols vals : Fin n → Tensor α .scalar) :
-    l.foldl
-        (fun accumulator index =>
-          Tensor.scalar
-            (accumulator.item +
-              (cols index).item * (vals index).item))
-        (Tensor.scalar a) =
-      Tensor.scalar
-        (l.foldl
-          (fun accumulator index =>
-            accumulator +
-              (cols index).item * (vals index).item)
-          a) :=
-  foldl_tensorScalar_mulAdd cols vals l a
 
 /-- Coordinate expansion of matrix-vector multiplication. -/
 theorem getScalar_mat_vec_mul_spec {m n : Nat}
@@ -381,34 +300,24 @@ theorem dot_mat_linear_adjoint {inDim outDim : Nat}
     (dx : Tensor α [inDim]) :
     dot dLdy (matVecMulSpec W dx) =
       dot (vecMatMulSpec dLdy W) dx := by
-  let weights := W
-  let outputGradient := dLdy
-  let inputTangent := dx
-  change dot outputGradient (matVecMulSpec weights inputTangent) =
-    dot (vecMatMulSpec outputGradient weights) inputTangent
   classical
   rw [dot_vec_eq_sum, dot_vec_eq_sum]
   simp only [getScalar_mat_vec_mul_spec, getScalar_vec_mat_mul_spec]
   calc
     (∑ output : Fin outDim,
-        getScalar outputGradient output *
-          ∑ input : Fin inDim,
-            get2 weights output input * getScalar inputTangent input) =
+        getScalar dLdy output *
+          ∑ input : Fin inDim, get2 W output input * getScalar dx input) =
         ∑ output : Fin outDim, ∑ input : Fin inDim,
-          getScalar outputGradient output *
-            (get2 weights output input * getScalar inputTangent input) := by
+          getScalar dLdy output * (get2 W output input * getScalar dx input) := by
       apply Finset.sum_congr rfl
       intro output _
       rw [Finset.mul_sum]
     _ = ∑ input : Fin inDim, ∑ output : Fin outDim,
-          getScalar outputGradient output *
-            (get2 weights output input * getScalar inputTangent input) := by
+          getScalar dLdy output * (get2 W output input * getScalar dx input) := by
       exact Finset.sum_comm
     _ = ∑ input : Fin inDim,
-          (∑ output : Fin outDim,
-            getScalar outputGradient output *
-              get2 weights output input) *
-            getScalar inputTangent input := by
+          (∑ output : Fin outDim, getScalar dLdy output * get2 W output input) *
+            getScalar dx input := by
       apply Finset.sum_congr rfl
       intro input _
       rw [Finset.sum_mul]

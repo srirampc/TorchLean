@@ -6,8 +6,8 @@ Authors: TorchLean Team
 
 module
 
-public import NN.Spec.Layers.Attention
 public import NN.Proofs.Analysis.Softmax
+public import NN.Spec.Layers.Attention
 
 /-!
 # Attention weights sum to 1 (spec layer, `ℝ`)
@@ -26,20 +26,20 @@ namespace NN.Proofs.Models.Attention
 
 open Spec TorchLean
 open TorchLean.Tensor
-open scoped BigOperators
 
 noncomputable section
 
 /--
 In unmasked scaled dot-product attention, each query row of the attention-weight matrix sums to `1`.
 
-This is purely a property of axis-`1` softmax; it does not depend on the particular choice of
-scores or scaling.
+The intermediates mirror `Spec.scaledDotProductAttention` with `mask = none`. The conclusion is
+purely a property of axis-`1` softmax; it does not depend on the particular choice of scores or
+scaling.
 -/
 theorem scaledDotProductAttention_unmasked_weights_row_sum_one
     {nQ nK dModel : Nat} {hQ : nQ ≠ 0} {hK : nK ≠ 0}
     (ctx : Spec.AttentionContext ℝ nQ nK dModel hQ hK) (i : Fin nQ) :
-    let scale := MathFunctions.sqrt (dModel : ℝ)
+    let scale := Spec.attentionScaleDenom (α := ℝ) dModel
     let scores := matMulSpec ctx.Q (swapAdjacentAxes ctx.K 0)
     let scaledScores := scaleSpec scores (1 / scale)
     let attentionWeights := Activation.softmaxSpec (α := ℝ) 1 scaledScores

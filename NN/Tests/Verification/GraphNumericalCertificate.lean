@@ -18,14 +18,11 @@ positive and negative cases without placing the test suite in the tutorial.
 
 @[expose] public section
 
-open FloatLib.Floats (ExecFloat)
 open FloatLib.Floats.ExecFloat (Binary)
 open FloatLib.Floats.ExecFloat.Binary (ofBits32)
-open FloatLib.Floats.Formats.BinaryInterchange (Model FloatFormat)
 
 open Proofs.RuntimeApprox.NumericalCertificate
 open Spec TorchLean
-open TorchLean.Floats.IEEE754
 open NN.Examples.DeepDives.Floats.GraphNumericalCertificate
 
 namespace NN.Tests.Verification.GraphNumericalCertificate
@@ -37,13 +34,13 @@ def misplacedSourceCheck : Except String GraphNumericalCertificate :=
 
 /-- Registries are deterministic maps: registering a second source contract is rejected. -/
 def duplicateContractCheck : Except String GraphRangeRegistry := do
-  let registry <- defaultRegistry
+  let registry ← defaultRegistry
   registry.register sourceContract
 
 /-- A certificate is bound to the named operation registry used to derive its transfer rows. -/
 def registryMismatchCheck : Except String RegistryCheckedCertificate := do
-  let raw <- generate NN.Backend.BackendProfile.checkedCpu graph sources
-  let registry <- defaultRegistry
+  let raw ← generate NN.Backend.BackendProfile.checkedCpu graph sources
+  let registry ← defaultRegistry
   let renamed := { registry with name := "example.incompatible-registry" }
   checkWith renamed NN.Backend.BackendProfile.checkedCpu graph raw
 
@@ -56,7 +53,7 @@ node id and operation name until a local range contract is registered.
 
 /-- The base graph is completely covered by the built-in range registry. -/
 def baseCoverage : Except String NumericalCoverageReport := do
-  let registry <- defaultRegistry
+  let registry ← defaultRegistry
   requireNumericalCoverage registry graph
 
 /-- Exponential is executable in the graph IR, but it intentionally has no built-in interval
@@ -69,7 +66,7 @@ def unsupportedGraph : NN.IR.Graph :=
 
 /-- Coverage failure occurs before certificate propagation begins. -/
 def unsupportedCoverage : Except String NumericalCoverageReport := do
-  let registry <- defaultRegistry
+  let registry ← defaultRegistry
   requireNumericalCoverage registry unsupportedGraph
 
 /-! ## A fixed-order reduction
@@ -96,16 +93,15 @@ def reductionSources : Array SourceRange := #[
 Three concrete entries whose exact sum is representable, so any drift comes from the summation order
 rather than from the values themselves.
 -/
-def reductionInput : Spec.SomeTensor (Binary 8 23) := by
-  let tensor : Tensor (Binary 8 23) [3] :=
-    [ ofBits32 0x3f800000
-    , ofBits32 0xbf000000
-    , ofBits32 0x40000000 ]
-  exact { shape := [3], tensor }
+def reductionInput : Spec.SomeTensor (Binary 8 23) :=
+  Spec.SomeTensor.ofTensor
+    ([ ofBits32 0x3f800000
+     , ofBits32 0xbf000000
+     , ofBits32 0x40000000 ] : Tensor (Binary 8 23) [3])
 
 /-- Generate the certificate for the portable CPU profile, then replay it at bit level. -/
 def reductionReplay : Except String RangeCheckedExecution := do
-  let certificate <-
+  let certificate ←
     generateChecked NN.Backend.BackendProfile.checkedCpu reductionGraph reductionSources
   executeIEEE32 {} reductionInput certificate
 
@@ -147,15 +143,14 @@ def matmulPayload : NN.IR.Payload (Binary 8 23) where
       none
 
 /-- A concrete two-by-two input, so the replay has actual bits to work with. -/
-def matmulInput : Spec.SomeTensor (Binary 8 23) := by
-  let tensor : Tensor (Binary 8 23) [2, 2] :=
-    [ [(1 : Binary 8 23), (-1 : Binary 8 23)]
-    , [(-1 : Binary 8 23), (1 : Binary 8 23)] ]
-  exact { shape := [2, 2], tensor }
+def matmulInput : Spec.SomeTensor (Binary 8 23) :=
+  Spec.SomeTensor.ofTensor
+    ([ [(1 : Binary 8 23), (-1 : Binary 8 23)]
+     , [(-1 : Binary 8 23), (1 : Binary 8 23)] ] : Tensor (Binary 8 23) [2, 2])
 
 /-- Certificate plus bit-level replay for the matrix product. -/
 def matmulReplay : Except String RangeCheckedExecution := do
-  let certificate <-
+  let certificate ←
     generateChecked NN.Backend.BackendProfile.checkedCpu matmulGraph matmulSources
   executeIEEE32 matmulPayload matmulInput certificate
 
@@ -194,7 +189,7 @@ def sqrtInput : Spec.SomeTensor (Binary 8 23) :=
 
 /-- Certificate plus replay for the `abs` then `sqrt` chain. -/
 def sqrtReplay : Except String RangeCheckedExecution := do
-  let certificate <-
+  let certificate ←
     generateChecked NN.Backend.BackendProfile.checkedCpu sqrtGraph sqrtSources
   executeIEEE32 {} sqrtInput certificate
 
@@ -230,15 +225,15 @@ def layerNormSources : Array SourceRange := #[
 ]
 
 /-- A two-by-three input for the LayerNorm replay. -/
-def layerNormInput : Spec.SomeTensor (Binary 8 23) := by
-  let tensor : Tensor (Binary 8 23) [2, 3] :=
-    [ [(-1 : Binary 8 23), (Binary.zero false : Binary 8 23), (1 : Binary 8 23)]
-    , [ofBits32 0x40000000, (1 : Binary 8 23), (Binary.zero false : Binary 8 23)] ]
-  exact { shape := [2, 3], tensor }
+def layerNormInput : Spec.SomeTensor (Binary 8 23) :=
+  Spec.SomeTensor.ofTensor
+    ([ [(-1 : Binary 8 23), (Binary.zero false : Binary 8 23), (1 : Binary 8 23)]
+     , [ofBits32 0x40000000, (1 : Binary 8 23), (Binary.zero false : Binary 8 23)] ] :
+      Tensor (Binary 8 23) [2, 3])
 
 /-- Certificate plus replay for LayerNorm on the portable profile. -/
 def layerNormReplay : Except String RangeCheckedExecution := do
-  let certificate <-
+  let certificate ←
     generateChecked NN.Backend.BackendProfile.checkedCpu layerNormGraph layerNormSources
   executeIEEE32 {} layerNormInput certificate
 
@@ -268,14 +263,14 @@ def softmaxSources : Array SourceRange := #[
 ]
 
 /-- Three concrete logits for the softmax replay. -/
-def softmaxInput : Spec.SomeTensor (Binary 8 23) := by
-  let tensor : Tensor (Binary 8 23) [3] :=
-    [(1 : Binary 8 23), (Binary.zero false : Binary 8 23), (-1 : Binary 8 23)]
-  exact { shape := [3], tensor }
+def softmaxInput : Spec.SomeTensor (Binary 8 23) :=
+  Spec.SomeTensor.ofTensor
+    ([(1 : Binary 8 23), (Binary.zero false : Binary 8 23), (-1 : Binary 8 23)] :
+      Tensor (Binary 8 23) [3])
 
 /-- Certificate plus replay for the numerically stable softmax. -/
 def softmaxReplay : Except String RangeCheckedExecution := do
-  let certificate <-
+  let certificate ←
     generateChecked NN.Backend.BackendProfile.checkedCpu softmaxGraph softmaxSources
   executeIEEE32 {} softmaxInput certificate
 

@@ -114,13 +114,12 @@ end Shape
 /-!
 Model code writes shapes as dimension lists. For example, `Tensor Float [4, 2]` is a four-by-two
 tensor of Lean `Float` values, while `Trainer.Dataset [2] [1]` describes supervised samples with
-two input values and one target value. The expected `Shape` type directs Lean to elaborate the list
-through `Shape.ofList`.
+two input values and one target value. Since `Shape` abbreviates `List Nat`, these brackets are
+ordinary list notation; they do not call `Shape.ofList`.
 
 The brackets are shape notation, not tensor storage: a value of type `Tensor Float [4, 2]` is still
-a `Tensor`, never a `List`. During elaboration the notation reduces to the recursive shape below,
-preserving the definitional equalities used by tensor programs and proofs. Ordinary model code
-should not write the expanded `.dim` form.
+a `Tensor`, never a `List`. The `.scalar` and `.dim` pattern abbreviations let recursive tensor
+programs inspect the same list. Ordinary model code can keep the bracket form.
 -/
 namespace Shape
 
@@ -165,7 +164,7 @@ abbrev ofList (dims : List Nat) : Shape := dims
 
 /-- Build a shape from runtime dimensions stored outermost first. -/
 def ofArray (dims : Array Nat) : Shape :=
-  dims.foldr (fun extent rest => .dim extent rest) .scalar
+  dims.toList
 
 /--
 View a shape as its dimension list.
@@ -266,25 +265,21 @@ instance search on such a binding can get stuck, while a direct call always elab
 def decEq (s t : Shape) : Decidable (s = t) :=
   inferInstanceAs (Decidable (s = t))
 
-/-- Concatenating the scalar shape leaves the leading shape unchanged. -/
-@[simp] theorem concat_scalar (shape : Shape) :
-    shape.concat .scalar = shape := by
-  induction shape with
-  | scalar => rfl
-  | dim n rest ih => simp only [concat, ih]
-
-/-- Shape concatenation is associative. -/
-@[simp] theorem concat_assoc (left middle right : Shape) :
-    (left.concat middle).concat right = left.concat (middle.concat right) := by
-  induction left with
-  | scalar => rfl
-  | dim n rest ih => simp only [concat, ih]
-
 /-- Shape concatenation is list append. -/
 theorem concat_eq_append (left right : Shape) : left.concat right = left ++ right := by
   induction left with
   | scalar => rfl
   | dim n rest ih => simp only [concat, ih, List.cons_append]
+
+/-- Concatenating the scalar shape leaves the leading shape unchanged. -/
+@[simp] theorem concat_scalar (shape : Shape) :
+    shape.concat .scalar = shape := by
+  simpa only [concat_eq_append] using List.append_nil shape
+
+/-- Shape concatenation is associative. -/
+@[simp] theorem concat_assoc (left middle right : Shape) :
+    (left.concat middle).concat right = left.concat (middle.concat right) := by
+  simpa only [concat_eq_append] using List.append_assoc left middle right
 
 /--
 Reversing a concatenation reverses each part and swaps them.
@@ -309,18 +304,13 @@ theorem appendDim_eq_concat (s : Shape) (n : Nat) :
 /-- Appending two dimensions is concatenation with a two-axis suffix. -/
 theorem appendDim_appendDim_eq_concat (s : Shape) (m n : Nat) :
     (s.appendDim m).appendDim n = s.concat (.dim m (.dim n .scalar)) := by
-  induction s with
-  | scalar => rfl
-  | dim k rest ih => simp only [appendDim, concat, ih]
+  rw [appendDim_eq_concat, appendDim_eq_concat, concat_assoc]
 
 /-- Appending a final dimension commutes with adding a fixed leading shape. -/
 @[simp]
 theorem concat_appendDim (leading suffix : Shape) (n : Nat) :
     (leading.concat suffix).appendDim n = leading.concat (suffix.appendDim n) := by
-  induction leading with
-  | scalar => rfl
-  | dim m rest ih =>
-      simp only [concat, appendDim, ih]
+  simp only [appendDim_eq_concat, concat_assoc]
 
 /-- Total number of scalar elements (a.k.a. “numel”). -/
 def size : Shape → Nat
@@ -334,7 +324,12 @@ list product would strand the many lemmas stated about `size`. -/
 theorem size_eq_prod (s : Shape) : size s = s.prod := by
   induction s with
   | scalar => rfl
-  | dim n rest ih => simp [size, ih]
+  | dim n rest ih => simp only [size, dim, List.prod_cons, ih]
+
+/-- The number of elements in a concatenated shape is the product of the two shape sizes. -/
+theorem size_concat (leading suffix : Shape) :
+    size (concat leading suffix) = size leading * size suffix := by
+  simp only [size_eq_prod, concat_eq_append, List.prod_append]
 
 /--
 `appendDim` multiplies the number of scalar elements by the appended dimension.
@@ -344,12 +339,8 @@ This lemma is the standard justification for reshape tricks where we:
 - append an extra singleton dimension (`n = 1`) without changing `size`.
 -/
 theorem size_appendDim (s : Shape) (n : Nat) : size (appendDim s n) = size s * n := by
-  induction s with
-  | scalar =>
-      simp [size]
-  | dim m rest ih =>
-      -- `appendDim` recurses to the innermost dimension; `size` is multiplicative.
-      simp [size, ih, Nat.mul_assoc]
+  rw [appendDim_eq_concat, size_concat]
+  simp [size]
 
 /--
 `prependDim` multiplies the number of scalar elements by the new outermost dimension.
@@ -359,43 +350,12 @@ by definition: `size` already recurses on the outermost axis.
 -/
 theorem size_prependDim (s : Shape) (n : Nat) : size (prependDim s n) = n * size s := rfl
 
-/-- The number of elements in a concatenated shape is the product of the two shape sizes. -/
-theorem size_concat (leading suffix : Shape) :
-    size (concat leading suffix) = size leading * size suffix := by
-  induction leading with
-  | scalar => simp [size]
-  | dim n rest ih => simp [size, ih, Nat.mul_assoc]
-
 -- Tell `grind` about the standard shape normalization lemmas.
 attribute [grind =] size_appendDim
 
 /-- Convert to an array of dimensions (outermost first). -/
 def toArray (s : Shape) : Array Nat :=
   toList s |>.toArray
-
-/-- Boolean structural equality test for shapes.
-
-`BEq Shape` is the lawful instance on `List Nat`. This explicit recursive test is kept for code that
-wants to inspect the comparison directly. -/
-def areEqual : Shape → Shape → Bool
-  | .scalar, .scalar => true
-  | .dim n1 s1, .dim n2 s2 => n1 == n2 && areEqual s1 s2
-  | _, _ => false
-
-/-- The structural test agrees with propositional equality. -/
-@[simp] theorem areEqual_eq_true_iff : ∀ {s t : Shape}, areEqual s t = true ↔ s = t
-  | .scalar, .scalar => by simp [areEqual]
-  | .scalar, .dim _ _ => by simp [areEqual]
-  | .dim _ _, .scalar => by simp [areEqual]
-  | .dim n1 s1, .dim n2 s2 => by
-      simp [areEqual, areEqual_eq_true_iff (s := s1) (t := s2)]
-
-/-- The structural test is the derived boolean equality. -/
-theorem areEqual_eq_beq (s t : Shape) : areEqual s t = (s == t) := by
-  by_cases h : s = t
-  · subst h
-    exact (areEqual_eq_true_iff.mpr rfl).trans (beq_self_eq_true s).symm
-  · rw [Bool.eq_iff_iff, areEqual_eq_true_iff, beq_iff_eq]
 
 /-- Get dimension at index `i` (0‑based), or `none` if out of bounds. -/
 def getDim : Shape → Nat → Option Nat
@@ -417,7 +377,7 @@ PyTorch analogy:
 
 - PyTorch broadcasting aligns shapes from the *trailing* dimensions by implicitly prepending `1`s
   to the shorter shape.
-- Our `Shape` is an outermost-first tree, so the corresponding operation is `expand_dims`:
+- Our `Shape` is an outermost-first list, so the corresponding operation is `expand_dims`:
   it inserts leading/outer dimensions to reach the target rank (this is the "prepend `1`s" step).
 - `dim_1_to_n` corresponds to PyTorch's "dimension 1 can expand to n" rule.
 -/
@@ -502,19 +462,6 @@ theorem swapAdjacentAtDepth_concat_rank (leading suffix : Shape) (m n : Nat) :
   | scalar => rfl
   | dim _ tail ih =>
       simp only [concat, rank, swapAdjacentAtDepth, ih]
-
-/-- Replace every dimension by one while preserving the rank of a shape. -/
-def singletonAxes : Shape → Shape
-  | .scalar => .scalar
-  | .dim _ rest => .dim 1 (singletonAxes rest)
-
-/-- Collapsing every axis to length one leaves the rank alone. -/
-@[simp] theorem rank_singletonAxes (s : Shape) : rank (singletonAxes s) = rank s := by
-  induction s <;> simp [singletonAxes, rank, *]
-
-/-- A shape whose every axis has length one holds exactly one element. -/
-@[simp] theorem size_singletonAxes (s : Shape) : size (singletonAxes s) = 1 := by
-  induction s <;> simp [singletonAxes, size, *]
 
 /-- Proposition used by broadcast constructors that align two existing dimensions. -/
 class SameRank (s₁ s₂ : Shape) : Prop where
@@ -677,13 +624,6 @@ theorem CanBroadcastTo.scalarTo : (s : Shape) → CanBroadcastTo .scalar s
   | .scalar => trivial
   | .dim _ tail => scalarTo tail
 
-/-- A shape of singleton axes broadcasts to any shape of the same rank. -/
-theorem CanBroadcastTo.singletonAxes : (s : Shape) → CanBroadcastTo (Shape.singletonAxes s) s
-  | .scalar => trivial
-  | .dim _ tail =>
-      letI : SameRank (Shape.singletonAxes tail) tail := ⟨rank_singletonAxes tail⟩
-      .dim_1_to_n (singletonAxes tail)
-
 /-- A suffix broadcasts across an arbitrary collection of newly prepended target dimensions. -/
 theorem CanBroadcastTo.prependTarget : (leading suffix : Shape) →
     CanBroadcastTo suffix (Shape.concat leading suffix)
@@ -691,7 +631,8 @@ theorem CanBroadcastTo.prependTarget : (leading suffix : Shape) →
   | .dim _ tail, suffix => .expand_dims (prependTarget tail suffix)
 
 /-- Typeclass wrapper for `CanBroadcastTo` so broadcast proofs can be inferred for literal
-shapes. -/
+shapes. Computed or symbolic shapes may need explicit evidence; for example, self-broadcasting
+uses `⟨CanBroadcastTo.refl s⟩`. -/
 class BroadcastTo (s₁ s₂ : Shape) : Prop where
   proof : CanBroadcastTo s₁ s₂
 
@@ -739,8 +680,11 @@ def transposePermutation (rank axis₁ axis₂ : Nat) : List Nat :=
   (List.range rank).map fun axis =>
     if axis = axis₁ then axis₂ else if axis = axis₂ then axis₁ else axis
 
-/-- Remove one axis from a shape. Invalid axes leave the shape unchanged. -/
-def eraseAxis : Shape → Nat → Shape
+/-- Remove one axis from a shape. Invalid axes leave the shape unchanged.
+
+Reducible so tensor shape arguments elaborate through reduction aliases such as `shapeAfterSum`.
+-/
+@[reducible] def eraseAxis : Shape → Nat → Shape
   | .scalar, _ => .scalar
   | .dim _ rest, 0 => rest
   | .dim n rest, axis + 1 => .dim n (eraseAxis rest axis)
@@ -808,22 +752,16 @@ theorem rank_eraseAxis {s : Shape} {axis : Nat} (h : axis < s.rank) :
           have hAxis : axis < rest.rank := by
             simp only [rank] at h
             grind
-          simp only [eraseAxis, rank, ih hAxis]
+          simp only [rank, ih hAxis]
           grind
 
-/-- Replacing an in-bounds axis preserves rank. -/
-theorem rank_replaceAxis {s : Shape} {axis extent : Nat} (h : axis < s.rank) :
+/-- Replacing any axis preserves rank, including an invalid axis left unchanged. -/
+theorem rank_replaceAxis {s : Shape} {axis extent : Nat} :
     (s.replaceAxis axis extent).rank = s.rank := by
   induction s generalizing axis with
-  | scalar => simp [rank] at h
+  | scalar => rfl
   | dim n rest ih =>
-      cases axis with
-      | zero => simp [replaceAxis, rank]
-      | succ axis =>
-          have hAxis : axis < rest.rank := by
-            simp only [rank] at h
-            grind
-          simp [replaceAxis, rank, ih hAxis]
+      cases axis <;> simp [replaceAxis, rank, ih]
 
 /-!
 ## Axis evidence
@@ -967,24 +905,11 @@ instance hasNonemptyAxisSucc {n s axis} [h : HasNonemptyAxis axis s] :
 /-!
 ## Well-formedness (`wellFormed`)
 
-`well_formed s` means "all dimensions are positive".
-
-Why this matters (and why we designed it this way):
-
-- Many definitions use `Fin n` indexing; if `n = 0`, there is no index and you end up with either
-  vacuous truths or extra cases that obscure the intent of the lemma.
-- Some common ops become awkward or partial at `n = 0`. For example, a mean typically divides by
-  the number of elements, so `n = 0` needs special-case semantics.
-- PyTorch *does* allow zero-sized dimensions, and most ops define a sensible result for them. We
-  intentionally keep that complexity out of the core spec layer because it makes proofs much more
-  case-heavy. When we need zero-dimension tensors, we introduce them with explicit
-  semantics instead of relying on incidental behavior.
-
-This is a pragmatic choice: proofs and specs are shorter, and
-runtime checks can still handle edge cases separately.
+`wellFormed s` means that all dimensions are positive. Shapes and tensors themselves admit
+zero-sized axes; this predicate is an additional hypothesis for operations and proofs that require
+positive extents. `NonemptyAxis` can instead require positivity of just the axis being reduced.
 -/
--- Well-formed shapes have positive dimensions.
-/-- `well_formed s` means "all dimensions of `s` are positive" (recursively). -/
+/-- Every dimension of `s` is positive. -/
 def wellFormed : Shape → Prop
 | .scalar => True
 | .dim n s => n > 0 ∧ s.wellFormed

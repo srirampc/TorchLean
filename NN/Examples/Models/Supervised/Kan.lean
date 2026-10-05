@@ -5,8 +5,8 @@ Authors: TorchLean Team
 
 Device-agnostic real-data example:
   python3 scripts/datasets/download_example_data.py --auto-mpg
-  lake exe torchlean kan --device cpu --steps 20
-  lake -R -K cuda=true exe torchlean kan --device cuda --steps 20
+  scripts/lake.sh exe torchlean kan --device cpu --steps 20
+  scripts/lake.sh -Kcuda=true exe torchlean kan --device cuda --steps 20
 -/
 
 module
@@ -24,7 +24,7 @@ $\mathtt{inputScale}=\mathtt{gridSize}-1$ to spread its knots across the data in
 
 ```lean
 let trainer := Trainer.new model
-  { objective := .meanSquaredError, optimizer := optim.adam { learningRate := 1e-3 } }
+  { objective := .mse, optimizer := optim.adam { learningRate := 1e-3 } }
 ```
 
 The edge basis is a normal config field. This example uses triangular piecewise-linear hats; a
@@ -76,29 +76,29 @@ def data (path : System.FilePath) (seed : Nat) : Trainer.Dataset input output :=
     (shuffle := true) (seed := seed)
 
 /-- Train the Auto MPG KAN with the public `Trainer` surface. -/
-def train (runtime : Runtime.Config) (flags : Support.CsvTrainFlags) :
+def train (runtime : Runtime.Config) (flags : Support.Training.Options Support.Csv.Options) :
     IO (Trainer.Result input output) := do
-  Data.requireFile exeName "CSV dataset" flags.csvPath RealData.missingAutoMpgHint
+  Data.requireFile exeName "CSV dataset" flags.data.path RealData.missingAutoMpgHint
   let trainer :=
     Trainer.new model <|
       Trainer.RunConfig.forObjective
         (Trainer.RunConfig.fromRuntime runtime
           { optimizer := optim.adam { learningRate := flags.training.learningRate } })
-        .meanSquaredError
-        (seed := flags.seed)
+        .mse
+        (seed := flags.data.seed)
   trainer.train
-    (data flags.csvPath flags.seed)
+    (data flags.data.path flags.data.seed)
     (flags.training.trainOptions
       (logTitle := "KAN Auto MPG regression")
-      (logNotes := #[Support.deviceNote runtime, s!"data={flags.csvPath}",
+      (logNotes := #[Support.deviceNote runtime, s!"data={flags.data.path}",
         s!"lr={flags.training.learningRate}", s!"steps={flags.training.steps}",
         s!"batch={batchSize}", s!"edge={modelConfig.edge.name}"]))
 
 /-- CLI entrypoint for Auto MPG regression with a KAN model. -/
 def main (args : List String) : IO UInt32 :=
-  TrainCommand.regressionCsv exeName args
+  TrainCommand.csv exeName args
     NN.Examples.Data.RealPaths.autoMpgCsv defaultLogPath 20 1e-2
-    (Support.bannerWithDevice exeName "Auto MPG KAN regression")
-    train
+    (Support.banner exeName "Auto MPG KAN regression")
+    train (fun result => result.printSummary)
 
 end NN.Examples.Models.Supervised.Kan

@@ -38,33 +38,6 @@ namespace CertSoundness
 noncomputable section
 
 /-!
-## Array helper lemmas (`getElem!` after `setIfInBounds`)
--/
-
-private theorem getElem!_setIfInBounds_ne {α : Type} [Inhabited α]
-    (xs : Array α) (i : Nat) (a : α) (j : Nat)
-    (hj : j < xs.size) (hij : i ≠ j) :
-    (xs.setIfInBounds i a)[j]! = xs[j]! := by
-  have hj' : j < (xs.setIfInBounds i a).size := by simpa using hj
-  calc
-    (xs.setIfInBounds i a)[j]! = (xs.setIfInBounds i a)[j]'hj' := by
-      simpa using (getElem!_pos (c := xs.setIfInBounds i a) (i := j) hj')
-    _ = xs[j]'hj := by
-      simpa using (Array.getElem_setIfInBounds_ne (xs := xs) (i := i) (a := a) (j := j) hj hij)
-    _ = xs[j]! := by
-      simpa using (getElem!_pos (c := xs) (i := j) hj).symm
-
-private theorem getElem!_setIfInBounds_self {α : Type} [Inhabited α]
-    (xs : Array α) (i : Nat) (a : α) (hi : i < xs.size) :
-    (xs.setIfInBounds i a)[i]! = a := by
-  have hi' : i < (xs.setIfInBounds i a).size := by simpa using hi
-  calc
-    (xs.setIfInBounds i a)[i]! = (xs.setIfInBounds i a)[i]'hi' := by
-      simpa using (getElem!_pos (c := xs.setIfInBounds i a) (i := i) hi')
-    _ = a := by
-      simp [Array.getElem_setIfInBounds_self]
-
-/-!
 ## Total evaluators (Nat-recursive, prefix semantics)
 
 We define fold-by-id evaluators using `Nat.rec` rather than `List.foldl` to keep proofs small and
@@ -80,8 +53,8 @@ def evalGraphPrefix (g : Graph) (ps : ParamStore ℝ) (inputs : Std.HashMap Nat 
       acc.set! n (evalNode? g.nodes ps inputs acc n)
 
 /-- Evaluate all nodes of `g` in id order, returning the final value array. -/
-def evalGraphRec (g : Graph) (ps : ParamStore ℝ) (inputs : Std.HashMap Nat Val) : Array (Option Val)
-  :=
+def evalGraphRec (g : Graph) (ps : ParamStore ℝ) (inputs : Std.HashMap Nat Val) :
+    Array (Option Val) :=
   evalGraphPrefix g ps inputs g.nodes.size
 
 /-- Prefix evaluator for the safe IBP checker step (`certStepNode?`). -/
@@ -112,56 +85,21 @@ private theorem runIBPPrefix_size (g : Graph) (ps : ParamStore ℝ) :
   | succ n ih =>
       simp [runIBPPrefix, ih, Array.set!_eq_setIfInBounds]
 
-/-! Prefix stability: later writes do not change earlier entries. -/
+/-! Prefix stability: the write at step `n` (in or out of bounds) leaves earlier entries alone. -/
 
 private theorem evalGraphPrefix_succ_get_of_lt
     (g : Graph) (ps : ParamStore ℝ) (inputs : Std.HashMap Nat Val)
     {n i : Nat} (hi : i < n) :
     (evalGraphPrefix g ps inputs (n + 1))[i]! = (evalGraphPrefix g ps inputs n)[i]! := by
-  classical
-  let acc := evalGraphPrefix g ps inputs n
-  have haccSz : acc.size = g.nodes.size := by
-    simpa [acc] using evalGraphPrefix_size (g := g) (ps := ps) (inputs := inputs) n
-  by_cases hn : n < g.nodes.size
-  · have hiAcc : i < acc.size := by
-      -- `i < n < nodes.size = acc.size`
-      have : i < g.nodes.size := lt_of_lt_of_le hi (Nat.le_of_lt hn)
-      simpa [haccSz] using this
-    have hne : n ≠ i := Nat.ne_of_gt hi
-    have hstep :
-        (acc.set! n (evalNode? g.nodes ps inputs acc n))[i]! = acc[i]! := by
-      simpa [Array.set!_eq_setIfInBounds] using
-        (getElem!_setIfInBounds_ne (xs := acc) (i := n)
-          (a := evalNode? g.nodes ps inputs acc n) (j := i) hiAcc hne)
-    simpa [evalGraphPrefix, acc, hn] using hstep
-  · have hnle : g.nodes.size ≤ n := Nat.le_of_not_gt hn
-    have haccLe : acc.size ≤ n := by simpa [haccSz] using hnle
-    -- out-of-bounds write is a no-op
-    simp [evalGraphPrefix, acc, Array.set!_eq_setIfInBounds, Array.setIfInBounds_eq_of_size_le
-      haccLe]
+  simp only [evalGraphPrefix]
+  exact Array.getElem!_set!_ne _ _ _ _ (Nat.ne_of_gt hi)
 
 private theorem runIBPPrefix_succ_get_of_lt
     (g : Graph) (ps : ParamStore ℝ)
     {n i : Nat} (hi : i < n) :
     (runIBPPrefix g ps (n + 1))[i]! = (runIBPPrefix g ps n)[i]! := by
-  classical
-  let acc := runIBPPrefix g ps n
-  have haccSz : acc.size = g.nodes.size := by
-    simpa [acc] using runIBPPrefix_size (g := g) (ps := ps) n
-  by_cases hn : n < g.nodes.size
-  · have hiAcc : i < acc.size := by
-      have : i < g.nodes.size := lt_of_lt_of_le hi (Nat.le_of_lt hn)
-      simpa [haccSz] using this
-    have hne : n ≠ i := Nat.ne_of_gt hi
-    have hstep :
-        (acc.set! n (certStepNode? g.nodes ps acc n))[i]! = acc[i]! := by
-      simpa [Array.set!_eq_setIfInBounds] using
-        (getElem!_setIfInBounds_ne (xs := acc) (i := n)
-          (a := certStepNode? g.nodes ps acc n) (j := i) hiAcc hne)
-    simpa [runIBPPrefix, acc, hn] using hstep
-  · have hnle : g.nodes.size ≤ n := Nat.le_of_not_gt hn
-    have haccLe : acc.size ≤ n := by simpa [haccSz] using hnle
-    simp [runIBPPrefix, acc, Array.set!_eq_setIfInBounds, Array.setIfInBounds_eq_of_size_le haccLe]
+  simp only [runIBPPrefix]
+  exact Array.getElem!_set!_ne _ _ _ _ (Nat.ne_of_gt hi)
 
 private theorem evalGraphPrefix_get_of_lt
     (g : Graph) (ps : ParamStore ℝ) (inputs : Std.HashMap Nat Val)
@@ -176,8 +114,7 @@ private theorem evalGraphPrefix_get_of_lt
       rcases Nat.lt_or_eq_of_le hkn with hklt | rfl
       · have hkn' : k ≤ n := Nat.le_of_lt_succ hklt
         have hin : i < n := lt_of_lt_of_le hi hkn'
-        exact (evalGraphPrefix_succ_get_of_lt (g := g) (ps := ps) (inputs := inputs) (n := n) (i :=
-          i) hin) ▸
+        exact (evalGraphPrefix_succ_get_of_lt (g := g) (ps := ps) (inputs := inputs) hin) ▸
           ih (hkn := hkn') hi
       · rfl
 
@@ -205,125 +142,47 @@ If two arrays agree on all parent ids of node `id`, then the step function at `i
 same result.
 -/
 
+/-- `certStepNode?` reads the certificate only at the node's parents, through `getBox?`. -/
+private theorem certStepNode?_congr (nodes : Array Node) (ps : ParamStore ℝ)
+    (cert₁ cert₂ : Array (Option (FlatBox ℝ))) (id : Nat)
+    (h : ∀ p ∈ (nodes[id]!).parents, getBox? cert₁ p = getBox? cert₂ p) :
+    certStepNode? nodes ps cert₁ id = certStepNode? nodes ps cert₂ id := by
+  have hu : ∀ {p}, NN.IR.unaryParent? (nodes[id]!).parents = some p →
+      getBox? cert₁ p = getBox? cert₂ p :=
+    fun hp => h _ (NN.IR.mem_of_unaryParent?_eq_some hp)
+  have hb : ∀ {pq : Nat × Nat}, NN.IR.binaryParents? (nodes[id]!).parents = some pq →
+      getBox? cert₁ pq.1 = getBox? cert₂ pq.1 ∧ getBox? cert₁ pq.2 = getBox? cert₂ pq.2 :=
+    fun hp => ⟨h _ (NN.IR.fst_mem_of_binaryParents?_eq_some hp),
+      h _ (NN.IR.snd_mem_of_binaryParents?_eq_some hp)⟩
+  cases hk : (nodes[id]!).kind
+  case concat axis =>
+    simp only [certStepNode?, hk, array_mapM_congr_of_mem (nodes[id]!).parents h]
+  all_goals
+    cases hp : NN.IR.unaryParent? (nodes[id]!).parents <;>
+    cases hq : NN.IR.binaryParents? (nodes[id]!).parents with
+    | none => simp_all [certStepNode?]
+    | some pq =>
+        obtain ⟨h₁, h₂⟩ := hb hq
+        simp_all [certStepNode?]
+
+/-- Under topological order, agreement of the raw entries at the (earlier) parents transfers
+`evalNode?` from one graph-sized table to another. -/
 private theorem evalNode?_congr_of_parents
     (nodes : Array Node) (ps : ParamStore ℝ) (inputs : Std.HashMap Nat Val)
     (vals₁ vals₂ : Array (Option Val))
     {id : Nat} (hid : id < nodes.size)
     (hsize₁ : vals₁.size = nodes.size)
     (hsize₂ : vals₂.size = nodes.size)
-    (hsupp : match (nodes[id]!).kind with
-      | .input | .const _ | .detach
-      | .add | .sub | .mulElem | .relu
-      | .linear | .matmul
-      | .tanh | .sigmoid | .softplus | .safeLog | .sin | .cos => True
-      | _ => False)
     (hparsLt : ∀ p, p ∈ (nodes[id]!).parents → p < id)
     (hpar : ∀ p, p ∈ (nodes[id]!).parents → vals₁[p]! = vals₂[p]!) :
     evalNode? nodes ps inputs vals₁ id = evalNode? nodes ps inputs vals₂ id := by
-  classical
-  have hvalOfParent (p : Nat) (hp : p ∈ (nodes[id]!).parents) :
-      getVal? vals₁ p = getVal? vals₂ p := by
-    have hpLt : p < id := hparsLt p hp
-    have hpNodes : p < nodes.size := lt_trans hpLt hid
-    have hp1 : p < vals₁.size := by simpa [hsize₁] using hpNodes
-    have hp2 : p < vals₂.size := by simpa [hsize₂] using hpNodes
-    simpa [getVal?, hp1, hp2] using hpar p hp
-  cases hk : (nodes[id]!).kind with
-  | input =>
-      simp [evalNode?, hk]
-  | const valueShape =>
-      simp [evalNode?, hk]
-  | detach =>
-      cases hp : NN.IR.unaryParent? (nodes[id]!).parents with
-      | none => simp [evalNode?, hk, hp]
-      | some p =>
-          have hget := hvalOfParent p (NN.IR.mem_of_unaryParent?_eq_some hp)
-          simpa [evalNode?, hk, hp] using hget
-  | add =>
-      cases hp : NN.IR.binaryParents? (nodes[id]!).parents with
-      | none => simp [evalNode?, hk, hp]
-      | some parents =>
-          rcases parents with ⟨p1, p2⟩
-          have hget1 := hvalOfParent p1 (NN.IR.fst_mem_of_binaryParents?_eq_some hp)
-          have hget2 := hvalOfParent p2 (NN.IR.snd_mem_of_binaryParents?_eq_some hp)
-          simp [evalNode?, hk, hp, hget1, hget2]
-  | sub =>
-      cases hp : NN.IR.binaryParents? (nodes[id]!).parents with
-      | none => simp [evalNode?, hk, hp]
-      | some parents =>
-          rcases parents with ⟨p1, p2⟩
-          have hget1 := hvalOfParent p1 (NN.IR.fst_mem_of_binaryParents?_eq_some hp)
-          have hget2 := hvalOfParent p2 (NN.IR.snd_mem_of_binaryParents?_eq_some hp)
-          simp [evalNode?, hk, hp, hget1, hget2]
-  | mulElem =>
-      cases hp : NN.IR.binaryParents? (nodes[id]!).parents with
-      | none => simp [evalNode?, hk, hp]
-      | some parents =>
-          rcases parents with ⟨p1, p2⟩
-          have hget1 := hvalOfParent p1 (NN.IR.fst_mem_of_binaryParents?_eq_some hp)
-          have hget2 := hvalOfParent p2 (NN.IR.snd_mem_of_binaryParents?_eq_some hp)
-          simp [evalNode?, hk, hp, hget1, hget2]
-  | relu =>
-      cases hp : NN.IR.unaryParent? (nodes[id]!).parents with
-      | none => simp [evalNode?, hk, hp]
-      | some p =>
-          have hget := hvalOfParent p (NN.IR.mem_of_unaryParent?_eq_some hp)
-          simp [evalNode?, hk, hp, hget]
-  | tanh =>
-      cases hp : NN.IR.unaryParent? (nodes[id]!).parents with
-      | none => simp [evalNode?, hk, hp]
-      | some p =>
-          have hget := hvalOfParent p (NN.IR.mem_of_unaryParent?_eq_some hp)
-          simp [evalNode?, hk, hp, hget]
-  | sigmoid =>
-      cases hp : NN.IR.unaryParent? (nodes[id]!).parents with
-      | none => simp [evalNode?, hk, hp]
-      | some p =>
-          have hget := hvalOfParent p (NN.IR.mem_of_unaryParent?_eq_some hp)
-          simp [evalNode?, hk, hp, hget]
-  | softplus =>
-      cases hp : NN.IR.unaryParent? (nodes[id]!).parents with
-      | none => simp [evalNode?, hk, hp]
-      | some p =>
-          have hget := hvalOfParent p (NN.IR.mem_of_unaryParent?_eq_some hp)
-          simp [evalNode?, hk, hp, hget]
-  | safeLog =>
-      cases hp : NN.IR.binaryParents? (nodes[id]!).parents with
-      | none => simp [evalNode?, hk, hp]
-      | some parents =>
-          rcases parents with ⟨p1, p2⟩
-          have hget1 := hvalOfParent p1 (NN.IR.fst_mem_of_binaryParents?_eq_some hp)
-          have hget2 := hvalOfParent p2 (NN.IR.snd_mem_of_binaryParents?_eq_some hp)
-          simp [evalNode?, hk, hp, hget1, hget2]
-  | sin =>
-      cases hp : NN.IR.unaryParent? (nodes[id]!).parents with
-      | none => simp [evalNode?, hk, hp]
-      | some p =>
-          have hget := hvalOfParent p (NN.IR.mem_of_unaryParent?_eq_some hp)
-          simp [evalNode?, hk, hp, hget]
-  | cos =>
-      cases hp : NN.IR.unaryParent? (nodes[id]!).parents with
-      | none => simp [evalNode?, hk, hp]
-      | some p =>
-          have hget := hvalOfParent p (NN.IR.mem_of_unaryParent?_eq_some hp)
-          simp [evalNode?, hk, hp, hget]
-  | linear =>
-      cases hp : NN.IR.unaryParent? (nodes[id]!).parents with
-      | none => simp [evalNode?, hk, hp]
-      | some p =>
-          have hget := hvalOfParent p (NN.IR.mem_of_unaryParent?_eq_some hp)
-          simp [evalNode?, hk, hp, hget]
-  | matmul =>
-      cases hp : NN.IR.unaryParent? (nodes[id]!).parents with
-      | none => simp [evalNode?, hk, hp]
-      | some p =>
-          have hget := hvalOfParent p (NN.IR.mem_of_unaryParent?_eq_some hp)
-          simp [evalNode?, hk, hp, hget]
-  | _ =>
-      have : False := by
-        simp [hk] at hsupp
-      exact False.elim this
+  refine evalNode?_congr nodes ps inputs vals₁ vals₂ id fun p hp => ?_
+  have hpNodes : p < nodes.size := lt_trans (hparsLt p hp) hid
+  have hp1 : p < vals₁.size := by simpa [hsize₁] using hpNodes
+  have hp2 : p < vals₂.size := by simpa [hsize₂] using hpNodes
+  simpa [getVal?, hp1, hp2] using hpar p hp
 
+/-- The certificate analogue of `evalNode?_congr_of_parents`. -/
 private theorem certStepNode?_congr_of_parents
     (nodes : Array Node) (ps : ParamStore ℝ)
     (cert₁ cert₂ : Array (Option (FlatBox ℝ)))
@@ -333,189 +192,89 @@ private theorem certStepNode?_congr_of_parents
     (hparsLt : ∀ p, p ∈ (nodes[id]!).parents → p < id)
     (hpar : ∀ p, p ∈ (nodes[id]!).parents → cert₁[p]! = cert₂[p]!) :
     certStepNode? nodes ps cert₁ id = certStepNode? nodes ps cert₂ id := by
-  classical
-  -- local helper for parent boxes
-  have hboxOfParent (p : Nat) (hp : p ∈ (nodes[id]!).parents) : getBox? cert₁ p = getBox? cert₂ p :=
-    by
-    have hpLt : p < id := hparsLt p hp
-    have hpNodes : p < nodes.size := lt_trans hpLt hid
-    have hp1 : p < cert₁.size := by simpa [hsize₁] using hpNodes
-    have hp2 : p < cert₂.size := by simpa [hsize₂] using hpNodes
-    have hpEq : cert₁[p]! = cert₂[p]! := hpar p hp
-    simpa [getBox?, hp1, hp2] using hpEq
-  cases hk : (nodes[id]!).kind with
-  | input =>
-      simp [certStepNode?, hk]
-  | const valueShape =>
-      simp [certStepNode?, hk]
-  | detach =>
-      cases hp : NN.IR.unaryParent? (nodes[id]!).parents with
-      | none => simp [certStepNode?, hk, hp]
-      | some p =>
-          have hbox := hboxOfParent p (NN.IR.mem_of_unaryParent?_eq_some hp)
-          simpa [certStepNode?, hk, hp] using hbox
-  | add =>
-      cases hp : NN.IR.binaryParents? (nodes[id]!).parents with
-      | none => simp [certStepNode?, hk, hp]
-      | some parents =>
-          rcases parents with ⟨p1, p2⟩
-          have hbox1 := hboxOfParent p1 (NN.IR.fst_mem_of_binaryParents?_eq_some hp)
-          have hbox2 := hboxOfParent p2 (NN.IR.snd_mem_of_binaryParents?_eq_some hp)
-          simp [certStepNode?, hk, hp, hbox1, hbox2]
-  | sub =>
-      cases hp : NN.IR.binaryParents? (nodes[id]!).parents with
-      | none => simp [certStepNode?, hk, hp]
-      | some parents =>
-          rcases parents with ⟨p1, p2⟩
-          have hbox1 := hboxOfParent p1 (NN.IR.fst_mem_of_binaryParents?_eq_some hp)
-          have hbox2 := hboxOfParent p2 (NN.IR.snd_mem_of_binaryParents?_eq_some hp)
-          simp [certStepNode?, hk, hp, hbox1, hbox2]
-  | mulElem =>
-      cases hp : NN.IR.binaryParents? (nodes[id]!).parents with
-      | none => simp [certStepNode?, hk, hp]
-      | some parents =>
-          rcases parents with ⟨p1, p2⟩
-          have hbox1 := hboxOfParent p1 (NN.IR.fst_mem_of_binaryParents?_eq_some hp)
-          have hbox2 := hboxOfParent p2 (NN.IR.snd_mem_of_binaryParents?_eq_some hp)
-          simp [certStepNode?, hk, hp, hbox1, hbox2]
-  | relu =>
-      cases hp : NN.IR.unaryParent? (nodes[id]!).parents with
-      | none => simp [certStepNode?, hk, hp]
-      | some p =>
-          have hbox := hboxOfParent p (NN.IR.mem_of_unaryParent?_eq_some hp)
-          simp [certStepNode?, hk, hp, hbox]
-  | tanh =>
-      cases hp : NN.IR.unaryParent? (nodes[id]!).parents with
-      | none => simp [certStepNode?, hk, hp]
-      | some p =>
-          have hbox := hboxOfParent p (NN.IR.mem_of_unaryParent?_eq_some hp)
-          simp [certStepNode?, hk, hp, hbox]
-  | sigmoid =>
-      cases hp : NN.IR.unaryParent? (nodes[id]!).parents with
-      | none => simp [certStepNode?, hk, hp]
-      | some p =>
-          have hbox := hboxOfParent p (NN.IR.mem_of_unaryParent?_eq_some hp)
-          simp [certStepNode?, hk, hp, hbox]
-  | softplus =>
-      cases hp : NN.IR.unaryParent? (nodes[id]!).parents with
-      | none => simp [certStepNode?, hk, hp]
-      | some p =>
-          have hbox := hboxOfParent p (NN.IR.mem_of_unaryParent?_eq_some hp)
-          simp [certStepNode?, hk, hp, hbox]
-  | safeLog =>
-      cases hp : NN.IR.binaryParents? (nodes[id]!).parents with
-      | none => simp [certStepNode?, hk, hp]
-      | some parents =>
-          rcases parents with ⟨p1, p2⟩
-          have hbox1 := hboxOfParent p1 (NN.IR.fst_mem_of_binaryParents?_eq_some hp)
-          have hbox2 := hboxOfParent p2 (NN.IR.snd_mem_of_binaryParents?_eq_some hp)
-          simp [certStepNode?, hk, hp, hbox1, hbox2]
-  | sin =>
-      cases hp : NN.IR.unaryParent? (nodes[id]!).parents with
-      | none => simp [certStepNode?, hk, hp]
-      | some p =>
-          have hbox := hboxOfParent p (NN.IR.mem_of_unaryParent?_eq_some hp)
-          simp [certStepNode?, hk, hp, hbox]
-  | cos =>
-      cases hp : NN.IR.unaryParent? (nodes[id]!).parents with
-      | none => simp [certStepNode?, hk, hp]
-      | some p =>
-          have hbox := hboxOfParent p (NN.IR.mem_of_unaryParent?_eq_some hp)
-          simp [certStepNode?, hk, hp, hbox]
-  | linear =>
-      cases hp : NN.IR.unaryParent? (nodes[id]!).parents with
-      | none => simp [certStepNode?, hk, hp]
-      | some p =>
-          have hbox := hboxOfParent p (NN.IR.mem_of_unaryParent?_eq_some hp)
-          simp [certStepNode?, hk, hp, hbox]
-  | matmul =>
-      cases hp : NN.IR.unaryParent? (nodes[id]!).parents with
-      | none => simp [certStepNode?, hk, hp]
-      | some p =>
-          have hbox := hboxOfParent p (NN.IR.mem_of_unaryParent?_eq_some hp)
-          simp [certStepNode?, hk, hp, hbox]
-  | _ =>
-      simp [certStepNode?, hk]
+  refine certStepNode?_congr nodes ps cert₁ cert₂ id fun p hp => ?_
+  have hpNodes : p < nodes.size := lt_trans (hparsLt p hp) hid
+  have hp1 : p < cert₁.size := by simpa [hsize₁] using hpNodes
+  have hp2 : p < cert₂.size := by simpa [hsize₂] using hpNodes
+  simpa [getBox?, hp1, hp2] using hpar p hp
 
 /-!
 ## Local consistency of the total evaluators
 -/
 
+/-- Under topological order, the total evaluator `evalGraphRec` satisfies `SemLocalOK`.
+
+No restriction on node kinds is needed: `evalNode?` consults the table only at parents, which
+precede the node, so the value written at step `id + 1` from the prefix equals the value
+`evalNode?` reads off the final table. -/
 theorem evalGraphRec_SemLocalOK (g : Graph) (ps : ParamStore ℝ) (inputs : Std.HashMap Nat Val)
-    (htopo : TopoSorted g) (hsupp : Supported g) :
+    (htopo : TopoSorted g) :
     SemLocalOK g ps inputs (evalGraphRec g ps inputs) := by
-  classical
   refine ⟨by simpa [evalGraphRec] using (evalGraphPrefix_size (g := g) (ps := ps) (inputs := inputs)
     g.nodes.size), ?_⟩
   intro id hid
-  -- `evalGraphPrefix (id+1)` sets index `id`.
   have hidSz : id < (evalGraphPrefix g ps inputs id).size := by
-    -- size is always `nodes.size`
     simpa [evalGraphPrefix_size (g := g) (ps := ps) (inputs := inputs)] using hid
+  -- Step `id + 1` writes index `id`; later steps leave it unchanged.
   have hstep :
       (evalGraphPrefix g ps inputs (id + 1))[id]!
         = evalNode? g.nodes ps inputs (evalGraphPrefix g ps inputs id) id := by
-    -- unfold the `id+1` step and compute the `id` lookup
-    simp [evalGraphPrefix, Array.set!_eq_setIfInBounds,
-      getElem!_setIfInBounds_self (xs := evalGraphPrefix g ps inputs id) (i := id)
-        (a := evalNode? g.nodes ps inputs (evalGraphPrefix g ps inputs id) id) hidSz]
+    simp only [evalGraphPrefix]
+    exact Array.getElem!_set!_self _ _ _ hidSz
   have hstable :
       (evalGraphRec g ps inputs)[id]!
         = (evalGraphPrefix g ps inputs (id + 1))[id]! := by
-    have : id + 1 ≤ g.nodes.size := Nat.succ_le_of_lt hid
-    -- stability lemma gives `prefix size` equals `prefix (id+1)` at index `id`
     have := evalGraphPrefix_get_of_lt (g := g) (ps := ps) (inputs := inputs)
       (k := id + 1) (n := g.nodes.size) (i := id)
-      (hkn := this) (hi := Nat.lt_succ_self id)
+      (hkn := Nat.succ_le_of_lt hid) (hi := Nat.lt_succ_self id)
     simpa [evalGraphRec] using this
-  have hset :
-      (evalGraphRec g ps inputs)[id]!
-        = evalNode? g.nodes ps inputs (evalGraphPrefix g ps inputs id) id := by
-    exact Eq.trans hstable hstep
+  -- Parents precede `id`, so the prefix and the final table agree on them.
   have hpar :
       ∀ p, p ∈ (g.nodes[id]!).parents →
         (evalGraphPrefix g ps inputs id)[p]!
           = (evalGraphRec g ps inputs)[p]! := by
     intro p hp
-    have hpLt : p < id := htopo id hid p hp
-    have hpLe : id ≤ g.nodes.size := Nat.le_of_lt hid
     have := evalGraphPrefix_get_of_lt (g := g) (ps := ps) (inputs := inputs)
       (k := id) (n := g.nodes.size) (i := p)
-      (hkn := hpLe) (hi := hpLt)
+      (hkn := Nat.le_of_lt hid) (hi := htopo id hid p hp)
     simpa [evalGraphRec] using this.symm
   have hsize₁ : (evalGraphPrefix g ps inputs id).size = g.nodes.size :=
     evalGraphPrefix_size (g := g) (ps := ps) (inputs := inputs) id
   have hsize₂ : (evalGraphRec g ps inputs).size = g.nodes.size := by
     simpa [evalGraphRec] using evalGraphPrefix_size (g := g) (ps := ps) (inputs := inputs)
       g.nodes.size
-  have hnode :
-      evalNode? g.nodes ps inputs (evalGraphPrefix g ps inputs id) id
-        = evalNode? g.nodes ps inputs (evalGraphRec g ps inputs) id := by
-    -- use congruence: parents (< id) agree between prefix and final
-    have hparsLt : ∀ p, p ∈ (g.nodes[id]!).parents → p < id := by
-      intro p hp; exact htopo id hid p hp
-    -- `Supported` ensures we only hit supported constructors at this node id
-    have hs : match (g.nodes[id]!).kind with
-        | .input | .const _ | .detach
-        | .add | .sub | .mulElem | .relu
-        | .linear | .matmul
-        | .tanh | .sigmoid | .softplus | .safeLog | .sin | .cos => True
-        | _ => False := hsupp id hid
-    simpa using (evalNode?_congr_of_parents (nodes := g.nodes) (ps := ps) (inputs := inputs)
-      (vals₁ := evalGraphPrefix g ps inputs id)
-      (vals₂ := evalGraphRec g ps inputs)
-      (hid := hid) (hsize₁ := hsize₁) (hsize₂ := hsize₂) (hsupp := hs) (hparsLt := hparsLt) hpar)
-  -- finish by rewriting the full-array step to the prefix step
-  calc
-    (evalGraphRec g ps inputs)[id]! = evalNode? g.nodes ps inputs (evalGraphPrefix g ps inputs id)
-      id := hset
-    _ = evalNode? g.nodes ps inputs (evalGraphRec g ps inputs) id := hnode
+  exact (hstable.trans hstep).trans
+    (evalNode?_congr_of_parents (nodes := g.nodes) (ps := ps) (inputs := inputs)
+      (vals₁ := evalGraphPrefix g ps inputs id) (vals₂ := evalGraphRec g ps inputs)
+      (hid := hid) (hsize₁ := hsize₁) (hsize₂ := hsize₂)
+      (hparsLt := fun p hp => htopo id hid p hp) hpar)
+
+/-- The safe step at a prefix agrees with the safe step at the full `runIBP?` array. -/
+private theorem certStepNode?_runIBPPrefix_eq (g : Graph) (ps : ParamStore ℝ)
+    (htopo : TopoSorted g) {id : Nat} (hid : id < g.nodes.size) :
+    certStepNode? g.nodes ps (runIBPPrefix g ps id) id
+      = certStepNode? g.nodes ps (runIBP? g ps) id := by
+  have hpar :
+      ∀ p, p ∈ (g.nodes[id]!).parents →
+        (runIBPPrefix g ps id)[p]! = (runIBP? g ps)[p]! := by
+    intro p hp
+    have := runIBPPrefix_get_of_lt (g := g) (ps := ps)
+      (k := id) (n := g.nodes.size) (i := p)
+      (hkn := Nat.le_of_lt hid) (hi := htopo id hid p hp)
+    simpa [runIBP?] using this.symm
+  have hsize₁ : (runIBPPrefix g ps id).size = g.nodes.size :=
+    runIBPPrefix_size (g := g) (ps := ps) id
+  have hsize₂ : (runIBP? g ps).size = g.nodes.size := by
+    simpa [runIBP?] using runIBPPrefix_size (g := g) (ps := ps) g.nodes.size
+  exact certStepNode?_congr_of_parents (nodes := g.nodes) (ps := ps)
+    (cert₁ := runIBPPrefix g ps id) (cert₂ := runIBP? g ps)
+    (hid := hid) (hsize₁ := hsize₁) (hsize₂ := hsize₂)
+    (hparsLt := fun p hp => htopo id hid p hp) hpar
 
 /-- Under topological order, the certificate produced by `runIBP?` satisfies `CertLocalOK`. -/
 theorem runIBP?_CertLocalOK (g : Graph) (ps : ParamStore ℝ)
     (htopo : TopoSorted g) :
     CertLocalOK (g := g) (ps := ps) (runIBP? g ps) := by
-  classical
   refine ⟨by simpa [runIBP?] using (runIBPPrefix_size (g := g) (ps := ps) g.nodes.size), ?_⟩
   intro id hid
   have hidSz : id < (runIBPPrefix g ps id).size := by
@@ -523,46 +282,16 @@ theorem runIBP?_CertLocalOK (g : Graph) (ps : ParamStore ℝ)
   have hstep :
       (runIBPPrefix g ps (id + 1))[id]!
         = certStepNode? g.nodes ps (runIBPPrefix g ps id) id := by
-    simp [runIBPPrefix, Array.set!_eq_setIfInBounds,
-      getElem!_setIfInBounds_self (xs := runIBPPrefix g ps id) (i := id)
-        (a := certStepNode? g.nodes ps (runIBPPrefix g ps id) id) hidSz]
+    simp only [runIBPPrefix]
+    exact Array.getElem!_set!_self _ _ _ hidSz
   have hstable :
       (runIBP? g ps)[id]!
         = (runIBPPrefix g ps (id + 1))[id]! := by
-    have : id + 1 ≤ g.nodes.size := Nat.succ_le_of_lt hid
     have := runIBPPrefix_get_of_lt (g := g) (ps := ps)
       (k := id + 1) (n := g.nodes.size) (i := id)
-      (hkn := this) (hi := Nat.lt_succ_self id)
+      (hkn := Nat.succ_le_of_lt hid) (hi := Nat.lt_succ_self id)
     simpa [runIBP?] using this
-  have hset :
-      (runIBP? g ps)[id]!
-        = certStepNode? g.nodes ps (runIBPPrefix g ps id) id := by
-    exact Eq.trans hstable hstep
-  have hpar :
-      ∀ p, p ∈ (g.nodes[id]!).parents →
-        (runIBPPrefix g ps id)[p]!
-          = (runIBP? g ps)[p]! := by
-    intro p hp
-    have hpLt : p < id := htopo id hid p hp
-    have hpLe : id ≤ g.nodes.size := Nat.le_of_lt hid
-    have := runIBPPrefix_get_of_lt (g := g) (ps := ps)
-      (k := id) (n := g.nodes.size) (i := p)
-      (hkn := hpLe) (hi := hpLt)
-    simpa [runIBP?] using this.symm
-  have hsize₁ : (runIBPPrefix g ps id).size = g.nodes.size :=
-    runIBPPrefix_size (g := g) (ps := ps) id
-  have hsize₂ : (runIBP? g ps).size = g.nodes.size := by
-    simpa [runIBP?] using runIBPPrefix_size (g := g) (ps := ps) g.nodes.size
-  have hparsLt : ∀ p, p ∈ (g.nodes[id]!).parents → p < id := by
-    intro p hp; exact htopo id hid p hp
-  have hnode :
-      certStepNode? g.nodes ps (runIBPPrefix g ps id) id
-        = certStepNode? g.nodes ps (runIBP? g ps) id := by
-    simpa using (certStepNode?_congr_of_parents (nodes := g.nodes) (ps := ps)
-      (cert₁ := runIBPPrefix g ps id)
-      (cert₂ := runIBP? g ps)
-      (hid := hid) (hsize₁ := hsize₁) (hsize₂ := hsize₂) (hparsLt := hparsLt) hpar)
-  simp [hset, hnode]
+  exact (hstable.trans hstep).trans (certStepNode?_runIBPPrefix_eq g ps htopo hid)
 
 /-!
 ## End-to-end theorem
@@ -581,7 +310,7 @@ theorem runIBP?_encloses_evalGraphRec
   have hcert : CertLocalOK (g := g) (ps := ps) (runIBP? g ps) :=
     runIBP?_CertLocalOK (g := g) (ps := ps) htopo
   have hsem : SemLocalOK (g := g) (ps := ps) (inputs := inputs) (evalGraphRec g ps inputs) :=
-    evalGraphRec_SemLocalOK (g := g) (ps := ps) (inputs := inputs) htopo hsupp
+    evalGraphRec_SemLocalOK (g := g) (ps := ps) (inputs := inputs) htopo
   exact cert_encloses_semantics
     (g := g) (ps := ps)
     (cert := runIBP? g ps)
@@ -601,17 +330,14 @@ theorem runIBP?_encloses_evalGraphRec
 It differs from the proof-side `runIBP?` above in the following ways.
 
 * It folds `propagateIBPNode` over `List.finRange` instead of recursing on a prefix length.
-* `propagateIBPNode` reads parent boxes with `get!`, so a missing parent box is replaced by the
-  default box instead of producing `none`.
 * It returns an all-`none` array when `crownGraphSemanticsSupported` rejects the graph.
 * For `tanh`, `sigmoid`, `sin`, and `cos` it uses the `NonlinearBoundOps` enclosures, whereas
   `certStepNode?` uses the `Runtime.Ops.IBP` boxes. For `sin` and `cos` these are different boxes
   (both sound), so the two passes do not agree on those ops.
 
-The first three differences are inessential. We identify the two passes on the op set where the
-per-node steps coincide (`EngineCore`), under the hypothesis that the proof-side pass produced a
-box at every node (`IBPCovers`), which rules out the `get!` default path. The engine's behaviour is
-not changed.
+Both passes propagate missing parent boxes through `Option`. We identify them on the op set where
+the per-node steps coincide (`EngineCore`), using the coverage hypothesis (`IBPCovers`) of the
+end-to-end enclosure theorem.
 -/
 
 /-- Node kinds on which `propagateIBPNode` and `certStepNode?` compute the same box. -/
@@ -620,7 +346,7 @@ def EngineCore (g : Graph) : Prop :=
     match (g.nodes[id]!).kind with
     | .input | .const _ | .detach
     | .add | .sub | .mulElem | .relu
-    | .linear | .matmul | .softplus | .safeLog => True
+    | .linear | .matmul | .softplus | .safeLog | .concat _ | .conv _ => True
     | _ => False
 
 /-- Every node of a certificate array carries a box. -/
@@ -634,6 +360,11 @@ theorem supported_of_engineCore {g : Graph} (h : EngineCore g) : Supported g := 
   revert h'
   cases (g.nodes[id]!).kind <;> simp
 
+/-- The certificate accessor is the checked lookup used by the executable dispatcher. -/
+private theorem getBox?_eq_join_getElem? (cert : Array (Option (FlatBox ℝ))) (p : Nat) :
+    getBox? cert p = (cert[p]?).join :=
+  rfl
+
 /-- A successful unary parent decode pins down the parent array. -/
 private theorem parents_eq_of_unaryParent?_eq_some {parents : Array Nat} {p : Nat}
     (h : NN.IR.unaryParent? parents = some p) : parents = #[p] := by
@@ -644,357 +375,112 @@ private theorem parents_eq_of_unaryParent?_eq_some {parents : Array Nat} {p : Na
     simpa using h
   next => simp at h
 
-/-- A successful binary parent decode pins down the parent array. -/
-private theorem parents_eq_of_binaryParents?_eq_some {parents : Array Nat} {p1 p2 : Nat}
-    (h : NN.IR.binaryParents? parents = some (p1, p2)) : parents = #[p1, p2] := by
-  simp only [NN.IR.binaryParents?] at h
-  split at h
-  next hsize =>
-    obtain ⟨l⟩ := parents
-    obtain ⟨a, b, rfl⟩ := List.length_eq_two.mp (by simpa using hsize)
-    have h0 : (#[a, b] : Array Nat)[0]! = a := rfl
-    have h1 : (#[a, b] : Array Nat)[1]! = b := rfl
-    rw [h0, h1] at h
-    obtain ⟨rfl, rfl⟩ := Prod.mk.inj (Option.some.inj h)
-    rfl
-  next => simp at h
+/-- A successful binary parent decode pins down both parent occurrences. -/
+private theorem parents_eq_of_binaryParents?_eq_some {parents : Array Nat} {p q : Nat}
+    (h : NN.IR.binaryParents? parents = some (p, q)) : parents = #[p, q] := by
+  rcases parents with ⟨entries⟩
+  cases entries with
+  | nil => simp [NN.IR.binaryParents?] at h
+  | cons a entries =>
+      cases entries with
+      | nil => simp [NN.IR.binaryParents?] at h
+      | cons b entries =>
+          cases entries with
+          | nil => simpa [NN.IR.binaryParents?] using h
+          | cons c entries => simp [NN.IR.binaryParents?] at h
 
-/-- A parent box read through the safe lookup agrees with the engine's `get!` read. -/
-private theorem get!_of_getBox?_eq_some {cert : Array (Option (FlatBox ℝ))} {p : Nat}
-    {B : FlatBox ℝ} (h : getBox? cert p = some B) : (cert[p]!).get! = B := by
-  simp only [getBox?] at h
-  split at h
-  · simp [h]
-  · simp at h
-
-/-- The engine step reads its node through `nodes[id]!`; rewrite that read to an explicit record. -/
-private theorem propagateIBPNode_eq_at
-    (nodes : Array Node) (ps : ParamStore ℝ) (boxes : Array (Option (FlatBox ℝ))) (id : Nat)
-    (node : Node) (hnode : nodes[id]! = node) :
-    propagateIBPNode (α := ℝ) nodes ps boxes id = propagateIBPNodeAt (α := ℝ) nodes ps boxes id node
-    := by
-  rw [propagateIBPNode, hnode]
-
-/-- A node record with given kind and parents, keeping the other fields. -/
-private theorem node_eq_mk_of_kind_parents (node : Node) {kind : NN.IR.OpKind} {parents : Array Nat}
-    (hk : node.kind = kind) (hp : node.parents = parents) :
-    node = { id := node.id, parents := parents, kind := kind, outShape := node.outShape } := by
-  rw [← hk, ← hp]
-
-/-- The `input` step reads the seed box. -/
-private theorem propagate_step_input
-    (nodes : Array Node) (ps : ParamStore ℝ) (boxes : Array (Option (FlatBox ℝ))) (id : Nat)
-    (B : FlatBox ℝ) (hstep : certStepNode? nodes ps boxes id = some B)
-    (hk : (nodes[id]!).kind = .input) :
-    propagateIBPNode (α := ℝ) nodes ps boxes id = boxes.set! id (some B) := by
-  classical
-  simp only [certStepNode?, hk] at hstep
-  rw [propagateIBPNode_eq_at nodes ps boxes id _ (node_eq_mk_of_kind_parents _ hk rfl)]
-  unfold propagateIBPNodeAt
-  dsimp only
-  rw [hstep]
-
-/-- The `const` step builds a degenerate box from the constant. -/
-private theorem propagate_step_const
-    (nodes : Array Node) (ps : ParamStore ℝ) (boxes : Array (Option (FlatBox ℝ))) (id : Nat)
-    (B : FlatBox ℝ) (hstep : certStepNode? nodes ps boxes id = some B) (valueShape : Shape)
-    (hk : (nodes[id]!).kind = .const valueShape) :
-    propagateIBPNode (α := ℝ) nodes ps boxes id = boxes.set! id (some B) := by
-  classical
-  simp only [certStepNode?, hk] at hstep
-  cases hc : ps.constVals[id]? with
-  | none => simp [hc] at hstep
-  | some v =>
-      simp only [hc] at hstep
-      have hB : ({ dim := v.n, lo := v.v, hi := v.v } : FlatBox ℝ) = B := by
-        simpa using hstep
-      rw [propagateIBPNode_eq_at nodes ps boxes id _ (node_eq_mk_of_kind_parents _ hk rfl)]
-      unfold propagateIBPNodeAt
-      dsimp only
-      rw [hc]
-      dsimp only
-      rw [hB]
-
-/-- The `detach` step forwards the parent box. -/
-private theorem propagate_step_detach
-    (nodes : Array Node) (ps : ParamStore ℝ) (boxes : Array (Option (FlatBox ℝ))) (id : Nat)
-    (B : FlatBox ℝ) (hstep : certStepNode? nodes ps boxes id = some B)
-    (hk : (nodes[id]!).kind = .detach) :
-    propagateIBPNode (α := ℝ) nodes ps boxes id = boxes.set! id (some B) := by
-  classical
-  simp only [certStepNode?, hk] at hstep
-  cases hp : NN.IR.unaryParent? (nodes[id]!).parents with
-  | none => simp [hp] at hstep
-  | some p1 =>
-      simp only [hp] at hstep
-      have hpar := parents_eq_of_unaryParent?_eq_some hp
-      have hget := get!_of_getBox?_eq_some hstep
-      rw [propagateIBPNode_eq_at nodes ps boxes id _ (node_eq_mk_of_kind_parents _ hk hpar),
-        ← hget]
-      rfl
-
-/-- The `add` step adds the parent boxes. -/
-private theorem propagate_step_add
-    (nodes : Array Node) (ps : ParamStore ℝ) (boxes : Array (Option (FlatBox ℝ))) (id : Nat)
-    (B : FlatBox ℝ) (hstep : certStepNode? nodes ps boxes id = some B)
-    (hk : (nodes[id]!).kind = .add) :
-    propagateIBPNode (α := ℝ) nodes ps boxes id = boxes.set! id (some B) := by
-  classical
-  simp only [certStepNode?, hk] at hstep
-  cases hp : NN.IR.binaryParents? (nodes[id]!).parents with
-  | none => simp [hp] at hstep
-  | some parents =>
-      rcases parents with ⟨p1, p2⟩
-      simp only [hp] at hstep
-      have hpar := parents_eq_of_binaryParents?_eq_some hp
-      cases h1 : getBox? boxes p1 with
-      | none => simp [h1] at hstep
-      | some B1 =>
-          cases h2 : getBox? boxes p2 with
-          | none => simp [h1, h2] at hstep
-          | some B2 =>
-              simp only [h1, h2] at hstep
-              split_ifs at hstep with hdim
-              have hB : boxAdd (α := ℝ) B1 B2 = B := by simpa using hstep
-              have hg1 := get!_of_getBox?_eq_some h1
-              have hg2 := get!_of_getBox?_eq_some h2
-              rw [propagateIBPNode_eq_at nodes ps boxes id _
-                (node_eq_mk_of_kind_parents _ hk hpar), ← hB, ← hg1, ← hg2]
-              rfl
-
-/-- The `sub` step subtracts the parent boxes. -/
-private theorem propagate_step_sub
-    (nodes : Array Node) (ps : ParamStore ℝ) (boxes : Array (Option (FlatBox ℝ))) (id : Nat)
-    (B : FlatBox ℝ) (hstep : certStepNode? nodes ps boxes id = some B)
-    (hk : (nodes[id]!).kind = .sub) :
-    propagateIBPNode (α := ℝ) nodes ps boxes id = boxes.set! id (some B) := by
-  classical
-  simp only [certStepNode?, hk] at hstep
-  cases hp : NN.IR.binaryParents? (nodes[id]!).parents with
-  | none => simp [hp] at hstep
-  | some parents =>
-      rcases parents with ⟨p1, p2⟩
-      simp only [hp] at hstep
-      have hpar := parents_eq_of_binaryParents?_eq_some hp
-      cases h1 : getBox? boxes p1 with
-      | none => simp [h1] at hstep
-      | some B1 =>
-          cases h2 : getBox? boxes p2 with
-          | none => simp [h1, h2] at hstep
-          | some B2 =>
-              simp only [h1, h2] at hstep
-              split_ifs at hstep with hdim
-              have hB : boxSub (α := ℝ) B1 B2 = B := by simpa using hstep
-              have hg1 := get!_of_getBox?_eq_some h1
-              have hg2 := get!_of_getBox?_eq_some h2
-              rw [propagateIBPNode_eq_at nodes ps boxes id _
-                (node_eq_mk_of_kind_parents _ hk hpar), ← hB, ← hg1, ← hg2]
-              rfl
-
-/-- The `mulElem` step multiplies the parent boxes. -/
-private theorem propagate_step_mulElem
-    (nodes : Array Node) (ps : ParamStore ℝ) (boxes : Array (Option (FlatBox ℝ))) (id : Nat)
-    (B : FlatBox ℝ) (hstep : certStepNode? nodes ps boxes id = some B)
-    (hk : (nodes[id]!).kind = .mulElem) :
-    propagateIBPNode (α := ℝ) nodes ps boxes id = boxes.set! id (some B) := by
-  classical
-  simp only [certStepNode?, hk] at hstep
-  cases hp : NN.IR.binaryParents? (nodes[id]!).parents with
-  | none => simp [hp] at hstep
-  | some parents =>
-      rcases parents with ⟨p1, p2⟩
-      simp only [hp] at hstep
-      have hpar := parents_eq_of_binaryParents?_eq_some hp
-      cases h1 : getBox? boxes p1 with
-      | none => simp [h1] at hstep
-      | some B1 =>
-          cases h2 : getBox? boxes p2 with
-          | none => simp [h1, h2] at hstep
-          | some B2 =>
-              simp only [h1, h2] at hstep
-              have hg1 := get!_of_getBox?_eq_some h1
-              have hg2 := get!_of_getBox?_eq_some h2
-              rw [← hg1, ← hg2] at hstep
-              rw [propagateIBPNode_eq_at nodes ps boxes id _
-                (node_eq_mk_of_kind_parents _ hk hpar)]
-              unfold propagateIBPNodeAt
-              dsimp only
-              conv_lhs => whnf
-              simp only [Array.getLit, List.getElem_toArray, List.getElem_cons_zero,
-                List.getElem_cons_succ]
-              rw [hstep]
-
-/-- The `relu` step applies the ReLU box transfer. -/
-private theorem propagate_step_relu
-    (nodes : Array Node) (ps : ParamStore ℝ) (boxes : Array (Option (FlatBox ℝ))) (id : Nat)
-    (B : FlatBox ℝ) (hstep : certStepNode? nodes ps boxes id = some B)
-    (hk : (nodes[id]!).kind = .relu) :
-    propagateIBPNode (α := ℝ) nodes ps boxes id = boxes.set! id (some B) := by
-  classical
-  simp only [certStepNode?, hk] at hstep
-  cases hp : NN.IR.unaryParent? (nodes[id]!).parents with
-  | none => simp [hp] at hstep
-  | some p1 =>
-      simp only [hp] at hstep
-      have hpar := parents_eq_of_unaryParent?_eq_some hp
-      cases h1 : getBox? boxes p1 with
-      | none => simp [h1] at hstep
-      | some B1 =>
-          simp only [h1] at hstep
-          have hB : boxRelu (α := ℝ) B1 = B := by simpa using hstep
-          have hg1 := get!_of_getBox?_eq_some h1
-          rw [propagateIBPNode_eq_at nodes ps boxes id _
-            (node_eq_mk_of_kind_parents _ hk hpar), ← hB, ← hg1]
-          rfl
-
-/-- The `linear` step applies the affine box transfer. -/
-private theorem propagate_step_linear
-    (nodes : Array Node) (ps : ParamStore ℝ) (boxes : Array (Option (FlatBox ℝ))) (id : Nat)
-    (B : FlatBox ℝ) (hstep : certStepNode? nodes ps boxes id = some B)
-    (hk : (nodes[id]!).kind = .linear) :
-    propagateIBPNode (α := ℝ) nodes ps boxes id = boxes.set! id (some B) := by
-  classical
-  simp only [certStepNode?, hk] at hstep
-  cases hp : NN.IR.unaryParent? (nodes[id]!).parents with
-  | none => simp [hp] at hstep
-  | some p1 =>
-      simp only [hp] at hstep
-      have hpar := parents_eq_of_unaryParent?_eq_some hp
-      cases h1 : getBox? boxes p1 with
-      | none => simp [h1] at hstep
-      | some B1 =>
-          simp only [h1] at hstep
-          have hg1 := get!_of_getBox?_eq_some h1
-          rw [← hg1] at hstep
-          rw [propagateIBPNode_eq_at nodes ps boxes id _
-            (node_eq_mk_of_kind_parents _ hk hpar)]
-          unfold propagateIBPNodeAt
-          dsimp only
-          conv_lhs => whnf
-          simp only [Array.getLit, List.getElem_toArray, List.getElem_cons_zero]
-          rw [hstep]
-
-/-- The softplus step uses the same checked enclosure as the certificate evaluator. -/
-private theorem propagate_step_softplus
-    (nodes : Array Node) (ps : ParamStore ℝ) (boxes : Array (Option (FlatBox ℝ))) (id : Nat)
-    (B : FlatBox ℝ) (hstep : certStepNode? nodes ps boxes id = some B)
-    (hk : (nodes[id]!).kind = .softplus) :
-    propagateIBPNode (α := ℝ) nodes ps boxes id = boxes.set! id (some B) := by
-  classical
-  simp only [certStepNode?, hk] at hstep
-  cases hp : NN.IR.unaryParent? (nodes[id]!).parents with
-  | none => simp [hp] at hstep
-  | some p1 =>
-      simp only [hp] at hstep
-      have hpar := parents_eq_of_unaryParent?_eq_some hp
-      cases h1 : getBox? boxes p1 with
-      | none => simp [h1] at hstep
-      | some B1 =>
-          simp only [h1] at hstep
-          have hg1 := get!_of_getBox?_eq_some h1
-          rw [← hg1] at hstep
-          rw [propagateIBPNode_eq_at nodes ps boxes id _
-            (node_eq_mk_of_kind_parents _ hk hpar)]
-          unfold propagateIBPNodeAt
-          dsimp only
-          conv_lhs => whnf
-          simp only [Array.getLit, List.getElem_toArray, List.getElem_cons_zero]
-          rw [hstep]
-
-/-- The safeLog step includes the scalar epsilon box read by the certificate evaluator. -/
-private theorem propagate_step_safeLog
-    (nodes : Array Node) (ps : ParamStore ℝ) (boxes : Array (Option (FlatBox ℝ))) (id : Nat)
-    (B : FlatBox ℝ) (hstep : certStepNode? nodes ps boxes id = some B)
-    (hk : (nodes[id]!).kind = .safeLog) :
-    propagateIBPNode (α := ℝ) nodes ps boxes id = boxes.set! id (some B) := by
-  classical
-  simp only [certStepNode?, hk] at hstep
-  cases hp : NN.IR.binaryParents? (nodes[id]!).parents with
-  | none => simp [hp] at hstep
-  | some parents =>
-      rcases parents with ⟨p1, p2⟩
-      simp only [hp] at hstep
-      have hpar := parents_eq_of_binaryParents?_eq_some hp
-      cases h1 : getBox? boxes p1 with
-      | none => simp [h1] at hstep
-      | some B1 =>
-          cases h2 : getBox? boxes p2 with
-          | none => simp [h1, h2] at hstep
-          | some B2 =>
-              simp only [h1, h2] at hstep
-              have hg1 := get!_of_getBox?_eq_some h1
-              have hg2 := get!_of_getBox?_eq_some h2
-              rw [← hg1, ← hg2] at hstep
-              rw [propagateIBPNode_eq_at nodes ps boxes id _
-                (node_eq_mk_of_kind_parents _ hk hpar)]
-              unfold propagateIBPNodeAt
-              dsimp only
-              conv_lhs => whnf
-              simp only [Array.getLit, List.getElem_toArray, List.getElem_cons_zero,
-                List.getElem_cons_succ]
-              rw [hstep]
-
-/-- The unary `matmul` step applies the matrix box transfer. -/
-private theorem propagate_step_matmul
-    (nodes : Array Node) (ps : ParamStore ℝ) (boxes : Array (Option (FlatBox ℝ))) (id : Nat)
-    (B : FlatBox ℝ) (hstep : certStepNode? nodes ps boxes id = some B)
-    (hk : (nodes[id]!).kind = .matmul) :
-    propagateIBPNode (α := ℝ) nodes ps boxes id = boxes.set! id (some B) := by
-  classical
-  simp only [certStepNode?, hk] at hstep
-  cases hp : NN.IR.unaryParent? (nodes[id]!).parents with
-  | none => simp [hp] at hstep
-  | some p1 =>
-      simp only [hp] at hstep
-      have hpar := parents_eq_of_unaryParent?_eq_some hp
-      cases h1 : getBox? boxes p1 with
-      | none => simp [h1] at hstep
-      | some B1 =>
-          simp only [h1] at hstep
-          have hg1 := get!_of_getBox?_eq_some h1
-          rw [← hg1] at hstep
-          rw [propagateIBPNode_eq_at nodes ps boxes id _
-            (node_eq_mk_of_kind_parents _ hk hpar)]
-          unfold propagateIBPNodeAt
-          dsimp only
-          conv_lhs => whnf
-          simp only [Array.getLit, List.getElem_toArray, List.getElem_cons_zero]
-          rw [hstep]
-
-/--
-On the engine-core ops, whenever the safe step produces a box, the engine step writes exactly that
-box at the node.
-
-Each per-kind lemma rewrites the node to a record literal and then evaluates the engine's
-array-pattern match definitionally, since `simp` cannot generate equations for array-literal
-matchers. Where the engine then matches on an `Option` result, the goal is first brought to weak
-head normal form so that the result of the safe step can be substituted.
--/
+/-- On core operators the checked engine writes the box produced by the certificate step. -/
 private theorem propagateIBPNode_eq_set!_of_core
     (nodes : Array Node) (ps : ParamStore ℝ) (boxes : Array (Option (FlatBox ℝ))) (id : Nat)
+    (hid : id < nodes.size)
+    (hparents : ∀ p ∈ (nodes[id]!).parents, p < nodes.size)
     (hcore : match (nodes[id]!).kind with
       | .input | .const _ | .detach
       | .add | .sub | .mulElem | .relu
-      | .linear | .matmul | .softplus | .safeLog => True
+      | .linear | .matmul | .softplus | .safeLog | .concat _ | .conv _ => True
       | _ => False)
     (B : FlatBox ℝ) (hstep : certStepNode? nodes ps boxes id = some B) :
     propagateIBPNode (α := ℝ) nodes ps boxes id = boxes.set! id (some B) := by
+  have hnode : nodes[id]? = some nodes[id]! := by simp [hid]
+  rw [propagateIBPNode, hnode]
+  change boxes.set! id (ibpStepNodeAt? nodes ps boxes id nodes[id]!) = boxes.set! id (some B)
+  congr 1
   cases hk : (nodes[id]!).kind with
-  | input => exact propagate_step_input nodes ps boxes id B hstep hk
-  | const valueShape => exact propagate_step_const nodes ps boxes id B hstep valueShape hk
-  | detach => exact propagate_step_detach nodes ps boxes id B hstep hk
-  | add => exact propagate_step_add nodes ps boxes id B hstep hk
-  | sub => exact propagate_step_sub nodes ps boxes id B hstep hk
-  | mulElem => exact propagate_step_mulElem nodes ps boxes id B hstep hk
-  | relu => exact propagate_step_relu nodes ps boxes id B hstep hk
-  | softplus => exact propagate_step_softplus nodes ps boxes id B hstep hk
-  | safeLog => exact propagate_step_safeLog nodes ps boxes id B hstep hk
-  | linear => exact propagate_step_linear nodes ps boxes id B hstep hk
-  | matmul => exact propagate_step_matmul nodes ps boxes id B hstep hk
-  | _ =>
-      have : False := by
-        simp [hk] at hcore
-      exact False.elim this
+  | input => simpa only [ibpStepNodeAt?, certStepNode?, hk] using hstep
+  | const shape =>
+      cases hv : ps.constVals[id]? <;>
+        simpa only [ibpStepNodeAt?, certStepNode?, hk, hv, Bind.bind, Option.bind] using hstep
+  | detach | relu | linear | softplus =>
+      cases hp : NN.IR.unaryParent? (nodes[id]!).parents with
+      | none => simp [certStepNode?, hk, hp] at hstep
+      | some p =>
+          cases hb : getBox? boxes p with
+          | none => simp [certStepNode?, hk, hp, hb] at hstep
+          | some box =>
+              simpa [ibpStepNodeAt?, certStepNode?, hk, hp,
+                ← getBox?_eq_join_getElem?, hb] using hstep
+  | add | sub | mulElem | safeLog =>
+      cases hp : NN.IR.binaryParents? (nodes[id]!).parents with
+      | none => simp [certStepNode?, hk, hp] at hstep
+      | some parents =>
+          rcases parents with ⟨p, q⟩
+          cases hb : getBox? boxes p with
+          | none => simp [certStepNode?, hk, hp, hb] at hstep
+          | some left =>
+              cases hc : getBox? boxes q with
+              | none => simp [certStepNode?, hk, hp, hb, hc] at hstep
+              | some right =>
+                  simpa [ibpStepNodeAt?, certStepNode?, hk, hp,
+                    ← getBox?_eq_join_getElem?, hb, hc] using hstep
+  | matmul =>
+      cases hp : NN.IR.unaryParent? (nodes[id]!).parents with
+      | none =>
+          cases hq : NN.IR.binaryParents? (nodes[id]!).parents with
+          | none => simp [certStepNode?, hk, hp, hq] at hstep
+          | some pair =>
+              rcases pair with ⟨p, q⟩
+              have hpar := parents_eq_of_binaryParents?_eq_some hq
+              have hpLt := hparents p (NN.IR.fst_mem_of_binaryParents?_eq_some hq)
+              have hqLt := hparents q (NN.IR.snd_mem_of_binaryParents?_eq_some hq)
+              cases hb : getBox? boxes p with
+              | none => simp [certStepNode?, hk, hp, hq, hb] at hstep
+              | some left =>
+                  cases hc : getBox? boxes q with
+                  | none => simp [certStepNode?, hk, hp, hq, hb, hc] at hstep
+                  | some right =>
+                      simp only [certStepNode?, hk, hp, hq, hb, hc] at hstep
+                      have hrecord :
+                          nodes[id]! = { nodes[id]! with kind := .matmul, parents := #[p, q] } := by
+                        rw [← hpar, ← hk]
+                      rw [hrecord]
+                      change (do
+                        let left ← nodes[p]?
+                        let right ← nodes[q]?
+                        ibpBinaryMatmul? left.outShape right.outShape
+                          (← (boxes[p]?).join) (← (boxes[q]?).join)) = some B
+                      simpa [← getBox?_eq_join_getElem?, hb, hc, hpLt, hqLt] using hstep
+      | some p =>
+          have hparents := parents_eq_of_unaryParent?_eq_some hp
+          cases hb : getBox? boxes p with
+          | none => simp [certStepNode?, hk, hp, hb] at hstep
+          | some box =>
+              simp only [certStepNode?, hk, hp, hb] at hstep
+              have hrecord :
+                  nodes[id]! = { nodes[id]! with kind := .matmul, parents := #[p] } := by
+                rw [← hparents, ← hk]
+              rw [hrecord]
+              change ((boxes[p]?).join >>= ibpMatmul id ps) = some B
+              simpa [← getBox?_eq_join_getElem?, hb] using hstep
+  | concat axis =>
+      have hget : getBox? boxes = fun p => (boxes[p]?).join :=
+        funext (getBox?_eq_join_getElem? boxes)
+      simpa only [ibpStepNodeAt?, certStepNode?, hk, concatNodeBoxes?, concatNodeLayout?,
+        hget] using hstep
+  | conv configuration =>
+      have hget : getBox? boxes = fun p => (boxes[p]?).join :=
+        funext (getBox?_eq_join_getElem? boxes)
+      simpa only [ibpStepNodeAt?, certStepNode?, hk, hget] using hstep
+  | _ => simp [hk] at hcore
 
 /-- Prefix of the engine's fold, by recursion on the number of processed nodes. -/
 def runIBPEnginePrefix (g : Graph) (ps : ParamStore ℝ) : Nat → Array (Option (FlatBox ℝ))
@@ -1035,30 +521,6 @@ theorem runIBP_eq_replicate_none (g : Graph) (ps : ParamStore ℝ)
     runIBP (α := ℝ) g ps = Array.replicate g.nodes.size none := by
   simp [runIBP, hguard]
 
-/-- The safe step at a prefix agrees with the safe step at the full `runIBP?` array. -/
-private theorem certStepNode?_runIBPPrefix_eq (g : Graph) (ps : ParamStore ℝ)
-    (htopo : TopoSorted g) {id : Nat} (hid : id < g.nodes.size) :
-    certStepNode? g.nodes ps (runIBPPrefix g ps id) id
-      = certStepNode? g.nodes ps (runIBP? g ps) id := by
-  have hpar :
-      ∀ p, p ∈ (g.nodes[id]!).parents →
-        (runIBPPrefix g ps id)[p]! = (runIBP? g ps)[p]! := by
-    intro p hp
-    have hpLt : p < id := htopo id hid p hp
-    have hpLe : id ≤ g.nodes.size := Nat.le_of_lt hid
-    have := runIBPPrefix_get_of_lt (g := g) (ps := ps)
-      (k := id) (n := g.nodes.size) (i := p) (hkn := hpLe) (hi := hpLt)
-    simpa [runIBP?] using this.symm
-  have hsize₁ : (runIBPPrefix g ps id).size = g.nodes.size :=
-    runIBPPrefix_size (g := g) (ps := ps) id
-  have hsize₂ : (runIBP? g ps).size = g.nodes.size := by
-    simpa [runIBP?] using runIBPPrefix_size (g := g) (ps := ps) g.nodes.size
-  have hparsLt : ∀ p, p ∈ (g.nodes[id]!).parents → p < id := by
-    intro p hp; exact htopo id hid p hp
-  exact certStepNode?_congr_of_parents (nodes := g.nodes) (ps := ps)
-    (cert₁ := runIBPPrefix g ps id) (cert₂ := runIBP? g ps)
-    (hid := hid) (hsize₁ := hsize₁) (hsize₂ := hsize₂) (hparsLt := hparsLt) hpar
-
 /-- Under coverage, the safe step succeeds at every prefix position. -/
 private theorem certStepNode?_runIBPPrefix_some (g : Graph) (ps : ParamStore ℝ)
     (htopo : TopoSorted g) (hcov : IBPCovers g (runIBP? g ps))
@@ -1082,7 +544,7 @@ private theorem runIBPEnginePrefix_eq_runIBPPrefix (g : Graph) (ps : ParamStore 
       have hprev := ih (Nat.le_of_lt hnLt)
       obtain ⟨B, hB⟩ := certStepNode?_runIBPPrefix_some g ps htopo hcov hnLt
       have hstep := propagateIBPNode_eq_set!_of_core g.nodes ps (runIBPPrefix g ps n) n
-        (hcore n hnLt) B hB
+        hnLt (fun p hp => lt_trans (htopo n hnLt p hp) hnLt) (hcore n hnLt) B hB
       show propagateIBPNode (α := ℝ) g.nodes ps (runIBPEnginePrefix g ps n) n
         = (runIBPPrefix g ps n).set! n (certStepNode? g.nodes ps (runIBPPrefix g ps n) n)
       rw [hprev, hstep, hB]
@@ -1091,8 +553,7 @@ private theorem runIBPEnginePrefix_eq_runIBPPrefix (g : Graph) (ps : ParamStore 
 The engine's `runIBP` computes exactly the proof-side `runIBP?` on engine-core graphs, provided the
 semantic guard accepts the graph and the proof-side pass produced a box at every node.
 
-Coverage is needed because `propagateIBPNode` reads parents with `get!`: at a node whose parent
-box is missing, the engine would compute from a default box while `certStepNode?` returns `none`.
+Coverage supplies a successful certificate step at each prefix of the induction.
 -/
 theorem runIBP_eq_runIBP? (g : Graph) (ps : ParamStore ℝ)
     (htopo : TopoSorted g) (hcore : EngineCore g)

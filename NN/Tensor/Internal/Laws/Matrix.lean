@@ -103,14 +103,14 @@ theorem matrixEquiv_rearrange_transpose
           (Coord.linearize (s := [inner])
               (innerCoordinate, PUnit.unit)).val +
             inner * outerCoordinate.val := by
-              simpa only [Shape.size, Nat.mul_one] using outerStep
+              simpa only [Shape.size_cons, Shape.size_nil, Nat.mul_one] using outerStep
       _ =
           ((Coord.linearize (s := []) PUnit.unit).val +
               innerCoordinate.val) +
             inner * outerCoordinate.val := by
               exact congrArg (fun value =>
                 value + inner * outerCoordinate.val) <| by
-                  simpa only [Shape.size, Nat.one_mul] using innerStep
+                  simpa only [Shape.size_nil, Nat.one_mul] using innerStep
       _ = innerCoordinate.val + inner * outerCoordinate.val := by
         have scalarIndexBound :
             (Coord.linearize (s := []) PUnit.unit).val < 1 :=
@@ -143,7 +143,7 @@ theorem matrixEquiv_rearrange_transpose
   · decide
   · exact row.isLt
 
-variable {R : Type u} [Storage R] [AddCommMonoid R] [Monoid R]
+variable {R : Type u} [Storage R] [AddCommMonoid R] [MulOneClass R]
 variable {contracted : Nat}
 
 /--
@@ -192,9 +192,9 @@ theorem matrixEquiv_einsum_mul
   · refine Fintype.sum_equiv contractedCoordinateEquiv _ _ ?_
     intro contractedCoordinate
     with_unfolding_all
-      grw (transparency := all) [Semantics.einsumProductTensor_get]
-      simp only [List.ofFn_succ, List.ofFn_zero, List.prod_cons,
-        List.prod_nil, Fin.cases_zero, Fin.cases_succ, mul_one]
+      grw (transparency := all) [Semantics.einsumProductTensor_get_ordered]
+      simp only [List.ofFn_succ, List.ofFn_zero, List.foldl_cons,
+        List.foldl_nil, Fin.cases_zero, Fin.cases_succ, one_mul]
       congr 1
       · congr 1
         unfold Check.CheckedEinsum.inputCoordinateOfGlobal
@@ -246,9 +246,9 @@ theorem einsum_diagonal_trace {dimension : Nat}
   · refine Fintype.sum_equiv diagonalCoordinateEquiv _ _ ?_
     intro diagonalCoordinate
     with_unfolding_all
-      grw (transparency := all) [Semantics.einsumProductTensor_get]
-      simp only [List.ofFn_succ, List.ofFn_zero, List.prod_cons,
-        List.prod_nil, Fin.cases_zero, mul_one, matrixEquiv_apply]
+      grw (transparency := all) [Semantics.einsumProductTensor_get_ordered]
+      simp only [List.ofFn_succ, List.ofFn_zero, List.foldl_cons,
+        List.foldl_nil, Fin.cases_zero, one_mul, matrixEquiv_apply]
       congr 1
       unfold Check.CheckedEinsum.inputCoordinateOfGlobal
       change
@@ -294,9 +294,9 @@ theorem einsum_row_sums (matrixTensor : Rep R [rows, columns])
   · refine Fintype.sum_equiv columnCoordinateEquiv _ _ ?_
     intro columnCoordinate
     with_unfolding_all
-      grw (transparency := all) [Semantics.einsumProductTensor_get]
-      simp only [List.ofFn_succ, List.ofFn_zero, List.prod_cons,
-        List.prod_nil, Fin.cases_zero, mul_one]
+      grw (transparency := all) [Semantics.einsumProductTensor_get_ordered]
+      simp only [List.ofFn_succ, List.ofFn_zero, List.foldl_cons,
+        List.foldl_nil, Fin.cases_zero, one_mul]
       congr 1
       unfold Check.CheckedEinsum.inputCoordinateOfGlobal
       change
@@ -339,9 +339,9 @@ theorem einsum_column_sums (matrixTensor : Rep R [rows, columns])
   · refine Fintype.sum_equiv rowCoordinateEquiv _ _ ?_
     intro rowCoordinate
     with_unfolding_all
-      grw (transparency := all) [Semantics.einsumProductTensor_get]
-      simp only [List.ofFn_succ, List.ofFn_zero, List.prod_cons,
-        List.prod_nil, Fin.cases_zero, mul_one]
+      grw (transparency := all) [Semantics.einsumProductTensor_get_ordered]
+      simp only [List.ofFn_succ, List.ofFn_zero, List.foldl_cons,
+        List.foldl_nil, Fin.cases_zero, one_mul]
       congr 1
       unfold Check.CheckedEinsum.inputCoordinateOfGlobal
       change

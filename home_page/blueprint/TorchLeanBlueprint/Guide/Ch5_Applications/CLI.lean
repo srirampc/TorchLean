@@ -19,8 +19,8 @@ TorchLean has two command dispatchers. `torchlean` runs models, demonstrations, 
 ```
 # Replace the placeholders with a registered command and its
 # own flags.
-lake exe torchlean <example> [flags...]
-lake exe verify -- <tool> [args...]
+scripts/lake.sh exe torchlean <example> [flags...]
+scripts/lake.sh exe verify -- <tool> [args...]
 ```
 
 Both commands can print numerical results. A training command's success means it completed its
@@ -32,8 +32,9 @@ The dispatch tables are ordinary Lean definitions:
 - {src "NN/Examples/Runner.lean"}[`NN/Examples/Runner.lean`] routes the `torchlean` subcommands;
 - {src "NN/Verification/CLI.lean"}[`NN/Verification/CLI.lean`] routes the `verify` tools.
 
-The transcripts illustrate these workflows. Help from your executable remains authoritative for
-command names and flags; numerical output and backend reports can change with the build.
+The commands below expose these workflows. Help from your executable remains authoritative for
+command names and flags. Terminal transcripts below are recorded examples; numerical output,
+banners, and backend reports can change with the build.
 
 # Discovering Commands
 
@@ -41,12 +42,13 @@ The dispatcher provides grouped help and a machine-readable list:
 
 ```terminal
 # Compare grouped help with the flat list used by scripts.
-lake exe torchlean --help
-lake exe torchlean --list
+scripts/lake.sh exe torchlean --help
+scripts/lake.sh exe torchlean --list
 ```
 
 `--help` explains the command groups and gives a starting path. `--list` prints exactly one
-registered command name per line, which is what you want in a script. Running `lake exe torchlean`
+registered command name per line, which is what you want in a script.
+Running `scripts/lake.sh exe torchlean`
 with no arguments prints the same help and exits with status `1`, so a bare invocation in a
 Makefile fails rather than silently doing nothing.
 
@@ -56,15 +58,15 @@ The help groups commands by the work they perform:
 TorchLean runnable examples
 
 Usage:
-  lake exe torchlean <example> [flags...]
-  lake exe torchlean --choose <example> [flags...]
-  lake exe torchlean <example> --help
-  lake exe torchlean --list
+  scripts/lake.sh exe torchlean <example> [flags...]
+  scripts/lake.sh exe torchlean --choose <example> [flags...]
+  scripts/lake.sh exe torchlean <example> --help
+  scripts/lake.sh exe torchlean --list
 
 Start here:
-  lake exe torchlean quickstart_tensors
-  lake exe torchlean quickstart_autograd
-  lake exe torchlean quickstart_mlp --steps 20
+  scripts/lake.sh exe torchlean quickstart_tensors
+  scripts/lake.sh exe torchlean quickstart_autograd
+  scripts/lake.sh exe torchlean quickstart_mlp --steps 20
 
 Quickstarts:
   quickstart_tensors - construct, transform, and print typed tensors
@@ -91,10 +93,12 @@ Sequence:
   mamba - train a compact Mamba-style sequence model
 
 Generative and operator learning:
-  autoencoder - train an image autoencoder
+  autoencoder - reconstruct a compact vector of CIFAR values
   mae - train a masked image autoencoder
   diffusion - train and sample an image diffusion model
   fno1d_burgers - learn the one-dimensional Burgers operator
+  pinn - train a neural field from an equation and boundary conditions
+  complex_regression - fit complex parameters using a real loss
 
 Reinforcement learning:
   ppo_cartpole - train and evaluate PPO on CartPole
@@ -103,7 +107,7 @@ Reinforcement learning:
   dqn_replay - inspect checked DQN replay-buffer behavior
 
 PyTorch interop:
-  pytorch_roundtrip - round-trip model weights through PyTorch
+  pytorch_roundtrip - export PyTorch source or import reference JSON weights
 
 Data:
   data_csv - load and validate supervised CSV tensors
@@ -126,15 +130,15 @@ Deep dives:
 
 Runtime flags:
   --choose                         ask for runtime choices before running
-  --device auto|cpu|cuda|rocm|metal|wasm|tpu|trainium|custom|external
+  --device auto|cpu|gpu|cuda|rocm|metal|wasm|tpu|trainium|custom|external
   --arithmetic native|ieee|complex
       arithmetic availability depends on the example; check its --help
   --execution eager|typed-graph
   --seed N
   --show-backend
 
-Verification commands live under `lake exe verify -- list`.
-Use `lake exe torchlean <example> --help` for command-specific flags.
+Verification commands live under `scripts/lake.sh exe verify -- list`.
+Use `scripts/lake.sh exe torchlean <example> --help` for command-specific flags.
 ```
 
 `--list` prints the registered command names with no grouping and no descriptions:
@@ -154,7 +158,7 @@ screen:
 ```terminal
 # An unknown name exercises dispatch before any model is
 # constructed.
-lake exe torchlean nosuchthing
+scripts/lake.sh exe torchlean nosuchthing
 ```
 
 ```
@@ -183,7 +187,7 @@ def main (args : List String) : IO Unit := do
 
   let trainer := Trainer.new model
     { flags.runtime with
-        objective := .meanSquaredError
+        objective := .mse
         optimizer := optim.adam { learningRate := 0.03 }
         seed := flags.seed }
   ...
@@ -199,8 +203,9 @@ helper in
 -- Each parser consumes its own flag and passes the
 -- remainder to the next parser.
 def parseFlags (exeName : String) (args : List String) (defaultSteps : Nat) : IO Flags := do
-  let (seed, args) ← CLI.seed exeName args
-  let (steps, args) ← CLI.positiveNatFlag exeName args "steps" defaultSteps
+  let (seed, args) ← CLI.orThrow exeName <| CLI.takeSeed args
+  let (steps, args) ← CLI.orThrow exeName <|
+    CLI.takePositiveNatFlag args exeName "steps" defaultSteps
   let runtime ← CLI.Trainer.parseCommandLine exeName args
   pure { seed, steps, runtime }
 ```
@@ -418,7 +423,7 @@ The normal form is:
 ```
 # Runtime and command-specific flags share the argument list
 # after the command.
-lake exe torchlean <subcommand> [runtime flags] [command flags]
+scripts/lake.sh exe torchlean <subcommand> [runtime flags] [command flags]
 ```
 
 For example:
@@ -426,7 +431,7 @@ For example:
 ```terminal
 # Select CPU execution while setting the training length and
 # initialization seed.
-lake exe torchlean quickstart_mlp \
+scripts/lake.sh exe torchlean quickstart_mlp \
   --device cpu --steps 20 --seed 2026
 ```
 
@@ -435,7 +440,7 @@ Runtime flags may also precede the subcommand:
 ```terminal
 # The dispatcher also accepts the runtime selection before
 # the command name.
-lake exe torchlean --device cpu quickstart_mlp \
+scripts/lake.sh exe torchlean --device cpu quickstart_mlp \
   --steps 20 --seed 2026
 ```
 
@@ -446,7 +451,7 @@ A leading separator is accepted for wrappers that require one:
 ```terminal
 # The separator is removed before the command parses its
 # remaining flags.
-lake exe torchlean -- quickstart_mlp --device cpu --steps 20
+scripts/lake.sh exe torchlean -- quickstart_mlp --device cpu --steps 20
 ```
 
 # Strict Parsing
@@ -456,7 +461,7 @@ The GridWorld command has a fixed source-level horizon and does not accept `--ro
 ```terminal
 # GridWorld does not accept this spelling of the rollout
 # option.
-lake exe torchlean ppo_gridworld \
+scripts/lake.sh exe torchlean ppo_gridworld \
   --device cpu --updates 1 --rollout 8
 ```
 
@@ -480,7 +485,7 @@ and `--y` for its training arrays, so the plausible-looking `--train-x` fails:
 ```terminal
 # A dataset option from another command is rejected by the
 # Burgers example.
-lake exe torchlean fno1d_burgers --train-x a.npy
+scripts/lake.sh exe torchlean fno1d_burgers --train-x a.npy
 ```
 
 ```terminal +output
@@ -525,11 +530,11 @@ only native arithmetic:
 ```terminal
 # Read the CNN-specific defaults before preparing image
 # batches.
-lake exe torchlean cnn --help
+scripts/lake.sh exe torchlean cnn --help
 ```
 
 ```
-Usage: lake exe torchlean cnn [options]
+Usage: scripts/lake.sh exe torchlean cnn [options]
 
 Data:
   --x PATH           feature/image NPY file
@@ -544,7 +549,7 @@ Training:
   --cuda-mem-watch N sample CUDA allocator state every N updates
 
 Runtime:
-  --device auto|cpu|cuda|rocm|metal|wasm|tpu|trainium|custom|external
+  --device auto|cpu|gpu|cuda|rocm|metal|wasm|tpu|trainium|custom|external
   --execution eager|typed-graph
   --arithmetic native
   --seed N --show-backend
@@ -560,7 +565,7 @@ planning targets in the backend registry, not completed runtimes, and asking for
 ```terminal
 # A known device name can still lack an implementation for
 # this command.
-lake exe torchlean quickstart_mlp --device rocm --steps 1
+scripts/lake.sh exe torchlean quickstart_mlp --device rocm --steps 1
 ```
 
 ```terminal +output
@@ -573,7 +578,7 @@ A name outside the registry fails differently, and lists the registry:
 ```terminal
 # An unknown device name fails during parsing rather than
 # backend execution.
-lake exe torchlean quickstart_mlp --device banana --steps 1
+scripts/lake.sh exe torchlean quickstart_mlp --device banana --steps 1
 ```
 
 ```terminal +output
@@ -595,28 +600,30 @@ CPU execution uses the ordinary build:
 ```terminal
 # Build the CPU configuration before asking the executable
 # to use CPU storage.
-lake build
-lake exe torchlean quickstart_mlp --device cpu --steps 20
+scripts/lake.sh build
+scripts/lake.sh exe torchlean quickstart_mlp --device cpu --steps 20
 ```
 
-Real CUDA execution must be compiled with the Lake option:
+CUDA execution requires a CUDA-enabled LibTorch SDK and the Lake option:
 
 ```terminal
-# Link the CUDA configuration before selecting CUDA at
-# runtime.
-lake -R -K cuda=true build
-lake -R -K cuda=true exe torchlean chargpt --device cuda \
+# Set this to the installed SDK before linking the CUDA configuration.
+export TORCHLEAN_LIBTORCH_HOME=/path/to/libtorch
+scripts/lake.sh -R -K cuda=true build
+scripts/lake.sh -R -K cuda=true exe torchlean chargpt --device cuda \
   --tiny-shakespeare --preset smoke
 ```
 
-Keep `-R` when changing a Lake configuration so affected native archives are rebuilt. Without
-`cuda=true`, TorchLean links portable CUDA stubs.
+The wrapper isolates CPU and CUDA build profiles; pass `-Kcuda=true` on each CUDA invocation.
+`-R` forces Lake to reconfigure the package. Without
+`cuda=true`, the CUDA symbols fail with a message to rebuild. The SDK, CUDA toolkit, and compiler
+must be compatible; {ref "gpu-and-cuda"}[GPU And CUDA] describes the native build.
 
 Add `--show-backend` to inspect what was selected:
 
 ```terminal
 # Inspect the capabilities compiled into this executable.
-lake exe torchlean quickstart_mlp --steps 1 --show-backend
+scripts/lake.sh exe torchlean quickstart_mlp --steps 1 --show-backend
 ```
 
 The report names, for each operation, its provider, trust level, VJP source, and reduction order,
@@ -662,22 +669,14 @@ workflows also accept `--arithmetic ieee`, which selects FloatLib's executable b
 ```terminal
 # Keep the model configuration fixed while changing the
 # arithmetic implementation.
-lake exe torchlean quickstart_mlp --steps 1
-lake exe torchlean quickstart_mlp --steps 1 --arithmetic ieee
+scripts/lake.sh exe torchlean quickstart_mlp --device cpu --steps 1 --seed 2026
+scripts/lake.sh exe torchlean quickstart_mlp --device cpu --steps 1 --seed 2026 --arithmetic ieee
 ```
 
-The following transcript predates the FloatLib migration and retains its recorded scalar labels
-and numerical results. Current `.ieee` execution uses FloatLib binary32.
-
-```
-steps=1 arithmetic=native scalar=Float32 loss=1.159370 -> 1.100337
-steps=1 arithmetic=ieee scalar=IEEE32Exec loss=1.159370 -> 1.100337
-```
-
-The two implementations agree to six printed decimals on this update. Native arithmetic executes
-hardware floating-point operations; FloatLib binary32 computes binary32 operations with rounding
-defined in Lean. Running both can expose a disagreement between the executable reference and
-the runtime, although this transcript neither compares every bit nor covers other inputs.
+Native arithmetic executes hardware floating-point operations; `--arithmetic ieee` selects
+`ExecFloat.Binary 8 23`, with binary32 rounding defined in FloatLib. Compare the reported losses
+and held-out prediction. Running both can expose a disagreement between the executable reference
+and the runtime, but matching decimal output alone does not compare every bit or cover other inputs.
 The proof statements
 and their assumptions are in {ref "fp32-soundness"}[Float32 Soundness];
 {ref "floats"}[Floating-Point Semantics] describes the scalar types {Informal.citep flocq2011}[].
@@ -687,7 +686,7 @@ A command that cannot implement the requested semantics says so instead of appro
 ```terminal
 # Complex arithmetic is not an available training mode for
 # this command.
-lake exe torchlean quickstart_mlp --steps 1 --arithmetic complex
+scripts/lake.sh exe torchlean quickstart_mlp --steps 1 --arithmetic complex
 ```
 
 ```terminal +output
@@ -712,8 +711,8 @@ complex GPU training benchmark.
 
 Device, arithmetic, and execution mode describe three choices: where tensor operations run,
 how scalar arithmetic is implemented, and how the program is evaluated. They are useful to
-record separately even when only some combinations are implemented. The two loss lines above
-come from a deliberately small comparison with the same training arguments. Reading a numerical
+record separately even when only some combinations are implemented. The two commands above
+make a deliberately small comparison with the same training arguments. Reading a numerical
 difference as an arithmetic effect requires keeping the initialization, data, optimizer settings,
 and number of updates fixed as well. A completed command establishes that its selected path ran;
 the printed loss describes that run's objective.
@@ -721,18 +720,18 @@ the printed loss describes that run's objective.
 # Execution Modes
 
 `--execution typed-graph` selects the shape-indexed graph host path for commands that implement it.
-The recorded MLP quickstart comparison used the same arguments for both paths:
+Compare it with eager execution using the same MLP quickstart arguments:
 
 ```terminal
 # Keep the training arguments fixed while comparing the two
 # execution modes.
-lake exe torchlean quickstart_mlp --steps 1 --execution eager
-lake exe torchlean quickstart_mlp --steps 1 --execution typed-graph
+scripts/lake.sh exe torchlean quickstart_mlp --device cpu --steps 1 --seed 2026 --execution eager
+scripts/lake.sh exe torchlean quickstart_mlp --device cpu --steps 1 --seed 2026 \
+  --execution typed-graph
 ```
 
-Both runs printed `loss=1.159370 -> 1.100337` and the same held-out prediction. This is one
-numerical comparison of the eager and typed-graph paths. The flag selects a shape-indexed
-host execution
+The initial loss, final loss, and held-out prediction let you compare the two paths on one update.
+The flag selects a shape-indexed host execution
 path; it does not request CUDA graph capture, compiler optimization, or a derivative proof.
 Some specialized CUDA applications require eager execution.
 {ref "execution-modes"}[Execution Modes] compares the paths.
@@ -744,14 +743,14 @@ Use `--choose` when running a command by hand and you do not want to remember th
 ```terminal
 # Choose the device interactively for the selected
 # quickstart command.
-lake exe torchlean --choose quickstart_mlp --steps 1
+scripts/lake.sh exe torchlean --choose quickstart_mlp --steps 1
 ```
 
 ```
 TorchLean runtime chooser
 Runtime device:
   1) CPU    portable default
-  2) CUDA   GPU runtime, requires `lake -R -K cuda=true exe ...`
+  2) CUDA   GPU runtime, requires `scripts/lake.sh -R -K cuda=true exe ...`
 Select device [1]:
 ```
 
@@ -766,7 +765,7 @@ invocations are handled without prompting. For example:
 ```terminal
 # A command with a fixed runtime can bypass the device
 # chooser.
-lake exe torchlean --choose quickstart_tensors
+scripts/lake.sh exe torchlean --choose quickstart_tensors
 ```
 
 This runs the tensor quickstart directly. An explicit `--device` is preserved and suppresses the
@@ -779,14 +778,14 @@ Ask the subcommand:
 ```terminal
 # Inspect the text model dimensions, data path, and
 # evaluation options together.
-lake exe torchlean chargpt --help
+scripts/lake.sh exe torchlean chargpt --help
 ```
 
 ```
 torchlean chargpt: character-level GPT training
 
 Usage:
-  lake -R -K cuda=true exe torchlean chargpt --device cuda --tiny-shakespeare \
+  scripts/lake.sh -R -K cuda=true exe torchlean chargpt --device cuda --tiny-shakespeare \
     --preset PRESET [flags]
 
 Presets:
@@ -886,7 +885,7 @@ Pass explicit paths when an output will be inspected later:
 
 ```terminal
 # Save the autoencoder training log at an explicit path.
-lake exe torchlean autoencoder --device cpu \
+scripts/lake.sh exe torchlean autoencoder --device cpu \
   --n-total 1 --steps 1 \
   --log /tmp/autoencoder-trainlog.json
 ```
@@ -894,7 +893,7 @@ lake exe torchlean autoencoder --device cpu \
 ```terminal
 # Keep the policy checkpoint, rollout record, and training
 # log as separate artifacts.
-lake exe torchlean ppo_gridworld --device cpu \
+scripts/lake.sh exe torchlean ppo_gridworld --device cpu \
   --updates 1 --eval-every 1 \
   --log /tmp/ppo-trainlog.json \
   --policy /tmp/ppo-policy.json \
@@ -903,7 +902,7 @@ lake exe torchlean ppo_gridworld --device cpu \
 
 ```terminal
 # Write the sampled image to the requested PPM file.
-lake -R -K cuda=true exe torchlean diffusion --device cuda \
+scripts/lake.sh -R -K cuda=true exe torchlean diffusion --device cuda \
   --dataset cifar10 --n-total 8 --steps 20 --T 20 \
   --sample-ppm /tmp/diffusion-sample.ppm
 ```
@@ -927,11 +926,11 @@ List the registry, then choose one workflow:
 ```terminal
 # Discover the checker names, then run the in-memory IBP
 # workflow explicitly.
-lake exe verify -- list
-lake exe verify -- torchlean-ibp
+scripts/lake.sh exe verify -- list
+scripts/lake.sh exe verify -- torchlean-ibp
 ```
 
-The registry currently holds 23 tools. Each row below is one `Tool` record in
+The registry currently holds 24 tools. Each row below is one `Tool` record in
 {src "NN/Verification/CLI.lean"}[`NN/Verification/CLI.lean`], and the last column is its
 `includeInAll` field:
 
@@ -974,8 +973,12 @@ The registry currently holds 23 tools. Each row below is one `Tool` record in
   * yes
 *
   * `abcrown-leaf`
-  * α,β-CROWN leaf artifact structure
+  * α,β-CROWN leaf artifact consistency
   * yes
+*
+  * `crown-query`
+  * exact rational CROWN output query
+  * no
 *
   * `margin-report`
   * consistency of an exported logit-bound report
@@ -1047,7 +1050,7 @@ the current process:
 ```terminal
 # This workflow builds and lowers its model inside the
 # current process.
-lake exe verify -- torchlean-ibp
+scripts/lake.sh exe verify -- torchlean-ibp
 ```
 
 ```terminal +output
@@ -1060,7 +1063,8 @@ output box hi: [2.256001]
 
 The workflow computes this box from its built-in model. An artifact checker such
 as `pinn-cert` or `abcrown-leaf` parses a file produced elsewhere and applies its declared
-checks. These differ: the α,β-CROWN leaf reader validates artifact structure, while a semantic
+checks. These differ: the α,β-CROWN leaf reader checks that the leaves cover the root and clear
+their thresholds without recomputing the bounds, while a semantic
 certificate checker must also establish the claimed bounds. This distinction matters for
 proof-carrying code
 {Informal.citep necula1997}[]: the producer may be untrusted as long as the consumer can check the
@@ -1072,10 +1076,10 @@ retroactively verify the process that produced the artifact.
 ```terminal
 # Run the registry entries whose includeInAll field is
 # enabled.
-lake exe verify -- all
+scripts/lake.sh exe verify -- all
 ```
 
-runs 10 of the 23 tools, one after another:
+runs 10 of the 24 tools, one after another:
 
 ```terminal +output
 == lirpa-mlp ==
@@ -1086,6 +1090,8 @@ IBP certificate verified: serialized bounds enclose Lean recomputation.
 ...
 == abcrown-leaf ==
 [artifact] Checked 1 leaves: ok=1, bad=0
+[artifact] consistent: the leaves cover the root and every leaf clears its threshold.
+[artifact] The lower bounds are the producer's claims; TorchLean did not recompute them.
 
 == margin-report ==
 [margin report] examples=360
@@ -1093,13 +1099,13 @@ IBP certificate verified: serialized bounds enclose Lean recomputation.
 [margin report] positive_margin=318
 ```
 
-The 13 tools it skips are the ones marked `no` above: interactive, externally dependent, or
+The 14 tools it skips are the ones marked `no` above: interactive, externally dependent, or
 long-running. That list includes every `torchlean-*` in-memory workflow, so a green `all` is not
 evidence that model lowering and bound propagation still work. Run those explicitly.
 
 `margin-report` reports a positive margin for 318 of 360 examples, and `all` still exits `0`.
 The tool checks report consistency; it does not require every example to have a positive margin.
-Likewise, the leaf reader's `ok=1` records acceptance under its structural checks. Interpret each
+Likewise, the leaf reader's `ok=1` records acceptance under its consistency checks. Interpret each
 message against the tool's contract before treating it as evidence of a semantic bound.
 
 `verify all` runs each included tool
@@ -1115,13 +1121,13 @@ After a fresh clone or a substantial local change, run these commands in order:
 ```terminal
 # Check elaboration, small executions, training, and
 # verification in sequence.
-lake build
-lake build NNExamples
-lake exe torchlean quickstart_tensors
-lake exe torchlean quickstart_autograd
-lake exe torchlean quickstart_mlp --device cpu --steps 20 --seed 2026
-lake exe torchlean numerical_certificate
-lake exe verify -- torchlean-ibp
+scripts/lake.sh build
+scripts/lake.sh build NNExamples
+scripts/lake.sh exe torchlean quickstart_tensors
+scripts/lake.sh exe torchlean quickstart_autograd
+scripts/lake.sh exe torchlean quickstart_mlp --device cpu --steps 20 --seed 2026
+scripts/lake.sh exe torchlean numerical_certificate
+scripts/lake.sh exe verify -- torchlean-ibp
 ```
 
 They answer different questions:
@@ -1131,10 +1137,10 @@ They answer different questions:
   * Command
   * Question
 *
-  * `lake build`
+  * `scripts/lake.sh build`
   * does the project elaborate and link?
 *
-  * `lake build NNExamples`
+  * `scripts/lake.sh build NNExamples`
   * do the curated examples elaborate?
 *
   * tensor/autograd quickstarts
@@ -1156,7 +1162,7 @@ and replay cases:
 ```terminal
 # Exercise both accepted certificates and the deliberately
 # tampered negative case.
-lake exe torchlean numerical_certificate
+scripts/lake.sh exe torchlean numerical_certificate
 ```
 
 ```terminal +output
@@ -1215,16 +1221,17 @@ still makes sense with them.
 
 # Command Exercises
 
-1. Run `lake exe torchlean --list | wc -l` and compare the count with the ten groups in `--help`.
+1. Run `scripts/lake.sh exe torchlean --list | wc -l` and account for the commands across the nine
+   groups in `--help`.
 2. Pick any training command and pass a flag from a different one. Read the message and identify
    which parser rejected it.
 3. Run one command twice with `--seed 1` and `--seed 2`, then twice with the same seed, and confirm
    which pairs agree exactly.
 4. Run `quickstart_mlp --steps 1` with `--arithmetic native` and `--arithmetic ieee` and diff the
-   two transcripts. Then try `--steps 200` and see whether the agreement survives.
+   two outputs. Then try `--steps 200` and compare the losses and predictions again.
 5. Redirect `--show-backend` output to a file and count the distinct `provider=` values.
-6. Run `lake exe verify -- all`, then run each `torchlean-*` tool by hand, and note how much of the
-   registry a green `all` left untouched.
+6. Run `scripts/lake.sh exe verify -- all`, then run each `torchlean-*` tool by hand, and note how
+   much of the registry a green `all` left untouched.
 7. Write a `--log` under a new directory and inspect the created parent directories. Then try a
    path whose parent is a regular file and inspect the reported write failure.
 

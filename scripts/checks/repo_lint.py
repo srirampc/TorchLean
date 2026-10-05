@@ -65,6 +65,15 @@ GENERATED_DOC_DIRS = {
 # TorchLean currently has no custom axioms.
 ALLOWED_AXIOMS: dict[str, set[str]] = {}
 
+# Visibility and attributes do not change an axiom's contribution to the trusted boundary.
+# Run this on masked Lean source so comments and string literals cannot create declarations.
+AXIOM_DECL_RE = re.compile(
+    r"^\s*(?:@\[[^\]]*\]\s*)*"
+    r"(?:(?:public|private|protected|noncomputable|unsafe)\s+)*"
+    r"axiom\s+([^\s:({]+)",
+    flags=re.MULTILINE,
+)
+
 # These modules were pure compatibility routes or duplicate import surfaces. New code must use the
 # canonical subsystem umbrellas and namespaces instead of recreating them.
 REMOVED_COMPATIBILITY_PATHS = {
@@ -871,7 +880,8 @@ PUBLIC_EXAMPLE_BANNED_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     ),
     (
         re.compile(r"\bfit\.fit\.predict(Batch)?\b"),
-        "public stream examples should use `trained.predict` / `trained.predictMany`; do not expose internal training state.",
+        "public stream examples should use `trained.predict`, with `(batch := true)` for batches; "
+        "do not expose internal training state.",
     ),
     (
         re.compile(r"\bfit\.curve\.values\b"),
@@ -920,10 +930,25 @@ PUBLIC_LAYOUT_NAME_RE = re.compile(
     r"(?:^|_)(?:chw|nchw|nhwc|hwc)(?:_|$))"
 )
 
-PUBLIC_IMPORT_RE = re.compile(
-    r"^\s*public\s+import\s+(?P<module>[A-Za-z0-9_.]+)\s*$",
+# Lean.Parser.Module.Syntax: optional public, optional meta, import, optional all, module.
+LEAN_IMPORT_RE = re.compile(
+    r"^[ \t]*(?P<directive>(?P<public>public[ \t]+)?(?:meta[ \t]+)?"
+    r"import[ \t]+(?:all[ \t]+)?(?P<module>[A-Za-z0-9_.']+))[ \t]*\r?$",
     flags=re.MULTILINE,
 )
+
+
+def _lean_import_header(masked: str) -> str:
+    """Keep module-header imports and their offsets, excluding imports inside body examples."""
+    lines: list[str] = []
+    for line in masked.splitlines(keepends=True):
+        stripped = line.strip()
+        if (not stripped or stripped in {"module", "prelude"}
+                or LEAN_IMPORT_RE.fullmatch(line.rstrip("\r\n"))):
+            lines.append(line)
+        else:
+            break
+    return "".join(lines)
 
 # Import-only API umbrellas should compose focused public modules. Re-exporting these implementation
 # roots makes runtime internals part of the user API by accident.
@@ -1045,10 +1070,6 @@ def _check_lean_target_coverage(findings: list[Finding]) -> None:
         for path in _iter_lean_files()
         if path == REPO_ROOT / "NN.lean" or path.is_relative_to(REPO_ROOT / "NN")
     }
-    import_re = re.compile(
-        r"^\s*(?:public\s+)?(?:meta\s+)?import\s+([A-Za-z0-9_.]+)",
-        flags=re.MULTILINE,
-    )
     imports: dict[str, list[str]] = {}
     for module, path in nn_files.items():
         try:
@@ -1056,7 +1077,11 @@ def _check_lean_target_coverage(findings: list[Finding]) -> None:
         except OSError:
             continue
         masked = _mask_lean_comments_and_strings(text)
-        imports[module] = [name for name in import_re.findall(masked) if name in nn_files]
+        imports[module] = [
+            match.group("module")
+            for match in LEAN_IMPORT_RE.finditer(_lean_import_header(masked))
+            if match.group("module") in nn_files
+        ]
 
     covered: set[str] = set()
     pending = list(LEAN_TYPECHECK_ROOTS)
@@ -1745,6 +1770,9 @@ def _render_docstring(block: list[str], snippet: list[str]) -> list[str]:
     else:
         body = [line[len(indent):] if line.startswith(indent) else line.lstrip()
                 for line in block[1:-1]]
+        opening = block[0].lstrip()[len("/--"):].strip()
+        if opening:
+            body.insert(0, opening)
         found = _fenced_example(body)
         if found is not None:
             body = body[: found[0]] + example + body[found[1] + 1:]
@@ -2532,8 +2560,6 @@ def lint_repo(*, fail_on_warn: bool) -> list[Finding]:
         ),
     ]
 
-    axiom_re = re.compile(r"^\s*axiom\s+([A-Za-z0-9_'.]+)\b", flags=re.MULTILINE)
-
     for path in _iter_lean_files():
         try:
             raw = path.read_bytes()
@@ -2737,29 +2763,15 @@ def lint_repo(*, fail_on_warn: bool) -> list[Finding]:
                 )
 
         import_directives: dict[str, int] = {}
-        import_re = re.compile(
-            r"^\s*((?:(?:public|private)\s+)?(?:meta\s+)?import\s+([A-Za-z0-9_.]+))\s*$",
-            flags=re.MULTILINE,
-        )
         # Lean module imports form one contiguous block at the start of a file. Restrict the
         # check to that block so `import ...` lines in Verso code examples are not mistaken for
         # dependencies of the documentation module itself.
-        import_header_lines: list[str] = []
-        saw_import = False
-        for header_line in masked.splitlines(keepends=True):
-            if import_re.fullmatch(header_line.rstrip("\r\n")):
-                saw_import = True
-                import_header_lines.append(header_line)
-            elif not saw_import or not header_line.strip():
-                import_header_lines.append(header_line)
-            else:
-                break
-        import_header = "".join(import_header_lines)
-        for match in import_re.finditer(import_header):
-            directive = " ".join(match.group(1).split())
-            module_name = match.group(2)
+        import_header = _lean_import_header(masked)
+        for match in LEAN_IMPORT_RE.finditer(import_header):
+            directive = " ".join(match.group("directive").split())
+            module_name = match.group("module")
             line, col = _line_col(text, match.start())
-            if rel.startswith("NN/CI/") and directive.startswith("public import"):
+            if rel.startswith("NN/CI/") and match.group("public"):
                 findings.append(
                     Finding(
                         "ERROR",
@@ -2786,7 +2798,9 @@ def lint_repo(*, fail_on_warn: bool) -> list[Finding]:
                 )
 
         if rel.startswith("NN/API") and TOP_LEVEL_API_DECL_RE.search(masked) is None:
-            for match in PUBLIC_IMPORT_RE.finditer(import_header):
+            for match in LEAN_IMPORT_RE.finditer(import_header):
+                if not match.group("public"):
+                    continue
                 module_name = match.group("module")
                 if (
                     module_name in BROAD_LOW_LEVEL_IMPORTS
@@ -2805,9 +2819,9 @@ def lint_repo(*, fail_on_warn: bool) -> list[Finding]:
                     )
 
         ownership_sensitive_cuda_modules = {
-            "NN/Runtime/Autograd/Engine/Cuda/Buffer.lean",
-            "NN/Runtime/Autograd/Engine/Cuda/Kernels.lean",
-            "NN/Runtime/Autograd/Engine/Cuda/ConvPool.lean",
+            "NN/Runtime/Autograd/Engine/LibTorch/Buffer.lean",
+            "NN/Runtime/Autograd/Engine/LibTorch/Kernels.lean",
+            "NN/Runtime/Autograd/Engine/LibTorch/ConvPool.lean",
         }
         if rel in ownership_sensitive_cuda_modules:
             unsafe_extern = re.compile(r"@\[(?![^\]]*\bnever_extract\b)[^\]]*\bextern\b[^\]]*\]")
@@ -2997,11 +3011,8 @@ def lint_repo(*, fail_on_warn: bool) -> list[Finding]:
                 )
             for m in re.finditer(r"\bList\s+Nat\b", masked):
                 line_start = masked.rfind("\n", 0, m.start()) + 1
-                line_end = masked.find("\n", m.end())
-                if line_end < 0:
-                    line_end = len(masked)
-                source_line = masked[line_start:line_end]
-                if "hiddenWidths" in source_line:
+                binder = masked[line_start:m.start()]
+                if re.search(r"\b(?:hiddenWidths|modelWidths)\s*:\s*$", binder):
                     continue
                 line, col = _line_col(text, m.start())
                 findings.append(
@@ -3013,7 +3024,7 @@ def lint_repo(*, fail_on_warn: bool) -> list[Finding]:
                         "public tensor and model geometry must use `Spec.Shape` for static "
                         "shape indices or `Tensor Nat [d]` for computed geometry, not `List Nat`; "
                         "ordinary lists are reserved for explicitly named recursive architecture "
-                        "plans such as `hiddenWidths`.",
+                        "plans named `hiddenWidths` or `modelWidths`.",
                     )
                 )
             for declaration in PUBLIC_DECL_RE.finditer(masked):
@@ -3107,7 +3118,7 @@ def lint_repo(*, fail_on_warn: bool) -> list[Finding]:
 
         # Axioms must be quarantined and named explicitly.
         allowed_axiom_names = ALLOWED_AXIOMS.get(rel, set())
-        for m in axiom_re.finditer(masked):
+        for m in AXIOM_DECL_RE.finditer(masked):
             axiom_name = m.group(1)
             if axiom_name not in allowed_axiom_names:
                 line, col = _line_col(text, m.start())

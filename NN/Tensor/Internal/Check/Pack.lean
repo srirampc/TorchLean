@@ -218,13 +218,8 @@ theorem input_size_eq_segment (checked : CheckedPack)
           checked.segmentLengths.get
               (checked.componentSegmentEquiv component) ::
             checked.trailingShape) := by
-  have hSegment :
-      checked.segmentLengths.get
-          (checked.componentSegmentEquiv component) =
-        Shape.size (checked.starShape component) := by
-    simp [componentSegmentEquiv]
-  rw [checked.input_size_eq_flattened]
-  rw [hSegment]
+  rw [checked.segmentLengths_get_componentSegmentEquiv]
+  exact checked.input_size_eq_flattened component
 
 end CheckedPack
 
@@ -380,13 +375,9 @@ namespace Pack.Impl
       if dimension = -1 then inferred else dimension.toNat
 
 /-- Find the first unpack dimension smaller than the permitted sentinel `-1`. -/
-@[expose] def firstInvalidRequestedDimension? :
-    RequestedShapes → Option Int
-  | [] => none
-  | requestedShape :: requestedShapes =>
-      match requestedShape.find? fun dimension => dimension < -1 with
-      | some invalid => some invalid
-      | none => firstInvalidRequestedDimension? requestedShapes
+@[expose] def firstInvalidRequestedDimension? (requestedShapes : RequestedShapes) : Option Int :=
+  requestedShapes.findSome? fun requestedShape =>
+    requestedShape.find? fun dimension => dimension < -1
 
 end Pack.Impl
 

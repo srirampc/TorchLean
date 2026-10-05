@@ -62,27 +62,12 @@ def parse
 end RunOptions
 
 /-- Training command options that also select a learning rate. -/
-structure OptimizerOptions where
-  /-- Number of optimizer updates. -/
-  steps : Nat
-  /-- Number of in-memory samples consumed by one optimizer update. -/
-  batchSize : Nat := 1
-  /-- Destination for the JSON training log. -/
-  logDestination : Runtime.Training.LogDestination
-  /-- Number of completed steps between CUDA allocator samples; `0` selects the default policy. -/
-  cudaMemorySampleEvery : Nat := 0
+structure OptimizerOptions extends RunOptions where
   /-- Learning rate passed to the command's optimizer constructor. -/
   learningRate : Float
 deriving Repr
 
 namespace OptimizerOptions
-
-/-- Step, batching, and logging settings without the optimizer learning rate. -/
-def toRunOptions (options : OptimizerOptions) : RunOptions :=
-  { steps := options.steps
-    batchSize := options.batchSize
-    logDestination := options.logDestination
-    cudaMemorySampleEvery := options.cudaMemorySampleEvery }
 
 /-- Parse run options followed by a positive `--lr` value. -/
 def parse
@@ -102,12 +87,7 @@ def parse
   let (learningRate, arguments) ←
     CLI.takePositiveFloatFlag arguments exeName "lr" (default := defaultLearningRate)
   pure
-    ({ steps := run.steps
-       batchSize := run.batchSize
-       logDestination := run.logDestination
-       cudaMemorySampleEvery := run.cudaMemorySampleEvery
-       learningRate },
-     arguments)
+    ({ toRunOptions := run, learningRate }, arguments)
 
 end OptimizerOptions
 

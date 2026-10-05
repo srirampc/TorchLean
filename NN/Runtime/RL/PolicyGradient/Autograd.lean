@@ -66,11 +66,17 @@ Input shapes:
 - `actionOneHot : (N × A)`
 
 Output shape:
-- `logProb : (N)` where `logProb[i] = log π(a_i | s_i)`.
+- `logProb : (N)` containing the selected clamped log-probability.
 
-Implementation note: this uses `logSoftmax` and a reduce-sum over the action axis.
+The log-softmax is clamped to `[-10^30, 10^30]` before it is multiplied by the one-hot mask. A
+logit of `-inf` has log-probability `-inf`, and without the clamp its unselected entry would
+contribute `0 * -inf = NaN` to the row sum. Log-probabilities are at most 0, so the clamp only
+changes values below `-10^30`, which a policy reaches only through infinite logits or logit gaps
+beyond `10^30`. Inside that range the clamp's derivative is 1, so gradients also agree with the
+unclamped formula. The guard requires `10^30` to be finite in `α`; it is ineffective for binary16,
+where the bound overflows. Rows whose log-softmax is NaN are not repaired.
 -/
-def actionLogProbOneHotBatch
+def actionLogProbOneHot
     {m : Type → Type} [Monad m] [Runtime.Autograd.Torch.Ops (m := m) (α := α)]
     {batch nActions : Nat} [NeZero batch] [NeZero nActions]
     (logits :
@@ -83,17 +89,24 @@ def actionLogProbOneHotBatch
   let _ : Shape.HasNonemptyAxis 1 s :=
     Shape.inferNonemptyAxis (by simp [s, Shape.rank])
   let logp ← F.logSoftmax (m := m) (α := α) (s := s) 1 logits
-  let masked ← mul (m := m) (α := α) (s := s) actionOneHot logp
+  let bound : α := ((10 ^ 30 : Nat) : α)
+  let finiteLogp ← clamp (m := m) (α := α) (s := s) logp (-bound) bound
+  let masked ← mul (m := m) (α := α) (s := s) actionOneHot finiteLogp
   reduceSum (m := m) (α := α) (s := s) (axis := 1) masked
 
 /--
-Mean entropy of a batched categorical policy.
+Mean categorical entropy with a clamped logarithmic factor.
 
-Input shape:
-- `logits : (N × A)`
+For `logp = logSoftmax(logits)` and `bound = (10^30 : α)`, this computes
+`mean_i[ -Σ_a exp(logp_i(a)) * clamp(logp_i(a), -bound, bound) ]`.
+Input shape is `(N × A)` and the output is scalar.
 
-Output shape:
-- scalar entropy mean: `mean_i[ -Σ_a p_i(a) log p_i(a) ]`.
+The expression agrees with ordinary entropy when the clamp is inactive. For Float and binary32,
+finite tails below the bound already exponentiate to zero, and the finite bound prevents
+`0 * -inf = NaN` in both forward and backward. This guard requires a finite representable bound:
+it is ineffective for binary16, where `10^30` overflows. Exact or wider-range carriers can have
+nonzero probabilities below the bound, so the clipped expression can differ from their entropy.
+Rows whose log-softmax is itself NaN are not repaired by this guard.
 -/
 def entropyMean
     {m : Type → Type} [Monad m] [Runtime.Autograd.Torch.Ops (m := m) (α := α)]
@@ -107,7 +120,9 @@ def entropyMean
     Shape.inferNonemptyAxis (by simp [s, Shape.rank])
   let logp ← F.logSoftmax (m := m) (α := α) (s := s) 1 logits
   let probs ← exp (m := m) (α := α) (s := s) logp
-  let plogp ← mul (m := m) (α := α) (s := s) probs logp
+  let bound : α := ((10 ^ 30 : Nat) : α)
+  let finiteLogp ← clamp (m := m) (α := α) (s := s) logp (-bound) bound
+  let plogp ← mul (m := m) (α := α) (s := s) probs finiteLogp
   let sumActions ← reduceSum (m := m) (α := α) (s := s) (axis := 1) plogp
   let entropyVec ← scale (m := m) (α := α) (s := .dim batch .scalar) sumActions (-1)
   Runtime.Autograd.Model.F.mean (m := m) (α := α) (s := .dim batch .scalar) entropyVec
@@ -120,8 +135,10 @@ PPO clipped surrogate objective (the thing to maximize), computed per sample:
 `L_clip_i = min(r_i * A_i, clip(r_i, 1-ε, 1+ε) * A_i)`
 
 where `r_i = exp(logπ_new(a_i|s_i) - logπ_old(a_i|s_i))`.
+The new log-probability uses `actionLogProbOneHot`'s clamp. Cached old values must use the same
+clamp, with matching reductions, for the ratio to equal one at identical policy parameters.
 -/
-def ppoClippedObjectiveBatch
+def ppoClippedObjective
     {m : Type → Type} [Monad m] [Runtime.Autograd.Torch.Ops (m := m) (α := α)]
     {batch nActions : Nat} [NeZero batch] [NeZero nActions]
     (newLogits :
@@ -134,7 +151,7 @@ def ppoClippedObjectiveBatch
     m (Runtime.Autograd.Model.RefTy (m := m) (α := α) (.dim batch .scalar)) := do
   let sVec : Shape := .dim batch .scalar
   let newLogProb ←
-    actionLogProbOneHotBatch (m := m) (α := α) (batch := batch) (nActions := nActions)
+    actionLogProbOneHot (m := m) (α := α) (batch := batch) (nActions := nActions)
       newLogits actionOneHot
   let diff ← sub (m := m) (α := α) (s := sVec) newLogProb oldLogProb
   let ratio ← exp (m := m) (α := α) (s := sVec) diff
@@ -151,7 +168,7 @@ PPO scalar loss to *minimize* (mean over batch):
 
 This is the standard discrete-action PPO loss used in many reference implementations.
 -/
-def ppoLossBatch
+def ppoLoss
     {m : Type → Type} [Monad m] [Runtime.Autograd.Torch.Ops (m := m) (α := α)]
     {batch nActions : Nat} [NeZero batch] [NeZero nActions]
     (newLogits :
@@ -167,7 +184,7 @@ def ppoLossBatch
     (entropyCoef : α := (1 : α) / ((100 : Nat) : α)) :
     m (Runtime.Autograd.Model.RefTy (m := m) (α := α) Shape.scalar) := do
   let obj ←
-    ppoClippedObjectiveBatch (m := m) (α := α) (batch := batch) (nActions := nActions)
+    ppoClippedObjective (m := m) (α := α) (batch := batch) (nActions := nActions)
       newLogits actionOneHot oldLogProb advantage (clipEps := clipEps)
   let objMean ← Runtime.Autograd.Model.F.mean (m := m) (α := α) (s := .dim batch .scalar) obj
   let policyLoss ← scale (m := m) (α := α) (s := Shape.scalar) objMean (-1)
@@ -245,7 +262,7 @@ def ppoActorCriticObjectiveDef
               let values ←
                 Runtime.Autograd.Model.Layers.Seq.forwardState
                   (model := critic) (α := α) (m := m) .train psCritic states
-              ppoLossBatch (m := m) (α := α) (batch := batch) (nActions := nActions)
+              ppoLoss (m := m) (α := α) (batch := batch) (nActions := nActions)
                 logits actionsOneHot oldLogProb advantages values valueTarget))
   }
 

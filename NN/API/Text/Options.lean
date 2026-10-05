@@ -72,9 +72,6 @@ Display-only: this does not change tokenizer semantics. Quotes and backslashes u
 escapes, common whitespace controls use `\\n`, `\\r`, and `\\t`, and every other ASCII control
 character is written as `\\xNN`. Thus byte-token predictions cannot turn a log into a binary file.
 
-The argument is called `fragment` rather than `text` so it cannot shadow the `text` namespace inside
-the body; a local named `text` makes every `text.foo` spelling in scope resolve to a field access
-instead, which is a genuinely confusing error to read.
 -/
 def escape (fragment : String) : String :=
   let hexDigit := fun n =>
@@ -134,29 +131,24 @@ structure GenerationOptions where
   asciiOnly : Bool
 deriving Repr
 
-namespace Internal
+namespace GenerationOptions
 
 /--
-Parse `--ascii-only`, accepting either a bare flag or a `true`/`false` value.
-
-Internal on purpose: `GenerationOptions.parse` is the entry point, and parsing this flag on its own
-would let a command accept it without recording it in the training log.
+Require a finite nonnegative repetition penalty and, for sampling, a finite positive temperature.
+Greedy decoding (`topK = 1`) ignores temperature.
 -/
-def parseAsciiOnlyFlag (exeName : String) (arguments : List String) (default : Bool) :
-    Except String (Bool × List String) := do
-  match TorchLean.CLI.takeSwitch arguments "ascii-only" (default := default) with
-  | .ok result => pure result
-  | .error e => throw s!"{exeName}: {e}"
-
-end Internal
-
-namespace GenerationOptions
+def validate (options : GenerationOptions) : Except String Unit := do
+  unless options.repeatPenalty.isFinite && 0.0 <= options.repeatPenalty do
+    throw "generation repeat penalty must be finite and nonnegative"
+  unless options.topK = 1 || (options.temperature.isFinite && 0.0 < options.temperature) do
+    throw "generation temperature must be finite and positive"
 
 /--
 Parse the generation flags shared by GPT-style examples.
 
 The model command supplies its concrete default prompt and sampling policy. This parser owns only
-the stable generation flags and returns arguments belonging to the caller.
+the stable generation flags and returns arguments belonging to the caller. Validation uses the
+selected policy, so greedy decoding ignores any numerically parsed temperature.
 -/
 def parse
     (exeName : String)
@@ -168,27 +160,28 @@ def parse
   let (newTokenCount, arguments) ←
     TorchLean.CLI.takeNatFlag arguments "generate" (default := defaults.newTokenCount)
   let (temperature, arguments) ←
-    TorchLean.CLI.takePositiveFloatFlag
-      arguments exeName "temperature" (default := defaults.temperature)
+    TorchLean.CLI.takeFloatFlag arguments "temperature" (default := defaults.temperature)
   let (topK, arguments) ← TorchLean.CLI.takeNatFlag arguments "top-k" (default := defaults.topK)
   let (repeatPenalty, arguments) ←
-    TorchLean.CLI.takeNonnegativeFloatFlag
-      arguments exeName "repeat-penalty" (default := defaults.repeatPenalty)
+    TorchLean.CLI.takeFloatFlag arguments "repeat-penalty" (default := defaults.repeatPenalty)
   let (repeatWindow, arguments) ←
     TorchLean.CLI.takeNatFlag arguments "repeat-window" (default := defaults.repeatWindow)
   let (seed, arguments) ←
     TorchLean.CLI.takeNatFlag arguments "sample-seed" (default := defaults.seed)
-  let (asciiOnly, arguments) ← Internal.parseAsciiOnlyFlag exeName arguments defaults.asciiOnly
-  pure
-    ({ prompt
-       newTokenCount
-       temperature
-       topK
-       repeatPenalty
-       repeatWindow
-       seed
-       asciiOnly },
-     arguments)
+  let (asciiOnly, arguments) ←
+    (CLI.takeSwitch arguments "ascii-only" (default := defaults.asciiOnly)).mapError
+      (fun message => s!"{exeName}: {message}")
+  let options : GenerationOptions :=
+    { prompt
+      newTokenCount
+      temperature
+      topK
+      repeatPenalty
+      repeatWindow
+      seed
+      asciiOnly }
+  options.validate.mapError (fun message => s!"{exeName}: {message}")
+  pure (options, arguments)
 
 end GenerationOptions
 
@@ -216,30 +209,12 @@ def parse
 
 end CorpusFileOptions
 
-/-- Optional text-corpus path selected by `--data-file`, with caller-supplied default. -/
-structure CorpusPathOptions where
-  /-- Local text corpus path. -/
-  path : System.FilePath
-deriving Repr
-
-namespace CorpusPathOptions
-
-/-- Parse an optional `--data-file` flag using the supplied default path. -/
-def parse
-    (arguments : List String)
-    (defaultPath : System.FilePath) :
-    Except String (CorpusPathOptions × List String) := do
-  let (path, arguments) ← TorchLean.CLI.takePathFlag arguments "data-file" (default := defaultPath)
-  pure ({ path := path }, arguments)
-
-end CorpusPathOptions
-
 /-- Optional second corpus pass after the main training run. -/
 structure FinetuneOptions where
   /-- Optional corpus used for a second fine-tuning pass. -/
-  finetuneFile? : Option System.FilePath
+  file? : Option System.FilePath
   /-- Number of optimizer steps used on that second corpus when present. -/
-  finetuneSteps : Nat
+  steps : Nat
 deriving Repr
 
 namespace FinetuneOptions
@@ -253,11 +228,10 @@ def parse
     (arguments : List String)
     (defaultSteps : Nat) :
     Except String (FinetuneOptions × List String) := do
-  let (finetuneFile?, arguments) ← TorchLean.CLI.takePathFlag? arguments "finetune-file"
-  let (finetuneSteps, arguments) ←
+  let (file?, arguments) ← TorchLean.CLI.takePathFlag? arguments "finetune-file"
+  let (steps, arguments) ←
     TorchLean.CLI.takeNatFlag arguments "finetune-steps" (default := defaultSteps)
-  pure ({ finetuneFile? := finetuneFile?
-          finetuneSteps := finetuneSteps }, arguments)
+  pure ({ file?, steps }, arguments)
 
 end FinetuneOptions
 
@@ -288,23 +262,6 @@ def parse
   pure ({ vocabularyFile?, mergesFile?, maximumCharacters? }, arguments)
 
 end BpeCorpusOptions
-
-/-- Shared terminal-REPL toggle used by interactive text examples. -/
-structure InteractiveOptions where
-  /-- Keep the trained model alive and read prompts from stdin. -/
-  interactive : Bool
-deriving Repr
-
-namespace InteractiveOptions
-
-/-- Parse the shared `--interactive` flag used by text examples with a terminal prompt loop. -/
-def parse
-    (arguments : List String) :
-    Except String (InteractiveOptions × List String) := do
-  let (interactive, arguments) ← TorchLean.CLI.takeBoolFlag arguments "interactive"
-  pure ({ interactive := interactive }, arguments)
-
-end InteractiveOptions
 
 /-- Shared prompt plus continuation-length options for simple text-generation commands. -/
 structure PromptGenerationOptions where
@@ -413,26 +370,6 @@ def writePrompt
 end Log
 
 /-! ## Text Training Option Combinators -/
-
-/-- Number of corpus windows used by a finite or cyclic text-training command. -/
-structure WindowOptions where
-  /-- Number of windows available to the training sampler. -/
-  windowCount : Nat
-deriving Repr
-
-namespace WindowOptions
-
-/-- Parse a positive `--windows` value. -/
-def parse
-    (exeName : String)
-    (arguments : List String)
-    (defaultWindows : Nat) :
-    Except String (WindowOptions × List String) := do
-  let (windowCount, arguments) ←
-    TorchLean.CLI.takePositiveNatFlag arguments exeName "windows" (default := defaultWindows)
-  pure ({ windowCount }, arguments)
-
-end WindowOptions
 
 /-- Optional model-checkpoint paths for text training and generation. -/
 structure CheckpointOptions where

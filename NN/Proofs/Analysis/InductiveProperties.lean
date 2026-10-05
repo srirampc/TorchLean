@@ -44,6 +44,7 @@ namespace Proofs
 open Spec TorchLean
 open TorchLean TorchLean.Tensor
 open Shape
+open scoped BigOperators
 
 -- ====================================================================
 -- DIMENSIONAL INDUCTION PATTERNS
@@ -112,34 +113,25 @@ theorem l2_norm_concatenation {n : Nat} {s : Shape}
   (tensorL2Norm (Tensor.dim f))^2 =
   (List.finRange n).foldl (fun acc i => acc + (tensorL2Norm (f i))^2) 0 := by
   classical
-  have l2_sq : ∀ {s : Shape} (t : Tensor ℝ s), (tensorL2Norm t)^2 = tensorNormSquared t := by
-    intro s t
-    simp [tensorL2Norm, Real.sq_sqrt (tensor_norm_squared_nonneg (tensor := t))]
   calc
-    (tensorL2Norm (Tensor.dim f))^2 = tensorNormSquared (Tensor.dim f) := l2_sq (t := Tensor.dim
-      f)
+    (tensorL2Norm (Tensor.dim f))^2 = tensorNormSquared (Tensor.dim f) := sq_tensorL2Norm _
     _ = (Finset.univ : Finset (Fin n)).sum (fun i => tensorNormSquared (f i)) := by
       calc
         tensorNormSquared (Tensor.dim f) = sumSpec (Tensor.dim (fun i => mulSpec (f i) (f i)))
           := by
             simp [tensorNormSquared, Spec.dot, TorchLean.Tensor.mulSpec]
         _ = (Finset.univ : Finset (Fin n)).sum (fun i => sumSpec (mulSpec (f i) (f i))) := by
-          -- Use the canonical lemma from `NN/Proofs/Tensor/Basic.lean` instead of duplicating the
-          -- outer-fold-to-`Finset.sum` proof here.
-            simpa [Spec.get] using
-              (Spec.sum_spec_dim (t := Tensor.dim (fun i => mulSpec (f i) (f i))))
+          -- `sum_spec_dim` (`NN/Proofs/Tensor/Basic/Folds.lean`) is the outer-fold-to-sum step.
+          simpa [Spec.get] using
+            (Spec.sum_spec_dim (t := Tensor.dim (fun i => mulSpec (f i) (f i))))
         _ = (Finset.univ : Finset (Fin n)).sum (fun i => tensorNormSquared (f i)) := by
           refine Finset.sum_congr rfl ?_
           intro i _
           rfl
-    _ = (Finset.univ : Finset (Fin n)).sum (fun i => (tensorL2Norm (f i))^2) := by
-      refine Finset.sum_congr rfl ?_
-      intro i _
-      simpa using (l2_sq (t := f i)).symm
-    _ = (List.finRange n).foldl (fun acc i => acc + (tensorL2Norm (f i))^2) 0 := by
-      simpa using
-        (List.finRange_foldl_add_eq_finset_sum (f := fun i : Fin n => (tensorL2Norm (f
-          i))^2)).symm
+    _ = (Finset.univ : Finset (Fin n)).sum (fun i => (tensorL2Norm (f i))^2) :=
+      Finset.sum_congr rfl fun i _ => (sq_tensorL2Norm (f i)).symm
+    _ = (List.finRange n).foldl (fun acc i => acc + (tensorL2Norm (f i))^2) 0 :=
+      (List.finRange_foldl_add_eq_finset_sum fun i : Fin n => (tensorL2Norm (f i))^2).symm
 
 /--
 Component-wise bounds extend to full tensors.
@@ -150,136 +142,43 @@ theorem componentwise_bound_extension {n : Nat} {s : Shape}
   (h : ∀ i : Fin n, tensorL2Norm (f i) ≤ C * tensorL2Norm (g i)) :
   tensorL2Norm (Tensor.dim f) ≤ C * tensorL2Norm (Tensor.dim g) := by
   classical
+  -- The squared norm of a stacked tensor is the sum of the squared component norms.
+  have hSf : (tensorL2Norm (Tensor.dim f))^2 = ∑ i, (tensorL2Norm (f i))^2 := by
+    rw [l2_norm_concatenation]
+    exact List.finRange_foldl_add_eq_finset_sum fun i => (tensorL2Norm (f i))^2
+  have hSg : (tensorL2Norm (Tensor.dim g))^2 = ∑ i, (tensorL2Norm (g i))^2 := by
+    rw [l2_norm_concatenation]
+    exact List.finRange_foldl_add_eq_finset_sum fun i => (tensorL2Norm (g i))^2
   by_cases hC : 0 ≤ C
-  · -- Compare squares and use `le_of_sq_le_sq` (RHS nonnegative).
-    have hSf :
-        (tensorL2Norm (Tensor.dim f))^2 =
-          (Finset.univ : Finset (Fin n)).sum (fun i => (tensorL2Norm (f i))^2) := by
-      calc
-        (tensorL2Norm (Tensor.dim f))^2 =
-            (List.finRange n).foldl (fun acc i => acc + (tensorL2Norm (f i))^2) 0 := by
-              simpa using (l2_norm_concatenation (f := f))
-        _ = (Finset.univ : Finset (Fin n)).sum (fun i => (tensorL2Norm (f i))^2) := by
-          simpa using
-            (List.finRange_foldl_add_eq_finset_sum (f := fun i : Fin n => (tensorL2Norm (f i))^2))
-    have hSg :
-        (tensorL2Norm (Tensor.dim g))^2 =
-          (Finset.univ : Finset (Fin n)).sum (fun i => (tensorL2Norm (g i))^2) := by
-      calc
-        (tensorL2Norm (Tensor.dim g))^2 =
-            (List.finRange n).foldl (fun acc i => acc + (tensorL2Norm (g i))^2) 0 := by
-              simpa using (l2_norm_concatenation (f := g))
-        _ = (Finset.univ : Finset (Fin n)).sum (fun i => (tensorL2Norm (g i))^2) := by
-          simpa using
-            (List.finRange_foldl_add_eq_finset_sum (f := fun i : Fin n => (tensorL2Norm (g i))^2))
-
-    have h_term :
-        ∀ i : Fin n, (tensorL2Norm (f i))^2 ≤ C^2 * (tensorL2Norm (g i))^2 := by
-      intro i
-      have hi := h i
-      have hf_nonneg : 0 ≤ tensorL2Norm (f i) := by
-        simpa [ge_iff_le] using tensor_l2_norm_nonneg (t := f i)
-      have hg_nonneg : 0 ≤ tensorL2Norm (g i) := by
-        simpa [ge_iff_le] using tensor_l2_norm_nonneg (t := g i)
-      have hCg_nonneg : 0 ≤ C * tensorL2Norm (g i) := mul_nonneg hC hg_nonneg
-      have hsq :
-          (tensorL2Norm (f i))^2 ≤ (C * tensorL2Norm (g i))^2 := by
-        have hmul :
-            tensorL2Norm (f i) * tensorL2Norm (f i) ≤
-              (C * tensorL2Norm (g i)) * (C * tensorL2Norm (g i)) :=
-          mul_le_mul hi hi hf_nonneg hCg_nonneg
-        simpa [pow_two] using hmul
-      simpa [mul_pow] using hsq
-
+  · -- Compare squares; the right-hand side is nonnegative.
     have hsquared :
         (tensorL2Norm (Tensor.dim f))^2 ≤ (C * tensorL2Norm (Tensor.dim g))^2 := by
-      -- Convert to `Finset` sums and bound termwise.
-      rw [hSf]
-      simp [mul_pow]
-      rw [hSg]
-      have hsum :
-          (Finset.univ : Finset (Fin n)).sum (fun i => (tensorL2Norm (f i))^2) ≤
-            (Finset.univ : Finset (Fin n)).sum (fun i => C^2 * (tensorL2Norm (g i))^2) := by
-        refine Finset.sum_le_sum ?_
-        intro i _
-        exact h_term i
-      calc
-        (Finset.univ : Finset (Fin n)).sum (fun i => (tensorL2Norm (f i))^2)
-            ≤ (Finset.univ : Finset (Fin n)).sum (fun i => C^2 * (tensorL2Norm (g i))^2) := hsum
-        _ = C^2 * (Finset.univ : Finset (Fin n)).sum (fun i => (tensorL2Norm (g i))^2) := by
-          simpa using
-            (Finset.mul_sum (s := (Finset.univ : Finset (Fin n)))
-              (f := fun i : Fin n => (tensorL2Norm (g i))^2) (a := C^2)).symm
-
-    have hR_nonneg : 0 ≤ C * tensorL2Norm (Tensor.dim g) := by
-      have hg_nonneg : 0 ≤ tensorL2Norm (Tensor.dim g) := by
-        simpa [ge_iff_le] using tensor_l2_norm_nonneg (t := Tensor.dim g)
-      exact mul_nonneg hC hg_nonneg
-    exact le_of_sq_le_sq hsquared hR_nonneg
-
-  · -- If `C < 0`, the hypotheses force both sides to be zero.
+      rw [mul_pow, hSf, hSg, Finset.mul_sum]
+      refine Finset.sum_le_sum fun i _ => ?_
+      rw [← mul_pow]
+      simpa only [sq] using mul_self_le_mul_self (tensor_l2_norm_nonneg (f i)) (h i)
+    exact le_of_sq_le_sq hsquared (mul_nonneg hC (tensor_l2_norm_nonneg _))
+  · -- If `C < 0`, every component norm vanishes, hence so do both stacked norms.
     have hCneg : C < 0 := lt_of_not_ge hC
-
     have hg_norm0 : ∀ i : Fin n, tensorL2Norm (g i) = 0 := by
       intro i
-      have hf_nonneg : 0 ≤ tensorL2Norm (f i) := by
-        simpa [ge_iff_le] using tensor_l2_norm_nonneg (t := f i)
-      have hCg_nonneg : 0 ≤ C * tensorL2Norm (g i) := le_trans hf_nonneg (h i)
-      have hg_nonneg : 0 ≤ tensorL2Norm (g i) := by
-        simpa [ge_iff_le] using tensor_l2_norm_nonneg (t := g i)
+      have hCg_nonneg : 0 ≤ C * tensorL2Norm (g i) :=
+        le_trans (tensor_l2_norm_nonneg (f i)) (h i)
       have hCg_nonpos : C * tensorL2Norm (g i) ≤ 0 :=
-        mul_nonpos_of_nonpos_of_nonneg (le_of_lt hCneg) hg_nonneg
-      have hCg0 : C * tensorL2Norm (g i) = 0 := le_antisymm hCg_nonpos hCg_nonneg
-      have hCne : C ≠ 0 := ne_of_lt hCneg
-      rcases (mul_eq_zero.mp hCg0) with hC0 | hg0
-      · exact (hCne hC0).elim
+        mul_nonpos_of_nonpos_of_nonneg hCneg.le (tensor_l2_norm_nonneg (g i))
+      rcases mul_eq_zero.mp (le_antisymm hCg_nonpos hCg_nonneg) with hC0 | hg0
+      · exact (hCneg.ne hC0).elim
       · exact hg0
-
     have hf_norm0 : ∀ i : Fin n, tensorL2Norm (f i) = 0 := by
       intro i
-      have hg0 := hg_norm0 i
-      have hf_nonneg : 0 ≤ tensorL2Norm (f i) := by
-        simpa [ge_iff_le] using tensor_l2_norm_nonneg (t := f i)
-      have hf_le0 : tensorL2Norm (f i) ≤ 0 := by simpa [hg0] using (h i)
-      exact le_antisymm hf_le0 hf_nonneg
-
-    have hg0 : ∀ i : Fin n, g i = Tensor.full s (0 : ℝ) := by
-      intro i
-      exact (tensor_l2_norm_zero_iff (t := g i)).1 (hg_norm0 i)
-    have hf0 : ∀ i : Fin n, f i = Tensor.full s (0 : ℝ) := by
-      intro i
-      exact (tensor_l2_norm_zero_iff (t := f i)).1 (hf_norm0 i)
-
-    have hg_dim : Tensor.dim g = Tensor.full (.dim n s) (0 : ℝ) := by
-      have : g = (fun _ : Fin n => Tensor.full s (0 : ℝ)) := by
-        funext i
-        exact hg0 i
-      rw [this]
-      calc
-        Tensor.dim (fun _ : Fin n => Tensor.full s (0 : ℝ)) =
-            Tensor.dim (Tensor.unstack (Tensor.full (.dim n s) (0 : ℝ))) := by
-          congr 1
-          funext i
-          simpa only [Spec.get] using (Spec.get_full n s (0 : ℝ) i).symm
-        _ = Tensor.full (.dim n s) (0 : ℝ) := Tensor.dim_unstack _
-
-    have hf_dim : Tensor.dim f = Tensor.full (.dim n s) (0 : ℝ) := by
-      have : f = (fun _ : Fin n => Tensor.full s (0 : ℝ)) := by
-        funext i
-        exact hf0 i
-      rw [this]
-      calc
-        Tensor.dim (fun _ : Fin n => Tensor.full s (0 : ℝ)) =
-            Tensor.dim (Tensor.unstack (Tensor.full (.dim n s) (0 : ℝ))) := by
-          congr 1
-          funext i
-          simpa only [Spec.get] using (Spec.get_full n s (0 : ℝ) i).symm
-        _ = Tensor.full (.dim n s) (0 : ℝ) := Tensor.dim_unstack _
-
+      have hf_le0 : tensorL2Norm (f i) ≤ 0 := by simpa [hg_norm0 i] using h i
+      exact le_antisymm hf_le0 (tensor_l2_norm_nonneg (f i))
     have nf0 : tensorL2Norm (Tensor.dim f) = 0 :=
-      (tensor_l2_norm_zero_iff (t := Tensor.dim f)).2 hf_dim
+      (pow_eq_zero_iff two_ne_zero).1
+        (hSf.trans (Finset.sum_eq_zero fun i _ => by simp [hf_norm0 i]))
     have ng0 : tensorL2Norm (Tensor.dim g) = 0 :=
-      (tensor_l2_norm_zero_iff (t := Tensor.dim g)).2 hg_dim
+      (pow_eq_zero_iff two_ne_zero).1
+        (hSg.trans (Finset.sum_eq_zero fun i _ => by simp [hg_norm0 i]))
     simp [nf0, ng0]
 
 -- ====================================================================
@@ -372,32 +271,6 @@ theorem sigmoid_bounds_inductive {s : Shape} (t : Tensor ℝ s) :
       · simp only [h, dite_true]
         simpa using ih ⟨head, h⟩ tail
       · simp [h]
-
--- ====================================================================
--- LINEAR TRANSFORMATION INDUCTIVE PROPERTIES
--- ====================================================================
-
-/--
-Matrix-vector multiplication dimension consistency.
-Proves output dimensions are correct regardless of input tensor structure.
--/
-theorem matvec_dimension_consistency {m n : Nat}
-  (A : Tensor ℝ [m, n])
-  (x : Tensor ℝ [n]) :
-  shapeOf (matVecMulSpec A x) = .dim m .scalar := by
-  exact shapeOf_eq_shape (matVecMulSpec A x)
-
-/--
-Linear transformation preserves tensor structure inductively.
-Shows that linearity holds component-wise across all dimensions.
--/
-theorem linear_structure_preservation {m n : Nat}
-  (A : Tensor ℝ [m, n]) :
-  ∀ (x y : Tensor ℝ [n]) (a b : ℝ),
-  matVecMulSpec A (addSpec (scaleSpec x a) (scaleSpec y b)) =
-  addSpec (scaleSpec (matVecMulSpec A x) a) (scaleSpec (matVecMulSpec A y) b) := by
-  intro x y a b
-  simpa using (Spec.mat_vec_linear_combination (W := A) (x := x) (y := y) (a := a) (b := b))
 
 -- ====================================================================
 -- COMPOSITION INDUCTIVE THEOREMS

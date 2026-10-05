@@ -141,23 +141,20 @@ theorem componentOffset_eq_sum_take (checked : Check.CheckedPack)
     (component : Fin checked.inputShapes.length) :
     componentOffset checked component =
       (checked.segmentLengths.take component.val).sum := by
-  unfold componentOffset
   let segment := checked.componentSegmentEquiv component
-  have sum_fin_get_eq_sum_take (xs : List Nat) (n : Nat)
-      (h : n ≤ xs.length) :
-      (∑ index : Fin n,
-        xs.get ⟨index.val, Nat.lt_of_lt_of_le index.isLt h⟩) =
-        (xs.take n).sum := by
-    induction n with
-    | zero => simp
-    | succ n ih =>
-        rw [Fin.sum_univ_castSucc]
-        rw [List.sum_take_succ xs n (Nat.lt_of_succ_le h)]
-        simpa using ih (Nat.le_trans (Nat.le_succ n) h)
-  have h :=
-    sum_fin_get_eq_sum_take
-      checked.segmentLengths segment.val segment.isLt.le
-  simpa [segment] using h
+  have hLength :
+      (checked.segmentLengths.take segment.val).length = segment.val :=
+    List.length_take_of_le segment.isLt.le
+  unfold componentOffset
+  calc
+    _ = ∑ index : Fin (checked.segmentLengths.take segment.val).length,
+        (checked.segmentLengths.take segment.val)[index.val] := by
+      refine Fintype.sum_equiv (finCongr hLength.symm) _ _ ?_
+      intro index
+      simp only [List.get_eq_getElem, finCongr_apply_coe, List.getElem_take, Fin.val_castLE]
+    _ = _ := by
+      simpa only [segment, checked.componentSegmentEquiv_val] using
+        Fin.sum_univ_getElem (checked.segmentLengths.take segment.val)
 
 /--
 Compute a packed flat index directly from one component's flat index.
@@ -240,7 +237,7 @@ theorem unpackDirectLinearIndex_row_column
         _ = (row + 1) * (trailingSize * segmentLength) := by
           rw [Nat.add_mul]
           simp
-  simp only [unpackDirectLinearIndex, Shape.size, Nat.mul_one]
+  simp only [unpackDirectLinearIndex, Shape.size, List.prod_singleton]
   rw [hInputModTrailing, hInputDivTrailingMod, hInputDivBlock]
   have hColumnDecomposition :=
     Nat.mod_add_div column trailingSize

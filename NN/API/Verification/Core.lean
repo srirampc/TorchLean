@@ -30,8 +30,9 @@ inductive Algorithm where
   /-- Forward affine CROWN bounds. -/
   | crown
   /--
-  Fixed-relaxation Alpha-Beta-CROWN replay. Stable ReLU phases are inferred from IBP; this does
-  not run an external branch-and-bound optimizer.
+  Fixed-relaxation alpha-CROWN with ReLU phases taken from IBP. The constructor is named after
+  alpha-beta-CROWN, but a phase is accepted only when IBP already proves it, so no beta split and no
+  branch-and-bound search runs. Reports print it as `Alpha-CROWN (IBP phases)`.
   -/
   | alphaBetaCrown
   deriving DecidableEq, Repr
@@ -42,7 +43,7 @@ namespace Algorithm
 def name : Algorithm → String
   | .ibp => "IBP"
   | .crown => "CROWN"
-  | .alphaBetaCrown => "Alpha-Beta-CROWN"
+  | .alphaBetaCrown => "Alpha-CROWN (IBP phases)"
 
 instance : ToString Algorithm where
   toString := name
@@ -149,7 +150,10 @@ end Bounds
 inductive Result where
   /-- The report contains an output enclosure but no additional assertion. -/
   | bounds
-  /-- A top-label assertion with its certified lower margin. -/
+  /--
+  A top-label assertion with its computed margin and strict-positivity test.
+  The binary64 difference may overflow to infinity even when both endpoints are finite.
+  -/
   | topLabel (label : Nat) (margin : Float) (certified : Bool)
   deriving Repr
 
@@ -200,7 +204,11 @@ structure Report where
 
 namespace Report
 
-/-- Build a report from verified output bounds and named verification choices. -/
+/--
+Build a report after checking the radius and consistency of the supplied output bounds.
+
+The caller supplies the enclosure guarantee; these checks do not establish it.
+-/
 def fromBounds (radius : Float) (bounds : Bounds)
     (norm : Norm := .inf)
     (property : Property := .bounds)

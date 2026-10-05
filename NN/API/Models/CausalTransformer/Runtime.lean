@@ -148,11 +148,9 @@ def indexed (config : Config)
           (config.tokenShape batchShape) (config.vocabularyShape batchShape)
           "CausalTransformer.indexed" message, stream)
     | .ok () =>
-        let embeddingInitialization :=
-          config.parameterInitialization?.getD (.uniform (-0.02) 0.02)
         let (table, afterTable) :=
           nn.embedding config.vocabularySize config.modelWidth
-            { weightInitialization := embeddingInitialization } stream
+            { weightInitialization := config.embeddingInitialization } stream
         let lookup : nn.IndexedModel
             (config.tokenShape batchShape) (config.embeddingShape batchShape)
             (Fin config.vocabularySize) := by
@@ -178,11 +176,9 @@ def tied (config : Config)
           (config.tokenShape batchShape) (config.vocabularyShape batchShape)
           "CausalTransformer.tied" message, stream)
     | .ok () =>
-        let embeddingInitialization :=
-          config.parameterInitialization?.getD (.uniform (-0.02) 0.02)
         let (table, afterTable) :=
           nn.embedding config.vocabularySize config.modelWidth
-            { weightInitialization := embeddingInitialization } stream
+            { weightInitialization := config.embeddingInitialization } stream
         let (body, afterBody) :=
           hidden config batchShape afterTable
         (Internal.tiedModel config table body, afterBody)

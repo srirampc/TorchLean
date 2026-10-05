@@ -541,7 +541,8 @@ comparison.
 {ref "runtime-approximation"}[the runtime approximation chapter] states what TorchLean actually
 proves about the gap.
 
-The executable examples run runtime tensors and an autograd tape. The `nn.linear` builder fixes
+The tensor examples above evaluate forward operations; they do not construct an autograd tape.
+In model execution, the `nn.linear` builder fixes
 the parameter shapes and emits the runtime linear operation, while the graph interpreter assigns
 `.linear` its `linearSpec` denotation. The VJP proof relates the selected backward rule to
 `linearBackwardSpec`. These connections use the same parameter layout and backward convention.
@@ -761,8 +762,9 @@ $`\left(\tfrac{12}{25}\right)^2=\tfrac{144}{625}`, and again the fraction is the
 144 / 625
 ```
 
-Because the objective is a mean, adding a fifth example to a four-example batch changes the gradient
-of the existing four. A sum-reduced loss would not. Neither convention is wrong, and a learning rate
+Because the objective is a mean, adding a fifth example to a four-example batch rescales the
+contributions from the existing four. A sum-reduced loss would not rescale those contributions.
+Neither convention is wrong, and a learning rate
 tuned under one may need rescaling under the other, which is why the reduction lives in the
 definition and not
 in a training script.
@@ -899,8 +901,9 @@ $`0/0`, matching PyTorch's scaled dot-product attention and TorchLean's CUDA pro
 [0.000000, 0.000000]
 ```
 
-{Informal.citet flashattention2022}[] relies on exactly this structure when it reorders the softmax
-denominator across tiles, since a hard zero is invariant under any summation order.
+Tiled attention algorithms such as {Informal.citet flashattention2022}[] also need to preserve
+the mask support while accumulating the softmax denominator. Excluding a key and approximating
+its exclusion with a finite penalty remain different operations.
 
 The mask here is fixed data describing which coordinates may interact. A derivative theorem with
 respect to scores differentiates the function with that mask held fixed. It does not define a
@@ -1061,7 +1064,7 @@ GraphSpec's checked MLP uses the same four parameter tensors:
  b₂ : [output]]
 ```
 
-The theorem `NN.GraphSpec.Models.mlp_interp_eq_spec_mlp_forward` proves that interpreting that
+The theorem `NN.GraphSpec.Models.mlp_interp` proves that interpreting that
 GraphSpec model is equal to the hand-written two-layer specification, for every parameter pack and
 every input, at every scalar type with `Storage` and `Context` instances:
 
@@ -1069,11 +1072,11 @@ every input, at every scalar type with `Storage` and `Context` instances:
 -- Inspect dependencies of the pure model-equivalence
 -- theorem, not a native execution claim.
 #print axioms
-  NN.GraphSpec.Models.mlp_interp_eq_spec_mlp_forward
+  NN.GraphSpec.Models.mlp_interp
 ```
 
 ```leanOutput slAxioms (whitespace := lax)
-'NN.GraphSpec.Models.mlp_interp_eq_spec_mlp_forward' depends on axioms:
+'NN.GraphSpec.Models.mlp_interp' depends on axioms:
 [propext, Classical.choice, Quot.sound]
 ```
 

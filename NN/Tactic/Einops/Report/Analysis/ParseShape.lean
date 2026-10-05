@@ -7,7 +7,6 @@ module
 
 public meta import NN.Tactic.Einops.Report.Analysis.Common
 public import NN.Tactic.Einops.Report.Analysis.Common
-import Mathlib.Algebra.Order.Field.Basic
 
 /-!
 # Parse-shape reports
@@ -128,10 +127,8 @@ def concreteParseShapeReport
     ("Public return metadata", publicResultType),
     ("Rep scalar type", "arbitrary and erased before this metadata check")]
   let positionChecks :=
-    ((List.range inputShape.length).zip
-      (expandedAxes.zip inputShape)).map fun position =>
-        s!"Position {position.1}: {position.2.1} matches physical \
-          dimension {position.2.2}."
+    (expandedAxes.zip inputShape).mapIdx fun index (axis, dimension) =>
+      s!"Position {index}: {axis} matches physical dimension {dimension}."
   let ellipsisRank :=
     if ellipsisCount = 0 then 0
     else inputShape.length - (sourceAxisCount - 1)

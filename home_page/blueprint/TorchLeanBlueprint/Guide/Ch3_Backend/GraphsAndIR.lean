@@ -39,8 +39,8 @@ I'll keep the six-node network from
 change its parameter payload and scalar interpretation. We can then compare the computed values,
 propagated intervals, and kernel plan for the same nodes. A PyTorch trace provides a second view
 of their connections. Every Lean
-block below is elaborated while this page is built. The recorded PyTorch and terminal transcripts
-predate the FloatLib migration; they illustrate the comparison and are not migration test results.
+block below is elaborated while this page is built. The Python examples and shell commands let
+you inspect the graph and compare its interpretations in your build.
 
 # Executable Graph Types And Lowering
 
@@ -244,22 +244,8 @@ for n in g.graph.nodes:
 print("fx node has a shape field:", hasattr(list(g.graph.nodes)[0], "shape"))
 ```
 
-The recorded run prints:
-
-```
-torch y(x0) = 0.027713
-x              placeholder x          ()
-l1             call_module l1         (x,)
-relu           call_function <built-in method relu of type object ...> (l1,)
-l2             call_module l2         (relu,)
-sum_1          call_method sum        (l2,)
-tanh           call_function <built-in method tanh of type object ...> (sum_1,)
-output         output   output     (tanh,)
-fx node has a shape field: False
-```
-
-Compare the operation names, shapes, parameter references, and output selection with the six-node
-listing above.
+Compare the printed operation names, parent arguments, parameter references, and output selection
+with the six-node listing above. Keep the output value for the numerical comparison below.
 
 An FX node's `target` is a
 Python object: a builtin, a submodule path, a method name, or any function you happened to call.
@@ -281,15 +267,10 @@ print("after: ", {n.name: tuple(n.meta["tensor_meta"].shape)
                   for n in g.graph.nodes if "tensor_meta" in n.meta})
 ```
 
-```
-before: {'x': [], 'l1': ['nn_module_stack'], 'relu': [], 'l2': ['nn_module_stack'],
-         'sum_1': [], 'tanh': [], 'output': []}
-after:  {'x': (4,), 'l1': (5,), 'relu': (5,), 'l2': (3,), 'sum_1': (), 'tanh': (), 'output': ()}
-```
-
-Those are the right shapes, and they agree with TorchLean's declared ones. But they are a record of
-what happened on one input, obtained by executing the graph. TorchLean's shapes are a claim, made
-before execution, that a checker validates and a theorem ties to the semantics.
+The expected feature widths are four at the input, five after the first linear layer and ReLU,
+and three after the second linear layer. The sum and `tanh` return scalars. Shape propagation
+records what happened on the supplied input by executing the graph. TorchLean's declared shapes
+are checked before execution, with a theorem connecting that check to the semantics.
 
 `call_module l1` means "go find the submodule named `l1` and
 call it", so the parameters are inside the traced object. TorchLean keeps the graph free of tensors
@@ -300,8 +281,8 @@ FX adds an explicit `output` node, so its listing has seven nodes. TorchLean nam
 id, and `Graph.denote` takes `outputId := 5`. The extra FX node selects the result; it adds no
 tensor calculation.
 
-The PyTorch output at `x0` is `0.027713`. We will compare it with the IR evaluator after supplying
-the parameter payload.
+We can compare the printed PyTorch output at `x0` with the IR evaluator after supplying the
+parameter payload.
 
 # The Node Record
 
@@ -704,14 +685,13 @@ def irCenter : Tensor (ExecFloat.Binary 8 23) input :=
 Except.ok "0.027713"
 ```
 
-The displayed evaluations agree to six decimals: Lean's hardware `Float`,
-FloatLib's software binary32, and the recorded PyTorch run. The explicit conversion after
-evaluation selects the same decimal display; the graph itself still computes in binary32.
-The first uses the machine's double-precision
-arithmetic, the second simulates binary32 with explicit rounding
-({Informal.citep goldberg1991}[]), and the third calls into LibTorch. The shared printed output
-does not tell us whether their stored values agree. {ref "floats"}[Floating-Point Semantics]
-follows individual rounding steps to explain how such differences arise.
+The two checked Lean evaluations agree to six decimals. The first uses hardware `Float`
+double-precision arithmetic; the second uses FloatLib binary32 with explicit rounding
+({Informal.citep goldberg1991}[]). Its final conversion selects a decimal display without changing
+the arithmetic inside the graph. Compare these values with the PyTorch output from the command
+above. Agreement at the displayed precision does not establish agreement of stored values.
+{ref "floats"}[Floating-Point Semantics] follows individual rounding steps to explain how such
+differences arise.
 
 The other two instantiations are noncomputable, which is a fact about their scalars and not about
 the graph:
@@ -720,19 +700,19 @@ the graph:
 -- These functions return optional boxes; a type alone does
 -- not promise a bound at every node.
 open NN.MLTheory.CROWN in
-#check @propagateRealBounds
+#check propagateBounds (α := ℝ)
 
 open NN.MLTheory.CROWN in
-#check @propagateFP32Bounds
+#check propagateBounds (α := Floats.FP32)
 ```
 
 ```leanOutput irNoncomputable (whitespace := lax)
-propagateRealBounds : Graph.ParamStore ℝ →
+propagateBounds : Graph.ParamStore ℝ →
   Array (Option (FlatBox ℝ))
 ```
 
 ```leanOutput irNoncomputable (whitespace := lax)
-propagateFP32Bounds : Graph.ParamStore Floats.FP32 →
+propagateBounds : Graph.ParamStore Floats.FP32 →
   Array (Option (FlatBox Floats.FP32))
 ```
 
@@ -845,8 +825,8 @@ some (-1.000000, 1.000000)
 
 The executable instance in
 {src "NN/MLTheory/CROWN/Extras/BoundOpsIEEE32Exec.lean"}[the binary32 bound operations] returns the
-global codomain of `tanh` and ignores its arguments. The specialized proof-oriented instances do
-not: over `ℝ`
+global codomain of `tanh` after checking that its input endpoints are finite and ordered. It then
+discards their range. The specialized proof-oriented instances use that range: over `ℝ`
 the rule is `some (Real.tanh lo, Real.tanh hi)`, and over `FP32` it is the same with the endpoints
 rounded outward. Since `tanh` is increasing, the real endpoints are tight for that scalar interval
 and the FP32
@@ -866,10 +846,12 @@ size; this next evaluation is not a directed-rounding enclosure:
 For the displayed node-4 interval, the real endpoint image has width about `0.0149`; the executable
 codomain fallback has width `2.0`. A full rerun with another scalar type also changes the rounding
 of the preceding nodes, so this calculation compares the final transfer on fixed endpoints.
-The endpoint-sensitive bound is much more informative here. Relating the executable enclosure to
-real semantics still requires its backend soundness hypotheses.
+The endpoint-sensitive bound is much more informative here.
+`IEEE32ExecBounds.tanhBounds_containsReal` proves that the executable fallback contains ideal real
+`tanh` whenever the finite transfer succeeds. Agreement with a separately rounded native `tanh`
+evaluation requires a further backend theorem.
 
-The generic real interval construction now lives in `FloatLib.Floats.Interval.Quantized`.
+The generic real interval construction is defined in `FloatLib.Floats.Interval.Quantized`.
 Its `RInterval.tanh` is noncomputable: it applies `Real.tanh` to each endpoint and rounds outward.
 The executable TorchLean instance above uses the global codomain instead. A tighter executable
 interval needs justified upper and lower bounds for the transcendental operation;
@@ -880,10 +862,14 @@ therefore needs an error bound or a directed-rounding implementation for the tra
 ({Informal.citep boldo2015}[]). The global enclosure avoids that endpoint calculation, at the cost
 of discarding the input interval.
 
-`sigmoid`, `sin`, and `cos` also use global codomain bounds in that
-instance; `exp`, `log`, and `layerNormAbsBound` return no bound at all rather than a
-trivial one. When an executable IBP result looks uselessly wide, check which nonlinearity the
-graph ends with before suspecting the propagation.
+`sigmoid` also uses its global codomain, `[0, 1]`, for finite ordered inputs. The `exp`, `log`,
+`sqrt`, `sin`, and `cos` transfers use FloatLib's certified rational interval kernels followed by
+checked outward binary32 rounding. Their theorems enclose every real input in the interval;
+sine and cosine include interior extrema. Domain checks and finite-output checks can still
+return `none`. Square root preserves intervals crossing zero by using the real convention
+`Real.sqrt x = 0` for negative `x`. `layerNormAbsBound` remains unavailable, and
+`supportsIdealCoupledDerivatives` remains false. When an executable IBP result looks uselessly
+wide, check which nonlinearity the graph ends with before suspecting the propagation.
 
 For a property that needs to distinguish this small positive output from zero, `[-1, 1]` is
 too wide. The missing information comes from the final transfer rule, even though the preceding
@@ -896,35 +882,19 @@ The whole experiment is one command:
 ```terminal
 # Check sampled executions against the intervals derived for
 # this example.
-lake exe torchlean one_semantic_universe --samples 50
+scripts/lake.sh exe torchlean one_semantic_universe --samples 50
 ```
 
-The following transcript predates the FloatLib migration and retains its recorded scalar labels
-and numerical results. Current `.ieee` execution uses FloatLib binary32.
+The command evaluates the center input in FloatLib binary32, propagates an output interval, and
+checks fifty deterministically generated inputs against it. It reports a counterexample and fails
+if a sample is outside its input box or its evaluated output is outside the propagated box.
 
-```terminal +output
-== One semantic universe tutorial ==
-graph nodes = 6
-[eval IEEE32Exec] y(x0) = 0.027713
-[IBP IEEE endpoints] lo = -1.000000
-[IBP IEEE endpoints] hi = 1.000000
-consistency: 50/50 samples satisfied evalIEEE(x) ∈ IBP(B)
-checker theorem: `NN.MLTheory.CROWN.Box.containsDecBool_sound`
-```
+Even if every sample passes, containment in `[-1, 1]` supplies little information about tightness:
+the final interval rule uses the global range of ideal real `tanh` and discards the input range.
+The comparison can still expose NaNs, broken dispatch, or an invalid range result, making it
+useful as a regression check.
 
-The transcript reports an evaluation, an interval, a sampled comparison, and a checker theorem:
-
-1. The graph evaluator produced one binary32 result at the center input.
-2. Interval propagation produced one output interval for the input box.
-3. Fifty sampled evaluations landed inside that interval.
-4. A named theorem says the Boolean containment check means what it appears to mean.
-
-For statement 3, all fifty samples fall in `[-1, 1]`, a global enclosure for ideal real `tanh`.
-This supplies little information about tightness, since the interval rule discarded the input
-range. The comparison can still expose NaNs, broken dispatch, or an invalid range result, making
-it useful as a regression check.
-
-Statement 4 refers to this pointwise theorem:
+The command also names the pointwise theorem behind its Boolean containment check:
 
 ```lean (name := irContains)
 -- The Boolean-to-proposition bridge concerns the point
@@ -978,12 +948,15 @@ node. It does not by itself establish successful evaluation at every node.
 
 The operation restriction matters for our example. `EngineCore` admits inputs, constants, detach,
 addition, subtraction, elementwise multiplication, ReLU, linear layers, matrix multiplication,
-softplus, and safe log.
+concatenation, convolution, softplus, and safe log.
 It excludes both `sum` and `tanh`, which occur at nodes 4 and 5. Consequently this theorem does not
-cover the six-node graph as written, even after changing its scalar type to `ℝ`. Extending the
-enclosure proof to those operations is a separate requirement from changing the scalar semantics.
+cover the six-node graph as written, even after changing its scalar type to `ℝ`.
+The separate `runIBP_encloses_all` theorem covers these operations and every other operation kind
+under `RealNodeEquation` and the lawful arithmetic requirements described in
+{ref "verification"}[Verification And Certificates]. The reals and rounded-real `FP32` satisfy
+its scalar requirements; that result does not supply a global law for the FloatLib IEEE carrier.
 
-The scalar in the theorem is `ParamStore ℝ`, whereas the run above used FloatLib binary32.
+The scalar in the theorem is `ParamStore ℝ`, whereas the command above uses FloatLib binary32.
 Relating that rounded propagation to real arithmetic requires another argument, developed in
 {ref "verification"}[Verification And Certificates] and
 {ref "fp32-soundness"}[Floating-Point Soundness]. Applying the enclosure theorem to an execution
@@ -999,8 +972,8 @@ hypotheses.
 
 `Runtime.Autograd.IRExec.lowerToForwardGraph` validates the graph and lowers the current IR
 vocabulary operation by operation: elementwise arithmetic, seeded masks, broadcasting, reductions,
-matrix multiplication and linear layers with any shared leading shape (so batched and rank-four
-products are covered), convolution payloads, pooling, normalization, reshape and permutation,
+matrix multiplication with vector promotion and broadcast batch shapes, linear layers over any
+leading batch shape, convolution payloads, pooling, normalization, reshape and permutation,
 concatenation along any axis, and scalar MSE. Lowering rejects a shape or axis that the IR semantics
 itself rejects; it does not panic and it does not guess.
 
@@ -1092,6 +1065,27 @@ The proof-bearing source lowering under `NN.Verification.Builtin.Proved` relates
 source evaluator to IR denotation, and its theorem is likewise not a wildcard over every
 `TorchLean.Program` or every `OpKind` the broad executable lowering accepts.
 
+The compiled IRExec lowering loop stores shape prefixes in reverse order, sharing the previous
+prefix at each step, and checks parent references through a shape array. It constructs the
+chronological shape list once when lowering finishes.
+`Internal.buildFrom_eq_buildFromWithArray` in
+{src "NN/Runtime/Autograd/IRExec/Lowering.lean"}[`Lowering.lean`] is the kernel-checked equality
+used by compiler simplification to select this implementation. It preserves both successful
+lowerings and errors; it does not change operation closures or their summation order.
+
+The {src "docs/benchmarks/irexec-scaling-20260925.md"}[2026-09-25 scaling measurements] compare
+this implementation with `0f845313` on native ReLU chains with one `[4]` input, using Lean 4.34.0
+on Linux `x86_64`. Across three fresh processes per case, median lowering time at 16,000 ReLUs
+fell from 2,352.590 ms to 4.180 ms, while whole-process peak memory fell from 3,987.46 MiB to
+77.20 MiB. Lowering 1,024,000 ReLUs took 247.650 ms; that larger experiment measured construction
+and disposal without tensor evaluation.
+
+These measurements concern lowering cost. Evaluation of the 16,000-node small-tensor chain took
+7.925 ms after the change versus 4.323 ms before, with matching result bits. Native evaluation
+still uses recursion and depends on stack capacity. The retained timings and growth guard give
+empirical scaling evidence; the equality theorem proves semantic preservation, not an asymptotic
+complexity bound.
+
 # Axis Operations And Lowering Coverage
 
 An axis is stored as data, but changing it changes which coordinates an operation combines. The
@@ -1101,7 +1095,7 @@ sides:
 ```terminal
 # Exercise nontrivial axes so a last-axis-only
 # implementation cannot pass unnoticed.
-lake exe torchlean ir_axis_ops
+scripts/lake.sh exe torchlean ir_axis_ops
 ```
 
 ```terminal +output
@@ -1175,7 +1169,7 @@ to `none`, as it does for `.const` and `.detach`. Notice also that the `.sum` ta
 both a full sum and an axis reduction.
 
 A `KernelCapsule` describes the selected contract. It contains no executable closure, so planning
-node 1 for `nativeCuda` does not call a CUDA kernel.
+node 1 for `libtorch` does not call ATen.
 Eager execution must bind the selected capsule to a typed handler with the same operation, provider,
 and device before that handler can run, and the current typed graph trainer does not consume a plan
 at all. {ref "backend-selection"}[Backend Selection] follows the selection and assurance
@@ -1210,10 +1204,10 @@ The tape may contain enough information to reconstruct an IR-like graph, but it 
 state. {ref "runtime-autograd"}[Runtime and Autograd] builds a tape by hand and shows exactly what
 those four bullet points look like as data.
 
-This difference is also why LibTorch forward can participate in a TorchLean-owned backward path: the
-TorchLean wrapper records a local tape node even when an external provider computes the forward
-value. The canonical semantic graph and the execution tape remain distinct objects connected by the
-operation contract.
+This difference is also why LibTorch can compute values in a TorchLean-owned backward path. The
+TorchLean wrapper records the local tape node and chooses its VJP; ATen executes the requested
+tensor operations with its autograd recording disabled. The canonical semantic graph and the
+execution tape remain distinct objects connected by the operation contract.
 
 A forward value table is also insufficient to reconstruct a proved reverse pass on its own. A
 reverse computation needs the selected VJP for every operation, the saved inputs that rule reads,
@@ -1275,8 +1269,8 @@ Changing one field at a time isolates the checks and interpretations used above.
 
 The six-node example separates two remaining verification tasks. The interval rule must preserve
 enclosure under the chosen scalar semantics, and the resulting interval must be tight enough for
-the property being checked. The global `tanh` range demonstrated why these are separate: every
-sample passed containment while the final rule discarded the narrow interval from node 4.
+the property being checked. The global `tanh` range shows why these are separate: the final rule
+discards the narrow interval from node 4 regardless of how many samples pass containment.
 
 {ref "verification"}[Verification And Certificates] develops the enclosure arguments and their
 graph hypotheses. {ref "fp32-soundness"}[Floating-Point Soundness] studies how rounding affects

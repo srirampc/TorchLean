@@ -13,8 +13,8 @@ public import NN.MLTheory.LearningTheory.DifferentialPrivacy.Core
 
 This entrypoint collects TorchLean's differential-privacy vocabulary. We keep the event-wise
 definition and closure lemmas in `DifferentialPrivacy.Core` because the public API is deliberately
-small: a randomized mechanism, an adjacency relation, `(ε, δ)`-DP, pure DP, monotonicity in `δ`,
-and measurable post-processing.
+small: a randomized mechanism, an adjacency relation, `(ε, δ)`-DP, pure DP, monotonicity in `ε`
+and `δ`, and measurable post-processing.
 
 The module is phrased using mathlib probability measures, so downstream users can instantiate the
 same definitions for discrete mechanisms, continuous mechanisms, or randomized training procedures

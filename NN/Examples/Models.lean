@@ -29,7 +29,7 @@ The source tree is grouped by what the example teaches:
 - `Operators`: operator-learning examples such as FNO.
 - `RL`: executable trainers and their artifact views.
 
-The command-line interface remains stable through `lake exe torchlean <name>`.
+The command-line interface remains stable through `scripts/lake.sh exe torchlean <name>`.
 -/
 
 @[expose] public section

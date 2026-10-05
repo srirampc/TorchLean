@@ -25,10 +25,11 @@ Generate a small deterministic regression dataset with
 
 Build:
 
-- `lake build NN.Examples.Data.Loaders.Csv`
+- `scripts/lake.sh build NN.Examples.Data.Loaders.Csv`
 
 The tutorial code is compiled with the rest of TorchLean and is directly runnable as
-`lake exe torchlean data_csv`. It keeps data loading and training together so the parsed CSV shape
+`scripts/lake.sh exe torchlean data_csv`. It keeps data loading and training
+together so the parsed CSV shape
 can be checked before the first optimizer step.
 
 Optional flags (tutorial-specific):
@@ -83,7 +84,7 @@ def usage : String :=
     [ "TorchLean CSV loader tutorial"
     , ""
     , "Usage:"
-    , "  lake exe torchlean data_csv [options]"
+    , "  scripts/lake.sh exe torchlean data_csv [options]"
     , ""
     , "Options:"
     , "  --data-dir PATH"
@@ -93,7 +94,7 @@ def usage : String :=
     , "  --steps N"
     , "  --arithmetic native|ieee"
     , "  --execution eager|typed-graph"
-    , "  --device auto|cpu|cuda|rocm|metal|wasm|tpu|trainium|custom|external"
+    , "  --device auto|cpu|gpu|cuda|rocm|metal|wasm|tpu|trainium|custom|external"
     , "  --show-backend                    print backend capsules as they execute"
     ]
 
@@ -117,7 +118,7 @@ def main (args : List String) : IO Unit := do
   let run ← TorchLean.CLI.Trainer.parseCommandLine exeName args
     { optimizer := optim.adam { learningRate := 0.05 } }
   let trainer := Trainer.new network <|
-    Trainer.RunConfig.forObjective run .meanSquaredError (seed := seed)
+    Trainer.RunConfig.forObjective run .mse (seed := seed)
 
   IO.println "== CSV loader training tutorial =="
   trainer.printSummary

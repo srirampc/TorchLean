@@ -23,9 +23,6 @@ namespace NN.Verification.Builtin.Proved
 open Spec TorchLean
 open TorchLean.Tensor
 open NN.IR
--- Typed context indices come from `NN.Proofs.Autograd.Tape.Util.Idx`, the one place
--- `Idx` and `getIdx` are defined.
-open Proofs (Idx getIdx)
 
 namespace Correctness
 
@@ -94,8 +91,8 @@ theorem evalAt_binaryElementwise_eq
   have hb :
       Graph.expectShape (α := α) (expected := s) (Spec.SomeTensor.mk (α := α) s b) = .ok b := by
     simp [Graph.expectShape, Pure.pure, Except.pure]
-  simpa [Graph.evalAt, Graph.evalNode, Graph.normalizeNodeOutput, binaryGraph, binaryNode,
-    Graph.getNode, Graph.getNode?] using
+  simpa [Graph.evalAt, Graph.evalNode, Graph.normalizeNodeOutput, binaryGraph,
+    binaryGraphOut, binaryNodeOut, Graph.getNode, Graph.getNode?] using
     (evalNode_binaryElementwise_eq op a b ({} : Payload α) (Spec.SomeTensor.mk (α := α) s a)
       #[Spec.SomeTensor.mk (α := α) s a, Spec.SomeTensor.mk (α := α) s b] 2 2 0 1
       (Spec.SomeTensor.mk (α := α) s a) (Spec.SomeTensor.mk (α := α) s b)
@@ -165,7 +162,7 @@ private theorem evalNode_unaryElementwise_eq
       .ok (Spec.SomeTensor.mk (α := α) s (op.denote x)) := by
   cases op <;>
     simp [UnaryElementwiseOp.toOpKind, UnaryElementwiseOp.denote, Graph.evalNode,
-      Graph.unaryParentId, unaryParent?, hSome, hx,
+      Graph.unaryParentId, unaryParent?, hSome, hx, Tensor.sinSpec, Tensor.cosSpec,
       Bind.bind, Except.bind, Pure.pure, Except.pure]
 
 /-- Evaluate any supported same-shape unary elementwise node. -/
@@ -180,8 +177,8 @@ theorem evalAt_unaryElementwise_eq
   have hx :
       Graph.expectShape (α := α) (expected := s) (Spec.SomeTensor.mk (α := α) s x) = .ok x := by
     simp [Graph.expectShape, Pure.pure, Except.pure]
-  simpa [Graph.evalAt, Graph.evalNode, Graph.normalizeNodeOutput, unaryGraph, unaryNode,
-    Graph.getNode, Graph.getNode?] using
+  simpa [Graph.evalAt, Graph.evalNode, Graph.normalizeNodeOutput, unaryGraph,
+    unaryGraphOut, unaryNodeOut, Graph.getNode, Graph.getNode?] using
     (evalNode_unaryElementwise_eq op x ({} : Payload α) (Spec.SomeTensor.mk (α := α) s x)
       #[Spec.SomeTensor.mk (α := α) s x] 1 1 0 (Spec.SomeTensor.mk (α := α) s x)
       (by simp) hx)
@@ -469,8 +466,8 @@ theorem evalAt_log_eq
         (vals := #[Spec.SomeTensor.mk (α := α) s x]) (i := 1)
       =
       Except.ok (Spec.SomeTensor.mk (α := α) s (Tensor.logSpec (α := α) x)) := by
-  simp [Graph.evalAt, Graph.evalNode, unaryGraph, unaryNode, Graph.getNode, Graph.getNode?,
-    Graph.unaryParentId, unaryParent?, Graph.expectShape, hpos,
+  simp [Graph.evalAt, Graph.evalNode, unaryGraph, unaryGraphOut, unaryNodeOut,
+    Graph.getNode, Graph.getNode?, Graph.unaryParentId, unaryParent?, Graph.expectShape, hpos,
     Bind.bind, Except.bind, Pure.pure, Except.pure]
 
 end IRStep

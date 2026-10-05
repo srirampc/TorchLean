@@ -50,9 +50,7 @@ local notation "R" => NF β fexp rnd
 This packages `approxTensor_add_spec` so addition can be used inside larger verified `FwdGraph`s.
 -/
 def addNode {Γ : List Shape} {s : Shape} (a b : Idx Γ s) :
-    FwdNode (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd)) Γ s :=
-by
-  classical
+    FwdNode (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd)) Γ s := by
   refine
     { forwardSpec := fun ctx =>
         addSpec (getIdx (α := SpecScalar) ctx a) (getIdx (α := SpecScalar) ctx b)
@@ -79,9 +77,7 @@ by
 
 /-- `FwdNode` for elementwise subtraction (wraps `approxTensor_sub_spec`). -/
 def subNode {Γ : List Shape} {s : Shape} (a b : Idx Γ s) :
-    FwdNode (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd)) Γ s :=
-by
-  classical
+    FwdNode (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd)) Γ s := by
   refine
     { forwardSpec := fun ctx =>
         subSpec (getIdx (α := SpecScalar) ctx a) (getIdx (α := SpecScalar) ctx b)
@@ -108,9 +104,7 @@ by
 
 /-- `FwdNode` for elementwise multiplication (wraps `approxTensor_mul_spec`). -/
 def mulNode {Γ : List Shape} {s : Shape} (a b : Idx Γ s) :
-    FwdNode (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd)) Γ s :=
-by
-  classical
+    FwdNode (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd)) Γ s := by
   refine
     { forwardSpec := fun ctx =>
         mulSpec (getIdx (α := SpecScalar) ctx a) (getIdx (α := SpecScalar) ctx b)
@@ -141,9 +135,7 @@ by
 Requires a proof `hε : 0 < ε` and uses `approxTensor_safeDiv_spec` to obtain an unconditional bound.
 -/
 def safeDivNode {Γ : List Shape} {s : Shape} (a b : Idx Γ s) (ε : ℝ) (hε : 0 < ε) :
-    FwdNode (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd)) Γ s :=
-by
-  classical
+    FwdNode (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd)) Γ s := by
   refine
     { forwardSpec := fun ctx =>
         map2Spec (s := s) (safeDiv (ε := ε))
@@ -177,9 +169,7 @@ by
 Wraps `approxTensor_scale_spec`.
 -/
 def scaleNode {Γ : List Shape} {s : Shape} (a : Idx Γ s) (c : R) :
-    FwdNode (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd)) Γ s :=
-by
-  classical
+    FwdNode (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd)) Γ s := by
   refine
     { forwardSpec := fun ctx =>
         scaleSpec (α := SpecScalar) (s := s) (getIdx (α := SpecScalar) ctx a)
@@ -200,9 +190,7 @@ by
 
 /-- `FwdNode` for elementwise negation (wraps `approxTensor_neg_spec`). -/
 def negNode {Γ : List Shape} {s : Shape} (a : Idx Γ s) :
-    FwdNode (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd)) Γ s :=
-by
-  classical
+    FwdNode (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd)) Γ s := by
   refine
     { forwardSpec := fun ctx =>
         negSpec (getIdx (α := SpecScalar) ctx a)
@@ -222,9 +210,7 @@ by
 
 /-- `FwdNode` for elementwise absolute value (wraps `approxTensor_abs_spec`). -/
 def absNode {Γ : List Shape} {s : Shape} (a : Idx Γ s) :
-    FwdNode (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd)) Γ s :=
-by
-  classical
+    FwdNode (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd)) Γ s := by
   refine
     { forwardSpec := fun ctx =>
         absSpec (getIdx (α := SpecScalar) ctx a)
@@ -244,9 +230,7 @@ by
 
 /-- `FwdNode` for elementwise exponentiation (wraps `approxTensor_exp_spec`). -/
 def expNode {Γ : List Shape} {s : Shape} (a : Idx Γ s) :
-    FwdNode (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd)) Γ s :=
-by
-  classical
+    FwdNode (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd)) Γ s := by
   refine
     { forwardSpec := fun ctx =>
         expSpec (getIdx (α := SpecScalar) ctx a)
@@ -266,9 +250,7 @@ by
 
 /-- `FwdNode` for elementwise softplus (wraps `approxTensor_softplus_spec`). -/
 def softplusNode {Γ : List Shape} {s : Shape} (a : Idx Γ s) :
-    FwdNode (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd)) Γ s :=
-by
-  classical
+    FwdNode (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd)) Γ s := by
   refine
     { forwardSpec := fun ctx =>
         mapSpec (s := s) (Activation.Math.softplusSpec (α := ℝ)) (getIdx (α := SpecScalar) ctx a)
@@ -292,9 +274,7 @@ by
 Requires a proof `hε : 0 < ε` and wraps `approxTensor_safeLog_spec`.
 -/
 def safeLogNode {Γ : List Shape} {s : Shape} (a : Idx Γ s) (ε : ℝ) (hε : 0 < ε) :
-    FwdNode (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd)) Γ s :=
-by
-  classical
+    FwdNode (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd)) Γ s := by
   refine
     { forwardSpec := fun ctx =>
         mapSpec (s := s) (safeLog (ε := ε)) (getIdx (α := SpecScalar) ctx a)
@@ -315,12 +295,10 @@ by
 /--
 `FwdNode` for the smooth `safeLog` activation.
 
-Requires `hε : 0 < ε` and wraps `approxTensor_safe_log_spec`.
+Requires `hε : 0 < ε` and wraps `approxTensor_safeLogSoftplus_spec`.
 -/
 def safeLogSoftplusNode {Γ : List Shape} {s : Shape} (a : Idx Γ s) (ε : ℝ) (hε : 0 < ε) :
-    FwdNode (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd)) Γ s :=
-by
-  classical
+    FwdNode (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd)) Γ s := by
   refine
     { forwardSpec := fun ctx =>
         mapSpec (s := s) (fun x => Activation.Math.safeLogSpec (α := ℝ) x ε) (getIdx (α :=
@@ -336,23 +314,21 @@ by
   have ha := approxCtx_getIdx (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd)) hctx
     a
   simpa using
-    (approxTensor_safe_log_spec (β := β) (fexp := fexp) (rnd := rnd) (s := s) (ε := ε) hε
+    (approxTensor_safeLogSoftplus_spec (β := β) (fexp := fexp) (rnd := rnd) (s := s) (ε := ε) hε
       (xS := getIdx (α := SpecScalar) xS a) (xR := getIdx (α := R) xR a)
       (eps := getIdxEps (Γ := Γ) (s := s) eps a) ha)
 
 /-- `FwdNode` for elementwise `tanh` (wraps `approxTensor_tanh_spec`). -/
 def tanhNode {Γ : List Shape} {s : Shape} (a : Idx Γ s) :
-    FwdNode (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd)) Γ s :=
-by
-  classical
+    FwdNode (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd)) Γ s := by
   refine
     { forwardSpec := fun ctx =>
         mapSpec (s := s) Numerics.MathFunctions.tanh (getIdx (α := SpecScalar) ctx a)
     , forwardRuntime := fun ctx =>
         mapSpec (s := s) Numerics.MathFunctions.tanh (getIdx (α := R) ctx a)
-    , bound := fun eps ctx =>
+    , bound := fun _eps ctx =>
         linfNorm (tanhBoundTensor (β := β) (fexp := fexp) (rnd := rnd)
-          (s := s) (getIdxEps (Γ := Γ) (s := s) eps a) (getIdx (α := R) ctx a))
+          (s := s) (getIdx (α := R) ctx a))
     , sound := ?_ }
   intro xS xR eps hctx
   have ha := approxCtx_getIdx (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd)) hctx
@@ -364,9 +340,7 @@ by
 
 /-- `FwdNode` for elementwise sigmoid (wraps `approxTensor_sigmoid_spec`). -/
 def sigmoidNode {Γ : List Shape} {s : Shape} (a : Idx Γ s) :
-    FwdNode (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd)) Γ s :=
-by
-  classical
+    FwdNode (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd)) Γ s := by
   refine
     { forwardSpec := fun ctx =>
         mapSpec (s := s) (Activation.Math.sigmoidSpec (α := ℝ)) (getIdx (α := SpecScalar) ctx a)
@@ -386,9 +360,7 @@ by
 
 /-- `FwdNode` for elementwise ReLU (`max · 0`, wraps `approxTensor_relu_spec`). -/
 def reluNode {Γ : List Shape} {s : Shape} (a : Idx Γ s) :
-    FwdNode (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd)) Γ s :=
-by
-  classical
+    FwdNode (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd)) Γ s := by
   refine
     { forwardSpec := fun ctx =>
         mapSpec (fun x => max x 0) (getIdx (α := SpecScalar) ctx a)
@@ -408,9 +380,7 @@ by
 
 /-- `FwdNode` for the scalar logistic-form `softmax` node (wraps `approxTensor_softmax_spec`). -/
 def softmaxNode {Γ : List Shape} {s : Shape} (a : Idx Γ s) :
-    FwdNode (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd)) Γ s :=
-by
-  classical
+    FwdNode (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd)) Γ s := by
   refine
     { forwardSpec := fun ctx =>
         mapSpec (s := s) (Activation.Math.logisticSpec (α := ℝ)) (getIdx (α := SpecScalar) ctx a)
@@ -434,9 +404,7 @@ by
 This reduces a tensor to a scalar and uses `approxTensor_sum_spec` with the accumulated `sumBound`.
 -/
 def sumNode {Γ : List Shape} {s : Shape} (a : Idx Γ s) :
-    FwdNode (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd)) Γ Shape.scalar :=
-by
-  classical
+    FwdNode (α := R) (toSpec := toSpec (β := β) (fexp := fexp) (rnd := rnd)) Γ Shape.scalar := by
   refine
     { forwardSpec := fun ctx =>
         Tensor.scalar (sumSpec (α := ℝ) (s := s) (getIdx (α := SpecScalar) ctx a))
@@ -453,7 +421,6 @@ by
     (approxTensor_sum_spec (β := β) (fexp := fexp) (rnd := rnd) (s := s)
       (xS := getIdx (α := SpecScalar) xS a) (xR := getIdx (α := R) xR a)
       (eps := getIdxEps (Γ := Γ) (s := s) eps a) ha)
-
 
 end NFBackend
 

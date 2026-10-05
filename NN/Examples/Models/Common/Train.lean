@@ -31,7 +31,7 @@ def modelUsage
     (dataOptions trainingOptions : Array String)
     (extraSections : Array String := #[]) : String :=
   String.intercalate "\n" <| (#[
-    s!"Usage: lake exe torchlean {exeName} [options]",
+    s!"Usage: scripts/lake.sh exe torchlean {exeName} [options]",
     "",
     "Data:"
   ] ++ dataOptions ++ #[
@@ -40,7 +40,7 @@ def modelUsage
   ] ++ trainingOptions ++ extraSections ++ #[
     "",
     "Runtime:",
-    "  --device auto|cpu|cuda|rocm|metal|wasm|tpu|trainium|custom|external",
+    "  --device auto|cpu|gpu|cuda|rocm|metal|wasm|tpu|trainium|custom|external",
     "  --execution eager|typed-graph",
     "  --arithmetic native",
     "  --seed N --show-backend"
@@ -56,8 +56,8 @@ def optimizerUsage (exeName : String) (dataOptions : Array String) : String :=
     "  --cuda-mem-watch N sample CUDA allocator state every N updates"
   ]
 
-/-- CSV-backed regression command using the public trainer API. -/
-def regressionCsv {σ τ : Shape}
+/-- CSV-backed training command. The caller chooses the objective and result reporting. -/
+def csv {Result : Type}
     (exeName : String)
     (args : List String)
     (defaultCsv : System.FilePath)
@@ -65,66 +65,55 @@ def regressionCsv {σ τ : Shape}
     (defaultSteps : Nat := 1)
     (defaultLearningRate : Float := 1e-3)
     (banner : Runtime.Config → String)
-    (train : Runtime.Config → Support.CsvTrainFlags →
-      IO (Trainer.Result σ τ)) :
+    (train : Runtime.Config → Support.Training.Options Support.Csv.Options →
+      IO Result)
+    (report : Result → IO Unit) :
     IO UInt32 :=
   CLI.Training.Command.runParsed exeName args
     (fun rest =>
-      Support.parseCsvTrainFlags
-        exeName rest defaultCsv defaultLogPath defaultSteps defaultLearningRate)
-    banner (fun runtime flags => train runtime { flags with seed := runtime.seed })
-    (fun result => result.printSummary)
+      Support.Training.Options.parse exeName rest defaultLogPath defaultSteps defaultLearningRate
+        (parseData := fun args => Support.Csv.Options.parse args defaultCsv))
+    banner (fun runtime flags => train runtime
+      { flags with data := { flags.data with seed := runtime.seed } })
+    report
     (usage? := some <| optimizerUsage exeName #["  --csv PATH         supervised CSV file"])
 
-/-- NPY-backed classifier command using the public trainer API. -/
-def classificationNpy
+/-- NPY-backed training command. The caller chooses the objective and result reporting. -/
+def npy {Result : Type}
     (exeName : String)
     (args : List String)
-    (parseFlags : List String → Except String (Support.NpyModelTrainFlags × List String))
+    (parseFlags : List String →
+      Except String (Support.Training.Options Support.Npy.Options × List String))
     (banner : Runtime.Config → String)
-    (train : Runtime.Config → Support.NpyModelTrainFlags →
-      IO Trainer.Report) :
+    (train : Runtime.Config → Support.Training.Options Support.Npy.Options →
+      IO Result)
+    (report : Result → IO Unit)
+    (target : String := "target") :
     IO UInt32 :=
   CLI.Training.Command.runParsed exeName args parseFlags banner (fun runtime flags => train runtime
       { flags with data := { flags.data with seed := runtime.seed } })
-    (fun report => report.printSummary)
+    report
     (usage? := some <| optimizerUsage exeName #[
       "  --x PATH           feature/image NPY file",
-      "  --y PATH           class-label NPY file",
+      s!"  --y PATH           {target} NPY file",
       "  --n-total N        rows to load"
     ])
 
-/-- NPY-backed regression command using the public trainer API. -/
-def regressionNpy {σ τ : Shape}
-    (exeName : String)
-    (args : List String)
-    (parseFlags : List String → Except String (Support.NpyModelTrainFlags × List String))
-    (banner : Runtime.Config → String)
-    (train : Runtime.Config → Support.NpyModelTrainFlags →
-      IO (Trainer.Result σ τ)) :
-    IO UInt32 :=
-  CLI.Training.Command.runParsed exeName args parseFlags banner (fun runtime flags => train runtime
-      { flags with data := { flags.data with seed := runtime.seed } })
-    (fun result => result.printSummary)
-    (usage? := some <| optimizerUsage exeName #[
-      "  --x PATH           feature/image NPY file",
-      "  --y PATH           target NPY file",
-      "  --n-total N        rows to load"
-    ])
-
-/-- Forecast-window regression command using the public trainer API. -/
-def forecastWindow {σ τ : Shape}
+/-- Forecasting command with caller-supplied training and result reporting. -/
+def forecast {Result : Type}
     (exeName : String)
     (args : List String)
     (parseFlags :
-      List String → Except String (Support.ForecastWindowModelTrainFlags × List String))
+      List String → Except String
+        (Support.Training.Options Support.Forecast.Options × List String))
     (banner : Runtime.Config → String)
-    (train : Runtime.Config → Support.ForecastWindowModelTrainFlags →
-      IO (Trainer.Result σ τ)) :
+    (train : Runtime.Config → Support.Training.Options Support.Forecast.Options →
+      IO Result)
+    (report : Result → IO Unit) :
     IO UInt32 :=
   CLI.Training.Command.runParsed exeName args parseFlags banner (fun runtime flags => train runtime
       { flags with data := { flags.data with seed := runtime.seed } })
-    (fun result => result.printSummary)
+    report
     (usage? := some <| optimizerUsage exeName #[
       "  --x PATH           input-window NPY file",
       "  --y PATH           target-window NPY file",

@@ -6,37 +6,15 @@ Authors: TorchLean Team
 
 module
 
-public import NN.Runtime.Autograd.IRExec.Correctness.SemanticEquivalenceCommon
+public import NN.Runtime.Autograd.IRExec.Correctness.Common
 
 /-!
-# Semantic Equivalence (Op Cases)
+# Semantic Equivalence: Linear, Reshape, and Flatten
 
-This module contains semantic-preservation lemmas for IR node kinds handled
-inline in the main recursive theorem [`Correctness.SemanticEquivalence`].
-
-Why split these out?
-
-1. **Lowering performance:** `SemanticEquivalence.lean` is a large mutually-dependent proof
-   script; extracting the heaviest branches into separate theorems makes elaboration more
-   incremental and keeps error messages local to the relevant operator case.
-2. **Auditability:** these cases are part of the lowering pass/denotation contract. Giving them
-   named theorems makes it easier to see which IR fragments are covered.
-
-The proofs follow the same pattern as the per-operator modules under `Correctness/Ops/`:
-
-* unfold `buildFrom` and mirror its runtime checks,
-* construct the lowered `nodeData` forward closure,
-* show that `NN.IR.Graph.evalAt` produces the same dynamic value,
-* finish with the shared `buildFrom_denoteAllFrom_finish` lemma for the tail.
-
-Build note: these proofs are slow because each branch normalizes both the lowering pass and the IR
-evaluator, then proves that the resulting dynamic value agrees with a shape-indexed forward node.
-Shape casts and `Except` error paths are the main source of proof noise. The local linter scopes in
-this file mark the current proof-engineering boundary: the proof is checked, but the simplification
-scripts still deserve a pass with more helper lemmas.
-
-More cases should live in `Correctness/Ops/*`, with repeated parent and cast facts packaged as
-lemmas from `SemanticEquivalenceCommon`.
+These operation lemmas establish the dependent shape casts needed by the main recursive theorem.
+Linear validates payloads and applies its affine map over arbitrary leading dimensions. Reshape
+and flatten validate element counts and output shapes. Each proof follows the lowering guards,
+identifies the evaluator's output, and uses the shared node-completion lemma for the graph tail.
 -/
 
 @[expose] public section
@@ -119,7 +97,7 @@ theorem buildFrom_denoteAllFrom_linear
       let nodeData : ForwardNode α ([inShape] ++ ss) n.outShape :=
         mkForwardNode (α := α) (Γ := [inShape] ++ ss) (τ := n.outShape) (fun ctx =>
           let xIn : Tensor α expectedIn :=
-            Tensor.castShape (getIdx (α := α) (xs := ctx) ix) hIn
+            Tensor.castShape (readTensor (α := α) (xs := ctx) ix) hIn
           let y : Tensor α expectedOut := NN.IR.Graph.linearLeading leading p.W p.b xIn
           Tensor.castShape y hOut)
       let st1 : State α inShape := ⟨ss ++ [n.outShape], .snoc (ss := ss) gd nodeData⟩
@@ -151,18 +129,10 @@ theorem buildFrom_denoteAllFrom_linear
         have hOut' : n.outShape = expectedOut := hOut.symm
         simp [NN.IR.Graph.evalLinear, hLin, expectedIn, expectedOut, leading, hExpect, hOut',
           nodeData, Tensor.eqRec_eq_cast_shape, Pure.pure, Except.pure]
-      have hStep :
-          denoteAllState (α := α) inShape st1 x =
-            vals0.push
-              (Spec.SomeTensor.mk (α := α) n.outShape (nodeData.eval ctx)) := by
-        simpa [vals0, st1, nodeData, ctx] using
-          (denoteAllState_snoc (α := α) (inShape := inShape) (ss := ss)
-            (τ := n.outShape) (gd := gd) (nodeData := nodeData) (x := x))
       have hTail := ih st1 hRec
-      exact buildFrom_denoteAllFrom_finish (α := α) (g := g) (payload := payload)
-        (i := i) (x := x) (hi := hi) (τ := n.outShape)
-        (nodeData := nodeData) (st1 := st1) (st' := st')
-        (ctx := ctx) (vals0 := vals0) (input := input) hTail hEval hStep
+      exact buildFrom_denoteAllFrom_nodeData_exact (α := α) (g := g) (payload := payload)
+        (gd := gd) (i := i) (st' := st') (x := x) (hi := hi)
+        (τ := n.outShape) (nodeData := nodeData) hTail hEval
     · exact False.elim <| throw_bind_ne_ok hBuild
   · exact False.elim <| throw_bind_ne_ok hBuild
 
@@ -216,7 +186,7 @@ theorem buildFrom_denoteAllFrom_reshape
                   simp [hOut] at hBuild
                   let nodeData : ForwardNode α ([inShape] ++ ss) n.outShape :=
                     mkForwardNode (α := α) (Γ := [inShape] ++ ss) (τ := n.outShape) (fun ctx =>
-                      let x := getIdx (α := α) (xs := ctx) ip
+                      let x := readTensor (α := α) (xs := ctx) ip
                       hOut ▸ Tensor.reshapeSpec (α := α) (source := inS) (target := outS) x
                         hNumel)
                   let st1 : State α inShape := ⟨ss ++ [n.outShape], .snoc (ss := ss) gd nodeData⟩
@@ -242,18 +212,10 @@ theorem buildFrom_denoteAllFrom_reshape
                     simp [hNumel, Pure.pure, Except.pure]
                     cases hOut
                     simp [nodeData]
-                  have hStep :
-                      denoteAllState (α := α) inShape st1 x =
-                        vals0.push
-                          (Spec.SomeTensor.mk (α := α) n.outShape (nodeData.eval ctx)) := by
-                    simpa [vals0, st1, nodeData, ctx] using
-                      (denoteAllState_snoc (α := α) (inShape := inShape) (ss := ss)
-                        (τ := n.outShape) (gd := gd) (nodeData := nodeData) (x := x))
                   have hTail := ih st1 hRec
-                  exact buildFrom_denoteAllFrom_finish (α := α) (g := g) (payload := payload)
-                    (i := i) (x := x) (hi := hi) (τ := n.outShape)
-                    (nodeData := nodeData) (st1 := st1) (st' := st')
-                    (ctx := ctx) (vals0 := vals0) (input := input) hTail hEval hStep
+                  exact buildFrom_denoteAllFrom_nodeData_exact (α := α) (g := g)
+                    (payload := payload) (gd := gd) (i := i) (st' := st') (x := x) (hi := hi)
+                    (τ := n.outShape) (nodeData := nodeData) hTail hEval
                 ·
                   simp [hOut] at hBuild
                   try cases hBuild
@@ -309,7 +271,7 @@ theorem buildFrom_denoteAllFrom_flatten
                 simp [expected, hOut] at hBuild
                 let nodeData : ForwardNode α ([inShape] ++ ss) n.outShape :=
                   mkForwardNode (α := α) (Γ := [inShape] ++ ss) (τ := n.outShape) (fun ctx =>
-                    let x := getIdx (α := α) (xs := ctx) ip
+                    let x := readTensor (α := α) (xs := ctx) ip
                     let y : Tensor α expected := Tensor.flattenSpec (α := α) (shape := s) x
                     hOut ▸ y)
                 let st1 : State α inShape := ⟨ss ++ [n.outShape], .snoc (ss := ss) gd nodeData⟩
@@ -335,18 +297,10 @@ theorem buildFrom_denoteAllFrom_flatten
                   -- `evalAt` performs a final produced-shape check against `n.outShape`.
                   rw [dite_eq_left hOut]
                   simp [nodeData, Pure.pure, Except.pure]
-                have hStep :
-                    denoteAllState (α := α) inShape st1 x =
-                      vals0.push
-                        (Spec.SomeTensor.mk (α := α) n.outShape (nodeData.eval ctx)) := by
-                  simpa [vals0, st1, nodeData, ctx] using
-                    (denoteAllState_snoc (α := α) (inShape := inShape) (ss := ss)
-                      (τ := n.outShape) (gd := gd) (nodeData := nodeData) (x := x))
                 have hTail := ih st1 hRec
-                exact buildFrom_denoteAllFrom_finish (α := α) (g := g) (payload := payload)
-                  (i := i) (x := x) (hi := hi) (τ := n.outShape)
-                  (nodeData := nodeData) (st1 := st1) (st' := st')
-                  (ctx := ctx) (vals0 := vals0) (input := input) hTail hEval hStep
+                exact buildFrom_denoteAllFrom_nodeData_exact (α := α) (g := g)
+                  (payload := payload) (gd := gd) (i := i) (st' := st') (x := x) (hi := hi)
+                  (τ := n.outShape) (nodeData := nodeData) hTail hEval
               ·
                 simp [expected, hOut] at hBuild
                 try cases hBuild

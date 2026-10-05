@@ -31,10 +31,6 @@ structure Point where
   u : Float
 deriving Repr
 
-/-- Absolute difference for Float diagnostics. -/
-def absDiff (a b : Float) : Float :=
-  if a ≥ b then a - b else b - a
-
 /-- Check interval containment with a symmetric tolerance on the endpoints. -/
 def containsWithTol (u lo hi tol : Float) : Bool :=
   (u ≥ lo - tol) && (u ≤ hi + tol)

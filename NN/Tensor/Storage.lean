@@ -6,7 +6,7 @@ Authors: TorchLean Team
 
 module
 
-import Mathlib.Tactic.Finiteness.Attr
+public import NN.Tensor.Internal.Representation.Storage -- shake: keep
 
 /-!
 # Tensor Storage

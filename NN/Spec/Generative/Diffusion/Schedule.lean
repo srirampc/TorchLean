@@ -21,6 +21,9 @@ We follow the common DDPM-style discrete schedule:
 - define the cumulative product $\bar\alpha_0:=1$ and
   $\bar\alpha_{t+1}:=\bar\alpha_t\alpha_t$.
 
+The record below stores the coefficients without a range proof; these inequalities are
+assumptions of the probabilistic interpretation, not enforced by `VPSchedule`.
+
 Then the forward noising kernel is (informally):
 
 $$
@@ -52,7 +55,7 @@ open TorchLean TorchLean.Tensor
 variable {α : Type} [TorchLean.Storage α] [Context α]
 
 /-- Discrete VP schedule with `T` diffusion steps. -/
-structure VPSchedule (α : Type) (T : Nat) [TorchLean.Storage α] [Context α] where
+structure VPSchedule (α : Type) (T : Nat) [TorchLean.Storage α] where
   /-- Per-step variances $\beta_t$ for $t=0,\ldots,T-1$. -/
   betas : TorchLean.Tensor α [T]
 
@@ -103,7 +106,7 @@ def timeOfIndex (t : Fin (T + 1)) : α :=
 /-!
 ## Simple constructors
 
-These are convenience constructors for examples and examples.
+These are convenience constructors for examples.
 We intentionally keep them small and deterministic; large-scale training pipelines usually want
 explicit control over schedules.
 -/
@@ -125,8 +128,8 @@ def linearBetas (T : Nat) (β_start β_end : α) : TorchLean.Tensor α [T] :=
           -- `T = 1`: by convention, return the endpoint.
           TorchLean.Tensor.ofFn (fun _i : Fin 1 => β_end)
       | Nat.succ T'' =>
-          -- `T = T'' + 2`: interpolate using denominator `(T-1) = T'' + 1`, so the last beta is
-          -- exactly `β_end`.
+          -- `T = T'' + 2`: interpolate using denominator `(T-1) = T'' + 1`.
+          -- The last beta equals `β_end` in exact real arithmetic; rounding can change it.
           TorchLean.Tensor.ofFn (fun i : Fin (Nat.succ (Nat.succ T'')) =>
             let denom : α := (Nat.succ T'' : α) -- = T - 1
             let frac : α := (i.1 : α) / denom

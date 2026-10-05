@@ -43,7 +43,7 @@ variable {α : Type} [TorchLean.Storage α] [Context α]
 -- Matrix operations used by classical model specifications.
 
 /-- The index in `Fin n` corresponding to `i : Fin (n - 1)` after skipping one position. -/
-theorem minorIndex_lt {n : ℕ} (skip : Fin n) (i : Fin (n - 1)) :
+theorem minor_index_lt {n : ℕ} (skip : Fin n) (i : Fin (n - 1)) :
     (if i.val < skip.val then i.val else i.val + 1) < n := by
   by_cases h : i.val < skip.val <;> simp [h]
   · exact Nat.lt_of_lt_of_le i.isLt (Nat.pred_le n)
@@ -64,8 +64,8 @@ def matrixMinorSpec {α : Type} [TorchLean.Storage α] {n : Nat}
       let actualJ := if j.val < col.val then j.val else j.val + 1
       Tensor.scalar (
         get2 matrix
-          ⟨actualI, minorIndex_lt row i⟩
-          ⟨actualJ, minorIndex_lt col j⟩
+          ⟨actualI, minor_index_lt row i⟩
+          ⟨actualJ, minor_index_lt col j⟩
       )
     )
   )
@@ -101,8 +101,9 @@ def determinantSpec {α : Type} [TorchLean.Storage α] [Context α] :
 /--
 Matrix inverse via the adjugate formula (spec-level reference implementation).
 
-The result is `none` when the determinant is zero. Returning an unrelated matrix for a singular
-input would make downstream statistical formulas appear defined when they are not.
+The result is `none` when the backend comparison `det == 0` succeeds. No conditioning or finiteness
+check is performed; on floating-point backends, a nonzero or NaN determinant can therefore produce
+nonfinite entries.
 
 PyTorch analogue: `torch.linalg.inv`, with failure represented explicitly by `Option`.
 -/
@@ -130,14 +131,15 @@ def inverseSpec? {n : Nat}
 /--
 Approximate the leading eigenpair by a caller-selected number of power-iteration steps.
 
-The scalar is the final Rayleigh quotient and the tensor is the corresponding normalized iterate.
-This definition does not claim to compute a full eigendecomposition. Convergence to a dominant
-eigenvector requires the usual spectral assumptions on `matrix` and a suitable initial vector.
+The scalar is the final dot product `v · (matrix v)`, which is the Rayleigh quotient when `v` has
+unit norm. Each normalization is attempted only when its computed norm is positive; finite-precision
+execution does not guarantee a unit vector. Convergence to a dominant eigenvector requires spectral
+assumptions on `matrix` and a suitable initial vector.
 -/
 def powerIterationLeadingEigenpairSpec {n : Nat}
     (matrix : Tensor α [n, n]) (iterations : Nat) :
     α × Tensor α [n] :=
-  -- Power iteration: returns normalized eigenvector and its Rayleigh quotient
+  -- Retain the last iterate when its next computed norm is not positive.
   let rec powerIteration (v : Tensor α [n]) (iter : Nat) :
     (Tensor α [n] × α) :=
     if iter = 0 then
@@ -193,80 +195,6 @@ def euclideanDistanceSpec {nFeatures : Nat}
         total + ratio * ratio) 0 diff
       scale * MathFunctions.sqrt scaledSum
 
-/-- Squared Euclidean distance (avoids the final square root). -/
-def squaredEuclideanDistanceSpec {nFeatures : Nat}
-  (x y : Tensor α [nFeatures]) : α :=
-  let diff := subSpec x y
-  let squaredDiff := squareSpec diff
-  sumSpec squaredDiff
-
-/-- Manhattan (L1) distance between two feature vectors. -/
-def manhattanDistanceSpec {nFeatures : Nat}
-  (x y : Tensor α [nFeatures]) : α :=
-  let diff := subSpec x y
-  let absDiff := mapSpec MathFunctions.abs diff
-  sumSpec absDiff
-
-/--
-Cosine distance `1 - cos(theta)` between two feature vectors.
-
-If either vector has zero norm, this returns `1`.
--/
-def cosineDistanceSpec {nFeatures : Nat}
-  (x y : Tensor α [nFeatures]) : α :=
-  let dotProduct := dotSpec x y
-  let normX := MathFunctions.sqrt (sumSpec (squareSpec x))
-  let normY := MathFunctions.sqrt (sumSpec (squareSpec y))
-  let denominator := normX * normY
-  if denominator == 0 then 1 else 1 - (dotProduct / denominator)
-
-/--
-Minkowski distance of order `p` between two feature vectors.
-
-This generalizes L1 (Manhattan) and L2 (Euclidean). The explicit positivity hypothesis rules out
-the undefined order-zero and negative-order cases.
--/
-def minkowskiDistanceSpec {nFeatures : Nat}
-  (p : α) (_hp : p > 0) (x y : Tensor α [nFeatures]) : α :=
-  let diff := subSpec x y
-  let absDiff := mapSpec MathFunctions.abs diff
-  let powered := mapSpec (fun a => a ^ p) absDiff
-  let sumPowered := sumSpec powered
-  sumPowered ^ (1 / p)
-
--- Normalization and utility functions shared by model specifications.
-
-/--
-Divide a vector by its sum when that sum is positive.
-
-If the sum is not positive, this returns the uniform vector. When the input entries are
-nonnegative, the positive-sum branch is a probability distribution.
-
-PyTorch analogue: `probs / probs.sum()` (with an explicit zero-sum guard).
--/
-def normalizeByPositiveSumSpec {n : Nat} (values : Tensor α [n]) :
-  Tensor α [n] :=
-  let total := sumSpec values
-  if total > 0 then
-    Tensor.dim (fun i =>
-      Tensor.scalar (getScalar values i / total))
-  else
-    Tensor.dim (fun _ => Tensor.scalar (1 / n))
-
-/--
-L2-normalize a vector.
-
-If the norm is `0`, this returns the input unchanged.
--/
-def normalizeL2Spec {n : Nat} (vector : Tensor α [n]) :
-  Tensor α [n] :=
-  let norm := MathFunctions.sqrt (sumSpec (squareSpec vector))
-  if norm > 0 then
-    Tensor.dim (fun i =>
-      Tensor.scalar (getScalar vector i / norm))
-  else
-    vector
-
 /--
 L2-normalize a vector with an additive regularizer under the square root.
 
@@ -274,7 +202,7 @@ The denominator is
 
 `sqrt (sumᵢ vector[i] ^ 2 + regularizer)`.
 
-Unlike `normalizeL2Spec`, this operation has no zero-norm branch. Callers are responsible for
+This operation has no zero-norm branch. Callers are responsible for
 choosing a regularizer that makes the denominator meaningful in their scalar context. This is the
 normalization convention used by several attention and recurrent architectures, where the exact
 regularizer is part of the model specification.
@@ -288,10 +216,10 @@ def normalizeL2RegularizedSpec {n : Nat}
 /--
 Z-score normalization: subtract the mean and divide by the population standard deviation.
 
-Zero denominators follow the same convention as `normalizeL2Spec` and
-`normalizeByPositiveSumSpec`: each denominator is tested before it is used. When `n = 0` there is
-nothing to normalize and the empty input is returned without ever forming `sum / n`. When the
-standard deviation is `0`, the mean-centered vector is returned.
+When `n = 0`, the empty input is returned before forming a division. Otherwise the mean and
+variance divide by the scalar cast `(n : α)` without testing that cast for zero or finiteness.
+The final division occurs only when the computed standard deviation is positive; otherwise the
+mean-centered vector is returned. These guards do not guarantee finite output on every backend.
 -/
 def normalizeZscoreSpec {n : Nat} (vector : Tensor α [n]) :
   Tensor α [n] :=

@@ -6,7 +6,6 @@ Authors: TorchLean Team
 
 module
 
-import Mathlib.Tactic.Measurability.Init
 -- These two are discussed in the overview rather than used by it, which is exactly the shape
 -- `lake shake` reads as dead. They stay: the overview is the only route by which they get
 -- typechecked.

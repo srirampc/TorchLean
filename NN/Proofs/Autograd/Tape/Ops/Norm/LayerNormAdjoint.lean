@@ -41,11 +41,6 @@ variable {m n : Nat}
 
 /-! ## Entry lemmas -/
 
-/-- Entries of a pointwise vector product. -/
-theorem getScalar_mulSpec' {k : Nat} (a b : Tensor ℝ [k]) (i : Fin k) :
-    getScalar (mulSpec a b) i = getScalar a i * getScalar b i := by
-  simp [mulSpec]
-
 /-- Column sums along the sequence axis. -/
 theorem getScalar_reduceSum_zero (x : Tensor ℝ [m, n])
     (h : Shape.NonemptyAxis 0 (.dim m (.dim n .scalar))) (j : Fin n) :
@@ -61,10 +56,6 @@ theorem getScalar_reduceSum_zero (x : Tensor ℝ [m, n])
 
 /-! ## Explicit matrix forms -/
 
-/-- Row broadcast of a length-`m` vector to an `m × n` matrix. -/
-abbrev bAS (v : Tensor ℝ [m]) : Tensor ℝ [m, n] :=
-  broadcastAfterSum (.dim m (.dim n .scalar)) 1 v
-
 /-- `1 / std`, as computed by the spec. -/
 def lnInvStd (x : Tensor ℝ [m, n]) (h1 : Shape.NonemptyAxis 1 (.dim m (.dim n .scalar)))
     (ε : ℝ) : Tensor ℝ [m] :=
@@ -73,14 +64,15 @@ def lnInvStd (x : Tensor ℝ [m, n]) (h1 : Shape.NonemptyAxis 1 (.dim m (.dim n 
 /-- `Spec.layerNormJvp` with its axis, broadcast, and cast evidence spelled out. -/
 def layerNormJvpMat (x tangent : Tensor ℝ [m, n]) (gamma dgamma dbeta : Tensor ℝ [n])
     (h1 : Shape.NonemptyAxis 1 (.dim m (.dim n .scalar))) (ε : ℝ) : Tensor ℝ [m, n] :=
-  let inv_std_b : Tensor ℝ [m, n] := bAS (lnInvStd x h1 ε)
+  let inv_std_b : Tensor ℝ [m, n] := rowBroadcast (lnInvStd x h1 ε)
   let norm := mulSpec (lnCentered x h1) inv_std_b
   let mean_tangent := divSpec (reduceSum 1 tangent h1) (Tensor.full (.dim m .scalar) (n : ℝ))
   let mean_tangent_norm :=
     divSpec (reduceSum 1 (mulSpec tangent norm) h1) (Tensor.full (.dim m .scalar) (n : ℝ))
   let dnorm :=
     mulSpec inv_std_b
-      (subSpec (subSpec tangent (bAS mean_tangent)) (mulSpec norm (bAS mean_tangent_norm)))
+      (subSpec (subSpec tangent (rowBroadcast mean_tangent))
+        (mulSpec norm (rowBroadcast mean_tangent_norm)))
   addSpec
     (addSpec (mulSpec dnorm (broadcastTo (colBroadcast (m := m) (n := n)) gamma))
       (mulSpec norm (broadcastTo (colBroadcast (m := m) (n := n)) dgamma)))
@@ -91,7 +83,7 @@ def layerNormBackwardMat (x : Tensor ℝ [m, n]) (gamma : Tensor ℝ [n]) (grad 
     (h1 : Shape.NonemptyAxis 1 (.dim m (.dim n .scalar)))
     (h0 : Shape.NonemptyAxis 0 (.dim m (.dim n .scalar))) (ε : ℝ) :
     NormalizationGradients ℝ [m, n] [n] :=
-  let norm := divSpec (lnCentered x h1) (bAS (lnStd x h1 ε))
+  let norm := divSpec (lnCentered x h1) (rowBroadcast (lnStd x h1 ε))
   let biasGradient := reduceSum 0 grad h0
   let scaleGradient := reduceSum 0 (mulSpec grad norm) h0
   let dy_gamma := mulSpec grad (broadcastTo (colBroadcast (m := m) (n := n)) gamma)
@@ -99,8 +91,9 @@ def layerNormBackwardMat (x : Tensor ℝ [m, n]) (gamma : Tensor ℝ [n]) (grad 
   let mean_dy_gamma_xhat :=
     divSpec (reduceSum 1 (mulSpec dy_gamma norm) h1) (Tensor.full (.dim m .scalar) (n : ℝ))
   let inputGradient :=
-    mulSpec (bAS (lnInvStd x h1 ε))
-      (subSpec (subSpec dy_gamma (bAS mean_dy_gamma)) (mulSpec norm (bAS mean_dy_gamma_xhat)))
+    mulSpec (rowBroadcast (lnInvStd x h1 ε))
+      (subSpec (subSpec dy_gamma (rowBroadcast mean_dy_gamma))
+        (mulSpec norm (rowBroadcast mean_dy_gamma_xhat)))
   { inputGradient, scaleGradient, biasGradient }
 
 /-- `Spec.layerNormJvp` is `layerNormJvpMat` by unfolding. -/

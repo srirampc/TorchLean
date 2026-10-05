@@ -6,6 +6,8 @@ Authors: TorchLean contributors
 module
 
 public import NN.Tensor.Internal.Representation.Fiber.Differential
+import Mathlib.Algebra.GroupWithZero.Commute
+import Mathlib.Data.Nat.Cast.Commute
 
 /-!
 # Equal-share tie rules
@@ -160,7 +162,7 @@ maximum tie it describes one symmetric generalized derivative; it does not
 assert that the ordinary derivative exists there.
 -/
 theorem dot_equalShareTieDifferential_eq_dot_equalShareTieVjp
-    {R : Type u} [Storage R] [Field R] [DecidableEq R] {s t : Shape}
+    {R : Type u} [Storage R] [DivisionRing R] [DecidableEq R] {s t : Shape}
     (aggregate : (values : Multiset R) → values ≠ 0 → R)
     (f : Coord s → Coord t)
     (fiberNonempty :
@@ -183,7 +185,11 @@ theorem dot_equalShareTieDifferential_eq_dot_equalShareTieVjp
   intro outputCoordinate _
   apply Finset.sum_congr rfl
   rintro ⟨inputCoordinate, rfl⟩ _
-  ac_rfl
+  dsimp only [equalShareTieWeight]
+  split
+  · rw [← mul_assoc, (Nat.cast_commute _ (inputTangent inputCoordinate)).inv_left₀.eq,
+      mul_assoc]
+  · simp
 
 end Rep
 

@@ -69,10 +69,12 @@ abbrev outputShape {d : Nat} (config : Diffusion.NoisePredictor.Config d)
 
 end Diffusion.NoisePredictor.Config
 
+namespace Diffusion.NoisePredictor
+
 namespace Internal
 
 /-- Implementation helper for the shape-preserving convolutions in the epsilon predictors. -/
-def noisePredictorConvolution {d : Nat}
+def conv {d : Nat}
     (config : Diffusion.NoisePredictor.Config d) (batchShape : Shape)
     (inputChannels outputChannels : Nat) :
     nn.Builder (nn.Sequential
@@ -92,6 +94,19 @@ def noisePredictorConvolution {d : Nat}
       (nn.conv config.spatial (geometry.convolution outputChannels)
         (batchShape := batchShape) (inputChannels := inputChannels))
 
+/-- Build one independently seeded two-convolution residual branch. -/
+def residualBlock {d : Nat}
+    (config : Diffusion.NoisePredictor.Config d) (batchShape : Shape) :
+    nn.Builder (nn.Sequential
+      (batchShape.concat ((config.spatial.to Shape).prependDim config.hiddenChannels))
+      (batchShape.concat ((config.spatial.to Shape).prependDim config.hiddenChannels))) := do
+  let block ← nn.Sequential![
+    conv config batchShape config.hiddenChannels config.hiddenChannels,
+    relu,
+    conv config batchShape config.hiddenChannels config.hiddenChannels
+  ]
+  pure (nn.residual block)
+
 end Internal
 
 /--
@@ -101,7 +116,7 @@ Build a minimal epsilon-predictor conv net:
 This stays compact enough for the eager CUDA example while giving the CIFAR trainer more denoising
 capacity than a bare two-layer network.
 -/
-def Diffusion.NoisePredictor.basic {d : Nat}
+def basic {d : Nat}
     (config : Diffusion.NoisePredictor.Config d) (batchShape : Shape := []) :
     nn.Builder
       (nn.Sequential (config.inputShape batchShape) (config.outputShape batchShape)) :=
@@ -112,16 +127,16 @@ def Diffusion.NoisePredictor.basic {d : Nat}
         "Diffusion.NoisePredictor" message
   | .ok () =>
       nn.Sequential![
-        Internal.noisePredictorConvolution config batchShape
+        Internal.conv config batchShape
           (config.dataChannels + 1) config.hiddenChannels,
         relu,
-        Internal.noisePredictorConvolution config batchShape
+        Internal.conv config batchShape
           config.hiddenChannels config.hiddenChannels,
         relu,
-        Internal.noisePredictorConvolution config batchShape
+        Internal.conv config batchShape
           config.hiddenChannels config.hiddenChannels,
         relu,
-        Internal.noisePredictorConvolution config batchShape
+        Internal.conv config batchShape
           config.hiddenChannels config.dataChannels
       ]
 
@@ -139,7 +154,7 @@ and multi-scale skip concatenation. It is still a useful compact architecture be
 residual paths make the denoising problem much easier than a plain conv chain while staying within
 the eager CUDA memory envelope used by examples.
 -/
-def Diffusion.NoisePredictor.residual {d : Nat}
+def residual {d : Nat}
     (config : Diffusion.NoisePredictor.Config d)
     (batchShape : Shape := []) :
     nn.Builder
@@ -151,34 +166,18 @@ def Diffusion.NoisePredictor.residual {d : Nat}
         "Diffusion.NoisePredictor" message
   | .ok () =>
       nn.Sequential![
-        Internal.noisePredictorConvolution config batchShape
+        Internal.conv config batchShape
           (config.dataChannels + 1) config.hiddenChannels,
         relu,
-        (do
-          let block ←
-            nn.Sequential![
-              Internal.noisePredictorConvolution config batchShape
-                config.hiddenChannels config.hiddenChannels,
-              relu,
-              Internal.noisePredictorConvolution config batchShape
-                config.hiddenChannels config.hiddenChannels
-            ]
-          pure (nn.residual block)),
+        Internal.residualBlock config batchShape,
         relu,
-        (do
-          let block ←
-            nn.Sequential![
-              Internal.noisePredictorConvolution config batchShape
-                config.hiddenChannels config.hiddenChannels,
-              relu,
-              Internal.noisePredictorConvolution config batchShape
-                config.hiddenChannels config.hiddenChannels
-            ]
-          pure (nn.residual block)),
+        Internal.residualBlock config batchShape,
         relu,
-        Internal.noisePredictorConvolution config batchShape
+        Internal.conv config batchShape
           config.hiddenChannels config.dataChannels
       ]
+
+end Diffusion.NoisePredictor
 
 end models
 end nn
@@ -316,34 +315,18 @@ def normalizedTime {steps : Nat} (schedule : Schedule steps) (step : Nat) : Floa
 
 end Schedule
 
-namespace Internal
-
-/-- Recursive worker for `diffusion.appendTimeChannel`. -/
-def appendTimeChannel (batchShape : Shape) {d c : Nat} (spatial : Tensor Nat [d])
-    (x : Tensor Float (sampleShape batchShape c spatial)) (tNorm : Float) :
-    Tensor Float (sampleShape batchShape (c + 1) spatial) :=
-  match batchShape with
-  | .scalar =>
-      TorchLean.Tensor.concatAfter [] x <|
-        TorchLean.Tensor.full
-          ((spatial.to Shape).prependDim 1) tNorm
-  | .dim _ rest =>
-      TorchLean.Tensor.stackLeading fun index =>
-        appendTimeChannel rest spatial (x.unstack index) tNorm
-
-end Internal
-
 /--
 Append a constant time channel to every sample in `batchShape`.
 
 The input layout is `batchShape × channels × spatial`. The result preserves the batch and spatial
 axes and changes only the channel count from `c` to `c + 1`.
 -/
-def appendTimeChannel (batchShape : Shape) {d c : Nat} (spatial : Tensor Nat [d])
-    (x : Tensor Float (sampleShape batchShape c spatial))
-    (tNorm : Float) :
-    Tensor Float (sampleShape batchShape (c + 1) spatial) :=
-  Internal.appendTimeChannel batchShape spatial x tNorm
+def appendTimeChannel {α : Type} [Storage α]
+    (batchShape : Shape) {d c : Nat} (spatial : Tensor Nat [d])
+    (x : Tensor α (sampleShape batchShape c spatial))
+    (tNorm : α) :
+    Tensor α (sampleShape batchShape (c + 1) spatial) :=
+  Tensor.concatAfter batchShape x (Tensor.full (sampleShape batchShape 1 spatial) tNorm)
 
 /--
 Build an epsilon-prediction training sample from explicit noise.
@@ -397,14 +380,21 @@ One deterministic DDIM reverse update ($\eta=0$).
 Given $x_t$, predicted epsilon, and adjacent schedule values, this estimates $x_0$ and remixes it to
 the previous timestep.
 
-We clamp the intermediate $x_0$ estimate to the training image range $[-1,1]$.  This is the standard
-"clipped denoised" stabilizer used by many DDPM/DDIM samplers: without it, a compact model can
-drive one color channel far outside the data range and the final PPM exporter merely clips the
-damage into saturated color blobs.
+The default postprocessor clamps the intermediate $x_0$ estimate to the training image range
+$[-1,1]$. This stabilizes compact image models whose reconstruction can drift outside the data
+range. Supply `postprocess := id` for an unclipped reconstruction, or a shape-preserving transform
+for another data domain. Postprocessing happens before remixing and does not recompute epsilon.
+
+The reconstruction denominator uses the explicit `sqrtAb > denominatorFloor` branch, with the
+floor in the else branch. The default is `1e-12`. For finite schedule coefficients, a positive
+finite floor keeps the denominator finite and nonzero.
 -/
 def ddimPrev {shape : Shape}
     (abPrev ab : Float)
-    (x_t epsHat : Tensor Float shape) : Tensor Float shape :=
+    (x_t epsHat : Tensor Float shape)
+    (postprocess : Tensor Float shape → Tensor Float shape :=
+      fun reconstruction => Tensor.clamp reconstruction (-1) 1)
+    (denominatorFloor : Float := 1e-12) : Tensor Float shape :=
   -- Obtain constants and branch operations from the spec's scalar dictionary. In particular,
   -- retain max(alpha, zero) and the strict root > floor test with the floor in the else branch.
   -- Their operand order matters for Float zeros and non-finite inputs.
@@ -420,11 +410,10 @@ def ddimPrev {shape : Shape}
   let x0Hat : Tensor Float shape :=
     TorchLean.Tensor.scale
       (TorchLean.Tensor.sub x_t (TorchLean.Tensor.scale epsHat sqrtOneMinusAb))
-      (one / (if sqrtAb > 1e-12 then sqrtAb else 1e-12))
-  let x0Clipped : Tensor Float shape :=
-    TorchLean.Tensor.clamp x0Hat (-one) one
+      (one / (if sqrtAb > denominatorFloor then sqrtAb else denominatorFloor))
+  let x0Processed := postprocess x0Hat
   TorchLean.Tensor.add
-    (TorchLean.Tensor.scale x0Clipped sqrtAbPrev)
+    (TorchLean.Tensor.scale x0Processed sqrtAbPrev)
     (TorchLean.Tensor.scale epsHat sqrtOneMinusAbPrev)
 
 end diffusion

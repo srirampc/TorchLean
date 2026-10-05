@@ -30,12 +30,8 @@ The generic JSON helpers (`loadWeights?`, `parseTensor`, `inferMatrixDims`, …)
 namespace Import
 namespace PINNPyTorch
 
-open Spec TorchLean
-open TorchLean TorchLean.Tensor
-open Shape
-open Lean
-open Data
-open Json
+open Spec TorchLean TorchLean.Tensor Shape
+open Lean Data Json
 
 open NN.Verification.PINN
 open Import.PyTorch
@@ -69,24 +65,32 @@ structure PinnState where
 ## Activation metadata
 
 Python training scripts often record which nonlinearity they used. We treat that as optional
-metadata under `meta.activation`. If it is missing (or unknown), we default to `tanh`.
+metadata under `meta.activation`. If it is missing we default to `tanh`; an unrecognized value
+rejects the checkpoint instead of silently bounding it as a tanh network.
 -/
 
-/- Parse optional activation metadata from JSON (`meta.activation`). -/
 namespace Internal
 
-/-- Internal: parse optional activation metadata from JSON (`meta.activation`). -/
-def parseActivation (metaOpt : Option Json) : HiddenActivation :=
+/--
+Parse optional activation metadata from JSON (`meta.activation`).
+
+An absent `meta` object or `activation` field selects `tanh`. A present value must name a
+supported nonlinearity (`tanh`, `relu`, or `sin`/`sine`/`siren`); anything else fails the load.
+-/
+def parseActivation (metaOpt : Option Json) : Option HiddenActivation :=
   match metaOpt with
+  | none => some HiddenActivation.tanh
   | some (Json.obj metaObj) =>
     match metaObj.get? "activation" with
+    | none => some HiddenActivation.tanh
     | some (Json.str s) =>
-      let s := s.toLower
-      if s = "relu" then HiddenActivation.relu
-      else if s = "sin" ∨ s = "sine" ∨ s = "siren" then HiddenActivation.sin
-      else HiddenActivation.tanh
-    | _ => HiddenActivation.tanh
-  | _ => HiddenActivation.tanh
+      match s.toLower with
+      | "tanh" => some HiddenActivation.tanh
+      | "relu" => some HiddenActivation.relu
+      | "sin" | "sine" | "siren" => some HiddenActivation.sin
+      | _ => none
+    | some _ => none
+  | some _ => none
 
 end Internal
 
@@ -96,7 +100,7 @@ Load a PINN state dict with arbitrary hidden widths.
 Expected keys:
 
 - `layers.<i>.weight` and `layers.<i>.bias` for each layer index `i`
-- optional `meta.activation`
+- optional `meta.activation` (see `Internal.parseActivation`; unsupported values reject)
 
 Unlike fixed-shape examples, we infer `(outDim, inDim)` for each layer from the JSON matrix shape.
 -/
@@ -116,12 +120,12 @@ def loadPinnState (j : Json) : Option PinnState := do
   match weightIdxs[0]? with
   | none => none
   | some _ =>
-    let activation := Internal.parseActivation (o.get? "meta")
+    let activation ← Internal.parseActivation (o.get? "meta")
     let layers ←
       weightIdxs.foldlM (fun acc idx => do
         let base := s!"layers.{idx}"
-        let wJson ← getJson? o (base ++ ".weight")
-        let bJson ← getJson? o (base ++ ".bias")
+        let wJson ← o.get? (base ++ ".weight")
+        let bJson ← o.get? (base ++ ".bias")
         let (outDim, inDim) ← inferMatrixDims wJson
         let weights ← parseTensor (.dim outDim (.dim inDim .scalar)) wJson
         let bias ← parseTensor (.dim outDim .scalar) bJson

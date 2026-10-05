@@ -4,18 +4,18 @@ title: Bug Zoo
 
 # Bug Zoo
 
-Bug Zoo collects mistakes that are easy to miss in ordinary machine-learning tests. The program
-still runs and returns a tensor, loss, or token sequence, but the result no longer has the meaning
-the caller assumed.
+Here we'll look at mistakes that are easy to miss in ordinary machine-learning tests. Our program
+may still return a tensor, loss, or token sequence even when it computes something different from
+what we intended.
 
-Each example is deliberately small. It states the intended behavior as a Lean definition or
-theorem, shows where an implementation can depart from it, and identifies any runtime assumption
-that remains outside the proof. Together they cover attention, decoding, data boundaries,
+We'll keep each example small: state the intended behavior in Lean, examine how an implementation
+can depart from it, and identify any runtime assumptions left outside the proof. The examples cover attention, decoding, data boundaries,
 normalization, losses, compilation, floating point, and geometry.
 
 ## Attention and Autoregressive Decoding
 
-A causal mask should exclude future keys exactly. Replacing $-\infty$ with a large finite negative
+Let's start with causal attention. We want the mask to exclude future keys exactly.
+Replacing $-\infty$ with a large finite negative
 number only approximates that behavior and can fail when logits leave the expected range.
 [`AttentionMask.lean`](https://github.com/lean-dojo/TorchLean/blob/main/NN/Examples/BugZoo/AttentionMask.lean)
 uses hard-mask semantics and proves that every strict-future attention weight is zero.
@@ -25,12 +25,12 @@ and values that full-sequence attention would have seen, in the same positions.
 [`KVCache.lean`](https://github.com/lean-dojo/TorchLean/blob/main/NN/Examples/BugZoo/KVCache.lean)
 checks the append operation, while
 [`RoPEPosition.lean`](https://github.com/lean-dojo/TorchLean/blob/main/NN/Examples/BugZoo/RoPEPosition.lean)
-records the position assigned to the new token. These contracts isolate the two common off-by-one
-errors instead of hiding them inside a generation loop.
+records the position assigned to the new token. These examples let us check the cache update and
+token position separately from the generation loop.
 
 ## Data, Batches, and Normalization State
 
-Tokenizer errors often appear much earlier than the model. A checkpoint may expect one vocabulary
+Before a token reaches our model, we need to check how it was encoded. A checkpoint may expect one vocabulary
 or special-token convention while the data loader supplies another.
 [`TokenizerBoundary.lean`](https://github.com/lean-dojo/TorchLean/blob/main/NN/Examples/BugZoo/TokenizerBoundary.lean)
 requires imported token ids to inhabit `Fin vocabularySize`, making the vocabulary bound part of the
@@ -52,7 +52,7 @@ fixed inference statistics and proves the same affine map works for every input.
 
 ## Losses, Floating Point, and Compilation
 
-Several examples concern computations that are mathematically familiar but numerically unsafe.
+Next, we'll look at familiar formulas that can fail when we evaluate them numerically.
 Masking a quotient after division does not repair a division by zero, and a direct implementation
 of a logit loss can overflow even when its stable form is finite. `AutogradDomain.lean` and
 `StableLoss.lean` expose the denominator policy and stable formula before reverse mode is considered.
@@ -67,25 +67,26 @@ the supported IR fragment preserves node denotations in a Lean reference evaluat
 excludes raw logarithm nodes; external compiler and native-kernel conformance remain separate obligations.
 
 The final geometry case starts from tensors exported by a detector. Lean recomputes camera
-projection and positive depth, then checks that the reported two-dimensional box encloses every
-projected corner. The detector remains an external producer; the enclosure claim does not.
+projection and positive depth, then checks that the reported two-dimensional box, expanded by its
+stated tolerance, encloses every projected corner. This checks the exported geometry, not the
+detector's ability to identify the right object.
 
 ## Run the Examples
 
-Build the complete collection with:
+We can check all the Lean examples by building the collection:
 
 ```bash
-lake build NN.Examples.BugZoo.All
+scripts/lake.sh build NN.Examples.BugZoo.All
 ```
 
 The geometry case has a registered certificate checker:
 
 ```bash
-lake exe verify -- camera-box3d-cert
+scripts/lake.sh exe verify -- camera-box3d-cert
 ```
 
 The other entries are inspected through their checked Lean definitions and theorems. The separate
-`lake exe verify -- all` command runs the ten bundled checks opted in through `includeInAll`.
+`scripts/lake.sh exe verify -- all` command runs the ten bundled checks opted in through `includeInAll`.
 External, interactive, and longer workflows are excluded; `verify -- list` shows the complete registry.
 
 For a runnable PyTorch comparison of one-feature LayerNorm and constant normalization slices:
@@ -116,12 +117,12 @@ The source files and the contracts they expose are listed below.
 | `ShapeAndBroadcast.lean` | Missing axes and silent broadcasts | Dimension changes are explicit terms with shape evidence. |
 | `CompilerBoundary.lean` | Optimized graphs silently changing semantics | Successful supported IR lowering preserves reference node denotations, assuming no raw logarithm nodes. |
 | `FloatBoundary.lean` | Real-valued reasoning applied to Float32 runs | FloatLib proves native round trips, finite-input add/sub agreement, and total square-root agreement through native export; configured division has a separate software-model refinement. |
-| `Geometry3DProjection.lean` | Camera convention, depth, layout, and projection-box errors | The checker recomputes projection, positive depth, and 2D box enclosure. |
+| `Geometry3DProjection.lean` | Camera convention, depth, layout, and projection-box errors | The checker recomputes projection, positive depth, and 2D box enclosure up to the declared tolerance. |
 
 ## Two Checked Statements
 
-Under hard-mask semantics, every strict-future key receives exactly zero attention weight.
-The source theorem has this signature:
+Let's look more closely at two of the statements. For hard-masked attention, we prove that every
+strict-future key receives exactly zero weight:
 
 ```text
 theorem trueInfinityMask_future_attention_weight_zero
@@ -131,7 +132,7 @@ theorem trueInfinityMask_future_attention_weight_zero
 ```
 
 Lean 4.34.0 defines core `Float32` operations through `Float32.Model`. The scalar connection comes
-from FloatLib directly. This complete example proves addition agreement for finite operands:
+from FloatLib directly. We can use its theorem to prove addition agreement for finite operands:
 
 ```lean
 import FloatLib.Floats.Formats.IEEE754

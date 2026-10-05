@@ -7,6 +7,7 @@ Authors: TorchLean Team
 module
 
 public import NN.Verification.Cert.AbCrownLeafCert
+public import NN.Verification.Cert.CROWNQuery.Json
 public import NN.Verification.Geometry3D.CLI
 public import NN.Verification.LiRPA
 public import NN.Verification.PINN.CLI
@@ -31,8 +32,9 @@ public import NN.MLTheory.CROWN.Lyapunov.TwoStage.PipelineIIIAllInLean
 Unified verification CLI registry.
 
 The repository exposes several verification entry points: LiRPA-style bound checks, PINN
-certificate recomputation, α,β-CROWN leaf artifact checks, logit-bound reports, ODE
-enclosure checks, and model-to-IR bound propagation workflows.
+certificate recomputation, exact CROWN output queries, consistency checks for converted
+α,β-CROWN leaf artifacts, logit-bound reports, ODE enclosure checks, and model-to-IR bound
+propagation workflows.
 
 This file defines a single dispatcher so users can run everything from:
   `lake exe verify -- <tool> [args...]`
@@ -45,7 +47,6 @@ References (background on the verifier families exposed here):
 -/
 
 @[expose] public section
-
 
 namespace NN.Verification.CLI
 
@@ -122,13 +123,13 @@ def lirpaTools : List Tool :=
       "NN/Examples/Verification/LiRPA/cnn_cert.json"
       NN.Verification.LiRPA.Cnn.verifyCert
   , mk "lirpa-attention" "IBP cert: attention softmax block"
-    "NN/Examples/Verification/LiRPA/attention_softmax_cert.json"
+      "NN/Examples/Verification/LiRPA/attention_softmax_cert.json"
       NN.Verification.LiRPA.Attention.verifyCert
   , mk "lirpa-gru" "IBP cert: GRU gate"
       "NN/Examples/Verification/LiRPA/gru_gate_cert.json"
       NN.Verification.LiRPA.Gru.verifyCert
   , mk "lirpa-encoder" "IBP cert: transformer encoder block"
-    "NN/Examples/Verification/LiRPA/transformer_encoder_cert.json"
+      "NN/Examples/Verification/LiRPA/transformer_encoder_cert.json"
       NN.Verification.LiRPA.TransformerEncoder.verifyCert
   ]
 
@@ -159,9 +160,13 @@ def otherTools : List Tool :=
       run := fun args =>
         NN.Verification.PINN.CLI.main args }
   , { name := "abcrown-leaf"
-      description := "α,β-CROWN leaf artifact structural check"
+      description := "consistency check of a converted α,β-CROWN leaf artifact (no bound recheck)"
       defaultArg := some NN.Verification.Cert.AbCrownLeafCert.defaultArtifactPath
       run := fun args => NN.Verification.Cert.AbCrownLeafCert.run args }
+  , { name := "crown-query"
+      description := "exact rational CROWN output query (crown_query_v1) with a soundness theorem"
+      includeInAll := false
+      run := fun args => NN.Verification.Cert.CROWNQuery.run args }
   , { name := "margin-report"
       description := "check internal consistency of an exported logit-bound report"
       defaultArg := some NN.Verification.Robustness.MarginCertCLI.defaultPath
@@ -183,7 +188,7 @@ def otherTools : List Tool :=
       run := fun args =>
         NN.Verification.Builtin.CrownOpsWorkflow.main args }
   , { name := "torchlean-mlp-workflow"
-      description := "train a classifier, then check robustness with Alpha-Beta-CROWN"
+      description := "train a classifier, then check robustness with α-CROWN and IBP phases"
       includeInAll := false
       run := fun args =>
         NN.Verification.Builtin.MlpTrainVerifyWorkflow.main args }
@@ -253,7 +258,7 @@ def dispatch (args : List String) : IO Unit := do
     | _ => args
   let help := usage tools
   match args with
-  | List.nil =>
+  | [] =>
       IO.println help
   | "list" :: _ =>
       IO.println help

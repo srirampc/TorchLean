@@ -51,6 +51,10 @@ def _load_mat(path: Path) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     u = np.asarray(mat["usol"])
     if u.shape != (x.shape[0], t.shape[0]):
         raise SystemExit(f"Unexpected usol shape {u.shape}, expected ({x.shape[0]}, {t.shape[0]})")
+    if x.size == 0 or t.size == 0:
+        raise SystemExit("MAT coordinates must be nonempty")
+    if any(np.iscomplexobj(a) or not np.isfinite(a).all() for a in (x, t, u)):
+        raise SystemExit("MAT coordinates and solution must be finite real numbers")
     return x, t, u
 
 
@@ -89,6 +93,10 @@ def main() -> None:
     ap.add_argument("--max-boundary", type=int, default=200)
     ap.add_argument("--max-data", type=int, default=2000)
     args = ap.parse_args()
+    if args.t_max is not None and not math.isfinite(args.t_max):
+        ap.error("--t-max must be finite")
+    if min(args.max_collocation, args.max_initial, args.max_boundary, args.max_data) < 0:
+        ap.error("sample counts must be nonnegative")
 
     x, t, usol = _load_mat(Path(args.mat))
 
@@ -122,7 +130,8 @@ def main() -> None:
 
     # Data points (supervised u)
     if args.full_grid:
-        data = [_as_entry(float(x[i]), float(t[j]), float(usol[i, j])) for (i, j) in pool]
+        data = [_as_entry(float(x[i]), float(t[j]), float(usol[i, j]))
+                for i in range(nx) for j in range(nt)]
     else:
         data_idx = _sample_indices(rng, len(pool), args.max_data)
         data = [_as_entry(float(x[pool[k][0]]), float(t[pool[k][1]]), float(usol[pool[k][0], pool[k][1]])) for k in data_idx]
@@ -146,7 +155,7 @@ def main() -> None:
 
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(payload, indent=2, sort_keys=True))
+    out.write_text(json.dumps(payload, indent=2, sort_keys=True, allow_nan=False))
     print(f"Wrote dataset JSON to {out}")
 
 

@@ -88,16 +88,16 @@ runtime parameter list.
 -/
 def elmanCellDGraph {inputSize hiddenSize : Nat}
     (cell : Spec.LinearSpec ℝ (inputSize + hiddenSize) hiddenSize) :
-    DGraph (ΓElman inputSize hiddenSize) (ssElmanCell inputSize hiddenSize) := by
+    DGraph (ΓElman inputSize hiddenSize) (ssElmanCell inputSize hiddenSize) :=
   let dg0 : DGraph (ΓElman inputSize hiddenSize) [] := DGraph.nil
   let dg1 :
       DGraph (ΓElman inputSize hiddenSize) [.dim (inputSize + hiddenSize) .scalar] :=
     DGraph.snoc (dg := dg0)
-      (node := concatLeadingAxis
+      (node := concat
         (Γ := ΓElman inputSize hiddenSize) (n := inputSize) (m := hiddenSize) (s := .scalar)
         (idxInput (inputSize := inputSize) (hiddenSize := hiddenSize) (ss := []))
         (idxHidden (inputSize := inputSize) (hiddenSize := hiddenSize) (ss := [])))
-      (hn := concatLeadingAxisFderiv
+      (hn := concatFderiv
         (Γ := ΓElman inputSize hiddenSize) (n := inputSize) (m := hiddenSize) (s := .scalar)
         (idxInput (inputSize := inputSize) (hiddenSize := hiddenSize) (ss := []))
         (idxHidden (inputSize := inputSize) (hiddenSize := hiddenSize) (ss := [])))
@@ -113,18 +113,17 @@ def elmanCellDGraph {inputSize hiddenSize : Nat}
         (Γ := ΓElman inputSize hiddenSize ++ [.dim (inputSize + hiddenSize) .scalar])
         (inDim := inputSize + hiddenSize) (outDim := hiddenSize)
         (idxConcat (inputSize := inputSize) (hiddenSize := hiddenSize)) cell)
-  exact
-    DGraph.snoc (dg := dg2)
-      (node := tanh
-        (Γ := ΓElman inputSize hiddenSize ++
-          [.dim (inputSize + hiddenSize) .scalar, HShape hiddenSize])
-        (s := HShape hiddenSize)
-        (idxPre (inputSize := inputSize) (hiddenSize := hiddenSize)))
-      (hn := tanhFderiv
-        (Γ := ΓElman inputSize hiddenSize ++
-          [.dim (inputSize + hiddenSize) .scalar, HShape hiddenSize])
-        (s := HShape hiddenSize)
-        (idxPre (inputSize := inputSize) (hiddenSize := hiddenSize)))
+  DGraph.snoc (dg := dg2)
+    (node := tanh
+      (Γ := ΓElman inputSize hiddenSize ++
+        [.dim (inputSize + hiddenSize) .scalar, HShape hiddenSize])
+      (s := HShape hiddenSize)
+      (idxPre (inputSize := inputSize) (hiddenSize := hiddenSize)))
+    (hn := tanhFderiv
+      (Γ := ΓElman inputSize hiddenSize ++
+        [.dim (inputSize + hiddenSize) .scalar, HShape hiddenSize])
+      (s := HShape hiddenSize)
+      (idxPre (inputSize := inputSize) (hiddenSize := hiddenSize)))
 
 /--
 End-to-end VJP theorem for one vanilla RNN cell.
@@ -335,16 +334,14 @@ theorem elmanUnroll_hasFDerivAt
       HasFDerivAt (elmanUnroll cell steps) D x := by
   induction steps generalizing x with
   | nil =>
-      refine ⟨fderiv ℝ (elmanCellEval cell) x, ?_⟩
-      simpa [ΓElman, elmanCellEval, elmanUnroll] using
-        elmanCell_eval_hasFDerivAt (inputSize := inputSize) (hiddenSize := hiddenSize) cell x
+      -- `elmanUnroll cell []` and `elmanCellEval cell` both unfold to the cell graph evaluation.
+      exact ⟨fderiv ℝ (elmanCellEval cell) x,
+        elmanCell_eval_hasFDerivAt (inputSize := inputSize) (hiddenSize := hiddenSize) cell x⟩
   | cons step rest ih =>
       rcases hSteps with ⟨⟨Dstep, hStep⟩, hRest⟩
       let cellEval := elmanCellEval (inputSize := inputSize) (hiddenSize := hiddenSize) cell
-      have hCell :
-          HasFDerivAt cellEval (fderiv ℝ cellEval x) x := by
-        simpa [cellEval, elmanCellEval] using
-          elmanCell_eval_hasFDerivAt (inputSize := inputSize) (hiddenSize := hiddenSize) cell x
+      have hCell : HasFDerivAt cellEval (fderiv ℝ cellEval x) x :=
+        elmanCell_eval_hasFDerivAt (inputSize := inputSize) (hiddenSize := hiddenSize) cell x
       have hStepAfterCell :
           HasFDerivAt (fun z => step (cellEval z))
             (Dstep.comp (fderiv ℝ cellEval x)) x :=

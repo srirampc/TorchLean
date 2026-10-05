@@ -123,154 +123,64 @@ Add two packed Float tensors in one preallocated native loop.
 Lean evaluation uses the ordinary packed-array model. Generated code calls
 `torchlean_float_array_add`.
 -/
-def nativeFloatAdd
+def nativeAdd
     {shape : Shape}
     (left right : @Rep Float shape instFloatStorage) :
     @Rep Float shape instFloatStorage where
   buffer := floatBufferAdd left.buffer right.buffer
   size_eq := by
-    have hLeft : left.buffer.data.size = Shape.size shape := by
-      calc
-        left.buffer.data.size =
-            @Storage.size Float instFloatStorage left.buffer :=
-          instFloatStorage.toArray_size left.buffer
-        _ = Shape.size shape := left.size_eq
-    have hRight : right.buffer.data.size = Shape.size shape := by
-      calc
-        right.buffer.data.size =
-            @Storage.size Float instFloatStorage right.buffer :=
-          instFloatStorage.toArray_size right.buffer
-        _ = Shape.size shape := right.size_eq
-    calc
-      @Storage.size Float instFloatStorage
-          (floatBufferAdd left.buffer right.buffer) =
-          (floatBufferAdd left.buffer right.buffer).data.size :=
-        (instFloatStorage.toArray_size
-          (floatBufferAdd left.buffer right.buffer)).symm
-      _ = (Array.zipWith (· + ·)
-          left.buffer.data right.buffer.data).size := rfl
-      _ = Shape.size shape := by simp [hLeft, hRight]
+    rw [← instFloatStorage.toArray_size]
+    change (Array.zipWith (· + ·) left.data right.data).size = _
+    simp
 
 /-- Subtract two packed Float tensors in one preallocated native loop. -/
-def nativeFloatSub
+def nativeSub
     {shape : Shape}
     (left right : @Rep Float shape instFloatStorage) :
     @Rep Float shape instFloatStorage where
   buffer := floatBufferSub left.buffer right.buffer
   size_eq := by
-    have hLeft : left.buffer.data.size = Shape.size shape := by
-      calc
-        left.buffer.data.size =
-            @Storage.size Float instFloatStorage left.buffer :=
-          instFloatStorage.toArray_size left.buffer
-        _ = Shape.size shape := left.size_eq
-    have hRight : right.buffer.data.size = Shape.size shape := by
-      calc
-        right.buffer.data.size =
-            @Storage.size Float instFloatStorage right.buffer :=
-          instFloatStorage.toArray_size right.buffer
-        _ = Shape.size shape := right.size_eq
-    calc
-      @Storage.size Float instFloatStorage
-          (floatBufferSub left.buffer right.buffer) =
-          (floatBufferSub left.buffer right.buffer).data.size :=
-        (instFloatStorage.toArray_size
-          (floatBufferSub left.buffer right.buffer)).symm
-      _ = (Array.zipWith (· - ·)
-          left.buffer.data right.buffer.data).size := rfl
-      _ = Shape.size shape := by simp [hLeft, hRight]
+    rw [← instFloatStorage.toArray_size]
+    change (Array.zipWith (· - ·) left.data right.data).size = _
+    simp
 
 /-- Multiply two packed Float tensors in one preallocated native loop. -/
-def nativeFloatMul
+def nativeMul
     {shape : Shape}
     (left right : @Rep Float shape instFloatStorage) :
     @Rep Float shape instFloatStorage where
   buffer := floatBufferMul left.buffer right.buffer
   size_eq := by
-    have hLeft : left.buffer.data.size = Shape.size shape := by
-      calc
-        left.buffer.data.size =
-            @Storage.size Float instFloatStorage left.buffer :=
-          instFloatStorage.toArray_size left.buffer
-        _ = Shape.size shape := left.size_eq
-    have hRight : right.buffer.data.size = Shape.size shape := by
-      calc
-        right.buffer.data.size =
-            @Storage.size Float instFloatStorage right.buffer :=
-          instFloatStorage.toArray_size right.buffer
-        _ = Shape.size shape := right.size_eq
-    calc
-      @Storage.size Float instFloatStorage
-          (floatBufferMul left.buffer right.buffer) =
-          (floatBufferMul left.buffer right.buffer).data.size :=
-        (instFloatStorage.toArray_size
-          (floatBufferMul left.buffer right.buffer)).symm
-      _ = (Array.zipWith (· * ·)
-          left.buffer.data right.buffer.data).size := rfl
-      _ = Shape.size shape := by simp [hLeft, hRight]
+    rw [← instFloatStorage.toArray_size]
+    change (Array.zipWith (· * ·) left.data right.data).size = _
+    simp
 
 /-- Divide two packed Float tensors in one preallocated native loop. -/
-def nativeFloatDiv
+def nativeDiv
     {shape : Shape}
     (left right : @Rep Float shape instFloatStorage) :
     @Rep Float shape instFloatStorage where
   buffer := floatBufferDiv left.buffer right.buffer
   size_eq := by
-    have hLeft : left.buffer.data.size = Shape.size shape := by
-      calc
-        left.buffer.data.size =
-            @Storage.size Float instFloatStorage left.buffer :=
-          instFloatStorage.toArray_size left.buffer
-        _ = Shape.size shape := left.size_eq
-    have hRight : right.buffer.data.size = Shape.size shape := by
-      calc
-        right.buffer.data.size =
-            @Storage.size Float instFloatStorage right.buffer :=
-          instFloatStorage.toArray_size right.buffer
-        _ = Shape.size shape := right.size_eq
-    calc
-      @Storage.size Float instFloatStorage
-          (floatBufferDiv left.buffer right.buffer) =
-          (floatBufferDiv left.buffer right.buffer).data.size :=
-        (instFloatStorage.toArray_size
-          (floatBufferDiv left.buffer right.buffer)).symm
-      _ = (Array.zipWith (· / ·)
-          left.buffer.data right.buffer.data).size := rfl
-      _ = Shape.size shape := by simp [hLeft, hRight]
+    rw [← instFloatStorage.toArray_size]
+    change (Array.zipWith (· / ·) left.data right.data).size = _
+    simp
 
 /--
 Promote packed bytes and add them to packed floats in one native output loop.
 
 The proof-visible definition is the canonical promoted pointwise operation.
 -/
-def nativeUInt8FloatAdd
+def nativePromoteLeftAdd
     {shape : Shape}
     (left : @Rep UInt8 shape instUInt8Storage)
     (right : @Rep Float shape instFloatStorage) :
     @Rep Float shape instFloatStorage where
   buffer := byteFloatBufferAdd left.buffer right.buffer
   size_eq := by
-    have hLeft : left.buffer.data.size = Shape.size shape := by
-      calc
-        left.buffer.data.size =
-            @Storage.size UInt8 instUInt8Storage left.buffer :=
-          instUInt8Storage.toArray_size left.buffer
-        _ = Shape.size shape := left.size_eq
-    have hRight : right.buffer.data.size = Shape.size shape := by
-      calc
-        right.buffer.data.size =
-            @Storage.size Float instFloatStorage right.buffer :=
-          instFloatStorage.toArray_size right.buffer
-        _ = Shape.size shape := right.size_eq
-    calc
-      @Storage.size Float instFloatStorage
-          (byteFloatBufferAdd left.buffer right.buffer) =
-          (byteFloatBufferAdd left.buffer right.buffer).data.size :=
-        (instFloatStorage.toArray_size
-          (byteFloatBufferAdd left.buffer right.buffer)).symm
-      _ = (Array.zipWith (fun x y => x.toFloat + y)
-          left.buffer.data right.buffer.data).size := rfl
-      _ = Shape.size shape := by simp [hLeft, hRight]
+    rw [← instFloatStorage.toArray_size]
+    change (Array.zipWith (fun x y => x.toFloat + y) left.data right.data).size = _
+    simp
 
 /--
 Add packed floats to promoted packed bytes in one native output loop.
@@ -278,81 +188,63 @@ Add packed floats to promoted packed bytes in one native output loop.
 Operand order remains explicit so IEEE exceptional behavior matches scalar
 `Float` addition exactly.
 -/
-def nativeFloatUInt8Add
+def nativePromoteRightAdd
     {shape : Shape}
     (left : @Rep Float shape instFloatStorage)
     (right : @Rep UInt8 shape instUInt8Storage) :
     @Rep Float shape instFloatStorage where
   buffer := floatByteBufferAdd left.buffer right.buffer
   size_eq := by
-    have hLeft : left.buffer.data.size = Shape.size shape := by
-      calc
-        left.buffer.data.size =
-            @Storage.size Float instFloatStorage left.buffer :=
-          instFloatStorage.toArray_size left.buffer
-        _ = Shape.size shape := left.size_eq
-    have hRight : right.buffer.data.size = Shape.size shape := by
-      calc
-        right.buffer.data.size =
-            @Storage.size UInt8 instUInt8Storage right.buffer :=
-          instUInt8Storage.toArray_size right.buffer
-        _ = Shape.size shape := right.size_eq
-    calc
-      @Storage.size Float instFloatStorage
-          (floatByteBufferAdd left.buffer right.buffer) =
-          (floatByteBufferAdd left.buffer right.buffer).data.size :=
-        (instFloatStorage.toArray_size
-          (floatByteBufferAdd left.buffer right.buffer)).symm
-      _ = (Array.zipWith (fun x y => x + y.toFloat)
-          left.buffer.data right.buffer.data).size := rfl
-      _ = Shape.size shape := by simp [hLeft, hRight]
+    rw [← instFloatStorage.toArray_size]
+    change (Array.zipWith (fun x y => x + y.toFloat) left.data right.data).size = _
+    simp
 
 /-- The ordinary array observation of packed addition is pointwise addition. -/
-@[simp] theorem nativeFloatAdd_data
+@[simp] theorem nativeAdd_data
     {shape : Shape}
     (left right : @Rep Float shape instFloatStorage) :
-    (nativeFloatAdd left right).data =
+    (nativeAdd left right).data =
       Array.zipWith (· + ·) left.data right.data := by
   change (floatBufferAdd left.buffer right.buffer).data =
     Array.zipWith (· + ·) left.buffer.data right.buffer.data
   rfl
 
 /-- The ordinary array observation of packed subtraction is pointwise subtraction. -/
-@[simp] theorem nativeFloatSub_data
+@[simp] theorem nativeSub_data
     {shape : Shape}
     (left right : @Rep Float shape instFloatStorage) :
-    (nativeFloatSub left right).data =
+    (nativeSub left right).data =
       Array.zipWith (· - ·) left.data right.data := by
   change (floatBufferSub left.buffer right.buffer).data =
     Array.zipWith (· - ·) left.buffer.data right.buffer.data
   rfl
 
 /-- The ordinary array observation of packed multiplication is pointwise multiplication. -/
-@[simp] theorem nativeFloatMul_data
+@[simp] theorem nativeMul_data
     {shape : Shape}
     (left right : @Rep Float shape instFloatStorage) :
-    (nativeFloatMul left right).data =
+    (nativeMul left right).data =
       Array.zipWith (· * ·) left.data right.data := by
   change (floatBufferMul left.buffer right.buffer).data =
     Array.zipWith (· * ·) left.buffer.data right.buffer.data
   rfl
 
 /-- The ordinary array observation of packed division is pointwise division. -/
-@[simp] theorem nativeFloatDiv_data
+@[simp] theorem nativeDiv_data
     {shape : Shape}
     (left right : @Rep Float shape instFloatStorage) :
-    (nativeFloatDiv left right).data =
+    (nativeDiv left right).data =
       Array.zipWith (· / ·) left.data right.data := by
   change (floatBufferDiv left.buffer right.buffer).data =
     Array.zipWith (· / ·) left.buffer.data right.buffer.data
   rfl
 
 /-- The ordinary array observation of byte/float addition includes promotion. -/
-@[simp] theorem nativeUInt8FloatAdd_data
+@[simp] theorem nativePromoteLeftAdd_data
     {shape : Shape}
     (left : @Rep UInt8 shape instUInt8Storage)
     (right : @Rep Float shape instFloatStorage) :
-    (nativeUInt8FloatAdd left right).data =
+    (nativePromoteLeftAdd left right).data =
       Array.zipWith (fun x y => x.toFloat + y) left.data right.data := by
   change (byteFloatBufferAdd left.buffer right.buffer).data =
     Array.zipWith (fun x y => x.toFloat + y)
@@ -360,11 +252,11 @@ def nativeFloatUInt8Add
   rfl
 
 /-- The ordinary array observation of float/byte addition includes promotion. -/
-@[simp] theorem nativeFloatUInt8Add_data
+@[simp] theorem nativePromoteRightAdd_data
     {shape : Shape}
     (left : @Rep Float shape instFloatStorage)
     (right : @Rep UInt8 shape instUInt8Storage) :
-    (nativeFloatUInt8Add left right).data =
+    (nativePromoteRightAdd left right).data =
       Array.zipWith (fun x y => x + y.toFloat) left.data right.data := by
   change (floatByteBufferAdd left.buffer right.buffer).data =
     Array.zipWith (fun x y => x + y.toFloat)
@@ -372,88 +264,88 @@ def nativeFloatUInt8Add
   rfl
 
 /-- Native packed addition has the canonical coordinate semantics. -/
-@[simp, grind =] theorem nativeFloatAdd_apply
+@[simp, grind =] theorem nativeAdd_apply
     {shape : Shape}
     (left right : @Rep Float shape instFloatStorage)
     (coordinate : Coord shape) :
-    nativeFloatAdd left right coordinate =
+    nativeAdd left right coordinate =
       left coordinate + right coordinate := by
   let index := Coord.linearize coordinate
-  change (nativeFloatAdd left right).getFlat index =
+  change (nativeAdd left right).getFlat index =
     left.getFlat index + right.getFlat index
-  rw [← Rep.data_getFlat (nativeFloatAdd left right) index,
+  rw [← Rep.data_getFlat (nativeAdd left right) index,
     ← Rep.data_getFlat left index, ← Rep.data_getFlat right index]
   simp
 
 /-- Native packed subtraction has the canonical coordinate semantics. -/
-@[simp, grind =] theorem nativeFloatSub_apply
+@[simp, grind =] theorem nativeSub_apply
     {shape : Shape}
     (left right : @Rep Float shape instFloatStorage)
     (coordinate : Coord shape) :
-    nativeFloatSub left right coordinate =
+    nativeSub left right coordinate =
       left coordinate - right coordinate := by
   let index := Coord.linearize coordinate
-  change (nativeFloatSub left right).getFlat index =
+  change (nativeSub left right).getFlat index =
     left.getFlat index - right.getFlat index
-  rw [← Rep.data_getFlat (nativeFloatSub left right) index,
+  rw [← Rep.data_getFlat (nativeSub left right) index,
     ← Rep.data_getFlat left index, ← Rep.data_getFlat right index]
   simp
 
 /-- Native packed multiplication has the canonical coordinate semantics. -/
-@[simp, grind =] theorem nativeFloatMul_apply
+@[simp, grind =] theorem nativeMul_apply
     {shape : Shape}
     (left right : @Rep Float shape instFloatStorage)
     (coordinate : Coord shape) :
-    nativeFloatMul left right coordinate =
+    nativeMul left right coordinate =
       left coordinate * right coordinate := by
   let index := Coord.linearize coordinate
-  change (nativeFloatMul left right).getFlat index =
+  change (nativeMul left right).getFlat index =
     left.getFlat index * right.getFlat index
-  rw [← Rep.data_getFlat (nativeFloatMul left right) index,
+  rw [← Rep.data_getFlat (nativeMul left right) index,
     ← Rep.data_getFlat left index, ← Rep.data_getFlat right index]
   simp
 
 /-- Native packed division has the canonical coordinate semantics. -/
-@[simp, grind =] theorem nativeFloatDiv_apply
+@[simp, grind =] theorem nativeDiv_apply
     {shape : Shape}
     (left right : @Rep Float shape instFloatStorage)
     (coordinate : Coord shape) :
-    nativeFloatDiv left right coordinate =
+    nativeDiv left right coordinate =
       left coordinate / right coordinate := by
   let index := Coord.linearize coordinate
-  change (nativeFloatDiv left right).getFlat index =
+  change (nativeDiv left right).getFlat index =
     left.getFlat index / right.getFlat index
-  rw [← Rep.data_getFlat (nativeFloatDiv left right) index,
+  rw [← Rep.data_getFlat (nativeDiv left right) index,
     ← Rep.data_getFlat left index, ← Rep.data_getFlat right index]
   simp
 
 /-- Fused byte/float addition has the canonical promoted semantics. -/
-@[simp, grind =] theorem nativeUInt8FloatAdd_apply
+@[simp, grind =] theorem nativePromoteLeftAdd_apply
     {shape : Shape}
     (left : @Rep UInt8 shape instUInt8Storage)
     (right : @Rep Float shape instFloatStorage)
     (coordinate : Coord shape) :
-    nativeUInt8FloatAdd left right coordinate =
+    nativePromoteLeftAdd left right coordinate =
       (left coordinate).toFloat + right coordinate := by
   let index := Coord.linearize coordinate
-  change (nativeUInt8FloatAdd left right).getFlat index =
+  change (nativePromoteLeftAdd left right).getFlat index =
     (left.getFlat index).toFloat + right.getFlat index
-  rw [← Rep.data_getFlat (nativeUInt8FloatAdd left right) index,
+  rw [← Rep.data_getFlat (nativePromoteLeftAdd left right) index,
     ← Rep.data_getFlat left index, ← Rep.data_getFlat right index]
   simp
 
 /-- Fused float/byte addition has the canonical promoted semantics. -/
-@[simp, grind =] theorem nativeFloatUInt8Add_apply
+@[simp, grind =] theorem nativePromoteRightAdd_apply
     {shape : Shape}
     (left : @Rep Float shape instFloatStorage)
     (right : @Rep UInt8 shape instUInt8Storage)
     (coordinate : Coord shape) :
-    nativeFloatUInt8Add left right coordinate =
+    nativePromoteRightAdd left right coordinate =
       left coordinate + (right coordinate).toFloat := by
   let index := Coord.linearize coordinate
-  change (nativeFloatUInt8Add left right).getFlat index =
+  change (nativePromoteRightAdd left right).getFlat index =
     left.getFlat index + (right.getFlat index).toFloat
-  rw [← Rep.data_getFlat (nativeFloatUInt8Add left right) index,
+  rw [← Rep.data_getFlat (nativePromoteRightAdd left right) index,
     ← Rep.data_getFlat left index, ← Rep.data_getFlat right index]
   simp
 

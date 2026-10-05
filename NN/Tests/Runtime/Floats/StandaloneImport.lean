@@ -26,7 +26,6 @@ open FloatLib.Floats.Formats.BinaryInterchange (Model FloatFormat)
 namespace Tests.Floats.StandaloneImport
 
 open TorchLean.Floats
-open TorchLean.Floats.IEEE754
 open FloatLib.Numerics.Quantization
 open FloatLib.Numerics
 open FloatLib.Floats.Formats.Flocq
@@ -112,12 +111,13 @@ def run : IO Unit := do
 
   let negativeOne : Binary 8 23 := -1
   let negativeZero : Binary 8 23 := Binary.zero true
-  unless toBits32 (Binary.add one negativeOne .towardNegativeInfinity) ==
+  unless toBits32 (Binary.addWithRounding one negativeOne .towardNegativeInfinity) ==
       toBits32 negativeZero do
     throw <| IO.userError "IEEE32 downward exact cancellation did not return -0"
-  unless toBits32 (Binary.sub one one .towardNegativeInfinity) == toBits32 negativeZero do
+  unless toBits32 (Binary.subWithRounding one one .towardNegativeInfinity) ==
+      toBits32 negativeZero do
     throw <| IO.userError "IEEE32 downward exact subtraction did not return -0"
-  unless toBits32 (Binary.fma one one negativeOne .towardNegativeInfinity) ==
+  unless toBits32 (Binary.fmaWithRounding one one negativeOne .towardNegativeInfinity) ==
       toBits32 negativeZero do
     throw <| IO.userError "IEEE32 downward exact FMA cancellation did not return -0"
   unless (Model.mkBits .binary32 false 256 0).toNat == 0 do
@@ -138,11 +138,13 @@ def run : IO Unit := do
   let belowQuarter := ofBits32 0x3E7FFFFF
   let quarter := ofBits32 0x3E800000
   let aboveQuarter := ofBits32 0x3E800001
-  unless ExecFloat.compare (tanh belowQuarter) (tanh quarter) != some .gt &&
-      ExecFloat.compare (tanh quarter) (tanh aboveQuarter) != some .gt do
+  unless (ExecFloat.compare (tanh belowQuarter) (tanh quarter)).any (· != .gt) &&
+      (ExecFloat.compare (tanh quarter) (tanh aboveQuarter)).any (· != .gt) do
     throw <| IO.userError "IEEE32 tanh is not monotone across its positive branch boundary"
-  unless ExecFloat.compare (tanh (Neg.neg aboveQuarter)) (tanh (Neg.neg quarter)) != some .gt &&
-      ExecFloat.compare (tanh (Neg.neg quarter)) (tanh (Neg.neg belowQuarter)) != some .gt do
+  unless (ExecFloat.compare (tanh (Neg.neg aboveQuarter)) (tanh (Neg.neg quarter))).any
+      (· != .gt) &&
+      (ExecFloat.compare (tanh (Neg.neg quarter)) (tanh (Neg.neg belowQuarter))).any
+        (· != .gt) do
     throw <| IO.userError "IEEE32 tanh is not monotone across its negative branch boundary"
 
   let quietNaN := (Binary.canonicalNaN : Binary 8 23)

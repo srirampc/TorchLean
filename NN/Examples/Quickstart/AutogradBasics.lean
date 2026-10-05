@@ -44,7 +44,7 @@ def model : nn.Sequential [2] [1] :=
   nn.build 0 (nn.linear 2 1)
 
 /-- Run the two common differentiation paths. -/
-def runDemo : IO Unit := do
+def run : IO Unit := do
   IO.println "== Differentiate a tensor function =="
   let x : Tensor Float [3] := [1.0, 2.0, 3.0]
   let (gradient, value) ← autograd.grad meanSquare x (value := true)
@@ -54,12 +54,12 @@ def runDemo : IO Unit := do
   IO.println ""
   IO.println "== Differentiate a model loss =="
   let state : autograd.model.State model Float :=
-    autograd.model.initialState model
+    nn.initialState model
   let input : Tensor Float [2] := [0.5, -1.0]
   let target : Tensor Float [1] := [0.25]
   let (gradient, loss) ←
     autograd.model.grad
-      model autograd.model.Loss.meanSquaredError state input target (value := true)
+      model autograd.model.Loss.mse state input target (value := true)
   IO.println s!"loss     = {loss}"
   IO.println s!"gradient = {reprStr gradient}"
 
@@ -82,6 +82,6 @@ def main (args : List String) : IO Unit := do
     IO.println usage
     return
   CLI.requireNoArgs exeName args
-  runDemo
+  run
 
 end NN.Examples.Quickstart.AutogradBasics

@@ -56,27 +56,31 @@ opaque create {α : Type} [TorchLean.Storage α] [Context α]
     RuntimeState α stateShapes :=
   ⟨stateRef, runtime, modeRef, rngCounter⟩
 
-/-- Instantiate runtime state after converting semantic initializer tensors to `α`. -/
+/-- Use supplied scalar-valued state, or convert the model's default initialization to `α`. -/
 def instantiate {α : Type} [TorchLean.Storage α] [Context α]
     [tensorTransfer : Runtime.TensorTransfer α]
     {stateShapes : List Shape} (initial : TorchLean.TensorPack Float stateShapes)
     (runtimeInit : Option
       (Runtime.Autograd.Model.Module.RuntimeInit.Plan stateShapes))
-    (requiresGrad : Array Bool) (runtime : Runtime.Config) (cast : Float → α) :
+    (requiresGrad : Array Bool) (runtime : Runtime.Config) (cast : Float → α)
+    (initialState? : Option (TorchLean.TensorPack α stateShapes) := none) :
     IO (RuntimeState α stateShapes) := do
   let stateRef ←
-    match runtimeInit with
-    | some plan => do
-        let empty := Runtime.Autograd.Model.Module.RuntimeInit.zeroPack
-          (cast 0.0) (ss := stateShapes)
-        let stateRef ← Runtime.Autograd.Torch.ParamList.ofPackWithRequiresGrad
-          empty requiresGrad
-        Runtime.Autograd.Model.Module.RuntimeInit.applyPlan
-          (α := α) cast runtime stateRef plan
-        pure stateRef
-    | none => do
-        let values := Runtime.Autograd.Model.Module.castPack cast initial
+    match initialState? with
+    | some values =>
         Runtime.Autograd.Torch.ParamList.ofPackWithRequiresGrad values requiresGrad
+    | none =>
+        match runtimeInit with
+        | some plan => do
+            let empty := TensorPack.fill (cast 0.0) (ss := stateShapes)
+            let stateRef ← Runtime.Autograd.Torch.ParamList.ofPackWithRequiresGrad
+              empty requiresGrad
+            Runtime.Autograd.Model.Module.RuntimeInit.applyPlan
+              (α := α) cast runtime stateRef plan
+            pure stateRef
+        | none => do
+            let values := Runtime.Autograd.Model.Module.castPack cast initial
+            Runtime.Autograd.Torch.ParamList.ofPackWithRequiresGrad values requiresGrad
   let modeRef ← IO.mkRef nn.Mode.train
   let rngCounter ← IO.mkRef 0
   pure (create stateRef runtime modeRef rngCounter)
@@ -198,22 +202,23 @@ end Internal
 Instantiate a checked model with mutable parameter and buffer storage.
 
 Native binary32 is the default. Select another supported element type with
-`nn.Module.instantiate model (α := Float)`.
+`nn.Module.instantiate model (α := Float)`. Supply `initialState?` to retain state already
+represented in `α`, bypassing the model's default Float-sourced initialization.
 -/
 def instantiate {σ τ : Shape}
     (model : nn.Sequential σ τ)
     (runtime : Runtime.Config := {})
     (α : Type := Float32)
     [TorchLean.Storage α] [Context α] [Runtime.FromFloat α]
-  [tensorTransfer : Runtime.TensorTransfer α] :
+    [tensorTransfer : Runtime.TensorTransfer α]
+    (initialState? : Option (nn.State α (nn.stateShapes model)) := none) :
     IO (Module α model) := do
-  match nn.validate model with
-  | .error message => throw <| IO.userError message
-  | .ok () => pure ()
+  IO.ofExcept (nn.validate model)
   let state ← TorchLean.Module.RuntimeState.Internal.instantiate
     (nn.State.Internal.toTensorPack (nn.initialState model))
     (nn.runtimeInit? model) (nn.requiresGrad model)
     runtime (Runtime.ofFloat (α := α))
+    (initialState? := initialState?.map nn.State.Internal.toTensorPack)
   pure (Internal.fromRuntimeState state)
 
 /-- Read whether training-sensitive layers currently use training or evaluation behavior. -/
@@ -251,49 +256,29 @@ def setState {σ τ : Shape} {α : Type} [TorchLean.Storage α] [Context α]
     (state : nn.State α (nn.stateShapes model)) : IO Unit :=
   (Internal.runtimeState module).setState state
 
-namespace Internal
-
-/-- Execute one ordinary module forward in an explicit mode without changing its mode cell. -/
-def forwardWithMode {σ τ : Shape} {α : Type}
-    [TorchLean.Storage α] [Context α]
-    [tensorTransfer : Runtime.TensorTransfer α]
-    {model : nn.Sequential σ τ} (module : Module α model)
-    (mode : nn.Mode) (input : Tensor α σ) : IO (Tensor α τ) := do
-  let state := Internal.runtimeState module
-  Runtime.Autograd.Model.Layers.Seq.forwardNoGrad
-    (α := α) (tensorTransfer := tensorTransfer)
-    (TorchLean.Module.RuntimeState.Internal.runtime state) model
-    (TorchLean.Module.RuntimeState.Internal.stateRef state) input
-    (mode := mode) (rngCounter := some (TorchLean.Module.RuntimeState.Internal.rngCounter state))
-
-end Internal
-
 /--
 Evaluate one concrete input without constructing a backward tape.
 
-The module's mode controls training-sensitive layer behavior. Training forwards update running
-buffers from their actual activations and advance the module's random stream. This concrete call
-does not construct a backward tape; differentiable model programs use `nn.forward`.
+The active mode controls training-sensitive layers unless `mode` supplies a per-call override.
+An override leaves the module's persistent mode unchanged. Training forwards update running
+buffers and advance the module's random stream; differentiable model programs use `nn.forward`.
 -/
 def forward {σ τ : Shape} {α : Type}
     [TorchLean.Storage α] [Context α]
     [tensorTransfer : Runtime.TensorTransfer α]
     {model : nn.Sequential σ τ} (module : Module α model)
-    (input : Tensor α σ) : IO (Tensor α τ) := do
-  Internal.forwardWithMode module (← module.mode) input
+    (input : Tensor α σ) (mode : Option nn.Mode := none) : IO (Tensor α τ) := do
+  let selectedMode ← match mode with
+    | some value => pure value
+    | none => module.mode
+  let state := Internal.runtimeState module
+  Runtime.Autograd.Model.Layers.Seq.forwardNoGrad
+    (α := α) (tensorTransfer := tensorTransfer)
+    (TorchLean.Module.RuntimeState.Internal.runtime state) model
+    (TorchLean.Module.RuntimeState.Internal.stateRef state) input
+    (mode := selectedMode)
+    (rngCounter := some (TorchLean.Module.RuntimeState.Internal.rngCounter state))
 
-/--
-Evaluation-mode inference without changing the module's persistent mode.
-
-Keeping the override local to this call prevents concurrent forwards from observing a temporary
-mode change.
--/
-def predict {σ τ : Shape} {α : Type}
-    [TorchLean.Storage α] [Context α]
-    [tensorTransfer : Runtime.TensorTransfer α]
-    {model : nn.Sequential σ τ} (module : Module α model)
-    (input : Tensor α σ) : IO (Tensor α τ) :=
-  Internal.forwardWithMode module .eval input
 
 end Module
 
@@ -324,22 +309,25 @@ end Internal
 
 /--
 Instantiate an indexed model. Native binary32 is the default runtime element type.
+
+Supply `initialState?` to retain state already represented in `α`, bypassing the model's
+default Float-sourced initialization.
 -/
 def instantiate {σ τ : Shape} {β : Type} [TorchLean.Storage β]
     (model : nn.IndexedModel σ τ β)
     (runtime : Runtime.Config := {})
     (α : Type := Float32)
     [TorchLean.Storage α] [Context α] [Runtime.FromFloat α]
-    [tensorTransfer : Runtime.TensorTransfer α] :
+    [tensorTransfer : Runtime.TensorTransfer α]
+    (initialState? : Option (nn.State α model.stateShapes) := none) :
     IO (IndexedModule α β model) := do
-  match model.validate with
-  | .error message => throw <| IO.userError message
-  | .ok () => pure ()
+  IO.ofExcept model.validate
   let state ← TorchLean.Module.RuntimeState.Internal.instantiate
     (nn.State.Internal.toTensorPack model.initialState)
     (nn.IndexedModel.Internal.initializationPlan model)
-    (nn.IndexedModel.Internal.trainableMask model)
+    model.requiresGrad
     runtime (Runtime.ofFloat (α := α))
+    (initialState? := initialState?.map nn.State.Internal.toTensorPack)
   pure (Internal.fromRuntimeState state)
 
 /-- Read the current behavior of training-sensitive layers. -/
@@ -382,53 +370,34 @@ def setState {σ τ : Shape} {α β : Type} [TorchLean.Storage α]
     (state : nn.State α model.stateShapes) : IO Unit :=
   (Internal.runtimeState module).setState state
 
-namespace Internal
+/--
+Evaluate one validated index tensor without constructing a backward tape.
 
-/-- Execute one indexed module forward in an explicit mode without changing its mode cell. -/
-def forwardWithMode {σ τ : Shape} {α β : Type}
-    [TorchLean.Storage α] [TorchLean.Storage β] [Context α]
-    [tensorTransfer : Runtime.TensorTransfer α]
-    {model : nn.IndexedModel σ τ β} (module : IndexedModule α β model)
-    (mode : nn.Mode) (input : Tensor β σ) : IO (Tensor α τ) := do
-  match nn.IndexedModel.Internal.validateInput model input with
-  | .error message => throw <| IO.userError message
-  | .ok () =>
-      let state := Internal.runtimeState module
-      let program : Runtime.Autograd.Model.ProgramWithDataInputs α β
-          (model.stateShapes ++ []) [σ] τ :=
-        fun {m} _ _ => by
-          simpa using
-            (nn.IndexedModel.Internal.program model mode (α := α) (m := m))
-      let evaluator ← Runtime.Autograd.Model.Module.Evaluator.withState
-        (program := program)
-        (TorchLean.Module.RuntimeState.Internal.runtime state)
-        (TorchLean.Module.RuntimeState.Internal.stateRef state)
-        (rngCounter := some (TorchLean.Module.RuntimeState.Internal.rngCounter state))
-      Runtime.Autograd.Model.Module.Evaluator.run
-        evaluator TensorPack.empty (TensorPack.singleton input)
-
-end Internal
-
-/-- Evaluate one validated index tensor without constructing a backward tape. -/
+`mode` overrides the active mode for this call without changing the module's persistent mode.
+-/
 def forward {σ τ : Shape} {α β : Type}
     [TorchLean.Storage α] [TorchLean.Storage β] [Context α]
     [tensorTransfer : Runtime.TensorTransfer α]
     {model : nn.IndexedModel σ τ β} (module : IndexedModule α β model)
-    (input : Tensor β σ) : IO (Tensor α τ) := do
-  Internal.forwardWithMode module (← module.mode) input
+    (input : Tensor β σ) (mode : Option nn.Mode := none) : IO (Tensor α τ) := do
+  let selectedMode ← match mode with
+    | some value => pure value
+    | none => module.mode
+  IO.ofExcept (nn.IndexedModel.Internal.validateInput model input)
+  let state := Internal.runtimeState module
+  let program : Runtime.Autograd.Model.ProgramWithDataInputs α β
+      (model.stateShapes ++ []) [σ] τ :=
+    fun {m} _ _ => by
+      simpa using
+        (nn.IndexedModel.Internal.program model selectedMode (α := α) (m := m))
+  let evaluator ← Runtime.Autograd.Model.Module.Evaluator.withState
+    (program := program)
+    (TorchLean.Module.RuntimeState.Internal.runtime state)
+    (TorchLean.Module.RuntimeState.Internal.stateRef state)
+    (rngCounter := some (TorchLean.Module.RuntimeState.Internal.rngCounter state))
+  Runtime.Autograd.Model.Module.Evaluator.run
+    evaluator TensorPack.empty (TensorPack.singleton input)
 
-/--
-Evaluation-mode inference without changing the module's persistent mode.
-
-Keeping the override local to this call prevents concurrent forwards from observing a temporary
-mode change.
--/
-def predict {σ τ : Shape} {α β : Type}
-    [TorchLean.Storage α] [TorchLean.Storage β] [Context α]
-    [tensorTransfer : Runtime.TensorTransfer α]
-    {model : nn.IndexedModel σ τ β} (module : IndexedModule α β model)
-    (input : Tensor β σ) : IO (Tensor α τ) :=
-  Internal.forwardWithMode module .eval input
 
 end IndexedModule
 
@@ -436,38 +405,7 @@ end nn
 
 namespace Module
 
-namespace Supervised
-
-/-- Run evaluation-mode prediction through a supervised runtime module. -/
-def predict {σ τ : Shape} {α : Type}
-    [TorchLean.Storage α] [Context α]
-    [Runtime.TensorTransfer α]
-    (options : Runtime.Config)
-    (model : TorchLean.nn.Sequential σ τ)
-    (objective : Objective α Unit (nn.stateShapes model) [σ, τ])
-    (input : Tensor α σ) : IO (Tensor α τ) := do
-  let runtimeObjective := Objective.Internal.runtime objective
-  Runtime.Autograd.Model.Layers.Seq.predict
-    (α := α) options model runtimeObjective.trainer.state input
-
-end Supervised
-
 namespace Internal
-
-/--
-Evaluate one supervised sample through a runtime module and return the scalar loss value.
-
-This packages the common internal pattern `Module.Objective.loss ...; Tensor.item`.
--/
-def sampleLoss {σ τ : Shape} {α : Type}
-    [TorchLean.Storage α] [Context α]
-    [Runtime.TensorTransfer α]
-    (model : TorchLean.nn.Sequential σ τ)
-    (objective : Objective α Unit (nn.stateShapes model) [σ, τ])
-    (sample : Sample.Supervised α σ τ) : IO α := do
-  let loss ← Objective.loss (α := α) objective
-    (Sample.Internal.arguments sample) Arguments.empty
-  pure (TorchLean.Tensor.item loss)
 
 /-- Bind an optimizer to the hidden runtime objective. -/
 def bindOptimizer {α β : Type}
@@ -544,7 +482,7 @@ def Internal.withConfiguredOptimizer {α Result : Type}
     IO Result := do
   IO.ofExcept (config.validateFor (α := α))
   if runtime.usesCuda then
-    IO.ofExcept config.validateFloat32
+    IO.ofExcept (config.validateFor (α := Float32) (scalarName := "binary32"))
   let cast := Runtime.ofFloat (α := α)
   match optim.Optimizer.Internal.view config with
   | .sgd learningRate momentum =>

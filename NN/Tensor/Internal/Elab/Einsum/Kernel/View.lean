@@ -46,8 +46,7 @@ def compileInputViewRead
       let certifiedInputIndexBound ←
         mkAppM ``Fin.isLt #[certifiedInputIndex]
       let inputIndexBound ←
-        indexBoundFromValueEquality logicalSize hInputIndexValue
-          certifiedInputIndexBound
+        mkAppM ``lt_of_eq_of_lt #[hInputIndexValue, certifiedInputIndexBound]
       let inputIndex ←
         mkAppOptM ``Fin.mk #[
           some logicalSize, some inputIndexValue, some inputIndexBound]
@@ -83,7 +82,7 @@ def compileInputViewRead
         withTransparency .all <|
           mkExpectedTypeHint hOptimizedSourceIndexValue
             (← mkEq optimizedSourceIndexValue certifiedSourceIndexValue)
-      let sourceTensorType ← inferType sourceTensor
+      let sourceTensorType ← whnf (← inferType sourceTensor)
       let sourceTensorType := sourceTensorType.consumeMData
       unless sourceTensorType.isAppOfArity ``Rep 3 do
         throwError

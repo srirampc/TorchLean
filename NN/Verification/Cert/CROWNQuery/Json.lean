@@ -8,6 +8,7 @@ module
 
 public import NN.Verification.Cert.CROWNQuery
 public import NN.Verification.Cert.RationalJson
+public import NN.API.CLI.Parser
 
 /-!
 # JSON acceptance implies output-query safety
@@ -23,10 +24,11 @@ from the binary32 node-replay transcript; β dual variables, cuts, and branch tr
 
 @[expose] public section
 
-namespace NN.Verification.CROWNQuery
+namespace NN.Verification.Cert.CROWNQuery
 
 open Lean _root_.Spec NN.Verification.Cert.RationalJson
 
+/-- Decode one `linear` or `relu` layer whose input dimension is `n`. -/
 def decodeLayer (n : Nat) (j : Json) : Except String (Σ m : Nat, Network n m) := do
   match ← (← j.getObjVal? "kind").getStr? with
   | "linear" =>
@@ -36,6 +38,7 @@ def decodeLayer (n : Nat) (j : Json) : Except String (Σ m : Nat, Network n m) :
   | "relu" => return ⟨n, .relu (← decodeVector n (← j.getObjVal? "alpha"))⟩
   | kind => throw s!"unsupported layer kind: {kind}"
 
+/-- Decode a nonempty layer list into a composed network, threading the dimensions. -/
 def decodeLayers (n : Nat) : List Json → Except String (Σ m : Nat, Network n m)
   | [] => .error "expected at least one layer"
   | j :: rest => do
@@ -61,6 +64,7 @@ def decode (j : Json) : Except String (Σ n m : Nat, Query n m) := do
   let strict ← (← query.getObjVal? "strict").getBool?
   return ⟨n, m, ⟨network, ⟨lo, hi⟩, k, inequalities, strict⟩⟩
 
+/-- Decode and check a query document; malformed documents are rejected. -/
 def acceptsJson (j : Json) : Bool :=
   match decode j with
   | .error _ => false
@@ -76,6 +80,7 @@ theorem acceptsJson_sound (j : Json) (h : acceptsJson j = true) :
       rcases decoded with ⟨n, m, q⟩
       exact ⟨n, m, q, rfl, q.check_sound (by simpa [hd] using h)⟩
 
+/-- Parse and check a query document given as text. This is the CLI verdict. -/
 def acceptsText (source : String) : Bool :=
   match Json.parse source with
   | .error _ => false
@@ -92,4 +97,29 @@ theorem acceptsText_sound (source : String) (h : acceptsText source = true) :
       obtain ⟨n, m, q, hd, hs⟩ := acceptsJson_sound j (by simpa [hp] using h)
       exact ⟨j, n, m, q, rfl, hd, hs⟩
 
-end NN.Verification.CROWNQuery
+/-- Why `acceptsText` rejected a document, for error messages. The verdict is `acceptsText`. -/
+def rejectionReason (source : String) : String :=
+  match Json.parse source with
+  | .error e => s!"invalid JSON: {e}"
+  | .ok j =>
+      match decode j with
+      | .error e => e
+      | .ok _ => "the recomputed bounds do not prove the query"
+
+/-- CLI entry point: `lake exe verify -- crown-query <query.json>`. -/
+def run (args : List String) : IO Unit := do
+  let usage := "Usage:\n  lake exe verify -- crown-query <path/to/query.json>"
+  if TorchLean.CLI.hasHelp args then
+    IO.println usage
+    return
+  let (path, rest) ← IO.ofExcept <| TorchLean.CLI.takePositional? (TorchLean.CLI.dropDashDash args)
+  IO.ofExcept <| TorchLean.CLI.checkNoArgs rest
+  let some path := path
+    | throw <| IO.userError s!"missing query path\n\n{usage}"
+  let source ← IO.FS.readFile path
+  if acceptsText source then
+    IO.println s!"[crown-query] {path}: proved for every real input in the box (acceptsText_sound)"
+  else
+    throw <| IO.userError s!"[crown-query] {path}: not proved: {rejectionReason source}"
+
+end NN.Verification.Cert.CROWNQuery

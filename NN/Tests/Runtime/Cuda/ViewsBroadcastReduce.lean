@@ -6,7 +6,7 @@ Authors: TorchLean Team
 
 module
 
-public import NN.Runtime.Autograd.Engine.Cuda.Ops
+public import NN.Runtime.Autograd.Engine.LibTorch.Ops
 public import NN.Tensor
 public import NN.Tests.Runtime.Cuda.Utils
 
@@ -29,7 +29,7 @@ open Spec TorchLean
 open TorchLean TorchLean.Tensor
 open Runtime.Autograd
 
--- Buffer comparisons and the `floatArray` literal wrapper come from `Cuda.Utils`.
+-- Buffer comparisons and the `floatArray` literal wrapper come from `LibTorch.Utils`.
 open Tests.Cuda.Utils (floatArray assertFloatArrayApprox)
 
 def assertFloatArrayAllZero (msg : String) (a : FloatArray) (expectedSize : Nat) : IO Unit := do
@@ -42,13 +42,13 @@ def assertFloatArrayAllZero (msg : String) (a : FloatArray) (expectedSize : Nat)
 
 def runRankPolymorphicProductCoverage : IO Unit := do
   IO.println "== rank-polymorphic native product coverage =="
-  let x := Runtime.Autograd.Cuda.Buffer.ofFloatArray <| floatArray #[
+  let x := Runtime.Autograd.LibTorch.Buffer.ofFloatArray <| floatArray #[
     0.0, 1.0, 2.0, 3.0, 4.0, 5.0,
     6.0, 7.0, 8.0, 9.0, 10.0, 11.0
   ]
-  let b := Runtime.Autograd.Cuda.Buffer.broadcastTo x #[2, 1, 3, 2] #[2, 4, 3, 2] #[1, 2, 3, 4]
+  let b := Runtime.Autograd.LibTorch.Buffer.broadcastTo x #[2, 1, 3, 2] #[2, 4, 3, 2] #[1, 2, 3, 4]
   assertFloatArrayApprox "broadcastTo rank-4"
-    (Runtime.Autograd.Cuda.Buffer.toFloatArray b)
+    (Runtime.Autograd.LibTorch.Buffer.toFloatArray b)
     (floatArray #[
       0.0, 1.0, 2.0, 3.0, 4.0, 5.0,
       0.0, 1.0, 2.0, 3.0, 4.0, 5.0,
@@ -60,15 +60,15 @@ def runRankPolymorphicProductCoverage : IO Unit := do
       6.0, 7.0, 8.0, 9.0, 10.0, 11.0
     ]) (tol := 1e-5)
 
-  let dOut := Runtime.Autograd.Cuda.Buffer.full 48 1.0
+  let dOut := Runtime.Autograd.LibTorch.Buffer.full 48 1.0
   let reduced :=
-    Runtime.Autograd.Cuda.Buffer.reduceFromBroadcastTo dOut #[2, 1, 3, 2] #[2, 4, 3, 2]
+    Runtime.Autograd.LibTorch.Buffer.reduceFromBroadcastTo dOut #[2, 1, 3, 2] #[2, 4, 3, 2]
       #[1, 2, 3, 4]
   assertFloatArrayApprox "reduceFromBroadcastTo rank-4"
-    (Runtime.Autograd.Cuda.Buffer.toFloatArray reduced)
+    (Runtime.Autograd.LibTorch.Buffer.toFloatArray reduced)
     (floatArray (Array.replicate 12 4.0)) (tol := 1e-5)
 
-  let x24 := Runtime.Autograd.Cuda.Buffer.ofFloatArray <| floatArray #[
+  let x24 := Runtime.Autograd.LibTorch.Buffer.ofFloatArray <| floatArray #[
     0.0, 1.0, 2.0, 3.0,
     4.0, 5.0, 6.0, 7.0,
     8.0, 9.0, 10.0, 11.0,
@@ -76,14 +76,14 @@ def runRankPolymorphicProductCoverage : IO Unit := do
     16.0, 17.0, 18.0, 19.0,
     20.0, 21.0, 22.0, 23.0
   ]
-  let sumLast := Runtime.Autograd.Cuda.Buffer.reduceSumAxis x24 #[2, 3, 4] 2
+  let sumLast := Runtime.Autograd.LibTorch.Buffer.reduceSumAxis x24 #[2, 3, 4] 2
   assertFloatArrayApprox "reduceSumAxis three-axis input"
-    (Runtime.Autograd.Cuda.Buffer.toFloatArray sumLast)
+    (Runtime.Autograd.LibTorch.Buffer.toFloatArray sumLast)
     (floatArray #[6.0, 22.0, 38.0, 54.0, 70.0, 86.0]) (tol := 1e-5)
 
-  let swapped := Runtime.Autograd.Cuda.Buffer.swapAdjacentAtDepth x24 #[2, 3, 4] 1
+  let swapped := Runtime.Autograd.LibTorch.Buffer.swapAdjacentAtDepth x24 #[2, 3, 4] 1
   assertFloatArrayApprox "swapAdjacentAtDepth three-axis input"
-    (Runtime.Autograd.Cuda.Buffer.toFloatArray swapped)
+    (Runtime.Autograd.LibTorch.Buffer.toFloatArray swapped)
     (floatArray #[
       0.0, 4.0, 8.0,
       1.0, 5.0, 9.0,
@@ -97,24 +97,42 @@ def runRankPolymorphicProductCoverage : IO Unit := do
 
 def runReduceSumAxisEmptyReducedDim : IO Unit := do
   IO.println "== reduce_sum_axis empty reduced dimension =="
-  let input ← Runtime.Autograd.Cuda.Buffer.zerosIO 0
-  let out := Runtime.Autograd.Cuda.Buffer.reduceSumAxis input #[3, 0, 5] 1
+  let input ← Runtime.Autograd.LibTorch.Buffer.zerosIO 0
+  let out := Runtime.Autograd.LibTorch.Buffer.reduceSumAxis input #[3, 0, 5] 1
   assertFloatArrayAllZero "reduce_sum_axis dims=[3,0,5], axis=1"
-    (Runtime.Autograd.Cuda.Buffer.toFloatArray out) 15
+    (Runtime.Autograd.LibTorch.Buffer.toFloatArray out) 15
 
 def runReduceMaxAxisEmptyReducedDim : IO Unit := do
   IO.println "== reduce_max_axis empty reduced dimension =="
-  let emptyByColumnInput ← Runtime.Autograd.Cuda.Buffer.zerosIO 0
-  let outByColumn := Runtime.Autograd.Cuda.Buffer.reduceMaxByColumn emptyByColumnInput 0 5
+  let emptyByColumnInput ← Runtime.Autograd.LibTorch.Buffer.zerosIO 0
+  let outByColumn := Runtime.Autograd.LibTorch.Buffer.reduceMaxByColumn emptyByColumnInput 0 5
   assertFloatArrayAllZero "reduce_max_by_column rows=0 cols=5"
-    (Runtime.Autograd.Cuda.Buffer.toFloatArray outByColumn) 5
-  let emptyByRowInput ← Runtime.Autograd.Cuda.Buffer.zerosIO 0
-  let outByRow := Runtime.Autograd.Cuda.Buffer.reduceMaxByRow emptyByRowInput 3 0
+    (Runtime.Autograd.LibTorch.Buffer.toFloatArray outByColumn) 5
+  let emptyByRowInput ← Runtime.Autograd.LibTorch.Buffer.zerosIO 0
+  let outByRow := Runtime.Autograd.LibTorch.Buffer.reduceMaxByRow emptyByRowInput 3 0
   assertFloatArrayAllZero "reduce_max_by_row rows=3 cols=0"
-    (Runtime.Autograd.Cuda.Buffer.toFloatArray outByRow) 3
+    (Runtime.Autograd.LibTorch.Buffer.toFloatArray outByRow) 3
+
+/-- Reduction-axis maps depend on rank, including the helper's total out-of-range behavior. -/
+def Internal.checkAfterSumAxisMap : IO Unit := do
+  let cases : Array (Shape × Nat × Array Nat) := #[
+    (.scalar, 0, #[]),
+    (.scalar, 4, #[]),
+    ([2, 3, 4], 0, #[0, 1, 2]),
+    ([2, 3, 4], 1, #[1, 0, 2]),
+    ([2, 3, 4], 2, #[1, 2, 0]),
+    ([2, 3, 4], 3, #[1, 2, 3]),
+    ([2, 3, 4], 8, #[1, 2, 3]),
+    ([2, 0, 4], 1, #[1, 0, 2])]
+  for (s, axis, expected) in cases do
+    let actual := LibTorch.Broadcast.afterSumAxisMap s axis
+    unless actual == expected do
+      throw <| IO.userError
+        s!"afterSumAxisMap axis {axis}: expected {expected}, got {actual}"
 
 def run : IO Unit := do
   IO.println "=== CUDA kernel coverage: views/broadcast/reduce ==="
+  Internal.checkAfterSumAxisMap
 
   -- reshape
   IO.println "== reshape =="
@@ -135,16 +153,17 @@ def run : IO Unit := do
   let gradsCpu ← Utils.okOrThrow (Tape.backwardDenseAll (α := Float) (t := t2) yId seedCpu)
   let dxCpu ← Utils.cpuGrad (s := s1) gradsCpu xId
 
-  let t0c : Runtime.Autograd.Cuda.Tape := Runtime.Autograd.Cuda.Tape.empty
+  let t0c : Runtime.Autograd.LibTorch.Tape := Runtime.Autograd.LibTorch.Tape.empty
   let (t1c, xIdc) :=
-    Runtime.Autograd.Cuda.Tape.leaf (t := t0c) (Utils.tensorToAnyBuffer x1) (name := some "x")
+    Runtime.Autograd.LibTorch.Tape.leaf (t := t0c) (Utils.tensorToAnyBuffer x1) (name := some "x")
   let (t2c, yIdc) ← Utils.okOrThrow
-    (Runtime.Autograd.Cuda.Tape.reshape (t := t1c) (s₁ := s1) (s₂ := s2) xIdc hSize)
+    (Runtime.Autograd.LibTorch.Tape.reshape (t := t1c) (s₁ := s1) (s₂ := s2) xIdc hSize)
   let yCuda ← Utils.cudaValue (s := s2) t2c yIdc
-  let seedCuda : Runtime.Autograd.Cuda.AnyBuffer :=
-    { s := s2, buf := Runtime.Autograd.Cuda.Buffer.full (UInt32.ofNat (Spec.Shape.size s2)) 1.0 }
+  let seedCuda : Runtime.Autograd.LibTorch.AnyBuffer :=
+    { s := s2, buf := Runtime.Autograd.LibTorch.Buffer.full (UInt32.ofNat (Spec.Shape.size
+      s2)) 1.0 }
   let gradsCuda ← Utils.okOrThrow
-    (Runtime.Autograd.Cuda.Tape.backwardDenseAll (t := t2c) yIdc seedCuda)
+    (Runtime.Autograd.LibTorch.Tape.backwardDenseAll (t := t2c) yIdc seedCuda)
   let dxCuda ← Utils.cudaGrad (s := s1) gradsCuda xIdc
 
   Utils.assertTensorApprox (s := s2) "reshape forward" yCuda yCpu (tol := 2e-3)
@@ -168,17 +187,17 @@ def run : IO Unit := do
   let gradsCpuM ← Utils.okOrThrow (Tape.backwardDenseAll (α := Float) (t := t2m) yMid seedCpuM)
   let dxCpuM ← Utils.cpuGrad (s := sM) gradsCpuM xMid
 
-  let t0mc : Runtime.Autograd.Cuda.Tape := Runtime.Autograd.Cuda.Tape.empty
+  let t0mc : Runtime.Autograd.LibTorch.Tape := Runtime.Autograd.LibTorch.Tape.empty
   let (t1mc, xMidc) :=
-    Runtime.Autograd.Cuda.Tape.leaf (t := t0mc) (Utils.tensorToAnyBuffer xM) (name := some "x")
+    Runtime.Autograd.LibTorch.Tape.leaf (t := t0mc) (Utils.tensorToAnyBuffer xM) (name := some "x")
   let (t2mc, yMidc) ← Utils.okOrThrow
-    (Runtime.Autograd.Cuda.Tape.swapAdjacentAtDepth (t := t1mc) (s := sM) 0 xMidc)
+    (Runtime.Autograd.LibTorch.Tape.swapAdjacentAtDepth (t := t1mc) (s := sM) 0 xMidc)
   let yCudaM ← Utils.cudaValue (s := [3, 2]) t2mc yMidc
-  let seedCudaM : Runtime.Autograd.Cuda.AnyBuffer :=
+  let seedCudaM : Runtime.Autograd.LibTorch.AnyBuffer :=
     { s := [3, 2],
-      buf := Runtime.Autograd.Cuda.Buffer.full (UInt32.ofNat (Spec.Shape.size [3, 2])) 1.0 }
+      buf := Runtime.Autograd.LibTorch.Buffer.full (UInt32.ofNat (Spec.Shape.size [3, 2])) 1.0 }
   let gradsCudaM ← Utils.okOrThrow
-    (Runtime.Autograd.Cuda.Tape.backwardDenseAll (t := t2mc) yMidc seedCudaM)
+    (Runtime.Autograd.LibTorch.Tape.backwardDenseAll (t := t2mc) yMidc seedCudaM)
   let dxCudaM ← Utils.cudaGrad (s := sM) gradsCudaM xMidc
 
   Utils.assertTensorApprox (s := [3, 2]) "transpose forward" yCudaM yCpuM (tol := 2e-3)
@@ -218,13 +237,13 @@ def run : IO Unit := do
     (Spec.SomeTensor.ofTensor seedSwap))
   let dxCpuSwap ← Utils.cpuGrad (s := sSwap) gradsCpuSwap xSid
 
-  let t0sc : Runtime.Autograd.Cuda.Tape := Runtime.Autograd.Cuda.Tape.empty
-  let (t1sc, xSidc) := Runtime.Autograd.Cuda.Tape.leaf (t := t0sc)
+  let t0sc : Runtime.Autograd.LibTorch.Tape := Runtime.Autograd.LibTorch.Tape.empty
+  let (t1sc, xSidc) := Runtime.Autograd.LibTorch.Tape.leaf (t := t0sc)
     (Utils.tensorToAnyBuffer xSwap) (name := some "x")
-  let (t2sc, ySidc) ← Utils.okOrThrow (Runtime.Autograd.Cuda.Tape.swapAdjacentAtDepth
+  let (t2sc, ySidc) ← Utils.okOrThrow (Runtime.Autograd.LibTorch.Tape.swapAdjacentAtDepth
     (t := t1sc) (s := sSwap) 1 xSidc)
   let yCudaSwap ← Utils.cudaValue (s := sSwapOut) t2sc ySidc
-  let gradsCudaSwap ← Utils.okOrThrow (Runtime.Autograd.Cuda.Tape.backwardDenseAll
+  let gradsCudaSwap ← Utils.okOrThrow (Runtime.Autograd.LibTorch.Tape.backwardDenseAll
     (t := t2sc) ySidc { s := sSwapOut, buf := Utils.tensorToBuffer seedSwap })
   let dxCudaSwap ← Utils.cudaGrad (s := sSwap) gradsCudaSwap xSidc
 
@@ -249,16 +268,17 @@ def run : IO Unit := do
   let gradsCpuB ← Utils.okOrThrow (Tape.backwardDenseAll (α := Float) (t := t2b) yBid seedCpuB)
   let dxCpuB ← Utils.cpuGrad (s := sB1) gradsCpuB xBid
 
-  let t0bc : Runtime.Autograd.Cuda.Tape := Runtime.Autograd.Cuda.Tape.empty
+  let t0bc : Runtime.Autograd.LibTorch.Tape := Runtime.Autograd.LibTorch.Tape.empty
   let (t1bc, xBidc) :=
-    Runtime.Autograd.Cuda.Tape.leaf (t := t0bc) (Utils.tensorToAnyBuffer xB) (name := some "x")
+    Runtime.Autograd.LibTorch.Tape.leaf (t := t0bc) (Utils.tensorToAnyBuffer xB) (name := some "x")
   let (t2bc, yBidc) ← Utils.okOrThrow
-    (Runtime.Autograd.Cuda.Tape.broadcastTo (t := t1bc) (s₁ := sB1) (s₂ := sB2) cb xBidc)
+    (Runtime.Autograd.LibTorch.Tape.broadcastTo (t := t1bc) (s₁ := sB1) (s₂ := sB2) cb xBidc)
   let yCudaB ← Utils.cudaValue (s := sB2) t2bc yBidc
-  let seedCudaB : Runtime.Autograd.Cuda.AnyBuffer :=
-    { s := sB2, buf := Runtime.Autograd.Cuda.Buffer.full (UInt32.ofNat (Spec.Shape.size sB2)) 1.0 }
+  let seedCudaB : Runtime.Autograd.LibTorch.AnyBuffer :=
+    { s := sB2, buf := Runtime.Autograd.LibTorch.Buffer.full (UInt32.ofNat
+      (Spec.Shape.size sB2)) 1.0 }
   let gradsCudaB ← Utils.okOrThrow
-    (Runtime.Autograd.Cuda.Tape.backwardDenseAll (t := t2bc) yBidc seedCudaB)
+    (Runtime.Autograd.LibTorch.Tape.backwardDenseAll (t := t2bc) yBidc seedCudaB)
   let dxCudaB ← Utils.cudaGrad (s := sB1) gradsCudaB xBidc
 
   Utils.assertTensorApprox (s := sB2) "broadcastTo forward" yCudaB yCpuB (tol := 2e-3)
@@ -293,28 +313,28 @@ def run : IO Unit := do
     (Tape.backwardDenseAll (α := Float) (t := t3r) meanId seedCpuMean)
   let dxCpuMean ← Utils.cpuGrad (s := sR) gradsCpuMean xRid
 
-  let t0rc : Runtime.Autograd.Cuda.Tape := Runtime.Autograd.Cuda.Tape.empty
+  let t0rc : Runtime.Autograd.LibTorch.Tape := Runtime.Autograd.LibTorch.Tape.empty
   let (t1rc, xRidc) :=
-    Runtime.Autograd.Cuda.Tape.leaf (t := t0rc) (Utils.tensorToAnyBuffer xR) (name := some "x")
+    Runtime.Autograd.LibTorch.Tape.leaf (t := t0rc) (Utils.tensorToAnyBuffer xR) (name := some "x")
   let (t2rc, sumIdc) ← Utils.okOrThrow
-    (Runtime.Autograd.Cuda.Tape.reduceSum (s := sR) axis (t := t1rc) xRidc)
+    (Runtime.Autograd.LibTorch.Tape.reduceSum (s := sR) axis (t := t1rc) xRidc)
   let (t3rc, meanIdc) ← Utils.okOrThrow
-    (Runtime.Autograd.Cuda.Tape.reduceMean (s := sR) axis (t := t2rc) xRidc)
+    (Runtime.Autograd.LibTorch.Tape.reduceMean (s := sR) axis (t := t2rc) xRidc)
 
   let yCudaSum ← Utils.cudaValue (s := sOut) t3rc sumIdc
-  let seedCudaSum : Runtime.Autograd.Cuda.AnyBuffer :=
+  let seedCudaSum : Runtime.Autograd.LibTorch.AnyBuffer :=
     { s := sOut,
-      buf := Runtime.Autograd.Cuda.Buffer.full (UInt32.ofNat (Spec.Shape.size sOut)) 1.0 }
+      buf := Runtime.Autograd.LibTorch.Buffer.full (UInt32.ofNat (Spec.Shape.size sOut)) 1.0 }
   let gradsCudaSum ← Utils.okOrThrow
-    (Runtime.Autograd.Cuda.Tape.backwardDenseAll (t := t3rc) sumIdc seedCudaSum)
+    (Runtime.Autograd.LibTorch.Tape.backwardDenseAll (t := t3rc) sumIdc seedCudaSum)
   let dxCudaSum ← Utils.cudaGrad (s := sR) gradsCudaSum xRidc
 
   let yCudaMean ← Utils.cudaValue (s := sOut) t3rc meanIdc
-  let seedCudaMean : Runtime.Autograd.Cuda.AnyBuffer :=
+  let seedCudaMean : Runtime.Autograd.LibTorch.AnyBuffer :=
     { s := sOut,
-      buf := Runtime.Autograd.Cuda.Buffer.full (UInt32.ofNat (Spec.Shape.size sOut)) 1.0 }
+      buf := Runtime.Autograd.LibTorch.Buffer.full (UInt32.ofNat (Spec.Shape.size sOut)) 1.0 }
   let gradsCudaMean ← Utils.okOrThrow
-    (Runtime.Autograd.Cuda.Tape.backwardDenseAll (t := t3rc) meanIdc seedCudaMean)
+    (Runtime.Autograd.LibTorch.Tape.backwardDenseAll (t := t3rc) meanIdc seedCudaMean)
   let dxCudaMean ← Utils.cudaGrad (s := sR) gradsCudaMean xRidc
 
   Utils.assertTensorApprox (s := sOut) "reduce_sum forward" yCudaSum yCpuSum (tol := 2e-3)

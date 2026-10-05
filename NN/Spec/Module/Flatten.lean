@@ -21,7 +21,10 @@ Why is the output length computed at the type level?
 - It prevents a common class of downstream mistakes (e.g. wiring a linear layer with the wrong
   feature dimension).
 
-If you're thinking in PyTorch: this is `nn.Flatten()` in its simplest form (collapse all dims).
+Here `s` is the per-sample shape. The `nn.Flatten()` metadata assumes the Python input has an
+additional leading batch axis: PyTorch preserves that axis and flattens the sample dimensions.
+Applying the same operation directly to an unbatched Python tensor requires
+`nn.Flatten(start_dim=0)`.
 -/
 
 @[expose] public section
@@ -34,10 +37,10 @@ open TorchLean TorchLean.Tensor
 -- Flatten module specification wrapper
 /-- Wrap `flattenSpec` as an `Spec.Module` (`s -> (Spec.Shape.size s)`).
 
-The `dimensions` metadata field is not meaningful for flatten because the output length depends on
-the whole input shape; exporters should recompute the shape from the typed input.
+The output length comes from the typed input shape; `pythonExpr` follows the external batch-axis
+convention described above.
 -/
-def flatten (α : Type) [TorchLean.Storage α] [Context α] (s : Shape) :
+def flatten (α : Type) [TorchLean.Storage α] (s : Shape) :
   Spec.Module α s ([(Spec.Shape.size s)]) :=
 { forward := fun x => flattenSpec x, kind := "Flatten", pythonExpr := "nn.Flatten()" }
 

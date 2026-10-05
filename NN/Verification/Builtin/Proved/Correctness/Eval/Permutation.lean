@@ -44,12 +44,8 @@ theorem evalAt_permute_eq
   simp [Graph.evalAt, Graph.evalNode, Graph.normalizeNodeOutput, unaryGraphOut, unaryNodeOut,
     Graph.getNode, Graph.getNode?,
     Graph.unaryParentId, unaryParent?, Bind.bind, Except.bind, Pure.pure, Except.pure]
-  have hPerm' : Graph.permuteSomeTensor (α := α) (v := ⟨s, x⟩) perm = .ok vOut := by
-    simpa [Spec.SomeTensor.mk] using hPerm
-  have hShape' : vOut.1 = out := by
-    simpa [Spec.SomeTensor.shape] using hShape
-  rw [hPerm']
-  simp [hShape']
+  rw [hPerm]
+  simp [hShape]
 
 end IRStep
 

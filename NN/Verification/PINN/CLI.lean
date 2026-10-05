@@ -60,7 +60,8 @@ open NN.Verification.PINN.ResidualAffine
 open Spec TorchLean
 open TorchLean.Tensor
 
-/-- Backend selection for the PINN CLI. -/
+/-- Backend selection for the PINN CLI. Only the host `Float` evaluator exists, so the flag is
+validated but does not change the computation. -/
 inductive Backend where
   | float
 
@@ -70,30 +71,25 @@ def parseBackendVal (s : String) : Option Backend :=
   | "float" => some .float
   | _ => none
 
-/-- Parse a decimal Float literal used by CLI flags. -/
-def parseFloat : String → Option Float :=
-  TorchLean.CLI.parseFloatLit?
-
-
-/-- Select interval-only, forward CROWN, or backward CROWN bounds for the PINN output value. -/
-inductive UBoundsMethod
+/-- Bound method for the PINN output value, selected by `--method`: interval-only, forward CROWN,
+or backward CROWN. -/
+inductive Method
   | ibp
   | crownFwd
   | crownBwd
 
-/-- Compute primitives u, duX, duY, d2uX, d2uY at the unique output node (id=5) for 1D/2D models.
-    Optionally, replace the `u`-interval with a tighter CROWN/DeepPoly bound. -/
-def computePrimsAt (g : Graph) (ps : ParamStore Float) (uMethod : UBoundsMethod := .ibp) (backend :
-  Backend := .float) : IO Prims := do
+instance : ToString Method :=
+  ⟨fun
+    | .ibp => "ibp"
+    | .crownFwd => "crown-fwd"
+    | .crownBwd => "crown-bwd"⟩
+
+/-- Compute primitives `u`, `duX`, `duY`, `d2uX`, `d2uY` at the graph output node for 1D/2D
+    models. Optionally, replace the `u`-interval with a tighter CROWN/DeepPoly bound. -/
+def computePrimsAt (g : Graph) (ps : ParamStore Float) (uMethod : Method := .ibp) : IO Prims := do
   let outId := NN.Verification.PINN.SequentialPINNArch.graphOutputId g
-  let _ := backend
   let ibp := runIBP (α:=Float) g ps
-  let outB ←
-    match NN.MLTheory.CROWN.Graph.outputBox? ibp outId with
-    | .ok outB => pure outB
-    | .error msg => throw <| IO.userError s!"IBP failed at output: {msg}"
-  let uLo := TorchLean.Tensor.sumSpec outB.lo
-  let uHi := TorchLean.Tensor.sumSpec outB.hi
+  let uBox ← IO.ofExcept (outputInterval "IBP failed at output" ibp outId)
   -- Determine input dimension from graph's input node shape
   let inDim : Nat ←
     match g.nodes[0]? with
@@ -121,7 +117,8 @@ def computePrimsAt (g : Graph) (ps : ParamStore Float) (uMethod : UBoundsMethod 
     match boundsAlong 1 with
     | some (first, second) => (endpoints first, endpoints second)
     | none => (none, none)
-  let base : Prims := { u := some (uLo, uHi), duX := duX, duY := duY, d2uX := d2uX, d2uY := d2uY }
+  let base : Prims :=
+    { u := some (uBox.lower, uBox.upper), duX := duX, duY := duY, d2uX := d2uX, d2uY := d2uY }
   match uMethod with
   | .ibp => pure base
   | .crownFwd =>
@@ -168,18 +165,6 @@ def loadWeightsOrDefault
       catch e =>
         IO.eprintln s!"[PINN] Failed to parse weights JSON: {e}; falling back to built-in weights"
         pure (defaultGraph, defaultParams)
-
-/-- User-facing bound method selected by `--method`. -/
-inductive Method
-  | ibp
-  | crownFwd
-  | crownBwd
-
-instance : ToString Method :=
-  ⟨fun
-    | .ibp => "ibp"
-    | .crownFwd => "crown-fwd"
-    | .crownBwd => "crown-bwd"⟩
 
 /-- Parse the `--method` value accepted by the PINN residual checker. -/
 def parseMethodVal (s : String) : Option Method :=
@@ -240,14 +225,8 @@ def main (args : List String) : IO Unit := do
     | .ok parsed => pure parsed
     | .error e => throw <| IO.userError e
   let method := options.method
-  let backend := options.backend
   let weights? := options.weights?
   let splitDepth := options.splitDepth
-  let uMethod : UBoundsMethod :=
-    match method with
-    | .ibp => .ibp
-    | .crownFwd => .crownFwd
-    | .crownBwd => .crownBwd
 
   let rec split1D (x : Float) (eps : Float) (d : Nat)
     (evalAt : Float → Float → IO (Float × Float)) : IO (Float × Float) := do
@@ -276,96 +255,92 @@ def main (args : List String) : IO Unit := do
       pure (if lo12 < lo34 then lo12 else lo34, if hi12 > hi34 then hi12 else hi34)
   match rest with
   | .cons pdeStr (.cons xStr (.cons epsStr .nil)) =>
-    match backend with
-    | .float =>
-      let x? := parseFloat xStr
-      let eps? := parseFloat epsStr
-      match x?, eps? with
-      | some x, some eps => do
-        unless x.isFinite do
-          throw <| IO.userError s!"x must be finite, got {x}"
-        unless eps.isFinite && eps ≥ 0.0 do
-          throw <| IO.userError s!"eps must be finite and nonnegative, got {eps}"
-        let expr ←
-          match parseExpr (fun _ => none) pdeStr with
-          | .ok e => pure e
-          | .error msg => throw <| IO.userError s!"Parse error: {msg}"
-        let (g, baseParams) ←
-          loadWeightsOrDefault weights? 1 (buildReferenceGraph 1) (referenceParams 1)
-        let evalAt : Float → Float → IO (Float × Float) :=
-          fun xc epsc => do
-            let center : TorchLean.Tensor Float [1] :=
-              TorchLean.Tensor.dim fun _ => TorchLean.Tensor.scalar xc
-            let ps := seedInput baseParams center epsc
-            let prims ← computePrimsAt g ps uMethod backend
-            match eval prims expr with
-            | some (lo, hi) => pure (lo, hi)
-            | none => throw <| IO.userError "PDE evaluation failed (insufficient primitives)"
-        let (lo0, hi0) ← evalAt x eps
-        let (loS, hiS) ←
-          if splitDepth = 0 then
-            pure (lo0, hi0)
-          else
-            split1D x eps splitDepth evalAt
-        -- Never return a worse interval when splitting: intersect when consistent, otherwise fall
-        -- back to hull.
-        let loI := if lo0 > loS then lo0 else loS
-        let hiI := if hi0 < hiS then hi0 else hiS
-        let (lo, hi) :=
-          if loI ≤ hiI then
-            (loI, hiI)
-          else
-            (if lo0 < loS then lo0 else loS, if hi0 > hiS then hi0 else hiS)
-        IO.println <|
-          (s!"PDE='{pdeStr}' at x={x}, eps={eps}, method={method}, " ++
-            s!"splitDepth={splitDepth}: residual ∈ [{lo},{hi}]")
-      | _, _ =>
-        IO.eprintln s!"invalid float input(s): x={xStr}, eps={epsStr}"
+    let x? := TorchLean.CLI.parseFloatLit? xStr
+    let eps? := TorchLean.CLI.parseFloatLit? epsStr
+    match x?, eps? with
+    | some x, some eps => do
+      unless x.isFinite do
+        throw <| IO.userError s!"x must be finite, got {x}"
+      unless eps.isFinite && eps ≥ 0.0 do
+        throw <| IO.userError s!"eps must be finite and nonnegative, got {eps}"
+      let expr ←
+        match parseExpr (fun _ => none) pdeStr with
+        | .ok e => pure e
+        | .error msg => throw <| IO.userError s!"Parse error: {msg}"
+      let (g, baseParams) ←
+        loadWeightsOrDefault weights? 1 (buildReferenceGraph 1) (referenceParams 1)
+      let evalAt : Float → Float → IO (Float × Float) :=
+        fun xc epsc => do
+          let center : TorchLean.Tensor Float [1] :=
+            TorchLean.Tensor.dim fun _ => TorchLean.Tensor.scalar xc
+          let ps := seedInput baseParams center epsc
+          let prims ← computePrimsAt g ps method
+          match eval prims expr with
+          | some (lo, hi) => pure (lo, hi)
+          | none => throw <| IO.userError "PDE evaluation failed (insufficient primitives)"
+      let (lo0, hi0) ← evalAt x eps
+      let (loS, hiS) ←
+        if splitDepth = 0 then
+          pure (lo0, hi0)
+        else
+          split1D x eps splitDepth evalAt
+      -- Never return a worse interval when splitting: intersect when consistent, otherwise fall
+      -- back to hull.
+      let loI := if lo0 > loS then lo0 else loS
+      let hiI := if hi0 < hiS then hi0 else hiS
+      let (lo, hi) :=
+        if loI ≤ hiI then
+          (loI, hiI)
+        else
+          (if lo0 < loS then lo0 else loS, if hi0 > hiS then hi0 else hiS)
+      IO.println <|
+        (s!"PDE='{pdeStr}' at x={x}, eps={eps}, method={method}, " ++
+          s!"splitDepth={splitDepth}: residual ∈ [{lo},{hi}]")
+    | _, _ =>
+      IO.eprintln s!"invalid float input(s): x={xStr}, eps={epsStr}"
   | .cons pdeStr (.cons xStr (.cons yStr (.cons epsStr .nil))) =>
-    match backend with
-    | .float =>
-      let x? := parseFloat xStr
-      let y? := parseFloat yStr
-      let eps? := parseFloat epsStr
-      match x?, y?, eps? with
-      | some x, some y, some eps => do
-        unless x.isFinite && y.isFinite do
-          throw <| IO.userError s!"x and y must be finite, got ({x}, {y})"
-        unless eps.isFinite && eps ≥ 0.0 do
-          throw <| IO.userError s!"eps must be finite and nonnegative, got {eps}"
-        let expr ←
-          match parseExpr (fun _ => none) pdeStr with
-          | .ok e => pure e
-          | .error msg => throw <| IO.userError s!"Parse error: {msg}"
-        let (g, baseParams) ←
-          loadWeightsOrDefault weights? 2 (buildReferenceGraph 2) (referenceParams 2)
-        let evalAt : Float → Float → Float → IO (Float × Float) :=
-          fun xc yc epsc => do
-            let center : TorchLean.Tensor Float [2] :=
-              TorchLean.Tensor.dim fun i => TorchLean.Tensor.scalar <| if i.val = 0 then xc else yc
-            let ps := seedInput baseParams center epsc
-            let prims ← computePrimsAt g ps uMethod backend
-            match eval prims expr with
-            | some (lo, hi) => pure (lo, hi)
-            | none => throw <| IO.userError "PDE evaluation failed (insufficient primitives)"
-        let (lo0, hi0) ← evalAt x y eps
-        let (loS, hiS) ←
-          if splitDepth = 0 then
-            pure (lo0, hi0)
-          else
-            split2D x y eps splitDepth evalAt
-        let loI := if lo0 > loS then lo0 else loS
-        let hiI := if hi0 < hiS then hi0 else hiS
-        let (lo, hi) :=
-          if loI ≤ hiI then
-            (loI, hiI)
-          else
-            (if lo0 < loS then lo0 else loS, if hi0 > hiS then hi0 else hiS)
-        IO.println <|
-          (s!"PDE='{pdeStr}' at (x,y)=({x},{y}), eps={eps}, method={method}, " ++
-            s!"splitDepth={splitDepth}: residual ∈ [{lo},{hi}]")
-      | _, _, _ =>
-        IO.eprintln s!"invalid float input(s): x={xStr}, y={yStr}, eps={epsStr}"
+    let x? := TorchLean.CLI.parseFloatLit? xStr
+    let y? := TorchLean.CLI.parseFloatLit? yStr
+    let eps? := TorchLean.CLI.parseFloatLit? epsStr
+    match x?, y?, eps? with
+    | some x, some y, some eps => do
+      unless x.isFinite && y.isFinite do
+        throw <| IO.userError s!"x and y must be finite, got ({x}, {y})"
+      unless eps.isFinite && eps ≥ 0.0 do
+        throw <| IO.userError s!"eps must be finite and nonnegative, got {eps}"
+      let expr ←
+        match parseExpr (fun _ => none) pdeStr with
+        | .ok e => pure e
+        | .error msg => throw <| IO.userError s!"Parse error: {msg}"
+      let (g, baseParams) ←
+        loadWeightsOrDefault weights? 2 (buildReferenceGraph 2) (referenceParams 2)
+      let evalAt : Float → Float → Float → IO (Float × Float) :=
+        fun xc yc epsc => do
+          let center : TorchLean.Tensor Float [2] :=
+            TorchLean.Tensor.dim fun i => TorchLean.Tensor.scalar <| if i.val = 0 then xc else yc
+          let ps := seedInput baseParams center epsc
+          let prims ← computePrimsAt g ps method
+          match eval prims expr with
+          | some (lo, hi) => pure (lo, hi)
+          | none => throw <| IO.userError "PDE evaluation failed (insufficient primitives)"
+      let (lo0, hi0) ← evalAt x y eps
+      let (loS, hiS) ←
+        if splitDepth = 0 then
+          pure (lo0, hi0)
+        else
+          split2D x y eps splitDepth evalAt
+      let loI := if lo0 > loS then lo0 else loS
+      let hiI := if hi0 < hiS then hi0 else hiS
+      let (lo, hi) :=
+        if loI ≤ hiI then
+          (loI, hiI)
+        else
+          (if lo0 < loS then lo0 else loS, if hi0 > hiS then hi0 else hiS)
+      IO.println <|
+        (s!"PDE='{pdeStr}' at (x,y)=({x},{y}), eps={eps}, method={method}, " ++
+          s!"splitDepth={splitDepth}: residual ∈ [{lo},{hi}]")
+    | _, _, _ =>
+      IO.eprintln s!"invalid float input(s): x={xStr}, y={yStr}, eps={epsStr}"
   | _ =>
     throw <| IO.userError <|
       ("Usage:\n  lake exe verify -- pinn-cli -- " ++

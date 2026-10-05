@@ -109,19 +109,6 @@ theorem enclosesAtInput_relu_propagate {ctx : AffineCtx} {x : Tensor ℝ [ctx.in
 
 /-! ## The α vector selected by the step -/
 
-/-- A certificate α entry, cast to the pre-activation dimension, has all components in `[0, 1]`
-under `AlphaOK`. -/
-theorem alpha_cast_range {alpha : Array (Option (FlatTensor ℝ))} {id : Nat} {αv : FlatTensor ℝ}
-    {n : Nat} (halpha : AlphaOK (alpha := alpha))
-    (hαopt : Cert.getAlpha? (α := ℝ) alpha id = some αv) (hα : αv.n = n) :
-    ∀ i : Fin n, (0 : ℝ) ≤ getScalar (castDimScalar (α := ℝ) hα αv.v) i ∧
-      getScalar (castDimScalar (α := ℝ) hα αv.v) i ≤ 1 := by
-  obtain ⟨hidA, hentry⟩ := lt_size_and_getElem!_of_getAlpha?_eq_some hαopt
-  have hrange : ∀ i : Fin αv.n, (0 : ℝ) ≤ getScalar αv.v i ∧ getScalar αv.v i ≤ 1 := by
-    simpa [hentry] using halpha id hidA
-  intro i
-  simpa [getScalar_castDimScalar] using hrange (Fin.cast hα.symm i)
-
 /-- The α vector the step selects when a certificate entry is present (the entry cast to the
 pre-activation dimension if the sizes agree, the default relaxation otherwise) has all components
 in `[0, 1]`. -/
@@ -135,7 +122,7 @@ theorem selected_alpha_range {alpha : Array (Option (FlatTensor ℝ))} {id : Nat
         else defaultAlphaVec (α := ℝ) preB.lo preB.hi) i ≤ 1 := by
   by_cases hα : αv.n = preB.dim
   · rw [dite_eq_left hα]
-    exact alpha_cast_range halpha hαopt hα
+    exact castDimScalar_unit_range hα αv.v (getAlpha?_unit_range halpha hαopt)
   · rw [dite_eq_right hα]
     exact defaultAlphaVec_range preB.lo preB.hi
 

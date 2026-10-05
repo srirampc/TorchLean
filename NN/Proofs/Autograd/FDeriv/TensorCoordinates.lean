@@ -45,8 +45,8 @@ def coordinateEquiv (shape : Shape) : Tensor ℝ shape ≃L[ℝ] (shape.Coord �
 /-- Rebuilding a tensor preserves each supplied coordinate. -/
 @[simp] theorem coordinateEquiv_symm_apply {shape : Shape}
     (x : shape.Coord → ℝ) (i : shape.Coord) :
-    (coordinateEquiv shape).symm x i = x i := by
-  exact Internal.Rep.get_ofFn _ i
+    (coordinateEquiv shape).symm x i = x i :=
+  Internal.Rep.get_ofFn _ i
 
 /-- A single tensor coordinate is a continuous linear functional. -/
 def coordinateCLM {shape : Shape} (i : shape.Coord) : Tensor ℝ shape →L[ℝ] ℝ :=
@@ -229,8 +229,8 @@ def assemble {shape : Shape} (derivatives : shape.Coord → E →L[ℝ] ℝ) :
 /-- Each coordinate of the assembled tangent is given by its supplied scalar derivative. -/
 @[simp] theorem assemble_apply {shape : Shape}
     (derivatives : shape.Coord → E →L[ℝ] ℝ) (dx : E) (i : shape.Coord) :
-    assemble derivatives dx i = derivatives i dx := by
-  exact coordinateEquiv_symm_apply _ i
+    assemble derivatives dx i = derivatives i dx :=
+  coordinateEquiv_symm_apply _ i
 
 /-- Scalar coordinate derivatives determine the full tensor Fréchet derivative.
 

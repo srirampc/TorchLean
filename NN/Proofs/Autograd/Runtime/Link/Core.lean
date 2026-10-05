@@ -6,7 +6,6 @@ Authors: TorchLean Team
 
 module
 
-public import NN.Proofs.Autograd.Runtime.ShapeErasure
 public import NN.Proofs.Autograd.Tape.Algebra.Soundness
 public import NN.Runtime.Autograd.Engine.Core.Base
 
@@ -42,15 +41,11 @@ https://pytorch.org/docs/stable/autograd.html
 
 @[expose] public section
 
-
 namespace Proofs
 namespace Autograd
 namespace Algebra
 
-open TorchLean
-
-open Spec TorchLean
-open TorchLean TorchLean.Tensor
+open Spec TorchLean TorchLean.Tensor
 
 namespace Graph
 
@@ -143,8 +138,8 @@ theorem size_addLeaves {α : Type} [Storage α] (t : Tape α) :
       (addLeaves (α := α) (t := t) (Γ := Γ) x).nodes.size = t.nodes.size + Γ.length
   | [], .nil => by simp [addLeaves]
   | _ :: Γ, .cons x xs => by
-      simp [addLeaves, Tape.leaf, Tape.addNode, size_addLeaves (t := { nodes := t.nodes.push _ }) (x
-        := xs),
+      simp [addLeaves, Tape.leaf, Tape.addNode,
+        size_addLeaves (t := { nodes := t.nodes.push _ }) (x := xs),
         Nat.add_assoc, Nat.add_comm, Array.size_push]
 
 /-- `addLeaves` appends `leafNodeOfSomeTensor` nodes for each input tensor, in order. -/
@@ -165,18 +160,13 @@ theorem nodes_addLeaves {α : Type} [Storage α] (t : Tape α) :
 
 /-- Value projection of `nodes_addLeaves`: `node.value` agrees with `toShapeErasedArray` for added
 leaves. -/
-theorem addLeaves_values {α : Type} [Storage α] (t : Tape α) :
-    {Γ : List Shape} → (x : TorchLean.TensorPack α Γ) →
-      (addLeaves (α := α) (t := t) (Γ := Γ) x).nodes.map (fun node => node.value) =
-        t.nodes.map (fun node => node.value) ++
-          TorchLean.TensorPack.toShapeErasedArray (α := α) (ss := Γ) x
-  | [], .nil => by
-      simp [addLeaves, TorchLean.TensorPack.toShapeErasedArray]
-  | _ :: Γ, .cons x xs => by
-      -- unfold one `leaf` push and use the induction hypothesis on the remaining leaves
-      simp [addLeaves, Tape.leaf, Tape.addNode,
-        addLeaves_values (t := { nodes := t.nodes.push _ }) (Γ := Γ) (x := xs),
-        TorchLean.TensorPack.toShapeErasedArray]
+theorem addLeaves_values {α : Type} [Storage α] (t : Tape α) {Γ : List Shape}
+    (x : TorchLean.TensorPack α Γ) :
+    (addLeaves (α := α) (t := t) (Γ := Γ) x).nodes.map (fun node => node.value) =
+      t.nodes.map (fun node => node.value) ++
+        TorchLean.TensorPack.toShapeErasedArray (α := α) (ss := Γ) x := by
+  -- A leaf stores its tensor unchanged, so projecting `value` off the leaf layout is the identity.
+  simp [nodes_addLeaves, Array.map_map, Function.comp_def, leafNodeOfSomeTensor]
 
 /--
 Runtime node produced by lowering one graph node.
@@ -276,8 +266,7 @@ theorem lowerGraphDataToTape_ctx_eq_eval {α : Type} {Δ : Type}
       rename_i ssPrev τ
       simp [lowerGraphDataToTape, GraphData.eval, ih]
 
-/-- The lowered tape's `.value` array is `GraphData.eval` with shapes erased in the same order.
-  -/
+/-- The lowered tape's `.value` array is `GraphData.eval` with shapes erased in the same order. -/
 theorem lowerGraphDataToTape_values_eq {α : Type} {Δ : Type}
     [Storage α]
     {Γ : List Shape} {ss : List Shape} (g : GraphData α Δ Γ ss)
@@ -309,8 +298,7 @@ theorem lowerGraphDataToTape_nodes_size {α : Type} {Δ : Type}
       simp [lowerGraphDataToTape, size_addLeaves, Runtime.Autograd.Tape.empty]
   | snoc g _node ih =>
       rename_i ssPrev τ
-      simp [lowerGraphDataToTape, Runtime.Autograd.Tape.addNode, ih, Array.size_push, Nat.add_assoc,
-        ]
+      simp [lowerGraphDataToTape, Runtime.Autograd.Tape.addNode, ih, Array.size_push, Nat.add_assoc]
 
 /--
 Lower a proved graph (`Graph`) to a runtime tape by evaluating forward nodes and storing each
@@ -387,54 +375,29 @@ theorem lowerGraphToTape_nodes_size {α : Type} {Δ : Type}
       rename_i ssPrev τ
       simp [lowerGraphToTape, Runtime.Autograd.Tape.addNode, ih, Array.size_push, Nat.add_assoc]
 
+end Graph
+
 /-!
 ### Full backpropagation (dense) for proofs and runtime
 
 The runtime engine computes a *dense* gradient array, accumulating cotangents for every node in the
-tape (inputs and intermediates). The following definition and theorems connect that behavior to the
-proved backpropagation semantics.
+tape (inputs and intermediates). The following definitions connect that behavior to the proved
+backpropagation semantics.
 -/
 
-/-- A "full" backpropagation that returns gradients for every value in `Γ ++ ss`. -/
-def backpropAllCtx {α : Type} {Δ : Type} [Storage α] [CommSemiring α]
-  {Γ : List Shape} {ss : List Shape} (g : Graph (α := α) Δ Γ ss)
-  (x : TorchLean.TensorPack α Γ)
-  (d : Δ) (seed : TorchLean.TensorPack α (Γ ++ ss)) :
-  TorchLean.TensorPack α (Γ ++ ss) :=
-  match g with
-  | .nil => seed
-  | .snoc (ss := ssPrev) (τ := τ) g node =>
-      let assoc : (Γ ++ ssPrev) ++ [τ] = Γ ++ (ssPrev ++ [τ]) := List.append_assoc Γ ssPrev [τ]
-      let seed' : TorchLean.TensorPack α ((Γ ++ ssPrev) ++ [τ]) :=
-        TorchLean.TensorPack.cast (α := α) (h := assoc.symm) seed
-      let seedPrev : TorchLean.TensorPack α (Γ ++ ssPrev) :=
-        (TorchLean.TensorPack.unsnoc (α := α) (ss := Γ ++ ssPrev) (τ := τ) seed').1
-      let seedOut : Tensor α τ :=
-        (TorchLean.TensorPack.unsnoc (α := α) (ss := Γ ++ ssPrev) (τ := τ) seed').2
-      let ctx := Graph.eval (α := α) (Δ := Δ) (Γ := Γ) (ss := ssPrev) g x d
-      let contrib := node.vjp ctx d seedOut
-      let seedPrev' := TorchLean.TensorPack.add (α := α) (ss := Γ ++ ssPrev) seedPrev contrib
-      let gradsPrev := backpropAllCtx (α := α) (Δ := Δ) (Γ := Γ) (ss := ssPrev) g x d seedPrev'
-      TorchLean.TensorPack.cast (α := α) (h := assoc)
-        (TorchLean.TensorPack.snoc (α := α) (ss := Γ ++ ssPrev) (τ := τ) gradsPrev seedOut)
+namespace GraphData
 
 /--
-“Full” backpropagation for `GraphData` that returns gradients for every value in `Γ ++ ss`,
-including inputs.
+"Full" backpropagation for `GraphData`: gradients for every value in `Γ ++ ss`, including inputs.
 
-This is the `GraphData`-analogue of `backpropAllCtx` above. We keep both definitions because:
-- `Graph` uses `[CommSemiring α]` (so it can express dot products and semiring-based accumulation),
-  while
-- `GraphData` only needs `[Add α]` here (it just adds contributions).
-
-Both follow the same reverse-mode accumulation structure: peel off the last node, apply its VJP to
-the seed on that node, add into the previous seed, and recurse.
+Peel off the last node, apply its VJP to the seed on that node, add the result into the previous
+seed, and recurse. Only `[Add α]` is needed. `Graph.backpropAllCtx` runs this program on the
+executable graph `g.toData`.
 -/
-def _root_.Proofs.Autograd.Algebra.GraphData.backpropAllCtx
-    {α : Type} {Δ : Type} [Storage α] [Add α]
-  {Γ : List Shape} {ss : List Shape} (g : GraphData α Δ Γ ss) (x : TorchLean.TensorPack α Γ)
-  (d : Δ) (seed : TorchLean.TensorPack α (Γ ++ ss)) :
-  TorchLean.TensorPack α (Γ ++ ss) :=
+def backpropAllCtx {α : Type} {Δ : Type} [Storage α] [Add α]
+    {Γ : List Shape} {ss : List Shape} (g : GraphData α Δ Γ ss) (x : TorchLean.TensorPack α Γ)
+    (d : Δ) (seed : TorchLean.TensorPack α (Γ ++ ss)) :
+    TorchLean.TensorPack α (Γ ++ ss) :=
   match g with
   | .nil => seed
   | .snoc (ss := ssPrev) (τ := τ) g node =>
@@ -452,6 +415,20 @@ def _root_.Proofs.Autograd.Algebra.GraphData.backpropAllCtx
       TorchLean.TensorPack.cast (α := α) (h := assoc)
         (TorchLean.TensorPack.snoc (α := α) (ss := Γ ++ ssPrev) (τ := τ) gradsPrev seedOut)
 
+end GraphData
+
+namespace Graph
+
+/--
+"Full" backpropagation for a proof-carrying graph: gradients for every value in `Γ ++ ss`,
+including inputs. It runs the executable reverse program of `g.toData`, exactly as `Graph.eval`
+and `Graph.backpropCtx` run its forward and inputs-only reverse programs.
+-/
+def backpropAllCtx {α : Type} {Δ : Type} [Storage α] [CommSemiring α]
+    {Γ : List Shape} {ss : List Shape} (g : Graph (α := α) Δ Γ ss)
+    (x : TorchLean.TensorPack α Γ) (d : Δ) (seed : TorchLean.TensorPack α (Γ ++ ss)) :
+    TorchLean.TensorPack α (Γ ++ ss) :=
+  GraphData.backpropAllCtx (α := α) g.toData x d seed
 
 end Graph
 

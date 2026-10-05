@@ -5,7 +5,7 @@ Authors: TorchLean Team
 
 Real-data CUDA example:
   python3 scripts/datasets/download_example_data.py --cifar10
-  lake -R -K cuda=true exe torchlean vit --device cuda --n-total 1 --steps 1
+  scripts/lake.sh -Kcuda=true exe torchlean vit --device cuda --n-total 1 --steps 1
 
 This is a real-data ViT-style CIFAR-10 minibatch run:
 - patch embedding via the generic convolution operation over two spatial axes,
@@ -22,15 +22,15 @@ public import NN.Examples.Models.Common.RealData
 # ViT-Style Real-Data Example
 
 Runnable `torchlean vit` example. It trains a compact ViT-style image classifier on a
-prepared CIFAR-10 minibatch: patch embedding by convolution, token reshape, transformer block, and
-linear head.
+prepared CIFAR-10 minibatch: patch embedding by convolution, token reshape, two Transformer blocks,
+class-token pooling, and a linear head.
 
 The reusable model wiring lives behind the public `TorchLean.nn.models.vit` constructor. The command
 adds CIFAR loader construction and the step-limited training loop.
 
 ```bash
 python3 scripts/datasets/download_example_data.py --cifar10
-lake -R -K cuda=true exe torchlean vit --device cuda --n-total 1 --steps 1
+scripts/lake.sh -Kcuda=true exe torchlean vit --device cuda --n-total 1 --steps 1
 ```
 
 This command is a small runtime check. Larger image-token runs belong in runtime profiling work,
@@ -134,33 +134,17 @@ def model : nn.Builder (nn.Sequential input output) :=
   nn.models.vit modelConfig batch
 
 /-- Train the CIFAR ViT with the public `Trainer` surface. -/
-def train (runtime : Runtime.Config) (flags : RealData.CifarModelTrainFlags) :
-    IO Trainer.Report := do
-  let batches ←
-    RealData.loadCifarBatches exeName batchSize flags.data.nRows flags.data.seed
-      flags.data.xPath flags.data.yPath
-  let batches ← batches.mapM fun sample =>
-    CLI.orThrow exeName <|
-      RealData.cropCifarBatch batchSize cropHeight cropWidth sample
-  let trainer :=
-    Trainer.new model <|
-      Trainer.RunConfig.forObjective
-        (Trainer.RunConfig.fromRuntime runtime
-          { optimizer := optim.adam { learningRate := flags.training.learningRate } })
-        (.oneHotCrossEntropy 1)
-        (seed := flags.data.seed)
-  let trained ← trainer.train
-    (Data.fromSamples batches)
-    (flags.training.trainOptions
-      (logTitle := "ViT CIFAR training")
-      (logNotes := RealData.cifarClassifierNotes batchSize flags))
-  pure trained.report
+def train (runtime : Runtime.Config) (flags : Support.Training.Options Support.Npy.Options) :
+    IO Trainer.Report :=
+  RealData.trainCifarClassifier batchSize cropHeight cropWidth exeName
+    "ViT CIFAR training" model runtime flags
 
 /-- CLI entrypoint for CIFAR ViT training on the selected runtime device. -/
 def main (args : List String) : IO UInt32 :=
-  TrainCommand.classificationNpy exeName args
-    (fun rest => RealData.CifarModelTrainFlags.parse exeName rest defaultLogPath 1 1e-3)
-    (Support.bannerWithDevice exeName "ViT CIFAR training")
-    train
+  TrainCommand.npy exeName args
+    (fun rest => Support.Training.Options.parse exeName rest defaultLogPath 1 1e-3
+      (parseData := RealData.NpyDatasets.parseCifar))
+    (Support.banner exeName "ViT CIFAR training")
+    train (fun result => result.printSummary) (target := "class-label")
 
 end NN.Examples.Models.Vision.Vit

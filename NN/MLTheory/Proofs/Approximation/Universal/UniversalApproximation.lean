@@ -7,11 +7,6 @@ Authors: TorchLean Team
 module
 
 public import NN.Spec.Models.Mlp
-public import Mathlib.Algebra.EuclideanDomain.Basic
-public import Mathlib.Algebra.EuclideanDomain.Field
-public import Mathlib.Analysis.SpecialFunctions.Pow.NNReal
-public import Mathlib.Data.Sym.Sym2.Init
-import Mathlib.Tactic.NormNum.GCD
 public import NN.Proofs.Tensor.Basic.Folds
 public import NN.Spec.Core.Context.Real
 
@@ -45,26 +40,26 @@ This file formalizes the classic constructive proof strategy:
 
 namespace NN.MLTheory.Proofs.UniversalApproximation
 
-  open _root_.Spec
-  open _root_.TorchLean
-  open _root_.TorchLean.Tensor
-  open Examples
+open _root_.Spec
+open _root_.TorchLean
+open _root_.TorchLean.Tensor
+open Examples
 
-  /-- Shorthand for `relu` in this development, using TorchLean’s spec semantics. -/
-  noncomputable abbrev relu (x : ℝ) : ℝ := Activation.Math.reluSpec x
+/-- Shorthand for `relu` in this development, using TorchLean’s spec semantics. -/
+noncomputable abbrev relu (x : ℝ) : ℝ := Activation.Math.reluSpec x
 
-  /-- If the knot $t$ is to the left of $x$, then $\operatorname{ReLU}(x-t)=x-t$. -/
-  theorem relu_sub_eq_of_le {x t : ℝ} (h : t ≤ x) : relu (x - t) = x - t := by
-    have : 0 ≤ x - t := sub_nonneg.mpr h
-    rw [relu, Activation.Math.reluSpec_eq_max, max_eq_left this]
+/-- If the knot $t$ is to the left of $x$, then $\operatorname{ReLU}(x-t)=x-t$. -/
+theorem relu_sub_eq_of_le {x t : ℝ} (h : t ≤ x) : relu (x - t) = x - t := by
+  have : 0 ≤ x - t := sub_nonneg.mpr h
+  rw [relu, Activation.Math.reluSpec_eq_max, max_eq_left this]
 
-  /-- If $x$ is to the left of the knot $t$, then $\operatorname{ReLU}(x-t)=0$. -/
-  theorem relu_sub_eq_zero_of_le {x t : ℝ} (h : x ≤ t) : relu (x - t) = 0 := by
-    have : x - t ≤ 0 := sub_nonpos.mpr h
-    rw [relu, Activation.Math.reluSpec_eq_max, max_eq_right this]
+/-- If $x$ is to the left of the knot $t$, then $\operatorname{ReLU}(x-t)=0$. -/
+theorem relu_sub_eq_zero_of_le {x t : ℝ} (h : x ≤ t) : relu (x - t) = 0 := by
+  have : x - t ≤ 0 := sub_nonpos.mpr h
+  rw [relu, Activation.Math.reluSpec_eq_max, max_eq_right this]
 
-/-- Extract scalar from a length-1 tensor. -/
-def extractScalarOutput (t : Tensor ℝ [1]) : ℝ :=
+/-- Extract the unique entry of a length-`1` tensor. -/
+def extractScalarOutput {α : Type} [TorchLean.Storage α] (t : Tensor α [1]) : α :=
   t.getScalar ⟨0, by norm_num⟩
 
 /-- Evaluate a 2-layer ReLU MLP on a scalar input. -/
@@ -129,11 +124,10 @@ spec-level MLP model.
 theorem mlp_eval_scalar_hinge (n : ℕ) (t : Fin n → ℝ) (c : Fin n → ℝ) (b x : ℝ) :
     mlpEvalScalar n (hingeLayer1 n t) (hingeLayer2 n c b) x = hingeFun n t c b x := by
   classical
-  -- Unfold the definition of `mlp_eval_scalar` and rewrite `mlp_forward`.
   unfold mlpEvalScalar hingeFun extractScalarOutput
-  -- Avoid `simp` here (it unfolds too much under matchers); rewrite `mlp_forward` explicitly.
-  rw [mlp_forward_eq_linear_relu_linear (l1 := hingeLayer1 n t) (l2 := hingeLayer2 n c b) (x :=
-    Tensor.singleton x)]
+  -- Avoid `simp` here (it unfolds too much under matchers); rewrite `mlpForward` explicitly.
+  rw [mlp_forward_eq_linear_relu_linear (l1 := hingeLayer1 n t) (l2 := hingeLayer2 n c b)
+    (x := Tensor.singleton x)]
   -- Reduce the let-bindings introduced by `mlp_forward_eq_linear_relu_linear`.
   dsimp
   -- Compute the first linear layer: `x ↦ (x - t i)`.
@@ -141,7 +135,7 @@ theorem mlp_eval_scalar_hinge (n : ℕ) (t : Fin n → ℝ) (c : Fin n → ℝ) 
       Spec.linearSpec (α := ℝ) (hingeLayer1 n t) (Tensor.singleton x) =
         Tensor.dim (fun i : Fin n => Tensor.scalar (x - t i)) := by
     unfold hingeLayer1 Spec.linearSpec
-    -- `mat_vec_mul_spec` yields the constant vector `x`; then add the bias `-t`.
+    -- `matVecMulSpec` yields the constant vector `x`; then add the bias `-t`.
     rw [mat_vec_mul_spec_matrix_singleton]
     apply Tensor.ext_vector
     intro i
@@ -159,7 +153,7 @@ theorem mlp_eval_scalar_hinge (n : ℕ) (t : Fin n → ℝ) (c : Fin n → ℝ) 
           (Activation.reluSpec (α := ℝ) (s := .dim n .scalar)
             (Spec.linearSpec (α := ℝ) (hingeLayer1 n t) (Tensor.singleton x))) =
         Tensor.dim (fun _ : Fin 1 => Tensor.scalar ((∑ i : Fin n, c i * relu (x - t i)) + b)) := by
-    -- Rewrite the activation output first, so unfolding `Spec.linear_spec` doesn't unfold the inner
+    -- Rewrite the activation output first, so unfolding `Spec.linearSpec` doesn't unfold the inner
     -- layer.
     rw [ha1]
     unfold hingeLayer2 Spec.linearSpec
@@ -178,6 +172,305 @@ theorem mlp_eval_scalar_hinge (n : ℕ) (t : Fin n → ℝ) (c : Fin n → ℝ) 
   -- `Fin 1` has a unique element, so `fin_cases` reduces the extracted component.
   simp [hy, Tensor.item, add_comm]
 
+namespace Internal.UniformInterpolation
+
+/-- The uniform grid with left endpoint `a` and spacing `δ`. -/
+noncomputable def grid (a δ : ℝ) (k : ℕ) : ℝ := a + (k : ℝ) * δ
+
+/-- The uniform grid starts at its left endpoint. -/
+@[simp] theorem grid_zero (a δ : ℝ) : grid a δ 0 = a := by simp [grid]
+
+/-- Consecutive grid points are one mesh width apart. -/
+theorem grid_step (a δ : ℝ) (k : ℕ) : grid a δ (k + 1) - grid a δ k = δ := by
+  simp only [grid, Nat.cast_add, Nat.cast_one]
+  ring
+
+/-- Nonnegative spacing gives an ordered grid. -/
+theorem grid_mono (a : ℝ) {δ : ℝ} (hδ : 0 ≤ δ) : Monotone (grid a δ) := by
+  intro m n hmn
+  exact add_le_add_right (mul_le_mul_of_nonneg_right (Nat.cast_le.mpr hmn) hδ) a
+
+/-- The slope between consecutive, arbitrary sample values. -/
+noncomputable def slope (δ : ℝ) (y : ℕ → ℝ) (k : ℕ) : ℝ :=
+  (y (k + 1) - y k) / δ
+
+/-- Hinge coefficients are the initial slope followed by successive slope differences. -/
+noncomputable def coefficient (δ : ℝ) (y : ℕ → ℝ) : ℕ → ℝ
+  | 0 => slope δ y 0
+  | k + 1 => slope δ y (k + 1) - slope δ y k
+
+/-- The slope times a nonzero mesh width is the corresponding sample increment. -/
+theorem slope_mul_step {δ : ℝ} (hδ : δ ≠ 0) (y : ℕ → ℝ) (k : ℕ) :
+    slope δ y k * δ = y (k + 1) - y k := by
+  exact div_mul_cancel₀ _ hδ
+
+/-- Summing the slope differences recovers the slope of the last segment. -/
+theorem sum_coefficient (δ : ℝ) (y : ℕ → ℝ) (k : ℕ) :
+    (∑ i ∈ Finset.range (k + 1), coefficient δ y i) = slope δ y k := by
+  induction k with
+  | zero => simp [coefficient]
+  | succ k ih =>
+    rw [Finset.sum_range_succ, ih]
+    simp [coefficient]
+
+/-- The width-`N` hinge interpolant of the samples `y 0, …, y N`. -/
+noncomputable def interpolant (N : ℕ) (a δ : ℝ) (y : ℕ → ℝ) (x : ℝ) : ℝ :=
+  y 0 + ∑ i ∈ Finset.range N, coefficient δ y i * relu (x - grid a δ i)
+
+/-- On each grid cell, the hinge sum is affine with the prescribed sample slope. -/
+theorem affine_on_segment {N k : ℕ} {a δ x : ℝ} (y : ℕ → ℝ) (hδ : 0 ≤ δ)
+    (hkN : k + 1 ≤ N) (hx0 : grid a δ k ≤ x) (hx1 : x ≤ grid a δ (k + 1)) :
+    interpolant N a δ y x = interpolant N a δ y (grid a δ k) +
+      slope δ y k * (x - grid a δ k) := by
+  classical
+  have hmono := grid_mono a hδ
+  have hsum :
+      (∑ i ∈ Finset.range N, coefficient δ y i *
+        (relu (x - grid a δ i) - relu (grid a δ k - grid a δ i))) =
+          slope δ y k * (x - grid a δ k) := by
+    calc
+      _ = ∑ i ∈ Finset.range (k + 1), coefficient δ y i *
+          (relu (x - grid a δ i) - relu (grid a δ k - grid a δ i)) := by
+        symm
+        refine Finset.sum_subset (Finset.range_mono hkN) ?_
+        intro i _ hi
+        have hki : k + 1 ≤ i := Nat.le_of_not_gt (by simpa using hi)
+        rw [relu_sub_eq_zero_of_le (hx1.trans (hmono hki)),
+          relu_sub_eq_zero_of_le (hmono ((Nat.le_succ k).trans hki))]
+        simp
+      _ = ∑ i ∈ Finset.range (k + 1), coefficient δ y i * (x - grid a δ k) := by
+        apply Finset.sum_congr rfl
+        intro i hi
+        have hik : grid a δ i ≤ grid a δ k :=
+          hmono (Nat.le_of_lt_succ (Finset.mem_range.mp hi))
+        rw [relu_sub_eq_of_le (hik.trans hx0), relu_sub_eq_of_le hik]
+        ring
+      _ = _ := by rw [← Finset.sum_mul, sum_coefficient]
+  have hdiff : interpolant N a δ y x - interpolant N a δ y (grid a δ k) =
+      slope δ y k * (x - grid a δ k) := by
+    simpa only [interpolant, add_sub_add_left_eq_sub, ← Finset.sum_sub_distrib,
+      ← mul_sub] using hsum
+  linarith
+
+/-- Positive spacing makes the hinge interpolant exact at every bounded grid point. -/
+theorem interpolant_grid {N : ℕ} (a : ℝ) {δ : ℝ} (y : ℕ → ℝ) (hδ : 0 < δ)
+    (k : ℕ) (hk : k ≤ N) : interpolant N a δ y (grid a δ k) = y k := by
+  classical
+  induction k with
+  | zero =>
+    have hsum : (∑ i ∈ Finset.range N,
+        coefficient δ y i * relu (grid a δ 0 - grid a δ i)) = 0 := by
+      apply Finset.sum_eq_zero
+      intro i _
+      rw [relu_sub_eq_zero_of_le (grid_mono a hδ.le (Nat.zero_le i)), mul_zero]
+    simp only [interpolant, hsum, add_zero]
+  | succ k ih =>
+    rw [affine_on_segment y hδ.le hk (grid_mono a hδ.le (Nat.le_succ k)) le_rfl,
+      ih ((Nat.le_succ k).trans hk), grid_step, slope_mul_step (ne_of_gt hδ)]
+    ring
+
+/-- The finite-index hinge network and the range-sum interpolant have the same value. -/
+theorem hinge_fun_eq_interpolant (N : ℕ) (a δ : ℝ) (y : ℕ → ℝ) (x : ℝ) :
+    hingeFun N (fun i => grid a δ i.1) (fun i => coefficient δ y i.1) (y 0) x =
+      interpolant N a δ y x := by
+  unfold hingeFun interpolant
+  congr 1
+  exact Fin.sum_univ_eq_sum_range
+    (f := fun i => coefficient δ y i * relu (x - grid a δ i)) (n := N)
+
+end Internal.UniformInterpolation
+
+/-- A uniform mesh with `N` cells gives a width-`N` hinge approximation whenever
+`2 * L * ((b - a) / N)` is below the requested error. The same interpolant serves both the
+qualitative existence theorem and the theorem with an explicit width. -/
+theorem relu_hinge_approximation_Icc_of_mesh {f : ℝ → ℝ} {a b L ε : ℝ} {N : ℕ}
+    (h_ab : a < b) (hL : 0 < L)
+    (h_lip : ∀ x ∈ Set.Icc a b, ∀ y ∈ Set.Icc a b, |f x - f y| ≤ L * |x - y|)
+    (hNpos_nat : 0 < N)
+    (hmesh : 2 * L * ((b - a) / (N : ℝ)) < ε) :
+    ∃ (t : Fin N → ℝ) (c : Fin N → ℝ),
+      ∀ x ∈ Set.Icc a b, |f x - hingeFun N t c (f a) x| < ε := by
+  classical
+  have hba : 0 < b - a := sub_pos.mpr h_ab
+  have hNpos : 0 < (N : ℝ) := by exact_mod_cast hNpos_nat
+  have hNne : (N : ℝ) ≠ 0 := ne_of_gt hNpos
+  let δ : ℝ := (b - a) / (N : ℝ)
+  have hδpos : 0 < δ := div_pos hba hNpos
+  have hδnonneg : 0 ≤ δ := le_of_lt hδpos
+  have hδne : δ ≠ 0 := ne_of_gt hδpos
+  have h2mesh : 2 * L * δ < ε := hmesh
+  have hε : 0 < ε := (mul_pos (mul_pos two_pos hL) hδpos).trans h2mesh
+
+  let grid := Internal.UniformInterpolation.grid a δ
+  let y : ℕ → ℝ := fun k => f (grid k)
+  let mNat := Internal.UniformInterpolation.slope δ y
+  let cNat := Internal.UniformInterpolation.coefficient δ y
+  let g := Internal.UniformInterpolation.interpolant N a δ y
+  have hgrid0 : grid 0 = a := Internal.UniformInterpolation.grid_zero a δ
+  have hgridN : grid N = b := by
+    dsimp [grid, Internal.UniformInterpolation.grid, δ]
+    rw [mul_div_cancel₀ _ hNne]
+    ring
+  have hstep : ∀ k : ℕ, grid (k + 1) - grid k = δ :=
+    Internal.UniformInterpolation.grid_step a δ
+  have hmδ : ∀ k : ℕ, mNat k * δ = f (grid (k + 1)) - f (grid k) :=
+    Internal.UniformInterpolation.slope_mul_step hδne y
+  have grid_mono : Monotone grid := Internal.UniformInterpolation.grid_mono a hδnonneg
+  have g_affine_on_segment :
+      ∀ {k : ℕ}, k + 1 ≤ N → ∀ {x : ℝ}, grid k ≤ x → x ≤ grid (k + 1) →
+        g x = g (grid k) + mNat k * (x - grid k) := by
+    intro k hkN x hx0 hx1
+    exact Internal.UniformInterpolation.affine_on_segment y hδnonneg hkN hx0 hx1
+  have g_grid_eq_f_grid : ∀ k : ℕ, k ≤ N → g (grid k) = f (grid k) :=
+    Internal.UniformInterpolation.interpolant_grid a y hδpos
+
+  -- Build the network corresponding to the polygonal interpolant.
+  let t : Fin N → ℝ := fun i => grid i.1
+  let c : Fin N → ℝ := fun i => cNat i.1
+  refine ⟨t, c, ?_⟩
+  intro x hx
+  have hhinge : hingeFun N t c (f a) x = g x := by
+    simpa only [y, hgrid0] using
+      Internal.UniformInterpolation.hinge_fun_eq_interpolant N a δ y x
+  -- Prove the approximation bound on `[a,b]`.
+  have hxle_gridN : x ≤ grid N := by simpa [hgridN] using hx.2
+  have hexists : ∃ k : ℕ, x ≤ grid k := ⟨N, hxle_gridN⟩
+  -- Two cases: x = a (`Nat.find hexists = 0`) or x lies in some segment `[grid k, grid (k+1)]`.
+  cases hjcases : Nat.find hexists with
+  | zero =>
+    have hx_eq : x = a := by
+      have hxle : x ≤ grid 0 := by
+        simpa [hjcases] using Nat.find_spec hexists
+      have hxle' : x ≤ a := by simpa [hgrid0] using hxle
+      exact le_antisymm hxle' hx.1
+    have hg_a : g a = f a := by
+      have := g_grid_eq_f_grid 0 (Nat.zero_le N)
+      simpa [hgrid0] using this
+    have : |f x - g x| < ε := by
+      -- at `x = a`, `g a = f a`
+      simpa [hx_eq, hg_a, abs_zero] using hε
+    simpa [hhinge] using this
+  | succ k =>
+    have hj : x ≤ grid (k + 1) := by
+      simpa [hjcases] using Nat.find_spec hexists
+    have hkN : k + 1 ≤ N := by
+      have hmin : Nat.find hexists ≤ N := Nat.find_min' hexists hxle_gridN
+      simpa [hjcases] using hmin
+    have hx_not_le_prev : ¬ x ≤ grid k := by
+      intro hxle
+      have hmin : Nat.find hexists ≤ k := Nat.find_min' hexists hxle
+      rw [hjcases] at hmin
+      exact Nat.not_succ_le_self k hmin
+    have hx0 : grid k ≤ x := le_of_lt (lt_of_not_ge hx_not_le_prev)
+    have hx1 : x ≤ grid (k + 1) := hj
+    have hk_le : k ≤ N := le_trans (Nat.le_succ k) hkN
+    have hgk : g (grid k) = f (grid k) := g_grid_eq_f_grid k hk_le
+    have haff : g x = g (grid k) + mNat k * (x - grid k) :=
+      g_affine_on_segment (k := k) hkN (x := x) hx0 hx1
+    have hfx : |f x - g x| < ε := by
+      -- bound via Lipschitz: |f x - g x| ≤ 2 L δ < ε
+      have hgridk_mem : grid k ∈ Set.Icc a b := by
+        have ha : a ≤ grid k := by
+          have : grid 0 ≤ grid k := grid_mono (Nat.zero_le k)
+          simpa [hgrid0] using this
+        have hb : grid k ≤ b := by
+          have : grid k ≤ grid N := grid_mono hk_le
+          simpa [hgridN] using this
+        exact ⟨ha, hb⟩
+      have hgridkp1_mem : grid (k + 1) ∈ Set.Icc a b := by
+        have ha : a ≤ grid (k + 1) := by
+          have : grid 0 ≤ grid (k + 1) := grid_mono (Nat.zero_le (k + 1))
+          simpa [hgrid0] using this
+        have hb : grid (k + 1) ≤ b := by
+          have : grid (k + 1) ≤ grid N := grid_mono hkN
+          simpa [hgridN] using this
+        exact ⟨ha, hb⟩
+      have hx_dist : |x - grid k| ≤ δ := by
+        have hx0' : 0 ≤ x - grid k := sub_nonneg.mpr hx0
+        have hxle : x - grid k ≤ δ := by
+          have : x - grid k ≤ grid (k + 1) - grid k := sub_le_sub_right hx1 (grid k)
+          simpa [hstep k] using this
+        have habs : |x - grid k| = x - grid k := abs_of_nonneg hx0'
+        simpa [habs] using hxle
+      have h1 : |f x - f (grid k)| ≤ L * δ := by
+        have := h_lip x hx (grid k) hgridk_mem
+        exact le_trans this (mul_le_mul_of_nonneg_left hx_dist hL.le)
+      have h2 : |f (grid k) - g x| ≤ L * δ := by
+        -- g x is between the endpoints; bound by the endpoint difference.
+        have habs' : |f (grid k) - g x| = |mNat k * (x - grid k)| := by
+          have hgx : g x = f (grid k) + mNat k * (x - grid k) := by
+            simpa [hgk] using haff
+          have hs : f (grid k) - g x = -(mNat k * (x - grid k)) := by
+            simp [hgx]
+          have : |f (grid k) - g x| = |-(mNat k * (x - grid k))| := by
+            simpa using congrArg abs hs
+          simpa [abs_neg] using this
+        -- use |x-grid k| ≤ δ to bound
+        have hmul_le : |mNat k * (x - grid k)| ≤ |mNat k| * δ := by
+          have := mul_le_mul_of_nonneg_left hx_dist (abs_nonneg (mNat k))
+          simpa [abs_mul] using this
+        have hmul_eq : |mNat k| * δ = |mNat k * δ| := by
+          simp [abs_mul, abs_of_nonneg hδnonneg, mul_comm]
+        have hendpoint : |mNat k * δ| ≤ L * δ := by
+          -- from Lipschitz on grid points
+          have hdiff := h_lip (grid (k + 1)) hgridkp1_mem (grid k) hgridk_mem
+          have hstepAbs : |grid (k + 1) - grid k| = δ := by
+            rw [hstep k]
+            exact abs_of_nonneg hδnonneg
+          -- rewrite |mNat k * δ| as |f(grid(k+1)) - f(grid k)|
+          have : |mNat k * δ| = |f (grid (k + 1)) - f (grid k)| := by simp [hmδ k]
+          simpa [this, hstepAbs] using hdiff
+        -- combine bounds
+        have hbound : |mNat k * (x - grid k)| ≤ |mNat k * δ| := by
+          exact le_trans hmul_le (le_of_eq hmul_eq)
+        have hfinal : |mNat k * (x - grid k)| ≤ L * δ := le_trans hbound hendpoint
+        simpa [habs'] using hfinal
+      have : |f x - g x| ≤ 2 * L * δ := by
+        have htri : |f x - g x| ≤ |f x - f (grid k)| + |f (grid k) - g x| := by
+          have htri0 :
+              |(f x - f (grid k)) + (f (grid k) - g x)| ≤
+                |f x - f (grid k)| + |f (grid k) - g x| :=
+            abs_add_le (f x - f (grid k)) (f (grid k) - g x)
+          have hrew' : (f x - f (grid k)) + (f (grid k) - g x) = f x - g x := by ring
+          simpa [hrew'] using htri0
+        have hsum : |f x - f (grid k)| + |f (grid k) - g x| ≤ L * δ + L * δ :=
+          add_le_add h1 (by simpa [abs_sub_comm] using h2)
+        have hsum' : L * δ + L * δ = 2 * L * δ := by ring
+        exact le_trans htri (by simpa [hsum'] using hsum)
+      exact lt_of_le_of_lt this h2mesh
+    simpa [hhinge] using hfx
+
+/-- Explicit hidden width for the 1D Lipschitz ReLU approximation construction. -/
+noncomputable def reluApproximationWidth (L a b ε : ℝ) : ℕ :=
+  Nat.ceil (2 * L * (b - a) / ε) + 1
+
+/-- The explicit ReLU approximation width is always positive. -/
+theorem relu_approximation_width_pos (L a b ε : ℝ) : 0 < reluApproximationWidth L a b ε :=
+  Nat.succ_pos _
+
+/--
+The chosen width makes the mesh-size error term smaller than the target accuracy.
+
+This is the arithmetic heart of the explicit-rate theorem: the ceiling construction ensures
+$N>2L(b-a)/\varepsilon$, hence $2L(b-a)/N<\varepsilon$.
+-/
+theorem two_mul_mul_sub_div_relu_approximation_width_lt {L a b ε : ℝ} (hε : 0 < ε) :
+    (2 * L * (b - a)) / (reluApproximationWidth L a b ε : ℝ) < ε := by
+  classical
+  let N : ℕ := reluApproximationWidth L a b ε
+  have hNpos_nat : 0 < N := relu_approximation_width_pos L a b ε
+  have hNpos : 0 < (N : ℝ) := by exact_mod_cast hNpos_nat
+  have hr_lt : (2 * L * (b - a) / ε : ℝ) < (N : ℝ) := by
+    have hr_le :
+        (2 * L * (b - a) / ε : ℝ) ≤ (Nat.ceil (2 * L * (b - a) / ε) : ℝ) :=
+      Nat.le_ceil _
+    have : (2 * L * (b - a) / ε : ℝ) < (Nat.ceil (2 * L * (b - a) / ε) : ℝ) + 1 := by
+      linarith
+    simpa [N, reluApproximationWidth, Nat.cast_add, Nat.cast_one, add_assoc] using this
+  -- Clear the `ε` denominator in `hr_lt`, then the `N` denominator in the goal.
+  have hnum : 2 * L * (b - a) < (N : ℝ) * ε := (div_lt_iff₀ hε).1 hr_lt
+  exact (div_lt_iff₀ hNpos).2 (by simpa [mul_comm, mul_assoc] using hnum)
+
 /--
 1D Universal Approximation (ReLU, one hidden layer).
 
@@ -186,371 +479,25 @@ Lipschitz continuity on $[a,b]$, a uniform partition, and piecewise-linear inter
 then represent the interpolant as a finite linear combination of hinges
 $\operatorname{ReLU}(x-t_i)$.
 -/
-  theorem relu_universal_approximation_Icc_hinge {f : ℝ → ℝ} {a b L : ℝ}
-      (h_ab : a < b) (hL : 0 < L)
-      (h_lip : ∀ x ∈ Set.Icc a b, ∀ y ∈ Set.Icc a b, |f x - f y| ≤ L * |x - y|) :
-      ∀ ε > 0, ∃ (hidDim : ℕ) (t : Fin hidDim → ℝ) (c : Fin hidDim → ℝ),
-        ∀ x ∈ Set.Icc a b, |f x - hingeFun hidDim t c (f a) x| < ε := by
-    intro ε hε
-    classical
-    have hba : 0 < b - a := sub_pos.mpr h_ab
-    have hεhalf : 0 < ε / 2 := by nlinarith
-    have hprod : 0 < L * (b - a) := by nlinarith [hL, hba]
-    have hε' : 0 < (ε / 2) / (L * (b - a)) := div_pos hεhalf hprod
-    rcases exists_nat_one_div_lt hε' with ⟨n, hn⟩
-    let N : ℕ := n + 1
-    have hNpos_nat : 0 < N := Nat.succ_pos n
-    have hNpos : 0 < (N : ℝ) := by exact_mod_cast hNpos_nat
-    have hNne : (N : ℝ) ≠ 0 := ne_of_gt hNpos
-    let δ : ℝ := (b - a) / (N : ℝ)
-    have hδpos : 0 < δ := div_pos hba hNpos
-    have hδnonneg : 0 ≤ δ := le_of_lt hδpos
-    have hmesh : L * δ < ε / 2 := by
-      have hn' :
-          (L * (b - a)) * (1 / ((n : ℝ) + 1)) <
-            (L * (b - a)) * ((ε / 2) / (L * (b - a))) :=
-        mul_lt_mul_of_pos_left hn hprod
-      have hnonzero : (L * (b - a)) ≠ 0 := ne_of_gt hprod
-      have hright : (L * (b - a)) * ((ε / 2) / (L * (b - a))) = ε / 2 := by
-        calc
-          (L * (b - a)) * ((ε / 2) / (L * (b - a))) =
-              (L * (b - a)) * (ε / 2) / (L * (b - a)) := by
-            simp [mul_div_assoc']
-          _ = ε / 2 := by
-            simpa using (mul_div_cancel_left₀ (ε / 2) hnonzero)
-      have hleft : (L * (b - a)) * (1 / ((n : ℝ) + 1)) = (L * (b - a)) / ((n : ℝ) + 1) := by
-        simpa using (mul_one_div (L * (b - a)) ((n : ℝ) + 1))
-      have hmesh' : L * (b - a) / ((n : ℝ) + 1) < ε / 2 := by
-        calc
-          L * (b - a) / ((n : ℝ) + 1)
-              = L * (b - a) * (1 / ((n : ℝ) + 1)) := by
-                rw [← hleft]
-          _ < L * (b - a) * ((ε / 2) / (L * (b - a))) := hn'
-          _ = ε / 2 := hright
-      have hmesh'' : L * (b - a) / (N : ℝ) < ε / 2 := by
-        simpa [N, Nat.cast_add, Nat.cast_one] using hmesh'
-      simpa [δ, mul_div_assoc'] using hmesh''
-    have h2mesh : 2 * L * δ < ε := by nlinarith [hmesh]
-
-    let grid : ℕ → ℝ := fun k => a + (k : ℝ) * δ
-    have hgrid0 : grid 0 = a := by simp [grid]
-    have hgridN : grid N = b := by
-      calc
-        grid N = a + (N : ℝ) * δ := by simp [grid]
-        _ = a + (N : ℝ) * (b - a) / (N : ℝ) := by simp [δ, mul_div_assoc']
-        _ = a + (b - a) := by simp [mul_div_cancel_left₀, hNne]
-        _ = b := by ring
-
-    let mNat : ℕ → ℝ := fun k => (f (grid (k + 1)) - f (grid k)) / δ
-    let cNat : ℕ → ℝ
-      | 0 => mNat 0
-      | k + 1 => mNat (k + 1) - mNat k
-    let g : ℝ → ℝ := fun x => f a + ∑ i ∈ Finset.range N, cNat i * relu (x - grid i)
-
-    have prefix_sum_cNat_eq_mNat : ∀ k : ℕ, (∑ i ∈ Finset.range (k + 1), cNat i) = mNat k := by
-      intro k
-      induction k with
-      | zero =>
-        simp [cNat, mNat]
-      | succ k ih =>
-        calc
-          (∑ i ∈ Finset.range (k + 2), cNat i)
-              = (∑ i ∈ Finset.range (k + 1), cNat i) + cNat (k + 1) := by
-                simpa using (Finset.sum_range_succ (f := fun i => cNat i) (n := k + 1))
-          _ = mNat k + cNat (k + 1) := by simp [ih]
-          _ = mNat k + (mNat (k + 1) - mNat k) := by simp [cNat]
-          _ = mNat (k + 1) := by ring
-
-    have grid_mono : Monotone grid := by
-      intro m n hmn
-      dsimp [grid]
-      have : (m : ℝ) ≤ (n : ℝ) := by exact_mod_cast hmn
-      nlinarith
-
-    have g_affine_on_segment :
-        ∀ {k : ℕ}, k + 1 ≤ N → ∀ {x : ℝ}, grid k ≤ x → x ≤ grid (k + 1) →
-          g x = g (grid k) + mNat k * (x - grid k) := by
-      intro k hkN x hx0 hx1
-      classical
-      let F : ℕ → ℝ := fun i => cNat i * relu (x - grid i)
-      let G : ℕ → ℝ := fun i => cNat i * relu (grid k - grid i)
-      have hsub : Finset.range (k + 1) ⊆ Finset.range N := by
-        intro i hi
-        have hi' : i < k + 1 := Finset.mem_range.mp hi
-        have : i < N := lt_of_lt_of_le hi' hkN
-        exact Finset.mem_range.mpr this
-      have hFzero : ∀ i ∈ Finset.range N, i ∉ Finset.range (k + 1) → F i = 0 := by
-        intro i hiN hik
-        have hik' : k + 1 ≤ i := by
-          have : ¬ i < k + 1 := by
-            exact fun hlt => hik (Finset.mem_range.mpr hlt)
-          exact Nat.le_of_not_gt this
-        have hgi : grid (k + 1) ≤ grid i := grid_mono hik'
-        have hxle : x ≤ grid i := le_trans hx1 hgi
-        simp only [F, relu_sub_eq_zero_of_le (x := x) (t := grid i) hxle, mul_zero]
-      have hGzero : ∀ i ∈ Finset.range N, i ∉ Finset.range (k + 1) → G i = 0 := by
-        intro i hiN hik
-        have hik' : k + 1 ≤ i := by
-          have : ¬ i < k + 1 := by
-            exact fun hlt => hik (Finset.mem_range.mpr hlt)
-          exact Nat.le_of_not_gt this
-        have hgi : grid k ≤ grid i := by
-          have : k ≤ i := le_trans (Nat.le_succ k) hik'
-          exact grid_mono this
-        simp only [G, relu_sub_eq_zero_of_le (x := grid k) (t := grid i) hgi, mul_zero]
-      have sumF : (∑ i ∈ Finset.range N, F i) = (∑ i ∈ Finset.range (k + 1), F i) := by
-        symm
-        exact Finset.sum_subset hsub hFzero
-      have sumG : (∑ i ∈ Finset.range N, G i) = (∑ i ∈ Finset.range (k + 1), G i) := by
-        symm
-        exact Finset.sum_subset hsub hGzero
-      have gx : g x = f a + ∑ i ∈ Finset.range (k + 1), F i := by
-        exact congrArg (fun y : ℝ => f a + y) sumF
-      have gk : g (grid k) = f a + ∑ i ∈ Finset.range (k + 1), G i := by
-        exact congrArg (fun y : ℝ => f a + y) sumG
-      have hF' : ∀ i ∈ Finset.range (k + 1), F i = cNat i * (x - grid i) := by
-        intro i hi
-        have hi' : i ≤ k := Nat.le_of_lt_succ (Finset.mem_range.mp hi)
-        have hgi : grid i ≤ grid k := grid_mono hi'
-        have : grid i ≤ x := le_trans hgi hx0
-        simp only [F, relu_sub_eq_of_le (x := x) (t := grid i) this]
-      have hG' : ∀ i ∈ Finset.range (k + 1), G i = cNat i * (grid k - grid i) := by
-        intro i hi
-        have hi' : i ≤ k := Nat.le_of_lt_succ (Finset.mem_range.mp hi)
-        have : grid i ≤ grid k := grid_mono hi'
-        simp only [G, relu_sub_eq_of_le (x := grid k) (t := grid i) this]
-      have gx' : g x = f a + ∑ i ∈ Finset.range (k + 1), cNat i * (x - grid i) := by
-        refine gx.trans ?_
-        congr 1
-        exact Finset.sum_congr rfl hF'
-      have gk' : g (grid k) = f a + ∑ i ∈ Finset.range (k + 1), cNat i * (grid k - grid i) := by
-        refine gk.trans ?_
-        congr 1
-        exact Finset.sum_congr rfl hG'
-      have hdiff :
-          (∑ i ∈ Finset.range (k + 1), cNat i * (x - grid i)) -
-            (∑ i ∈ Finset.range (k + 1), cNat i * (grid k - grid i)) =
-              (∑ i ∈ Finset.range (k + 1), cNat i) * (x - grid k) := by
-        calc
-          (∑ i ∈ Finset.range (k + 1), cNat i * (x - grid i)) -
-              (∑ i ∈ Finset.range (k + 1), cNat i * (grid k - grid i)) =
-              ∑ i ∈ Finset.range (k + 1),
-                (cNat i * (x - grid i) - cNat i * (grid k - grid i)) := by
-                exact
-                  (Finset.sum_sub_distrib (s := Finset.range (k + 1))
-                    (f := fun i => cNat i * (x - grid i))
-                    (g := fun i => cNat i * (grid k - grid i))).symm
-          _ = ∑ i ∈ Finset.range (k + 1), cNat i * (x - grid k) := by
-                apply Finset.sum_congr rfl
-                intro i hi
-                have hmul :
-                    cNat i * (x - grid i) - cNat i * (grid k - grid i) =
-                      cNat i * ((x - grid i) - (grid k - grid i)) := by
-                  simpa using (mul_sub (cNat i) (x - grid i) (grid k - grid i)).symm
-                have hinner : (x - grid i) - (grid k - grid i) = x - grid k := by ring
-                simp [hmul, hinner]
-          _ = (∑ i ∈ Finset.range (k + 1), cNat i) * (x - grid k) := by
-                simpa using
-                  (Finset.sum_mul (s := Finset.range (k + 1))
-                    (f := fun i => cNat i)
-                    (a := (x - grid k))).symm
-      have hsub' : g x - g (grid k) = mNat k * (x - grid k) := by
-        calc
-          g x - g (grid k) =
-              (f a + ∑ i ∈ Finset.range (k + 1), cNat i * (x - grid i)) -
-                (f a + ∑ i ∈ Finset.range (k + 1), cNat i * (grid k - grid i)) := by
-                simp [gx', gk']
-          _ =
-              (∑ i ∈ Finset.range (k + 1), cNat i * (x - grid i)) -
-                (∑ i ∈ Finset.range (k + 1), cNat i * (grid k - grid i)) := by ring
-          _ = (∑ i ∈ Finset.range (k + 1), cNat i) * (x - grid k) := hdiff
-          _ = mNat k * (x - grid k) := by simp [prefix_sum_cNat_eq_mNat k]
-      linarith
-
-    have g_grid_eq_f_grid : ∀ k : ℕ, k ≤ N → g (grid k) = f (grid k) := by
-      intro k hk
-      induction k with
-      | zero =>
-        -- g(a) = f(a)
-        have ha_le : ∀ i ∈ Finset.range N, a ≤ grid i := by
-          intro i hi
-          have : grid 0 ≤ grid i := grid_mono (Nat.zero_le i)
-          simpa [hgrid0] using this
-        have hsum :
-            (∑ i ∈ Finset.range N, cNat i * relu (a - grid i)) = 0 := by
-          refine Finset.sum_eq_zero ?_
-          intro i hi
-          have : a ≤ grid i := ha_le i hi
-          simp only [relu_sub_eq_zero_of_le (x := a) (t := grid i) this, mul_zero]
-        simp only [g, hgrid0, hsum, add_zero]
-      | succ k ih =>
-        have hkN : k + 1 ≤ N := hk
-        have hk_le : k ≤ N := le_trans (Nat.le_succ k) hkN
-        have hx0 : grid k ≤ grid (k + 1) := grid_mono (Nat.le_succ k)
-        have haff := g_affine_on_segment (k := k) hkN (x := grid (k + 1)) hx0 le_rfl
-        have hstep : grid (k + 1) - grid k = δ := by
-          dsimp [grid]
-          simp [Nat.cast_add, Nat.cast_one, add_assoc, add_comm, mul_add, sub_eq_add_neg, mul_comm]
-        have hm : mNat k * δ = f (grid (k + 1)) - f (grid k) := by
-          have hδne : δ ≠ 0 := ne_of_gt hδpos
-          dsimp [mNat]
-          field_simp [hδne]
-        have hk_eq : g (grid k) = f (grid k) := ih hk_le
-        -- rewrite and finish
-        have : g (grid (k + 1)) = f (grid (k + 1)) := by
-          -- from affine step
-          calc
-            g (grid (k + 1)) = g (grid k) + mNat k * (grid (k + 1) - grid k) := haff
-            _ = f (grid k) + mNat k * δ := by simp [hk_eq, hstep]
-            _ = f (grid k) + (f (grid (k + 1)) - f (grid k)) := by simp [hm]
-            _ = f (grid (k + 1)) := by ring
-        simpa using this
-
-    -- Build the network corresponding to the polygonal interpolant.
-    let t : Fin N → ℝ := fun i => grid i.1
-    let c : Fin N → ℝ := fun i => cNat i.1
-    refine ⟨N, t, c, ?_⟩
-    intro x hx
-    have hhinge : hingeFun N t c (f a) x = g x := by
-      -- hinge_fun sums over `Fin N`; use `Fin.sum_univ_eq_sum_range` to convert to `Finset.range
-      -- N`.
-      unfold hingeFun g t c
-      congr 1
-      simpa using
-        (Fin.sum_univ_eq_sum_range
-          (f := fun i : ℕ => cNat i * relu (x - grid i)) (n := N))
-    -- Prove the approximation bound on `[a,b]`.
-    have hxle_gridN : x ≤ grid N := by simpa [hgridN] using hx.2
-    have hexists : ∃ k : ℕ, x ≤ grid k := ⟨N, hxle_gridN⟩
-    -- Two cases: x = a (`Nat.find hexists = 0`) or x lies in some segment `[grid k, grid (k+1)]`.
-    cases hjcases : Nat.find hexists with
-    | zero =>
-      have hx_eq : x = a := by
-        have hxle : x ≤ grid 0 := by
-          simpa [hjcases] using Nat.find_spec hexists
-        have hxle' : x ≤ a := by simpa [hgrid0] using hxle
-        exact le_antisymm hxle' hx.1
-      have hg_a : g a = f a := by
-        have := g_grid_eq_f_grid 0 (Nat.zero_le N)
-        simpa [hgrid0] using this
-      have : |f x - g x| < ε := by
-        -- at `x = a`, `g a = f a`
-        simpa [hx_eq, hg_a, abs_zero] using hε
-      simpa [hhinge] using this
-    | succ k =>
-      have hj : x ≤ grid (k + 1) := by
-        simpa [hjcases] using Nat.find_spec hexists
-      have hkN : k + 1 ≤ N := by
-        have hmin : Nat.find hexists ≤ N := Nat.find_min' hexists hxle_gridN
-        simpa [hjcases] using hmin
-      have hx_not_le_prev : ¬ x ≤ grid k := by
-        intro hxle
-        have hmin : Nat.find hexists ≤ k := Nat.find_min' hexists hxle
-        rw [hjcases] at hmin
-        exact Nat.not_succ_le_self k hmin
-      have hx0 : grid k ≤ x := le_of_lt (lt_of_not_ge hx_not_le_prev)
-      have hx1 : x ≤ grid (k + 1) := hj
-      have hk_le : k ≤ N := le_trans (Nat.le_succ k) hkN
-      have hgk : g (grid k) = f (grid k) := g_grid_eq_f_grid k hk_le
-      have haff : g x = g (grid k) + mNat k * (x - grid k) :=
-        g_affine_on_segment (k := k) hkN (x := x) hx0 hx1
-      have hfx : |f x - g x| < ε := by
-        -- bound via Lipschitz: |f x - g x| ≤ 2 L δ < ε
-        have hgridk_mem : grid k ∈ Set.Icc a b := by
-          have ha : a ≤ grid k := by
-            have : grid 0 ≤ grid k := grid_mono (Nat.zero_le k)
-            simpa [hgrid0] using this
-          have hb : grid k ≤ b := by
-            have : grid k ≤ grid N := grid_mono hk_le
-            simpa [hgridN] using this
-          exact ⟨ha, hb⟩
-        have hgridkp1_mem : grid (k + 1) ∈ Set.Icc a b := by
-          have ha : a ≤ grid (k + 1) := by
-            have : grid 0 ≤ grid (k + 1) := grid_mono (Nat.zero_le (k + 1))
-            simpa [hgrid0] using this
-          have hb : grid (k + 1) ≤ b := by
-            have : grid (k + 1) ≤ grid N := grid_mono hkN
-            simpa [hgridN] using this
-          exact ⟨ha, hb⟩
-        have hx_dist : |x - grid k| ≤ δ := by
-          have hx0' : 0 ≤ x - grid k := sub_nonneg.mpr hx0
-          have hxle : x - grid k ≤ δ := by
-            have : x - grid k ≤ grid (k + 1) - grid k := sub_le_sub_right hx1 (grid k)
-            have hstep : grid (k + 1) - grid k = δ := by
-              dsimp [grid]
-              simp [Nat.cast_add, Nat.cast_one, add_assoc, add_comm, mul_add, sub_eq_add_neg,
-                mul_comm]
-            simpa [hstep] using this
-          have habs : |x - grid k| = x - grid k := abs_of_nonneg hx0'
-          simpa [habs] using hxle
-        have h1 : |f x - f (grid k)| ≤ L * δ := by
-          have := h_lip x hx (grid k) hgridk_mem
-          exact le_trans this (mul_le_mul_of_nonneg_left hx_dist hL.le)
-        have hmδ : mNat k * δ = f (grid (k + 1)) - f (grid k) := by
-          have hδne : δ ≠ 0 := ne_of_gt hδpos
-          dsimp [mNat]
-          field_simp [hδne]
-        have h2 : |f (grid k) - g x| ≤ L * δ := by
-          -- g x is between the endpoints; bound by the endpoint difference.
-          have habs' : |f (grid k) - g x| = |mNat k * (x - grid k)| := by
-            have hgx : g x = f (grid k) + mNat k * (x - grid k) := by
-              simpa [hgk] using haff
-            have hs : f (grid k) - g x = -(mNat k * (x - grid k)) := by
-              simp [hgx]
-            have : |f (grid k) - g x| = |-(mNat k * (x - grid k))| := by
-              simpa using congrArg abs hs
-            simpa [abs_neg] using this
-          -- use |x-grid k| ≤ δ to bound
-          have hmul_le : |mNat k * (x - grid k)| ≤ |mNat k| * δ := by
-            have := mul_le_mul_of_nonneg_left hx_dist (abs_nonneg (mNat k))
-            simpa [abs_mul] using this
-          have hmul_eq : |mNat k| * δ = |mNat k * δ| := by
-            simp [abs_mul, abs_of_nonneg hδnonneg, mul_comm]
-          have hendpoint : |mNat k * δ| ≤ L * δ := by
-            -- from Lipschitz on grid points
-            have hdiff := h_lip (grid (k + 1)) hgridkp1_mem (grid k) hgridk_mem
-            have hstep' : grid (k + 1) - grid k = δ := by
-              dsimp [grid]
-              simp [Nat.cast_add, Nat.cast_one, add_assoc, add_comm, mul_add, sub_eq_add_neg,
-                mul_comm]
-            have hnonneg : 0 ≤ grid (k + 1) - grid k := by
-              have : grid k ≤ grid (k + 1) := grid_mono (Nat.le_succ k)
-              exact sub_nonneg.mpr this
-            have hstep : |grid (k + 1) - grid k| = δ := by
-              calc
-                |grid (k + 1) - grid k| = grid (k + 1) - grid k := abs_of_nonneg hnonneg
-                _ = δ := hstep'
-            -- rewrite |mNat k * δ| as |f(grid(k+1)) - f(grid k)|
-            have : |mNat k * δ| = |f (grid (k + 1)) - f (grid k)| := by simp [hmδ]
-            -- combine
-            simpa [this, hstep] using hdiff
-          -- combine bounds
-          have hbound : |mNat k * (x - grid k)| ≤ |mNat k * δ| := by
-            exact le_trans hmul_le (le_of_eq hmul_eq)
-          have hfinal : |mNat k * (x - grid k)| ≤ L * δ := le_trans hbound hendpoint
-          simpa [habs'] using hfinal
-        have : |f x - g x| ≤ 2 * L * δ := by
-          have htri : |f x - g x| ≤ |f x - f (grid k)| + |f (grid k) - g x| := by
-            have htri0 :
-                |(f x - f (grid k)) + (f (grid k) - g x)| ≤
-                  |f x - f (grid k)| + |f (grid k) - g x| :=
-              abs_add_le (f x - f (grid k)) (f (grid k) - g x)
-            have hrew' : (f x - f (grid k)) + (f (grid k) - g x) = f x - g x := by ring
-            simpa [hrew'] using htri0
-          have hsum : |f x - f (grid k)| + |f (grid k) - g x| ≤ L * δ + L * δ :=
-            add_le_add h1 (by simpa [abs_sub_comm] using h2)
-          have hsum' : L * δ + L * δ = 2 * L * δ := by ring
-          exact le_trans htri (by simpa [hsum'] using hsum)
-        exact lt_of_le_of_lt this h2mesh
-      simpa [hhinge] using hfx
+theorem relu_universal_approximation_Icc_hinge {f : ℝ → ℝ} {a b L : ℝ}
+    (h_ab : a < b) (hL : 0 < L)
+    (h_lip : ∀ x ∈ Set.Icc a b, ∀ y ∈ Set.Icc a b, |f x - f y| ≤ L * |x - y|) :
+    ∀ ε > 0, ∃ (hidDim : ℕ) (t : Fin hidDim → ℝ) (c : Fin hidDim → ℝ),
+      ∀ x ∈ Set.Icc a b, |f x - hingeFun hidDim t c (f a) x| < ε := by
+  intro ε hε
+  obtain ⟨t, c, happrox⟩ :=
+    relu_hinge_approximation_Icc_of_mesh h_ab hL h_lip
+      (relu_approximation_width_pos L a b ε)
+      (by simpa [mul_div_assoc', mul_assoc] using
+        two_mul_mul_sub_div_relu_approximation_width_lt (L := L) (a := a) (b := b) hε)
+  exact ⟨_, t, c, happrox⟩
 
 /--
 1D Universal Approximation (ReLU, one hidden layer), stated as an existence theorem for a 2-layer
-  MLP.
+MLP.
 
 This is a wrapper around `relu_universal_approximation_Icc_hinge` that instantiates the linear
-  layers
-as the explicit hinge construction.
+layers as the explicit hinge construction.
 -/
 theorem relu_universal_approximation_Icc {f : ℝ → ℝ} {a b L : ℝ}
     (h_ab : a < b) (hL : 0 < L)
@@ -571,4 +518,4 @@ theorem relu_universal_approximation_Icc {f : ℝ → ℝ} {a b L : ℝ}
     simpa using (mlp_eval_scalar_hinge hidDim t c (f a) x)
   simpa [hnet] using happx x hx
 
-  end NN.MLTheory.Proofs.UniversalApproximation
+end NN.MLTheory.Proofs.UniversalApproximation

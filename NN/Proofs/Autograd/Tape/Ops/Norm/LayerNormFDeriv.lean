@@ -56,7 +56,7 @@ theorem lnInvStd_specX (hn : 0 < n) {ε : ℝ} (hε : 0 < ε)
     (q : CtxVec (ΓLN m n)) (i : Fin m) :
     getScalar (lnInvStd (specX q) (Norm.nonemptyAxis_one hn) ε) i =
       RowNorm.invStd (valX q) ε i := by
-  rw [lnInvStd, Norm.getScalar_divSpec, Norm.getScalar_full, Norm.getScalar_lnStd hn,
+  rw [lnInvStd, Norm.getScalar_divSpec, getScalar_full, Norm.getScalar_lnStd hn,
     rowVarE_specX, max_eq_left (RowNorm.rowVar_add_pos hε (valX q) i).le, one_div]
   rfl
 
@@ -79,21 +79,21 @@ theorem fderiv_specLayerNormVec_idxMN (hm : 0 < m) (hn : 0 < n) {ε : ℝ} (hε 
     fderiv ℝ (specLayerNormVec hm hn ε) q dq (idxMN (m := m) (n := n) i j) =
       RowNorm.nrmJvp (valX q) ε (valX dq) i j * valGamma q j +
         RowNorm.nrm (valX q) ε i j * valGamma dq j + valBeta dq j := by
-  let input := CtxVec.getCLM (Γ := ΓLN m n) (s := MatShape m n) idxX0
+  let input := CtxVec.getCLM (Γ := ΓLN m n) (s := MatShape m n) idxInputX
   let scale := (EuclideanSpace.proj (𝕜 := ℝ) j).comp
-    (getVecCLM (Γ := ΓLN m n) idxGamma0)
+    (getVecCLM (Γ := ΓLN m n) idxInputGamma)
   let bias := (EuclideanSpace.proj (𝕜 := ℝ) j).comp
-    (getVecCLM (Γ := ΓLN m n) idxBeta0)
+    (getVecCLM (Γ := ΓLN m n) idxInputBeta)
   -- Each context projection carries a size cast. Its evaluation lemma identifies the block
   -- without expanding the recursive context representation during the derivative calculation.
   have hinput (p : CtxVec (ΓLN m n)) : input p = valX p :=
-    CtxVec.getCLM_apply idxX0 p
+    CtxVec.getCLM_apply idxInputX p
   have hscale (p : CtxVec (ΓLN m n)) : scale p = valGamma p j := by
-    change (getVecCLM idxGamma0 p) j = valGamma p j
-    exact congrArg (fun v : Vec n => v j) (getVecCLM_apply idxGamma0 p)
+    change (getVecCLM idxInputGamma p) j = valGamma p j
+    exact congrArg (fun v : Vec n => v j) (getVecCLM_apply idxInputGamma p)
   have hbias (p : CtxVec (ΓLN m n)) : bias p = valBeta p j := by
-    change (getVecCLM idxBeta0 p) j = valBeta p j
-    exact congrArg (fun v : Vec n => v j) (getVecCLM_apply idxBeta0 p)
+    change (getVecCLM idxInputBeta p) j = valBeta p j
+    exact congrArg (fun v : Vec n => v j) (getVecCLM_apply idxInputBeta p)
   have hX : HasFDerivAt (fun p : CtxVec (ΓLN m n) => valX p) input q :=
     input.hasFDerivAt.congr_of_eventuallyEq
       (Filter.Eventually.of_forall fun p => (hinput p).symm)
@@ -149,7 +149,7 @@ theorem fderiv_specLayerNormVec_eq_layerNormJvp (hm : 0 < m) (hn : 0 < n)
           (specGamma q) (specGamma dq) (specBeta q) (specBeta dq) ε) := by
   apply Norm.vec_ext_idxMN
   intro i j
-  rw [fderiv_specLayerNormVec_idxMN hm hn hε, Norm.tensorToVec_idxMN,
+  rw [fderiv_specLayerNormVec_idxMN hm hn hε, TapeNodes.Matmul.tensorToVec_idxMN,
     get2_layerNormJvp_eq_row_differential hm hn hε]
 
 /-- Tensor form of the derivative bridge, with arbitrary input, scale, and bias tangents. -/

@@ -27,9 +27,9 @@ the infoview. It is designed for:
 - inspecting runtime output,
 - teaching/exposition in the manual.
 
-It is **not** intended to be used inside proofs, and it is kept out of TorchLean’s default build
-surface (you must explicitly import `NN.Widgets` or a concrete widget module such as
-`NN.Widgets.Core.Tensor`).
+It is **not** intended to be used inside proofs. Import `NN.Widgets` or the concrete
+`NN.Widgets.Core.Tensor` module to use it without importing the full `NN` umbrella, which also
+includes the widgets.
 
 Implementation note:
 We build on ProofWidgets’ `#html` command (which ships with mathlib’s dependency set) rather than
@@ -178,8 +178,8 @@ end TensorInternal
 /--
 Render a tensor as HTML.
 
-For small vectors/matrices, we render an actual table; otherwise we show a compact pretty string
-plus a flat preview.
+Vectors and matrices use clipped tables. Higher-rank tensors show bounded leading slices, with a
+flat preview when the recursion depth is exhausted.
 -/
 def tensorHtml {α : Type} [TorchLean.Storage α] [ToString α] [TensorElemView α]
     {s : Shape} (t : Tensor α s)

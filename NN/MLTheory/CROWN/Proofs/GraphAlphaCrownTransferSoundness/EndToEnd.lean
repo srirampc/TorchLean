@@ -78,7 +78,7 @@ theorem ibp_encloses_vals_runIBP?
     (hinputs : InputsEnclosed g ps inputs) :
     IBPEnclosesVals (ibp := runIBP? g ps) (vals := evalGraphRec g ps inputs) :=
   ibp_encloses_vals_of_cert_local_ok g ps (runIBP? g ps) inputs (evalGraphRec g ps inputs)
-    htopo hsupp (runIBP?_CertLocalOK g ps htopo) (evalGraphRec_SemLocalOK g ps inputs htopo hsupp)
+    htopo hsupp (runIBP?_CertLocalOK g ps htopo) (evalGraphRec_SemLocalOK g ps inputs htopo)
     hinputs
 
 /-! ## α-CROWN -/
@@ -184,7 +184,7 @@ theorem alphaCrown_cert_encloses_evalGraphRec
         EnclosesAtInput (α := ℝ) ctx x b v :=
   alphaCrown_cert_encloses_semantics g ps (runIBP? g ps) alpha cert inputs
     (evalGraphRec g ps inputs) ctx x htopo hsupp (runIBP?_CertLocalOK g ps htopo)
-    (evalGraphRec_SemLocalOK g ps inputs htopo hsupp) hinputsEnc hinputs halpha hcert
+    (evalGraphRec_SemLocalOK g ps inputs htopo) hinputsEnc hinputs halpha hcert
 
 /-! ## α/β-CROWN -/
 
@@ -192,10 +192,11 @@ theorem alphaCrown_cert_encloses_evalGraphRec
 A locally replayed α/β-CROWN certificate encloses every corresponding graph value, with the IBP
 boxes justified rather than assumed.
 
-This is `alphaBetaCrown_cert_encloses_semantics` with `IBPEnclosesVals` discharged from the IBP
-soundness theorem; see `alphaCrown_cert_encloses_semantics` for the hypothesis trade.
+This is `alphaBetaCrown_cert_encloses_semantics_of_ibpEnclosesVals` with `IBPEnclosesVals`
+discharged from the IBP soundness theorem; see `alphaCrown_cert_encloses_semantics` for the
+hypothesis trade.
 -/
-theorem alphaBetaCrown_cert_encloses_semantics'
+theorem alphaBetaCrown_cert_encloses_semantics
     (g : Graph) (ps : ParamStore ℝ)
     (ibp : Array (Option (FlatBox ℝ)))
     (alpha : Array (Option (FlatTensor ℝ)))
@@ -217,8 +218,8 @@ theorem alphaBetaCrown_cert_encloses_semantics'
         cert[id]! = some b →
         vals[id]! = some v →
         EnclosesAtInput (α := ℝ) ctx x b v :=
-  alphaBetaCrown_cert_encloses_semantics g ps ibp alpha beta cert inputs vals ctx x
-    htopo hsem hinputs
+  alphaBetaCrown_cert_encloses_semantics_of_ibpEnclosesVals g ps ibp alpha beta cert inputs vals
+    ctx x htopo hsem hinputs
     (ibp_encloses_vals_of_cert_local_ok g ps ibp inputs vals htopo hsupp hibp hsem hinputsEnc)
     halpha hcert
 
@@ -250,7 +251,7 @@ theorem alphaBetaCrown_cert_encloses_all_nodes
   intro id hid
   obtain ⟨b, v, hb, hv⟩ := hcoverage.2.2 id hid
   exact ⟨b, v, hb, hv,
-    alphaBetaCrown_cert_encloses_semantics' g ps ibp alpha beta cert inputs vals ctx x
+    alphaBetaCrown_cert_encloses_semantics g ps ibp alpha beta cert inputs vals ctx x
       htopo hsupp hibp hsem hinputsEnc hinputs halpha hcert id hid b v hb hv⟩
 
 /--
@@ -276,9 +277,9 @@ theorem alphaBetaCrown_cert_encloses_evalGraphRec
         cert[id]! = some b →
         (evalGraphRec g ps inputs)[id]! = some v →
         EnclosesAtInput (α := ℝ) ctx x b v :=
-  alphaBetaCrown_cert_encloses_semantics' g ps (runIBP? g ps) alpha beta cert inputs
+  alphaBetaCrown_cert_encloses_semantics g ps (runIBP? g ps) alpha beta cert inputs
     (evalGraphRec g ps inputs) ctx x htopo hsupp (runIBP?_CertLocalOK g ps htopo)
-    (evalGraphRec_SemLocalOK g ps inputs htopo hsupp) hinputsEnc hinputs halpha hcert
+    (evalGraphRec_SemLocalOK g ps inputs htopo) hinputsEnc hinputs halpha hcert
 
 end
 

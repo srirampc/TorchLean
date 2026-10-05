@@ -28,8 +28,6 @@ namespace NN.MLTheory.CROWN.Graph
 
 open Spec TorchLean
 open TorchLean.Tensor
-open scoped BigOperators
-open Proofs.TensorAlgebra
 
 open NN.MLTheory.CROWN
 open NN.MLTheory.CROWN.Cert
@@ -43,25 +41,6 @@ open CertSoundness
 
 /-! ## Semantic glue -/
 
-/--
-The parent hypothesis of `CrownTransferSound`, specialised to a parent whose certificate entry and
-semantic value are both present.
--/
-theorem enclosesAtInput_of_parents
-    {g : Graph} {cert : Array (Option (FlatAffineBounds ℝ))} {vals : Array (Option Val)}
-    {ctx : AffineCtx} {x : Tensor ℝ [ctx.inputDim]} {id p : Nat}
-    {xin : FlatAffineBounds ℝ} {vp : Val}
-    (hparents : ∀ p : Nat, p ∈ (g.nodes[id]!).parents →
-      match cert[p]!, vals[p]! with
-      | some bp, some vp => EnclosesAtInput (α := ℝ) ctx x bp vp
-      | _, _ => True)
-    (hp : p ∈ (g.nodes[id]!).parents)
-    (hcert : cert[p]! = some xin) (hval : vals[p]! = some vp) :
-    EnclosesAtInput (α := ℝ) ctx x xin vp := by
-  have h := hparents p hp
-  rw [hcert, hval] at h
-  exact h
-
 /-- A ReLU node's semantic value is `relu` of its unary parent's value. -/
 theorem vals_relu_eq
     {g : Graph} {ps : ParamStore ℝ} {inputs : Std.HashMap Nat Val} {vals : Array (Option Val)}
@@ -73,9 +52,7 @@ theorem vals_relu_eq
     (hv : vals[id]! = some v) :
     ∃ vp : Val,
       vals[p1]! = some vp ∧ v = { n := vp.n, v := Activation.reluSpec (α := ℝ) vp.v } := by
-  have hEval : evalNode? g.nodes ps inputs vals id = some v := by
-    rw [← hsem.2 id hid]
-    exact hv
+  have hEval := Alpha.evalNode?_eq_some_of_semLocalOK hsem hid hv
   simp only [CertSoundness.evalNode?, hk, hps] at hEval
   cases hgv : CertSoundness.getVal? vals p1 with
   | none => simp [hgv] at hEval
@@ -94,10 +71,7 @@ theorem enclosesBox_parent
     (hid : id < g.nodes.size) (hp : p ∈ (g.nodes[id]!).parents)
     (hpre : ibp[p]! = some preB) (hvp : vals[p]! = some vp) :
     EnclosesBox preB vp := by
-  have hlt : p < vals.size := by
-    rw [hsem.1]
-    exact lt_trans (htopo id hid p hp) hid
-  have h := hibp p hlt
+  have h := hibp p (parent_lt_array_size vals hsem.1 htopo hid hp)
   rw [hpre, hvp] at h
   exact h
 
@@ -178,7 +152,7 @@ theorem alphaBetaCrown_relu_beta_case_sound
     stepAlphaBeta_relu_beta_inv g ps ibp alpha beta cert ctx id b phases p1 halpha hk hbeta hps hs
   obtain ⟨vp, hvp, hvEq⟩ := vals_relu_eq hsem hid hk hps hv
   have hpar : EnclosesAtInput (α := ℝ) ctx x xin vp :=
-    enclosesAtInput_of_parents hparents hpMem (getElem!_of_getAff?_eq_some hxin) hvp
+    Alpha.parentsEnclosed_of_match hparents p1 hpMem xin vp (getElem!_of_getAff?_eq_some hxin) hvp
   have hbox : EnclosesBox preB vp := enclosesBox_parent htopo hsem hibp hid hpMem hpre hvp
   subst hb hvEq
   exact enclosesAtInput_relu_beta ctx x xin vp preB hout αt phases relaxLo relaxHi hαrange hrelax
@@ -251,13 +225,15 @@ open CrownCertSoundness
 open CertSoundness
 
 /--
-A locally replayed α/β-CROWN certificate encloses every corresponding graph value.
+A locally replayed α/β-CROWN certificate encloses every corresponding graph value, given IBP
+boxes that enclose those values (`IBPEnclosesVals`).
 
-This is the user-facing composition of `alphaBetaCrown_transfer_sound` with the generic graph
-certificate checker. The certificate producer remains untrusted: `hcert` requires its entries to
-agree node-by-node with TorchLean's α/β transfer function.
+This is the composition of `alphaBetaCrown_transfer_sound` with the generic graph certificate
+checker; `EndToEnd` discharges `IBPEnclosesVals` to obtain the user-facing
+`alphaBetaCrown_cert_encloses_semantics`. The certificate producer remains untrusted: `hcert`
+requires its entries to agree node-by-node with TorchLean's α/β transfer function.
 -/
-theorem alphaBetaCrown_cert_encloses_semantics
+theorem alphaBetaCrown_cert_encloses_semantics_of_ibpEnclosesVals
     (g : Graph) (ps : ParamStore ℝ)
     (ibp : Array (Option (FlatBox ℝ)))
     (alpha : Array (Option (FlatTensor ℝ)))

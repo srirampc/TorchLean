@@ -46,6 +46,6 @@ theorem vjpChecked_adjoint_fderiv {Γ ss : List Shape} {τ : Shape} (graph : DGr
     (graph.toTypedGraph output) graph.g.toAlgebra rfl inputs () seed _ result checked
   change GraphFDerivCorrectAt (graph.g.toAlgebra.toReal ()) (flattenCtx inputs)
   rw [Algebra.Graph.toAlgebra_toReal]
-  exact graphFDerivCorrectAtOfCorrect graph.hg (flattenCtx inputs)
+  exact GraphFDerivCorrect.at graph.hg (flattenCtx inputs)
 
 end Proofs.Autograd.DGraph

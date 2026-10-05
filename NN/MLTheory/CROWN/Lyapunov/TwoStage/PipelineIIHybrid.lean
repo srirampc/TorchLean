@@ -67,22 +67,10 @@ open NN.MLTheory.CROWN.Lyapunov.TwoStage.Execution
 
 local notation "Scalar" => (ExecFloat.Binary 8 23)
 
-/-- Learning rate for the stage-2 SGD loop. -/
-def lr : Scalar := Execution.defaultLr
-
-/-- PGD step size when searching for counterexample-ish inputs. -/
-def pgdStepSize : Scalar := Execution.defaultPgdStepSize
-
-/-- Radius of the training box `[-rad, rad]^2` (also used for clamping PGD iterates). -/
-def rad : Scalar := Execution.defaultRad
-
-/-- Half-width of the small box around the origin used for the final IBP/CROWN post-check. -/
-def epsCheck : Scalar := Execution.defaultEpsCheck
-
 /-- Convert a `Nat` JSON payload into a `UInt32`, or raise a user-facing error with context. -/
 def Internal.expectU32 (ctx : String) (n : Nat) : IO UInt32 := do
   let limit : Nat := 4294967296 -- 2^32
-  if _h : n < limit then
+  if n < limit then
     pure (UInt32.ofNat n)
   else
     throw <| IO.userError s!"{ctx}: expected uint32 in [0,2^32), got {n}"
@@ -262,29 +250,29 @@ def run (width : Nat) (args : List String) : IO Unit := do
   let mut foundViolations : Nat := 0
   for round in [0:stage2Rounds] do
     for _ci in [0:options.candidates] do
-      let (seed', x0) := sampleStateTensor seed rad
+      let (seed', x0) := sampleStateTensor seed Execution.defaultRad
       seed := seed'
       let lossBeforePgd := (←
-        Runtime.Autograd.Torch.ScalarTrainer.runLoss tr
+        Runtime.Autograd.Torch.ScalarTrainer.loss tr
           (TorchLean.TensorPack.singleton x0) .nil).item
       let params := TorchLean.nn.State.Internal.fromTensorPack (← tr.getState)
       let mut x := x0
       for _k in [0:pgdSteps] do
         x := LossAnalysis.projectedGradientStep
-          width cLoss params x pgdStepSize rad
+          width cLoss params x Execution.defaultPgdStepSize Execution.defaultRad
       let xs := TorchLean.TensorPack.singleton x
       let lossFound := (←
-        Runtime.Autograd.Torch.ScalarTrainer.runLoss tr xs .nil).item
+        Runtime.Autograd.Torch.ScalarTrainer.loss tr xs .nil).item
       if (0 : Scalar) < lossFound then
         foundViolations := foundViolations + 1
-      Runtime.Autograd.Torch.ScalarTrainer.runStep tr lr xs .nil
+      Runtime.Autograd.Torch.ScalarTrainer.step tr Execution.defaultLr xs .nil
       IO.println s!"[stage2] round {round}: lossBefore={lossBeforePgd} lossAfterPGD={lossFound}"
 
   let params := TorchLean.nn.State.Internal.fromTensorPack (← tr.getState)
   IO.println
     (s!"[stage2] PGD counterexample candidates={stage2Rounds * options.candidates} " ++
       s!"(positive-loss={foundViolations})")
-  LossAnalysis.checkLossBox width params epsCheck
+  LossAnalysis.checkLossBox width params Execution.defaultEpsCheck
 
 /-- Default hidden width used by the hybrid workflow. -/
 def defaultWidth : Nat := 500

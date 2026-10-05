@@ -23,7 +23,7 @@ of spatial dimensions. Padding, stride, and window extents are independent on ev
 namespace Spec.Module
 open TorchLean TorchLean.Tensor
 
-variable {α : Type} [TorchLean.Storage α] [Context α] [DecidableRel ((· > ·) : α → α → Prop)]
+variable {α : Type} [TorchLean.Storage α] [Context α]
 
 /-- Wrap arbitrary-rank channels-first max pooling as a `Spec.Module`. -/
 def maxPool {d C : Nat} {inSpatial kernel stride padding : TorchLean.Tensor Nat [d]}

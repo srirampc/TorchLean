@@ -82,7 +82,10 @@ def sampleNat (key : UInt64) (linearIndex : Nat) (denom : Nat := (2:Nat) ^ 32) :
 
 /-- Convert `u/denom` into `α` using backend arithmetic.
 
-Even when `u < denom`, floating-point rounding can make the result equal to `1`. -/
+The numerator and denominator are cast separately before division. Even when `u < denom`,
+rounding can make the result equal to `1`; a format that cannot represent the denominator can
+also produce zero or NaN. This is the sampling grid's existing arithmetic contract, rather than
+an exact rational cast. -/
 def sampleUnit {α : Type} [Context α] (u denom : Nat) : α :=
   (u : α) / (denom : α)
 
@@ -173,7 +176,9 @@ We return only the `cos` branch:
 `z = sqrt(-2 * log u1) * cos(2π * u2)`.
 
 Notes:
-- We clamp `u1` below by `ε` to avoid `log 0`.
+- We clamp `u1` below by the backend's default safeguard. Avoiding `log 0` requires that this
+  safeguard be positive and that the backend comparison select it; `Context` alone gives no
+  such law.
 - This is intended as a deterministic *pseudo*-normal sampler for examples and benchmarking.
   It is not a cryptographic RNG.
 
@@ -187,9 +192,10 @@ def boxMullerCos {α : Type} [Context α] (u1 u2 : α) : α :=
   r * MathFunctions.cos theta
 
 /--
-Deterministic standard normal `N(0,1)` sample derived from `key` and a linear index.
+Deterministic approximate standard-normal sample derived from `key` and a linear index.
 
 We use two 32-bit uniforms (via `sampleNat`) per output scalar and apply the Box-Muller transform.
+The finite sampling grid, clamping, and backend arithmetic do not give an exact `N(0,1)` law.
 -/
 def normalScalar {α : Type} [Context α] (key : UInt64) (linearIndex : Nat) :
     α :=
@@ -208,7 +214,7 @@ block-size multiplier so the same tensor shape always yields the same samples.
 -/
 namespace Internal
 
-/-- Fill a tensor with independent standard normal draws, coordinate by coordinate. -/
+/-- Fill a tensor with approximate normal draws keyed by their linear coordinates. -/
 def normal {α : Type} [TorchLean.Storage α] [Context α] (key : UInt64) :
     ∀ {s : Shape}, Nat → Tensor α s
   | .scalar, linearOffset =>
@@ -220,7 +226,7 @@ def normal {α : Type} [TorchLean.Storage α] [Context α] (key : UInt64) :
 
 end Internal
 
-/-- Build a standard-normal tensor over the whole shape, starting the stream at offset `0`. -/
+/-- Build an approximate normal tensor over the whole shape, starting the stream at offset `0`. -/
 def normal {α : Type} [TorchLean.Storage α] [Context α]
     (key : UInt64) {s : Shape} : Tensor α s :=
   Internal.normal (α := α) key (s := s) 0

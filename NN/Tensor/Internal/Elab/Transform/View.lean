@@ -10,7 +10,6 @@ public meta import NN.Tensor.Internal.Elab.Transform.Index
 public meta import NN.Tensor.Internal.Elab.Transform.ViewAttribute
 public import NN.Tensor.Internal.Elab.Native.Tensor -- shake: keep
 public import NN.Tensor.Internal.Elab.Transform.Index
-import Mathlib.Algebra.Order.Field.Basic
 import NN.Tensor.Internal.Elab.Transform.ViewAttribute
 
 /-!
@@ -66,21 +65,6 @@ private def rewriteCertifiedView? (candidate : Expr)
       failure
     return (rewritten, proof)
 
-/--
-Rewrite only with equations registered as certified tensor views.
-
-The returned proof is an ordinary equality from the visible tensor expression
-to the rewritten view. No global simp theorem or implementation unfolding is
-used.
--/
-private def rewriteCertifiedViews? (candidate : Expr) :
-    TermElabM (Option (Expr × Expr)) := do
-  let theoremNames := certifiedViewTheorems (← getEnv)
-  for theoremName in theoremNames do
-    if let some result ← rewriteCertifiedView? candidate theoremName then
-      return some result
-  return none
-
 /-- Recover the physical input and output shapes stored in a checked transform. -/
 def checkedTransformShapes (checked : Expr) :
     MetaM (Expr × Expr) := do
@@ -114,7 +98,7 @@ def repeatAxesProof (checked hKind : Expr) : MetaM Expr := do
 Build the checked coordinate projection, its compact flat representation, and
 the theorem connecting them.
 -/
-def checkedProjection (checked hAxes : Expr) :
+private def checkedProjection (checked hAxes : Expr) :
     MetaM (Expr × Expr × Expr) := do
   let coordinateMap ←
     mkAppM ``Check.CheckedTransform.inputCoordinateOfOutput #[
@@ -152,7 +136,7 @@ def directFlatProjection (inputShape : Expr)
   return (flatMap, hFlatMap)
 
 /-- Compose coordinate maps, flat maps, and their correctness certificates. -/
-def composeCertifiedProjections
+private def composeCertifiedProjections
     (outerMap outerFlatMap hOuterMap innerMap innerFlatMap hInnerMap : Expr) :
     MetaM (Expr × Expr × Expr) := do
   let coordinateMap ← mkAppM ``Function.comp #[outerMap, innerMap]
@@ -171,30 +155,43 @@ repeat, or a direct `Rep.reindex` or `Rep.pull`. Generated lets are
 preserved without duplicating their checked plans. The result includes
 equalities for both the visible tensor and the compact logical reference used
 by downstream denotational semantics.
+
+Repeated expressions are skipped, and the entire search visits at most 256
+expressions. This also bounds expanding view equations that never repeat an
+expression. Failed branches try later registered rules while the budget
+remains; exhaustion leaves the ordinary tensor lowering available.
 -/
 partial def fusedTransformInput?
     (inputShape tensor : Expr) :
     TermElabM
       (Option (Expr × Expr × Expr × Expr × Expr × Expr × Expr)) := do
+  let theoremNames := certifiedViewTheorems (← getEnv)
+  let remainingVisits ← IO.mkRef (256 : Nat)
   let rec
     /--
     Open generated lets while recovering synchronized coordinate and flat
     programs for the preceding transformation chain.
     -/
-    visit (candidate : Expr) :
+    visit (candidate : Expr) (visited : List Expr) :
         TermElabM
           (Option
             (Expr × Expr × Expr × Expr × Expr × Expr × Expr × Expr)) := do
+      let candidate := candidate.consumeMData
+      let remaining ← remainingVisits.get
+      if remaining = 0 || visited.contains candidate then
+        return none
+      remainingVisits.set (remaining - 1)
+      let visited := candidate :: visited
       match candidate with
       | .letE name type assignment body _ =>
           if type.consumeMData.isConstOf ``Check.CheckedTransform then
-            visit (body.instantiate1 assignment)
+            visit (body.instantiate1 assignment) visited
           else
             withLetDecl name type assignment fun localValue => do
               let some
                   (outputShape, coordinateMap, flatMap, hFlatMap, sourceTensor,
                     hTensor, logicalTensor, hLogicalTensor) ←
-                  visit (body.instantiate1 localValue)
+                  visit (body.instantiate1 localValue) visited
                 | return none
               let coordinateMap ←
                 mkLetFVars (generalizeNondepLet := false) #[localValue]
@@ -221,28 +218,39 @@ partial def fusedTransformInput?
                 (outputShape, coordinateMap, flatMap, hFlatMap, sourceTensor,
                   hTensor, logicalTensor, hLogicalTensor)
       | _ => do
-          let candidate := candidate.consumeMData
-          if let some (rewritten, hRewritten) ←
-              rewriteCertifiedViews? candidate then
-            let rewritten ←
-              withTransparency .reducible <| whnf rewritten
-            let some
-                (outputShape, coordinateMap, flatMap, hFlatMap, sourceTensor,
-                  hRewrittenTensor, logicalTensor, hLogicalTensor) ←
-                  visit rewritten
-              | return none
-            let hTensor ←
-              mkAppM ``Eq.trans #[hRewritten, hRewrittenTensor]
-            return some
-              (outputShape, coordinateMap, flatMap, hFlatMap, sourceTensor,
+          -- Public tensor type hints wrap generated values in `id`.
+          if candidate.isAppOfArity ``id 2 then
+            return ← visit candidate.appArg! visited
+          if candidate.isAppOfArity ``Rep.castShape 6 then
+            let arguments := candidate.getAppArgs
+            -- Generated shape annotations need no transport when their shapes reduce equally.
+            if ← withTransparency .reducible <| isDefEq arguments[2]! arguments[3]! then
+              return ← visit arguments[5]! visited
+          for theoremName in theoremNames do
+            let result? ← observing? do
+              let some (rewritten, hRewritten) ←
+                  rewriteCertifiedView? candidate theoremName
+                | failure
+              let rewritten ←
+                withTransparency .reducible <| whnf rewritten
+              let some
+                  (outputShape, coordinateMap, flatMap, hFlatMap, sourceTensor,
+                    hRewrittenTensor, logicalTensor, hLogicalTensor) ←
+                    visit rewritten visited
+                | failure
+              let hTensor ←
+                mkAppM ``Eq.trans #[hRewritten, hRewrittenTensor]
+              return (outputShape, coordinateMap, flatMap, hFlatMap, sourceTensor,
                 hTensor, logicalTensor, hLogicalTensor)
+            if let some result := result? then
+              return some result
           if candidate.isAppOfArity ``nativeTensorKernel 8 then
             let arguments := candidate.getAppArgs
             let compiled := arguments[4]!
             let some
                 (outputShape, coordinateMap, flatMap, hFlatMap, sourceTensor,
                   hCompiledTensor, _, _) ←
-                visit compiled
+                visit compiled visited
               | return none
             let hNativeCompiled ←
               mkAppM ``nativeTensorKernel_eq_compiled #[
@@ -430,7 +438,7 @@ partial def fusedTransformInput?
   let some
       (_, inputMap, inputFlatMap, hInputMap, sourceTensor, hTensor,
         logicalTensor, hLogicalTensor) ←
-      visit tensor
+      visit tensor []
     | return none
   return some
     (inputMap, inputFlatMap, hInputMap, sourceTensor, hTensor,

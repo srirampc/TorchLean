@@ -4,8 +4,8 @@ Released under MIT license as described in the file LICENSE.
 Authors: TorchLean Team
 
 GPU-only corpus-training example:
-  lake -R -K cuda=true build
-  lake -R -K cuda=true exe torchlean text_gpt2 --device cuda \
+  scripts/lake.sh -Kcuda=true build
+  scripts/lake.sh -Kcuda=true exe torchlean text_gpt2 --device cuda \
     --data-file data/real/text/tinystories_valid.txt \
     --allow-small-data --steps 1 --generate 0
 
@@ -13,7 +13,7 @@ Prepare that file with:
   python3 scripts/datasets/download_example_data.py --tinystories-valid
 
 GPT-2 BPE tokenizer run:
-  lake -R -K cuda=true exe torchlean text_gpt2 --device cuda \
+  scripts/lake.sh -Kcuda=true exe torchlean text_gpt2 --device cuda \
     --data-file data/real/text/tiny_shakespeare.txt \
     --bpe-vocab data/real/gpt2/vocab.json \
     --bpe-merges data/real/gpt2/merges.txt \
@@ -21,7 +21,7 @@ GPT-2 BPE tokenizer run:
     --prompt "First Citizen:" --generate 8
 
 Local file run:
-  lake -R -K cuda=true exe torchlean text_gpt2 --device cuda \
+  scripts/lake.sh -Kcuda=true exe torchlean text_gpt2 --device cuda \
     --data-file /tmp/tiny.txt --allow-small-data --steps 1 --generate 0
 -/
 
@@ -82,7 +82,7 @@ structure Options where
   /-- Prompt and continuation-length settings. -/
   generation : text.PromptGenerationOptions
   /-- Terminal prompt-loop policy. -/
-  interaction : text.InteractiveOptions
+  interactive : Bool
   /-- Primary corpus and explicit small-data override. -/
   corpus : text.CorpusFileOptions
   /-- Optional second corpus pass. -/
@@ -96,7 +96,7 @@ namespace Options
 /-- Help text for corpus training, optional GPT-2 tokenization, and generation. -/
 def usage : String :=
   String.intercalate "\n" [
-    "Usage: lake exe torchlean text_gpt2 --data-file PATH [options]",
+    "Usage: scripts/lake.sh exe torchlean text_gpt2 --data-file PATH [options]",
     "",
     "Corpus and tokenizer:",
     "  --data-file PATH       training corpus",
@@ -122,12 +122,12 @@ def parse (args : List String) : Except String (Options × List String) := do
     CLI.Training.RunOptions.parse exeName args defaultLogPath (defaultSteps := 1)
   let (prompt, args) ← text.PromptGenerationOptions.parse args
     { prompt := "First Citizen:", newTokenCount := 0 }
-  let (interactive, args) ← text.InteractiveOptions.parse args
+  let (interactive, args) ← CLI.takeBoolFlag args "interactive"
   let (finetune, args) ← text.FinetuneOptions.parse args training.steps
   let (bpe, args) ← text.BpeCorpusOptions.parse args
   pure ({ training
           generation := prompt
-          interaction := interactive
+          interactive
           corpus
           finetune
           bpe }, args)
@@ -234,18 +234,17 @@ def generateByteGreedy
       (Tensor.from (text.Tokenizer.byte.encode prompt)) gen
       (fun padded predPos => do
         let x := Tensor.repeatAxis 0 ByteModel.batchSize <|
-          Data.CausalLM.oneHotInputs (α := Float) ByteModel.vocabularySize
+          Tensor.oneHotIndices (α := Float) ByteModel.vocabularySize
             (padded.map ByteModel.byteIndex)
         let logits ← predict x
-        pure (text.batchLogitScoresAt logits 0 predPos))
+        pure ((logits.get 0).get predPos))
   pure (text.Tokenizer.byte.decode (ids.to (Array Nat)))
 
-/-- Terminal prompt loop for the trained byte-level model. -/
-partial def interactiveByteLoop
-    (predict : Tensor Float ByteModel.input → IO (Tensor Float ByteModel.output))
-    (newTokenCount : Nat) : IO Unit := do
+/-- Read prompts until an empty line or quit command, printing each generated response. -/
+partial def interactive
+    (generate : String → IO String) (window : String) (newTokenCount : Nat) : IO Unit := do
   IO.println ("  interactive: enter a prompt; empty line or :q exits "
-    ++ s!"(window={ByteModel.contextLength} bytes, generate={newTokenCount})")
+    ++ s!"(window={window}, generate={newTokenCount})")
   let stdin ← IO.getStdin
   let rec loop : IO Unit := do
     IO.print "  prompt> "
@@ -254,8 +253,8 @@ partial def interactiveByteLoop
     if prompt = "" || prompt = ":q" || prompt = ":quit" then
       IO.println "  interactive: done"
     else
-      let out ← generateByteGreedy predict prompt newTokenCount
-      IO.println s!"  response={text.escape out}"
+      let response ← generate prompt
+      IO.println s!"  response={text.escape response}"
       loop
   loop
 
@@ -374,7 +373,7 @@ def argmaxLocalBPETokens
     Except String (Tensor Nat [BpeModel.contextLength]) :=
   Tensor.generateFlatM [BpeModel.contextLength] fun index =>
     let position : Fin BpeModel.contextLength := ⟨index.val, by simpa [Shape.size] using index.isLt⟩
-    match text.greedyToken? (text.batchLogitScoresAt logits 0 position) (isLocalBPEId lv) with
+    match text.greedyToken? ((logits.get 0).get position) (isLocalBPEId lv) with
     | some token => pure token.val
     | none => throw "no assigned compact-vocabulary token has a non-NaN score"
 
@@ -392,9 +391,9 @@ def printBpePredictionProbe
   IO.println s!"  prompt={text.escape prompt}"
 
 /--
-Greedy BPE generation by repeatedly feeding the last `contextLength` tokens and appending the
-final-position argmax. This is a deterministic sampling path for inspecting the trained next-token
-model.
+Greedy BPE generation using up to the last `contextLength` tokens. The next-token logits come from
+the current context position, before any right padding, and unassigned local vocabulary slots are
+excluded from selection.
 -/
 def generateBpeGreedy
     (tok : text.GPT2BPE.Tokenizer)
@@ -418,32 +417,11 @@ def generateBpeGreedy
         let bounded ← CLI.orThrow exeName <|
           Tensor.checkIndices BpeModel.vocabularySize padded
         let x := Tensor.repeatAxis 0 BpeModel.batchSize <|
-          Data.CausalLM.oneHotInputs (α := Float) BpeModel.vocabularySize bounded
+          Tensor.oneHotIndices (α := Float) BpeModel.vocabularySize bounded
         let logits ← predict x
-        pure (text.batchLogitScoresAt logits 0 predPos))
+        pure ((logits.get 0).get predPos))
       (allowToken := isLocalBPEId lv)
   CLI.orThrow exeName <| decodeLocalBPE tok lv ids
-
-/-- Terminal prompt loop for the trained BPE model. -/
-partial def interactiveBpeLoop
-    (tok : text.GPT2BPE.Tokenizer)
-    (lv : text.VocabularyProjection BpeModel.vocabularySize)
-    (predict : Tensor Float BpeModel.input → IO (Tensor Float BpeModel.output))
-    (newTokenCount : Nat) : IO Unit := do
-  IO.println s!"  interactive: enter a prompt; empty line or :q exits (window={
-    BpeModel.contextLength} tokens, generate={newTokenCount})"
-  let stdin ← IO.getStdin
-  let rec loop : IO Unit := do
-    IO.print "  prompt> "
-    let line ← stdin.getLine
-    let prompt := line.trimAscii.toString
-    if prompt = "" || prompt = ":q" || prompt = ":quit" then
-      IO.println "  interactive: done"
-    else
-      let out ← generateBpeGreedy tok lv predict prompt newTokenCount
-      IO.println s!"  response={text.escape out}"
-      loop
-  loop
 
 /--
 Train the GPT-2-style model over a text corpus using CUDA.
@@ -465,7 +443,7 @@ def trainCorpus (runtime : Runtime.Config)
   IO.println
     s!"  first target={text.escape (text.Tokenizer.byte.decode (firstIds.drop 1))}"
   let ftBytes? ←
-    match trainOpts.finetune.finetuneFile? with
+    match trainOpts.finetune.file? with
     | none => pure none
     | some path => do
         let ftBytes ←
@@ -478,13 +456,13 @@ def trainCorpus (runtime : Runtime.Config)
   let finetuneSamples := match ftBytes? with
     | none => Data.SampleStream.fromFunction 0 (fun index => nomatch index)
     | some ftBytes => Data.SampleStream.fromFunction
-        (trainOpts.finetune.finetuneSteps * trainOpts.training.batchSize) fun index =>
+        (trainOpts.finetune.steps * trainOpts.training.batchSize) fun index =>
           byteCorpusSampleAt ftBytes index.val
   let allSamples := pretrainSamples.append finetuneSamples
   let totalSteps := trainOpts.training.steps +
     match ftBytes? with
     | none => 0
-    | some _ => trainOpts.finetune.finetuneSteps
+    | some _ => trainOpts.finetune.steps
   let trainSamples := if allSamples.size == 0 then
     Data.SampleStream.fromFunction 1 (fun _ => sample0) else allSamples
   let run :=
@@ -517,8 +495,10 @@ def trainCorpus (runtime : Runtime.Config)
     trainOpts.generation (some generated)
     #[s!"data={trainOpts.corpus.dataFile}", Support.deviceNote runtime,
       s!"bytes={bytes.size}"]
-  if trainOpts.interaction.interactive then
-    interactiveByteLoop trained.predict trainOpts.generation.newTokenCount
+  if trainOpts.interactive then
+    interactive
+      (fun prompt => generateByteGreedy trained.predict prompt trainOpts.generation.newTokenCount)
+      s!"{ByteModel.contextLength} bytes" trainOpts.generation.newTokenCount
 
 /-- Validate, optionally cap, and tokenize one UTF-8 corpus file with GPT-2 BPE. -/
 def loadBpeFileTokens
@@ -573,7 +553,7 @@ def trainBpeCorpus {tokenCount : Nat} (runtime : Runtime.Config)
   let totalSteps := trainOpts.training.steps +
     match finetuneTokens? with
     | none => 0
-    | some _ => trainOpts.finetune.finetuneSteps
+    | some _ => trainOpts.finetune.steps
   IO.println s!"  mode=bpe local-vocab={lv.size}/{BpeModel.vocabularySize} tokens={
     tokenCount} steps={totalSteps}"
   printBpeCorpusPreview tok lv tokens
@@ -589,7 +569,7 @@ def trainBpeCorpus {tokenCount : Nat} (runtime : Runtime.Config)
         let bounded ← CLI.orThrow exeName <|
           Tensor.checkIndices BpeModel.vocabularySize finetuneTokens
         pure <| Data.SampleStream.fromFunction
-          (trainOpts.finetune.finetuneSteps * trainOpts.training.batchSize) fun index =>
+          (trainOpts.finetune.steps * trainOpts.training.batchSize) fun index =>
             bpeCorpusSampleAt bounded index.val
   let scheduledSamples := pretrainSamples.append finetuneSamples
   let samples := if scheduledSamples.size == 0 then
@@ -625,14 +605,17 @@ def trainBpeCorpus {tokenCount : Nat} (runtime : Runtime.Config)
     trainOpts.generation (some generated)
     #[s!"data={trainOpts.corpus.dataFile}", Support.deviceNote runtime,
       s!"localVocab={lv.size}/{BpeModel.vocabularySize}", s!"tokens={tokenCount}"]
-  if trainOpts.interaction.interactive then
-    interactiveBpeLoop tok lv trained.predict trainOpts.generation.newTokenCount
+  if trainOpts.interactive then
+    interactive
+      (fun prompt => generateBpeGreedy tok lv trained.predict prompt
+        trainOpts.generation.newTokenCount)
+      s!"{BpeModel.contextLength} tokens" trainOpts.generation.newTokenCount
 
 /-- CLI entrypoint for CUDA byte/BPE corpus training. -/
 def main (args : List String) : IO UInt32 := do
   Module.Command.run
     (config := {
-      banner? := some <| Support.bannerWithDevice exeName "GPU corpus trainer"
+      banner? := some <| Support.banner exeName "GPU corpus trainer"
       usage? := some Options.usage
       printSuccess := true
       runtime := { device? := some .cuda } })
@@ -653,7 +636,7 @@ def main (args : List String) : IO UInt32 := do
           let tokens ← loadBpeFileTokens trainOpts tok trainOpts.corpus.dataFile
           IO.eprintln s!"{exeName}: encoded BPE corpus original-tokens={tokens.size}"
           let finetuneTokens? ←
-            match trainOpts.finetune.finetuneFile? with
+            match trainOpts.finetune.file? with
             | none => pure none
             | some path =>
                 IO.eprintln s!"{exeName}: encoding BPE fine-tuning corpus {path}"

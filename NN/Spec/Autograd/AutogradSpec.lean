@@ -26,6 +26,10 @@ representation. The runtime code is free to:
 
 as long as it implements the same mathematical VJP behavior.
 
+`OpSpec` stores the two functions without a proof that `backward` is the derivative of `forward`.
+That claim needs separate theorems and domain hypotheses. The interface also admits selected
+subgradients and floating-point rules where a classical derivative need not exist.
+
 PyTorch analogy:
 
 - `OpSpec.forward` corresponds to the `forward(...)` method of a `torch.autograd.Function`.
@@ -57,7 +61,8 @@ variable {α : Type} [TorchLean.Storage α]
 
 /-- Atomic operation specification (forward + VJP/backward).
 
-`backward` takes the input `x` and an upstream gradient `dL/dy`, and returns `dL/dx`.
+`backward` takes the input `x` and an upstream gradient `dL/dy`, and specifies the returned
+`dL/dx`. This record imposes no differentiability or derivative-correctness law.
 
 Why this signature:
 

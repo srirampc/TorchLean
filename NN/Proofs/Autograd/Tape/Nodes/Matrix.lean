@@ -7,6 +7,7 @@ Authors: TorchLean Team
 module
 
 public import NN.Proofs.Autograd.Tape.Nodes.Elementwise
+public import NN.Proofs.Autograd.Tape.Nodes.Shape
 
 /-!
 # Matrix tape nodes
@@ -45,109 +46,65 @@ abbrev matSize (m n : Nat) : Nat :=
 abbrev vecSize (n : Nat) : Nat :=
   Spec.Shape.size (.dim n .scalar)
 
-  @[simp] theorem vecSize_eq (n : Nat) : vecSize n = n := by
-    simp [vecSize, Spec.Shape.size]
+@[simp] theorem vecSize_eq (n : Nat) : vecSize n = n := by
+  simp [vecSize, Spec.Shape.size]
 
-  /-- Convert `(i,j)` coordinates into a flattened index for an `m×n` matrix vectorization. -/
-  def idxMN {m n : Nat} (i : Fin m) (j : Fin n) : Fin (matSize m n) :=
-    let hn : vecSize n = n := vecSize_eq n
-    -- `matSize m n` is definitionally `m * vecSize n`, so `finProdFinEquiv` targets `Fin (matSize m
-    -- n)`.
-    finProdFinEquiv (i, Fin.cast hn.symm j)
+/-- Convert `(i,j)` coordinates into a flattened index for an `m×n` matrix vectorization. -/
+def idxMN {m n : Nat} (i : Fin m) (j : Fin n) : Fin (matSize m n) :=
+  let hn : vecSize n = n := vecSize_eq n
+  -- `matSize m n` unfolds to `m * vecSize n`, so `finProdFinEquiv` lands in `Fin (matSize m n)`.
+  finProdFinEquiv (i, Fin.cast hn.symm j)
 
-  /-- Casting a column index through `vecSize n = n` leaves its flattened index unchanged. -/
-  private theorem idxMN_cast_vecSize {m n : Nat} (i : Fin m) (j : Fin (vecSize n))
-      (h : vecSize n = n) :
-      idxMN i (Fin.cast h j) = finProdFinEquiv (i, j) := by
+/-- The flattened index of entry `(i, j)` is `j + n * i`: row-major layout, as in PyTorch. -/
+theorem val_idxMN {m n : Nat} (i : Fin m) (j : Fin n) :
+    (idxMN (m := m) (n := n) i j).val = j.val + n * i.val := by
+  change j.val + Spec.Shape.size (Shape.dim n Shape.scalar) * i.val = _
+  simp [Spec.Shape.size]
+
+/-- Every flattened matrix index is `idxMN` of its row and column. -/
+theorem idxMN_divNat_modNat {m n : Nat} (ip : Fin (matSize m n)) :
+    idxMN (m := m) (n := n) (ip.divNat (m := m) (n := vecSize n))
+      (Fin.cast (vecSize_eq n) (ip.modNat (m := m) (n := vecSize n))) = ip := by
+  apply Fin.ext
+  change (ip.modNat (m := m) (n := vecSize n)).val +
+      vecSize n * (ip.divNat (m := m) (n := vecSize n)).val = ip.val
+  exact Nat.mod_add_div _ _
+
+/-- Coordinate `idxMN i j` of a vectorized matrix is the matrix entry `A i j`.
+
+Matrix and attention nodes are proved in the flat `Vec` world, where Mathlib's calculus lives, and
+stated about `Tensor ℝ [m, n]`; this lemma connects the two without unfolding the flattening. -/
+theorem tensorToVec_idxMN {m n : Nat} (A : Tensor ℝ [m, n]) (i : Fin m) (j : Fin n) :
+    tensorToVec (t := A) (idxMN (m := m) (n := n) i j) = Spec.get2 A i j := by
+  have h1 : 0 < Spec.Shape.size Shape.scalar := by simp [Spec.Shape.size]
+  have hrow := tensorToVec_dim_apply (Tensor.unstack A)
+    (i, finProdFinEquiv (j, (⟨0, h1⟩ : Fin (Spec.Shape.size Shape.scalar))))
+  have hcol := tensorToVec_dim_apply (Tensor.unstack (Tensor.unstack A i))
+    (j, (⟨0, h1⟩ : Fin (Spec.Shape.size Shape.scalar)))
+  rw [Tensor.dim_unstack] at hrow hcol
+  have hidx :
+      (finProdFinEquiv (i, finProdFinEquiv (j, (⟨0, h1⟩ : Fin (Spec.Shape.size Shape.scalar)))) :
+        Fin (matSize m n)) = idxMN (m := m) (n := n) i j := by
     apply Fin.ext
-    simp [idxMN]
+    rw [val_idxMN]
+    change (0 + Spec.Shape.size Shape.scalar * j.val) +
+      Spec.Shape.size (Shape.dim n Shape.scalar) * i.val = j.val + n * i.val
+    simp [Spec.Shape.size]
+  rw [hidx] at hrow
+  rw [hrow, hcol, ← Tensor.scalar_item (Tensor.unstack (Tensor.unstack A i) j), tensorToVec_scalar]
+  rfl
 
-  /-- Relate the tensor vectorization `tensorToVec` to `Spec.get2` at a matrix coordinate. -/
-  private theorem tensorToVec_get2 {m n : Nat} (A : Tensor ℝ [m, n]) (i : Fin m) (j :
-    Fin n) :
-      tensorToVec (t := A) (idxMN (m := m) (n := n) i j) = Spec.get2 A i j := by
-    change
-      TorchLean.Tensor.getScalar (TorchLean.Tensor.flattenSpec A)
-          (idxMN (m := m) (n := n) i j) =
-        Spec.get2 A i j
-    rw [TorchLean.Tensor.getScalar_eq_apply]
-    unfold TorchLean.Tensor.flattenSpec Spec.get2 TorchLean.Tensor.getScalar Spec.get
-      TorchLean.Tensor.unstack TorchLean.Tensor.item
-    rw [TorchLean.Tensor.Internal.Rep.reshape_apply_coordEquiv]
-    rw [TorchLean.Tensor.Internal.Rep.unstack_apply,
-      TorchLean.Tensor.Internal.Rep.unstack_apply]
-    apply congrArg A
-    apply TorchLean.Tensor.Internal.Coord.linearize_injective
-    apply Fin.ext
-    rw [TorchLean.Tensor.reshapeCoordEquiv_linearize_val]
-    rw [TorchLean.Tensor.vectorCoordinate_linearize_val]
-    have hlinearize :
-        (TorchLean.Tensor.Internal.Coord.linearize (s := [m, n])
-          (i, j, PUnit.unit)).val =
-          j.val + n * i.val := by
-      calc
-        _ =
-            (TorchLean.Tensor.Internal.Coord.linearize (s := [n])
-              (j, PUnit.unit)).val +
-              TorchLean.Tensor.Internal.Shape.size [n] * i.val :=
-          TorchLean.Tensor.Internal.Coord.linearize_cons_val (s := [n]) i (j, PUnit.unit)
-        _ = j.val + n * i.val := by
-          rw [TorchLean.Tensor.vectorCoordinate_linearize_val]
-          simp
-    rw [hlinearize]
-    simp [idxMN, finProdFinEquiv_apply_val]
-
-  /-- `Spec.get2` of a `vecToTensor`-constructed matrix reads back the corresponding flattened
-  entry. -/
-  private theorem get2_vecToTensor {m n : Nat} (v : Vec (matSize m n)) (i : Fin m) (j : Fin n) :
-      Spec.get2 (vecToTensor (s := .dim m (.dim n .scalar)) v) i j =
-        v (idxMN (m := m) (n := n) i j) := by
-    have htv :
-        tensorToVec (t := vecToTensor (s := .dim m (.dim n .scalar)) v)
-            (idxMN (m := m) (n := n) i j)
-          = v (idxMN (m := m) (n := n) i j) := by
-      simp
-    exact (tensorToVec_get2 (A := vecToTensor (s := .dim m (.dim n .scalar)) v) i j).symm.trans htv
-
-  /-- Entrywise formula for matrix addition: `(A + B)[i,j] = A[i,j] + B[i,j]`. -/
-  private theorem get2_add_spec {m n : Nat} (A B : Tensor ℝ [m, n]) (i : Fin m) (j
-    : Fin n) :
-      Spec.get2 (addSpec A B) i j = Spec.get2 A i j + Spec.get2 B i j := by
-    simp [addSpec]
-
-  /-- Vectorization commutes with matrix addition:
-  `tensorToVec (A + B) = tensorToVec A + tensorToVec B`. -/
-  theorem tensorToVec_add_spec_mat {m n : Nat} (A B : Tensor ℝ [m, n]) :
-      tensorToVec (t := addSpec A B) = tensorToVec (t := A) + tensorToVec (t := B) := by
-    classical
-    ext ip
-    let hp : vecSize n = n := by simp [vecSize, Spec.Shape.size]
-    let i : Fin m := ip.divNat (m := m) (n := vecSize n)
-    let j' : Fin (vecSize n) := ip.modNat (m := m) (n := vecSize n)
-    let j : Fin n := Fin.cast hp j'
-    have hip : idxMN (m := m) (n := n) i j = ip := by
-      have hCast : idxMN i j = finProdFinEquiv (i, j') := idxMN_cast_vecSize i j' hp
-      have hPair : finProdFinEquiv (i, j') = ip := by
-        apply Fin.ext
-        change j'.val + vecSize n * i.val = ip.val
-        exact Nat.mod_add_div _ _
-      exact hCast.trans hPair
-    -- Convert the LHS via `get2`, use elementwise addition, then convert back.
-    have hgetL : tensorToVec (t := addSpec A B) ip = Spec.get2 (addSpec A B) i j := by
-      -- rewrite the index to match `tensorToVec_get2`
-      rw [←hip]
-      exact tensorToVec_get2 (A := addSpec A B) i j
-    have hgetA : tensorToVec (t := A) ip = Spec.get2 A i j := by
-      rw [←hip]
-      exact tensorToVec_get2 (A := A) i j
-    have hgetB : tensorToVec (t := B) ip = Spec.get2 B i j := by
-      rw [←hip]
-      exact tensorToVec_get2 (A := B) i j
-    calc
-      tensorToVec (t := addSpec A B) ip
-          = Spec.get2 (addSpec A B) i j := hgetL
-      _ = Spec.get2 A i j + Spec.get2 B i j := get2_add_spec (A := A) (B := B) i j
-      _ = tensorToVec (t := A) ip + tensorToVec (t := B) ip := by simp [hgetA, hgetB]
+/-- `Spec.get2` of a `vecToTensor`-constructed matrix reads back the corresponding flattened
+entry. -/
+private theorem get2_vecToTensor {m n : Nat} (v : Vec (matSize m n)) (i : Fin m) (j : Fin n) :
+    Spec.get2 (vecToTensor (s := .dim m (.dim n .scalar)) v) i j =
+      v (idxMN (m := m) (n := n) i j) := by
+  have htv :
+      tensorToVec (t := vecToTensor (s := .dim m (.dim n .scalar)) v)
+          (idxMN (m := m) (n := n) i j)
+        = v (idxMN (m := m) (n := n) i j) := by
+    simp
+  exact (tensorToVec_idxMN (A := vecToTensor (s := .dim m (.dim n .scalar)) v) i j).symm.trans htv
 
 /-- A bilinear map on flattened matrices: `(m×n) × (n×p) → (m×p)` on `Vec (Spec.Shape.size ...)`. -/
 def matmulVec {m n p : Nat} (a : Vec (matSize m n)) (b : Vec (matSize n p)) : Vec (matSize m p) :=
@@ -161,9 +118,8 @@ def matmulVec {m n p : Nat} (a : Vec (matSize m n)) (b : Vec (matSize n p)) : Ve
 /-- Entry `(i, k)` of a matrix product is the usual sum over the contracted index.
 
 The `let`s in the statement are the flat-index arithmetic: a single `Fin (m * p)` is split into a
-row
-by `divNat` and a column by `modNat`. Keeping them in the statement rather than in a side condition
-means `simp` can use this lemma on a goal phrased purely in flat coordinates. -/
+row by `divNat` and a column by `modNat`. Keeping them in the statement rather than in a side
+condition means `simp` can use this lemma on a goal phrased purely in flat coordinates. -/
 @[simp] theorem matmulVec_apply {m n p : Nat} (a : Vec (matSize m n)) (b : Vec (matSize n p))
     (ip : Fin (matSize m p)) :
     matmulVec (m := m) (n := n) (p := p) a b ip =
@@ -183,8 +139,8 @@ https://pytorch.org/docs/stable/generated/torch.matmul.html
 -/
 
 /-- For fixed left operand `a`, `matmulCLMRight a` is the linear map `b ↦ a*b`. -/
-def matmulCLMRight {m n p : Nat} (a : Vec (matSize m n)) : Vec (matSize n p) →L[ℝ] Vec (matSize m p)
-  := by
+def matmulCLMRight {m n p : Nat} (a : Vec (matSize m n)) :
+    Vec (matSize n p) →L[ℝ] Vec (matSize m p) := by
   classical
   let fLin : Vec (matSize n p) →ₗ[ℝ] Vec (matSize m p) :=
     { toFun := fun b => matmulVec (m := m) (n := n) (p := p) a b
@@ -199,194 +155,38 @@ def matmulCLMRight {m n p : Nat} (a : Vec (matSize m n)) : Vec (matSize n p) →
   refine ⟨fLin, ?_⟩
   exact LinearMap.continuous_of_finiteDimensional (f := fLin)
 
-/-- Continuous bilinear map for matrix multiplication on flattened vectors. -/
+/-- `matmulCLMRight a` computes `matmulVec a`. -/
+@[simp] theorem matmulCLMRight_apply {m n p : Nat} (a : Vec (matSize m n))
+    (b : Vec (matSize n p)) :
+    matmulCLMRight (m := m) (n := n) (p := p) a b = matmulVec (m := m) (n := n) (p := p) a b :=
+  rfl
+
+/-- Continuous bilinear map for matrix multiplication on flattened vectors.
+
+This is `a ↦ matmulCLMRight a`, linear in `a`; continuity is automatic in finite dimension, so no
+operator-norm bound is needed. -/
 def matmulBilin {m n p : Nat} :
     Vec (matSize m n) →L[ℝ] Vec (matSize n p) →L[ℝ] Vec (matSize m p) := by
   classical
-  -- Define the underlying bilinear map on pairs.
-  let f : Vec (matSize m n) × Vec (matSize n p) → Vec (matSize m p) :=
-    fun x => matmulVec (m := m) (n := n) (p := p) x.1 x.2
-  have hf : IsBoundedBilinearMap ℝ f := by
-    refine
-      { add_left := ?_
-        smul_left := ?_
-        add_right := ?_
-        smul_right := ?_
-        bound := ?_ }
-    · intro a1 a2 b
-      ext ip
-      simp [f, matmulVec, Finset.sum_add_distrib, add_mul,
-        ]
-    · intro r a b
-      ext ip
-      simp [f, matmulVec, smul_eq_mul, Finset.mul_sum, mul_assoc]
-    · intro a b1 b2
-      ext ip
-      simp [f, matmulVec, Finset.sum_add_distrib, mul_add,
-        ]
-    · intro r a b
-      ext ip
-      simp [f, matmulVec, smul_eq_mul, Finset.mul_sum, mul_left_comm]
-    · -- A crude global bound for Euclidean (L2) norms, using `‖x i‖ ≤ ‖x‖` and `‖∑‖ ≤ ∑‖‖`.
-      refine ⟨Real.sqrt (matSize m p) * (n : ℝ) + 1, ?_, ?_⟩
-      · -- positivity
-        have hnonneg : 0 ≤ Real.sqrt (matSize m p) * (n : ℝ) := by
-          have hs : 0 ≤ Real.sqrt (matSize m p) := Real.sqrt_nonneg _
-          have hn : 0 ≤ (n : ℝ) := by exact_mod_cast (Nat.zero_le n)
-          exact mul_nonneg hs hn
-        exact add_pos_of_nonneg_of_pos hnonneg zero_lt_one
-      · intro a b
-        -- Bound each coordinate by `n * ‖a‖ * ‖b‖`.
-        let M : ℝ := (n : ℝ) * ‖a‖ * ‖b‖
-        have hM : 0 ≤ M := by
-          have hn : 0 ≤ (n : ℝ) := by exact_mod_cast (Nat.zero_le n)
-          exact mul_nonneg (mul_nonneg hn (norm_nonneg a)) (norm_nonneg b)
-        have hcoord : ∀ ip : Fin (matSize m p), ‖matmulVec (m := m) (n := n) (p := p) a b ip‖ ≤ M :=
-          by
-          intro ip
-          let hp : vecSize p = p := vecSize_eq p
-          let i : Fin m := (ip.divNat (m := m) (n := vecSize p))
-          let k' : Fin (vecSize p) := (ip.modNat (m := m) (n := vecSize p))
-          let k : Fin p := Fin.cast hp k'
-          -- unfold the coordinate formula and apply triangle inequality
-          have hsum :
-              ‖∑ j : Fin n,
-                  a (idxMN (m := m) (n := n) i j) * b (idxMN (m := n) (n := p) j k)‖
-                ≤
-              ∑ j : Fin n,
-                  ‖a (idxMN (m := m) (n := n) i j) * b (idxMN (m := n) (n := p) j k)‖ := by
-            -- `norm_sum_le` on `Finset.univ`
-            simpa using
-              (norm_sum_le (s := (Finset.univ : Finset (Fin n)))
-                (f := fun j : Fin n => a (idxMN (m := m) (n := n) i j) * b (idxMN (m := n) (n := p)
-                  j k)))
-          have hterm :
-              ∀ j : Fin n,
-                ‖a (idxMN (m := m) (n := n) i j) * b (idxMN (m := n) (n := p) j k)‖
-                  ≤ ‖a‖ * ‖b‖ := by
-            intro j
-            have ha : ‖a (idxMN (m := m) (n := n) i j)‖ ≤ ‖a‖ :=
-              PiLp.norm_apply_le (x := a) (i := idxMN (m := m) (n := n) i j)
-            have hb : ‖b (idxMN (m := n) (n := p) j k)‖ ≤ ‖b‖ :=
-              PiLp.norm_apply_le (x := b) (i := idxMN (m := n) (n := p) j k)
-            -- `‖x*y‖ = ‖x‖*‖y‖` and then bound each factor by the vector norms.
-            calc
-              ‖a (idxMN (m := m) (n := n) i j) * b (idxMN (m := n) (n := p) j k)‖
-                  = ‖a (idxMN (m := m) (n := n) i j)‖ * ‖b (idxMN (m := n) (n := p) j k)‖ := by
-                      exact norm_mul (a (idxMN (m := m) (n := n) i j)) (b (idxMN (m := n) (n := p) j
-                        k))
-              _ ≤ ‖a‖ * ‖b‖ := by
-                    exact mul_le_mul ha hb (norm_nonneg _) (norm_nonneg _)
-          have hsum' :
-              ∑ j : Fin n,
-                  ‖a (idxMN (m := m) (n := n) i j) * b (idxMN (m := n) (n := p) j k)‖
-                ≤
-              ∑ _j : Fin n, ‖a‖ * ‖b‖ := by
-            refine Finset.sum_le_sum ?_
-            intro j hj
-            exact hterm j
-          -- assemble
-          have hmain :
-              ‖matmulVec (m := m) (n := n) (p := p) a b ip‖ ≤ (n : ℝ) * (‖a‖ * ‖b‖) := by
-            -- unfold `matmulVec` at coordinate `ip`
-            have hdef :
-                matmulVec (m := m) (n := n) (p := p) a b ip
-                  =
-                ∑ j : Fin n,
-                  a (idxMN (m := m) (n := n) i j) * b (idxMN (m := n) (n := p) j k) := by
-              simp [i, k', k]
-            -- use triangle inequality + term bounds
-            have h0 :=
-              (hdef ▸ hsum)
-            have h1 : ‖∑ j : Fin n,
-                  a (idxMN (m := m) (n := n) i j) * b (idxMN (m := n) (n := p) j k)‖
-                ≤ (n : ℝ) * (‖a‖ * ‖b‖) := by
-              -- bound the RHS sum of norms by `n * (‖a‖*‖b‖)`
-              have hcard :
-                  (∑ _j : Fin n, ‖a‖ * ‖b‖) = (n : ℝ) * (‖a‖ * ‖b‖) := by
-                simp
-              exact h0.trans (hsum'.trans_eq hcard)
-            simpa [hdef] using h1
-          -- final coordinate bound, rewriting `M`
-          have : (n : ℝ) * (‖a‖ * ‖b‖) = M := by
-            simp [M, mul_assoc]
-          simpa [this] using hmain
-        -- Now bound the full `L2` norm via coordinatewise square bounds.
-        have hL2 :
-            ‖matmulVec (m := m) (n := n) (p := p) a b‖ ≤ Real.sqrt (matSize m p) * M := by
-          -- Use `EuclideanSpace.norm_eq` and compare sums under `sqrt`.
-          have hsq_le :
-              ∑ ip : Fin (matSize m p), ‖matmulVec (m := m) (n := n) (p := p) a b ip‖ ^ 2
-                ≤ ∑ _ip : Fin (matSize m p), M ^ 2 := by
-            refine Finset.sum_le_sum ?_
-            intro ip hip
-            have h0 : ‖matmulVec (m := m) (n := n) (p := p) a b ip‖ ≤ M := hcoord ip
-            have hn0 : 0 ≤ ‖matmulVec (m := m) (n := n) (p := p) a b ip‖ := norm_nonneg _
-            exact pow_le_pow_left₀ hn0 h0 2
-          have hnorm :
-              ‖matmulVec (m := m) (n := n) (p := p) a b‖
-                = Real.sqrt (∑ ip : Fin (matSize m p), ‖matmulVec (m := m) (n := n) (p := p) a b ip‖
-                  ^ 2) := by
-            simp [EuclideanSpace.norm_eq]
-          have hnorm' :
-              ‖matmulVec (m := m) (n := n) (p := p) a b‖
-                ≤ Real.sqrt (∑ _ip : Fin (matSize m p), M ^ 2) := by
-            -- apply `sqrt_le_sqrt` to the sum inequality
-            have hsum_nonneg :
-                0 ≤ ∑ ip : Fin (matSize m p), ‖matmulVec (m := m) (n := n) (p := p) a b ip‖ ^ 2 :=
-                  by
-              exact Finset.sum_nonneg (fun _ _ => sq_nonneg _)
-            have hsum_nonneg' :
-                0 ≤ ∑ _ip : Fin (matSize m p), M ^ 2 := by
-              exact Finset.sum_nonneg (fun _ _ => sq_nonneg _)
-            -- rewrite using `hnorm` and compare
-            have := Real.sqrt_le_sqrt hsq_le
-            simpa [hnorm] using this
-          -- compute the RHS sqrt
-          have hsum_const :
-              (∑ _ip : Fin (matSize m p), M ^ 2) = (matSize m p : ℝ) * (M ^ 2) := by
-            simp []
-          have hsqrt :
-              Real.sqrt (∑ _ip : Fin (matSize m p), M ^ 2) = Real.sqrt (matSize m p) * M := by
-            have hk : 0 ≤ (matSize m p : ℝ) := by exact_mod_cast (Nat.zero_le (matSize m p))
-            have hM' : 0 ≤ M := hM
-            calc
-              Real.sqrt (∑ _ip : Fin (matSize m p), M ^ 2)
-                  = Real.sqrt ((matSize m p : ℝ) * (M ^ 2)) := by simp [hsum_const]
-              _ = Real.sqrt (matSize m p : ℝ) * Real.sqrt (M ^ 2) := by
-                    simp
-              _ = Real.sqrt (matSize m p) * M := by
-                    simp [Real.sqrt_sq_eq_abs, abs_of_nonneg hM']
-          exact (hnorm'.trans_eq hsqrt)
-        -- Finish by absorbing the `+ 1` slack.
-        have hA :
-            Real.sqrt (matSize m p) * M ≤ (Real.sqrt (matSize m p) * (n : ℝ) + 1) * ‖a‖ * ‖b‖ := by
-          have : Real.sqrt (matSize m p) * M = (Real.sqrt (matSize m p) * (n : ℝ)) * ‖a‖ * ‖b‖ := by
-            simp [M, mul_assoc, mul_left_comm, mul_comm]
-          -- use `(X ≤ X+1)` and multiply by nonneg `‖a‖*‖b‖`
-          have hX : (Real.sqrt (matSize m p) * (n : ℝ)) ≤ (Real.sqrt (matSize m p) * (n : ℝ) + 1) :=
-            by
-            simp
-          have hnn : 0 ≤ ‖a‖ * ‖b‖ := mul_nonneg (norm_nonneg a) (norm_nonneg b)
-          calc
-            Real.sqrt (matSize m p) * M
-                = (Real.sqrt (matSize m p) * (n : ℝ)) * ‖a‖ * ‖b‖ := this
-            _ ≤ (Real.sqrt (matSize m p) * (n : ℝ) + 1) * ‖a‖ * ‖b‖ := by
-                  have h := mul_le_mul_of_nonneg_right hX hnn
-                  simpa [mul_assoc] using h
-        exact hL2.trans hA
-  -- curry the bounded bilinear map into a `→L →L` map
-  exact hf.toContinuousLinearMap
+  let fLin : Vec (matSize m n) →ₗ[ℝ] Vec (matSize n p) →L[ℝ] Vec (matSize m p) :=
+    { toFun := fun a => matmulCLMRight (m := m) (n := n) (p := p) a
+      map_add' := by
+        intro a1 a2
+        ext b ip
+        simp [matmulVec, Finset.sum_add_distrib, add_mul]
+      map_smul' := by
+        intro r a
+        ext b ip
+        simp [matmulVec, smul_eq_mul, Finset.mul_sum, mul_assoc] }
+  refine ⟨fLin, ?_⟩
+  exact LinearMap.continuous_of_finiteDimensional (f := fLin)
 
-/-- The bounded bilinear packaging of matrix multiplication computes `matmulVec`.
+/-- The bilinear packaging of matrix multiplication computes `matmulVec`.
 
 `matmulBilin` exists only so the differentiability proofs can reuse Mathlib's bilinear-map API; this
 lemma is what lets every other proof forget that packaging. -/
 @[simp] theorem matmulBilin_apply {m n p : Nat} (a : Vec (matSize m n)) (b : Vec (matSize n p)) :
-    matmulBilin (m := m) (n := n) (p := p) a b = matmulVec (m := m) (n := n) (p := p) a b := by
-  classical
-  -- Unfold to the bounded bilinear map and use `toContinuousLinearMap_apply`.
-  simp [matmulBilin]
+    matmulBilin (m := m) (n := n) (p := p) a b = matmulVec (m := m) (n := n) (p := p) a b := rfl
 
 /-- `Spec.matMulSpec` agrees with `matmulVec` after flattening both inputs/outputs. -/
 theorem forward_eq_matmulVec {m n p : Nat} (aV : Vec (matSize m n)) (bV : Vec (matSize n p)) :
@@ -399,7 +199,7 @@ theorem forward_eq_matmulVec {m n p : Nat} (aV : Vec (matSize m n)) (bV : Vec (m
   -- represent `ip` as a row/column pair using `Fin.divNat/modNat` for `m * vecSize p`
   let i : Fin m := ip.divNat (m := m) (n := vecSize p)
   let k' : Fin (vecSize p) := ip.modNat (m := m) (n := vecSize p)
-  let hp : vecSize p = p := by simp [vecSize, Spec.Shape.size]
+  let hp : vecSize p = p := vecSize_eq p
   let k : Fin p := Fin.cast hp k'
   -- interpret LHS coordinate via `get2` and the matrix entry lemma
   have hL :
@@ -410,16 +210,9 @@ theorem forward_eq_matmulVec {m n p : Nat} (aV : Vec (matSize m n)) (bV : Vec (m
       Spec.get2
           (Spec.matMulSpec (vecToTensor (s := .dim m (.dim n .scalar)) aV)
             (vecToTensor (s := .dim n (.dim p .scalar)) bV)) i k := by
-    -- rewrite `ip` as the flattened `(i,k)` index
-    have hip : idxMN (m := m) (n := p) i k = ip := by
-      have hCast : idxMN i k = finProdFinEquiv (i, k') := idxMN_cast_vecSize i k' hp
-      have hPair : finProdFinEquiv (i, k') = ip := by
-        apply Fin.ext
-        change k'.val + vecSize p * i.val = ip.val
-        exact Nat.mod_add_div _ _
-      exact hCast.trans hPair
+    have hip : idxMN (m := m) (n := p) i k = ip := idxMN_divNat_modNat ip
     rw [←hip]
-    exact tensorToVec_get2
+    exact tensorToVec_idxMN
       (A := Spec.matMulSpec (vecToTensor (s := .dim m (.dim n .scalar)) aV)
         (vecToTensor (s := .dim n (.dim p .scalar)) bV))
       i k
@@ -478,82 +271,20 @@ private theorem transposeEquiv_symm (m n : Nat) :
 
 /-- Transpose on flattened matrices: `(m×n)` flattened row-major → `(n×m)` flattened row-major. -/
 def transposeVec {m n : Nat} (a : Vec (Matmul.matSize m n)) : Vec (Matmul.matSize n m) :=
-  castVec (matSize_eq_mul n m).symm <|
-    vecOfFun (n := n * m) (fun k : Fin (n * m) =>
-      (castVec (matSize_eq_mul m n) a) ((transposeEquiv m n).symm k))
+  castVec (matSize_eq_mul n m).symm
+    (ShapeOps.reindexVec (transposeEquiv m n) (castVec (matSize_eq_mul m n) a))
 
 /-- Adjointness of `transposeVec` with respect to the standard inner product on vectors. -/
 private theorem inner_transposeVec {m n : Nat} (x : Vec (Matmul.matSize m n))
     (y : Vec (Matmul.matSize n m)) :
     inner ℝ (transposeVec (m := m) (n := n) x) y =
       inner ℝ x (transposeVec (m := n) (n := m) y) := by
-  classical
-  let x' : Vec (m * n) := castVec (matSize_eq_mul m n) x
-  let y' : Vec (n * m) := castVec (matSize_eq_mul n m) y
-  let e : Fin (m * n) ≃ Fin (n * m) := transposeEquiv m n
-  have hx :
-      castVec (matSize_eq_mul n m) (transposeVec (m := m) (n := n) x) =
-        vecOfFun (n := n * m) (fun k : Fin (n * m) => x' (e.symm k)) := by
-    ext k
-    simp [transposeVec, x', e, castVec_castVec]
-  have hy :
-      castVec (matSize_eq_mul m n) (transposeVec (m := n) (n := m) y) =
-        vecOfFun (n := m * n) (fun k : Fin (m * n) => y' (e k)) := by
-    have hswap : (transposeEquiv n m).symm = e := by
-      simpa [e] using (transposeEquiv_symm (m := n) (n := m))
-    ext k
-    have hk : (transposeEquiv n m).symm k = e k := by
-      simpa using congrArg (fun f => f k) hswap
-    have hL :
-        castVec (matSize_eq_mul m n) (transposeVec (m := n) (n := m) y) k =
-          castVec (matSize_eq_mul n m) y ((transposeEquiv n m).symm k) := by
-      simp [transposeVec]
-    calc
-      castVec (matSize_eq_mul m n) (transposeVec (m := n) (n := m) y) k
-          = castVec (matSize_eq_mul n m) y ((transposeEquiv n m).symm k) := hL
-      _ = castVec (matSize_eq_mul n m) y (e k) := by simp [hk]
-      _ = y' (e k) := by rfl
-  have hL :
-      inner ℝ (transposeVec (m := m) (n := n) x) y =
-        inner ℝ (castVec (matSize_eq_mul n m) (transposeVec (m := m) (n := n) x))
-          (castVec (matSize_eq_mul n m) y) := by
-    simpa using
-      (inner_castVec_castVec (h := matSize_eq_mul n m) (x := transposeVec (m := m) (n := n) x) (y :=
-        y)).symm
-  calc
-    inner ℝ (transposeVec (m := m) (n := n) x) y
-        = inner ℝ (vecOfFun (n := n * m) (fun k : Fin (n * m) => x' (e.symm k))) y' := by
-            simp [hL, hx, y']
-    _ = ∑ k : Fin (n * m), x' (e.symm k) * y' k := by
-          simpa using
-            (inner_eq_sum_mul (x := vecOfFun (n := n * m) (fun k : Fin (n * m) => x' (e.symm k))) (y
-              := y'))
-    _ = ∑ i : Fin (m * n), x' i * y' (e i) := by
-          -- change variables `k = e i`
-          have hsum :
-              (∑ k : Fin (n * m), x' (e.symm k) * y' k) =
-                ∑ i : Fin (m * n), x' (e.symm (e i)) * y' (e i) := by
-            simpa using (Equiv.sum_comp (e := e) (g := fun k : Fin (n * m) => x' (e.symm k) * y'
-              k)).symm
-          -- simplify `e.symm (e i)` pointwise under the sum
-          refine hsum.trans ?_
-          refine Finset.sum_congr rfl ?_
-          intro i _
-          have hxidx : x' (e.symm (e i)) = x' i := by
-            simp
-          -- rewrite the left factor, then close by reflexivity
-          simp [hxidx]
-    _ = inner ℝ x' (vecOfFun (n := m * n) (fun i : Fin (m * n) => y' (e i))) := by
-          simpa using
-            (inner_eq_sum_mul (x := x') (y := vecOfFun (n := m * n) (fun i : Fin (m * n) => y' (e
-              i)))).symm
-    _ = inner ℝ (castVec (matSize_eq_mul m n) x) (castVec (matSize_eq_mul m n) (transposeVec (m :=
-      n) (n := m) y)) := by
-          simp [x', hy]
-    _ = inner ℝ x (transposeVec (m := n) (n := m) y) := by
-          simpa using
-            inner_castVec_castVec (h := matSize_eq_mul m n) (x := x) (y := transposeVec (m := n) (n
-              := m) y)
+  -- Move the size casts across the inner product; what remains is `inner_reindex_left` for
+  -- `transposeEquiv m n`, whose inverse is the transpose equivalence with `m` and `n` swapped.
+  unfold transposeVec
+  rw [inner_castVec_left, ShapeOps.inner_reindex_left, transposeEquiv_symm,
+    ← inner_castVec_castVec (h := matSize_eq_mul m n) (x := x)]
+  simp
 
 end MatTranspose
 
@@ -601,20 +332,12 @@ def matrixTransposeFderiv {Γ : List Shape} {m n : Nat}
     (A : Idx Γ (.dim m (.dim n .scalar))) :
     NodeFDerivCorrect (matrixTranspose (Γ := Γ) (m := m) (n := n) A) := by
   classical
-  let Tlin : Vec (Matmul.matSize m n) →L[ℝ] Vec (Matmul.matSize n m) := by
-    classical
-    let fLin : Vec (Matmul.matSize m n) →ₗ[ℝ] Vec (Matmul.matSize n m) :=
-      { toFun := fun v => MatTranspose.transposeVec (m := m) (n := n) v
-        map_add' := by
-          intro x y
-          ext i
-          simp [MatTranspose.transposeVec, vecOfFun]
-        map_smul' := by
-          intro r x
-          ext i
-          simp [MatTranspose.transposeVec, vecOfFun, smul_eq_mul] }
-    refine ⟨fLin, ?_⟩
-    exact LinearMap.continuous_of_finiteDimensional (f := fLin)
+  -- `transposeVec` is a size cast, a coordinate permutation, and a size cast; each is already a
+  -- continuous linear map.
+  let Tlin : Vec (Matmul.matSize m n) →L[ℝ] Vec (Matmul.matSize n m) :=
+    (Graph.castCLM (h := (MatTranspose.matSize_eq_mul n m).symm)).comp
+      ((ShapeOps.reindexLin (MatTranspose.transposeEquiv m n)).comp
+        (Graph.castCLM (h := MatTranspose.matSize_eq_mul m n)))
   refine
     { deriv := fun _xV => Tlin.comp (CtxVec.getCLM (Γ := Γ) (s := .dim m (.dim n .scalar)) A)
       hasFDerivAt := ?_
@@ -629,11 +352,11 @@ def matrixTransposeFderiv {Γ : List Shape} {m n : Nat}
             (Tlin.comp (CtxVec.getCLM (Γ := Γ) (s := .dim m (.dim n .scalar)) A)) x) := by
       funext x
       simp [matrixTranspose, Node.forwardVec_ofFn, ContinuousLinearMap.comp_apply,
-        CtxVec.getCLM_apply, Tlin]
+        CtxVec.getCLM_apply, Tlin, Graph.castCLM, MatTranspose.transposeVec]
     exact hCLM.congr_of_eventuallyEq hfun.eventuallyEq
   · intro _xV dxV
     simp [matrixTranspose, Node.jvpVec_ofFn, ContinuousLinearMap.comp_apply, CtxVec.getCLM_apply,
-      Tlin]
+      Tlin, Graph.castCLM, MatTranspose.transposeVec]
 
 /-- Matrix multiplication node on 2D tensors. -/
 def matmul {Γ : List Shape} {m n p : Nat}
@@ -778,15 +501,14 @@ This packages the product rule and the dot/adjointness lemmas for `Spec.matMulSp
 -/
 def matmulFderiv {Γ : List Shape} {m n p : Nat}
     (A : Idx Γ (.dim m (.dim n .scalar))) (B : Idx Γ (.dim n (.dim p .scalar))) :
-    NodeFDerivCorrect (matmul (Γ := Γ) (m := m) (n := n) (p := p) A B) :=
-by
+    NodeFDerivCorrect (matmul (Γ := Γ) (m := m) (n := n) (p := p) A B) := by
   classical
   let fA : CtxVec Γ → Vec (Matmul.matSize m n) :=
     fun x => CtxVec.get (Γ := Γ) (s := .dim m (.dim n .scalar)) A x
   let fB : CtxVec Γ → Vec (Matmul.matSize n p) :=
     fun x => CtxVec.get (Γ := Γ) (s := .dim n (.dim p .scalar)) B x
-  let Bmul : Vec (Matmul.matSize m n) →L[ℝ] Vec (Matmul.matSize n p) →L[ℝ] Vec (Matmul.matSize m p)
-    :=
+  let Bmul :
+      Vec (Matmul.matSize m n) →L[ℝ] Vec (Matmul.matSize n p) →L[ℝ] Vec (Matmul.matSize m p) :=
     Matmul.matmulBilin (m := m) (n := n) (p := p)
 
   refine
@@ -824,13 +546,11 @@ by
     exact hbilin.congr_of_eventuallyEq hEq.eventuallyEq
 
   · intro xV dxV
-    -- Rewrite the node JVP into the bilinear derivative formula.
-    -- We use that `tensorToVec` respects matrix addition and that
-    -- `tensorToVec (mat_mul_spec (vecToTensor a) (vecToTensor b))` is exactly
-    -- `Matmul.matmulVec a b`.
+    -- Rewrite the node JVP into the bilinear derivative formula: `tensorToVec` respects matrix
+    -- addition, and `tensorToVec (matMulSpec (vecToTensor a) (vecToTensor b))` is `matmulVec a b`.
     ext ip
     -- After expanding, the two bilinear terms may appear in the opposite order.
-    simp [matmul, Node.jvpVec_ofFn, fA, fB, Bmul, Matmul.tensorToVec_add_spec_mat,
+    simp [matmul, Node.jvpVec_ofFn, fA, fB, Bmul, tensorToVec_addSpec,
       Matmul.forward_eq_matmulVec, ContinuousLinearMap.comp_apply,
       CtxVec.getCLM_apply]
     ring
@@ -849,8 +569,8 @@ open scoped BigOperators
 def broadcastRowCLM {m n : Nat} : Vec m →L[ℝ] Vec (matSize m n) := by
   classical
   let fLin : Vec m →ₗ[ℝ] Vec (matSize m n) :=
-    { toFun := fun v => vecOfFun (n := matSize m n) fun ip => v (ip.divNat (m := m) (n := vecSize
-      n))
+    { toFun := fun v =>
+        vecOfFun (n := matSize m n) fun ip => v (ip.divNat (m := m) (n := vecSize n))
       map_add' := by
         intro v w
         ext ip
@@ -865,7 +585,7 @@ def broadcastRowCLM {m n : Nat} : Vec m →L[ℝ] Vec (matSize m n) := by
 /-- Broadcast a vector `v : Vec n` across the first axis to a flattened `(m×n)` matrix. -/
 def broadcastColCLM {m n : Nat} : Vec n →L[ℝ] Vec (matSize m n) := by
   classical
-  let hn : vecSize n = n := by simp [vecSize, Spec.Shape.size]
+  let hn : vecSize n = n := vecSize_eq n
   let fLin : Vec n →ₗ[ℝ] Vec (matSize m n) :=
     { toFun := fun v =>
         let v' : Vec (vecSize n) := castVec hn.symm v
@@ -944,8 +664,7 @@ def broadcastRow {Γ : List Shape} {m n : Nat}
 /-- `NodeFDerivCorrect` for `broadcastRow` (linear op). -/
 def broadcastRowFderiv {Γ : List Shape} {m n : Nat}
     (idx : Idx Γ (.dim m .scalar)) :
-    NodeFDerivCorrect (broadcastRow (Γ := Γ) (m := m) (n := n) idx) :=
-by
+    NodeFDerivCorrect (broadcastRow (Γ := Γ) (m := m) (n := n) idx) := by
   classical
   refine
     { deriv := fun _ =>
@@ -1000,8 +719,7 @@ def broadcastCol {Γ : List Shape} {m n : Nat}
 /-- `NodeFDerivCorrect` for `broadcastCol` (linear op). -/
 def broadcastColFderiv {Γ : List Shape} {m n : Nat}
     (idx : Idx Γ (.dim n .scalar)) :
-    NodeFDerivCorrect (broadcastCol (Γ := Γ) (m := m) (n := n) idx) :=
-by
+    NodeFDerivCorrect (broadcastCol (Γ := Γ) (m := m) (n := n) idx) := by
   classical
   refine
     { deriv := fun _ =>
@@ -1087,8 +805,7 @@ def rowMean {Γ : List Shape} {m n : Nat}
 /-- `NodeFDerivCorrect` for `rowMean` (reduce-mean along the last axis). -/
 def rowMeanFderiv {Γ : List Shape} {m n : Nat}
     (idx : Idx Γ (.dim m (.dim n .scalar))) :
-    NodeFDerivCorrect (rowMean (Γ := Γ) (m := m) (n := n) idx) :=
-by
+    NodeFDerivCorrect (rowMean (Γ := Γ) (m := m) (n := n) idx) := by
   classical
   let outShape : Shape := .dim m .scalar
   let hsz : Spec.Shape.size outShape = m := by simp [outShape, Spec.Shape.size]
