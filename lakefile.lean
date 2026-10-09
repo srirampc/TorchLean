@@ -73,6 +73,7 @@ private def torchBridgeExeLinkArgs (lt : String) : Array String :=
     #["-L", s!"{lt}/lib"] ++ libtorchLibs ++
     #["-L", windowsLinkLibsDir.toString, "-l:libvcruntime.a"]
 
+-- ==============================  Link Args ===================================
 /-- LibTorch's SDK link flags and runtime paths are carried by its private shared library.
 On Windows the backend is a static archive whose dependencies the executable must name
 itself; on Linux the `.so` carries them and only the rpath is needed, so the executable can
@@ -106,7 +107,11 @@ package TorchLean where
     ⟨`autoImplicit, false⟩,
     ⟨`relaxedAutoImplicit, false⟩,
     ⟨`warningAsError, true⟩]
-  dynlibs := #[`@/torchlean_tensor_cpu_shared]
+  dynlibs :=
+    if cudaEnabled && Platform.isWindows then
+      #[`@/torchlean_tensor_cpu_shared, `@/torchlean_libtorch_shared]
+    else
+      #[`@/torchlean_tensor_cpu_shared]
   moreLinkArgs := nativeLinkArgs
 
 /-!
@@ -159,6 +164,24 @@ private def nativeCompilerJob (name : String) : SpawnM (Job FilePath) := Job.asy
   traceNativeTool compiler
   return compiler
 
+/-- Arguments for the LibTorch CMake build helper (`scripts/libtorch_build.py`), shared by
+its static-archive and Windows shared-DLL variant targets. -/
+private def libtorchBuildArgs (pkg : Package) (leanInclude : FilePath) (scriptPath : FilePath) : Array String :=
+  let base := #[scriptPath.toString, "--package-dir", pkg.dir.toString,
+    "--build-dir", pkg.buildDir.toString, "--lean-include", leanInclude.toString]
+  let args := match libtorchHomeConfig with
+    | some home => base.push s!"--libtorch-home={home}"
+    | none => base
+  let cudaHome := ((get_config? cuda_home).getD "").trimAscii.toString
+  let args := if !cudaHome.isEmpty then args.push s!"--cuda-home={cudaHome}" else args
+  let args := match msys2LibDirConfig with
+    | some msys2 => args.push s!"--msys2-lib-dir={msys2}"
+    | none => args
+  let args := match msvcLibDirConfig with
+    | some msvc => args.push s!"--msvc-lib-dir={msvc}"
+    | none => args
+  args
+
 /-- Numerical CUDA primitives built and linked with the selected LibTorch SDK. -/
 target torchlean_libtorch pkg : FilePath := do
   let lean ← getLeanInstall
@@ -166,17 +189,7 @@ target torchlean_libtorch pkg : FilePath := do
   scriptJob.mapM fun scriptPath => do
     unless cudaEnabled do
       error "torchlean_libtorch requires -Kcuda=true; the default build does not link LibTorch"
-    let mut args := #[scriptPath.toString, "--package-dir", pkg.dir.toString,
-      "--build-dir", pkg.buildDir.toString, "--lean-include", lean.includeDir.toString]
-    if let some home := libtorchHomeConfig then
-      args := args.push s!"--libtorch-home={home}"
-    let cudaHome := ((get_config? cuda_home).getD "").trimAscii.toString
-    if !cudaHome.isEmpty then
-      args := args.push s!"--cuda-home={cudaHome}"
-    if let some msys2 := msys2LibDirConfig then
-      args := args.push s!"--msys2-lib-dir={msys2}"
-    if let some msvc := msvcLibDirConfig then
-      args := args.push s!"--msvc-lib-dir={msvc}"
+    let args := libtorchBuildArgs pkg lean.includeDir scriptPath
     -- The helper checks SDK/tool/source contents even when Lake previously built this target.
     let fingerprint ← captureProc { cmd := "python3", args := args }
     addPureTrace fingerprint "LibTorch SDK, compiler, flags, and native sources"
@@ -187,6 +200,27 @@ target torchlean_libtorch pkg : FilePath := do
         else nameToSharedLib "torchlean_libtorch")
     addTrace (.ofHash (← computeFileHash output) output.toString)
     return output
+
+/-- Windows DLL variant of the LibTorch backend for interpreter and `#eval` hosts.
+The CMake helper builds it with `--shared`: it exports the C ABI and imports the Lean
+runtime from the shared DLL chain, so `lean`/`lake` (shared-runtime hosts) load it
+soundly — mirroring the CPU path's `torchlean_tensor_cpu_shared`. -/
+target torchlean_libtorch_shared pkg : Dynlib := do
+  let lean ← getLeanInstall
+  let scriptJob ← inputFile (pkg.dir / "scripts/libtorch_build.py") false
+  scriptJob.mapM fun scriptPath => do
+    unless cudaEnabled do
+      error "torchlean_libtorch_shared requires -Kcuda=true; the default build does not link LibTorch"
+    unless Platform.isWindows do
+      error "torchlean_libtorch_shared is a Windows-only DLL variant; on other platforms the backend .so is torchlean_libtorch"
+    let args := libtorchBuildArgs pkg lean.includeDir scriptPath
+    -- The helper checks SDK/tool/source contents even when Lake previously built this target.
+    let fingerprint ← captureProc { cmd := "python3", args := args.push "--shared" }
+    addPureTrace fingerprint "LibTorch SDK, compiler, flags, and native sources (shared)"
+    addTrace (← getLeanTrace)
+    let output ← IO.FS.realPath (pkg.buildDir / "libtorch" / "torchlean_libtorch.dll")
+    addTrace (.ofHash (← computeFileHash output) output.toString)
+    return (Dynlib.mk output "torchlean_libtorch" false #[] #[])
 
 /-- Object shared by the static executable link and the dynamic elaborator library. -/
 target torchlean_tensor_cpu_object pkg : FilePath := do

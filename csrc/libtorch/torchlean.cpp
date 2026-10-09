@@ -233,11 +233,13 @@ void initialize() {
     const bool deterministic = deterministic_reductions_requested();
     context.setDeterministicAlgorithms(deterministic, false);
     context.setDeterministicCuDNN(deterministic);
-    // Torch's lazy CUDA init reached via `lazyInitDevice` can fail a TORCH_CHECK from the
-    // `from_blob`/TensorMaker path in the Windows mixed-ABI executable; a C++ exception on a
-    // Lean worker thread aborts before any catch runs (no MSVC per-thread CRT state). Warm up
-    // through the plain device-query API first, which initializes CUDA successfully; the
-    // lazyInitDevice below then finds it already done and is a no-op. Harmless elsewhere.
+    // Torch's lazy CUDA init reached via `context.lazyInitDevice` can fail at
+    // TORCH_CHECK in Windows mixed-ABI executable;
+    // a C++ exception thrown within a Lean worker thread aborts before any
+    // catch (no MSVC per-thread CRT state).
+    // Solution:  Warm up through the plain device-query API first, which
+    // initializes CUDA successfully; the lazyInitDevice below then finds it
+    // already done and is a no-op.
     (void)at::cuda::is_available();
     (void)at::cuda::getCurrentDeviceProperties();
     context.lazyInitDevice(c10::kCUDA);

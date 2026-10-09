@@ -2,8 +2,9 @@
 """Build the LibTorch C ABI library through the selected SDK's CMake package.
 
 Lake calls this helper even on cache hits, so changes to the SDK, toolchain, flags,
-or source contents cannot reuse an incompatible backend. Compilation needs a
-Linux host with a full LibTorch SDK; --resolve-home and --help only inspect paths.
+or source contents cannot reuse an incompatible backend. Compilation needs a Linux
+or Windows host with a full CUDA-enabled LibTorch SDK; --resolve-home and --help
+only inspect paths.
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 
 SOURCES = (
@@ -213,6 +215,45 @@ def msvc_lib_dir(flag: str) -> str | None:
     return str(tool_dir.parents[2] / "lib" / tool_dir.name)
 
 
+def atomic_copy(source: Path, destination: Path) -> None:
+    """Copy through a sibling temporary file, then atomically rename into place.
+
+    The static and shared targets of one Lake build can provision the same shim
+    directory concurrently; the rename keeps each copy atomic so neither ever sees
+    a partially written library.
+    """
+    temporary = destination.with_name(f"{destination.name}.tmp.{os.getpid()}")
+    shutil.copy2(source, temporary)
+    os.replace(temporary, destination)
+
+
+def _norm_dir(path: str) -> str:
+    """Canonical lowercase form of a directory path, for PATH comparisons.
+
+    Accepts MSYS2-style entries (``/c/Users/...``) as well as native Windows
+    ones (``C:\\Users\\...``) and folds them to the same key.
+    """
+    path = path.strip().rstrip("/\\")
+    if len(path) >= 3 and path[0] == "/" and path[1].isalpha() and path[2] == "/":
+        path = path[1].upper() + ":" + path[2:]
+    elif len(path) == 2 and path[0] == "/" and path[1].isalpha():
+        path = path[1].upper() + ":"
+    return path.replace("\\", "/").lower()
+
+
+def libtorch_lib_on_path(home: Path) -> bool:
+    """Whether ``<libtorch home>/lib`` is on ``PATH``.
+
+    The shared backend DLL's torch imports (c10.dll, torch.dll, ...) are resolved
+    through PATH when ``lean`` loads it for ``#eval``; without them loading fails
+    with the cryptic ``ERROR_MOD_NOT_FOUND`` (Win32 126). Catching it here surfaces
+    the same condition as a clear build error instead.
+    """
+    lib = _norm_dir(str((home / "lib").resolve()))
+    return any(_norm_dir(entry) == lib
+               for entry in os.environ.get("PATH", "").split(os.pathsep) if entry)
+
+
 def win_link_shim(args: argparse.Namespace, build_root: Path) -> None:
     """Provision the private dir of Windows libs the executable link needs.
 
@@ -250,11 +291,13 @@ def win_link_shim(args: argparse.Namespace, build_root: Path) -> None:
     for name, _ in msvc_libraries:
         if not (msvc_dir / name).is_file():
             raise ValueError(f"Windows LibTorch build requires {name} in {msvc_dir}")
-    # All inputs verified: populate the shim.
+    # All inputs verified: populate the shim. Copies are atomic (temp + rename)
+    # because the static and shared targets of one Lake build may provision this
+    # directory concurrently.
     shim.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(libuuid_src, shim / "libuuid.a")
+    atomic_copy(libuuid_src, shim / "libuuid.a")
     for name, gnu in msvc_libraries:
-        shutil.copy2(msvc_dir / name, shim / gnu)
+        atomic_copy(msvc_dir / name, shim / gnu)
 
 
 def win_cmake_options(args: argparse.Namespace, package: Path, build_root: Path) -> list[str]:
@@ -305,7 +348,16 @@ def _build_lock(build_root: Path):
             handle.write(b"\0")
             handle.flush()
             handle.seek(0)
-            msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+            # msvcrt's LK_LOCK only retries for ~10s, far shorter than the CMake
+            # configure+build, so a second helper (the static and shared targets of
+            # one Lake build run in parallel) would raise PermissionError instead of
+            # waiting. Poll with the non-blocking LK_NBLCK until the lock clears.
+            while True:
+                try:
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                    break
+                except OSError:
+                    time.sleep(0.2)
         else:
             import fcntl
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
@@ -323,6 +375,12 @@ def _build_lock(build_root: Path):
 def build(args: argparse.Namespace, package: Path, home: Path) -> str:
     if sys.platform not in ("linux", "win32"):
         raise ValueError("cuda=true currently requires a Linux or Windows LibTorch SDK")
+    if args.shared and sys.platform == "win32" and not libtorch_lib_on_path(home):
+        raise ValueError(
+            "--shared on Windows requires the LibTorch DLL directory on PATH; add "
+            f"{home / 'lib'} to PATH (lean resolves torchlean_libtorch.dll's torch "
+            "imports through PATH when loading it for #eval)"
+        )
     if not args.build_dir or not args.lean_include:
         raise ValueError("building requires --build-dir and --lean-include")
     source = package / "csrc/libtorch"
@@ -356,7 +414,7 @@ def build(args: argparse.Namespace, package: Path, home: Path) -> str:
         "helper": file_record(Path(__file__).resolve()),
         "cmakelists": file_record(source / "CMakeLists.txt"),
         "environment": {name: os.environ.get(name) for name in BUILD_ENV},
-        "cuda_home": args.cuda_home, "extra": extra,
+        "cuda_home": args.cuda_home, "shared": args.shared, "extra": extra,
         "sdk_cmake": tree_records(home / "share/cmake"),
         "sdk_metadata": [
             file_record(home / name) for name in ("version.py", "build-version", "build-hash")
@@ -379,11 +437,17 @@ def build(args: argparse.Namespace, package: Path, home: Path) -> str:
     win_link_shim(args, build_root)
     # Lock direct Lake/helper invocations too; the wrapper's checkout lock is not always held.
     with _build_lock(build_root):
-        directory = build_root / "cmake"
-        output = build_root / (
-            "torchlean_libtorch.lib" if sys.platform == "win32" else "libtorchlean_libtorch.so"
-        )
-        state_file = build_root / "build.json"
+        # The static archive and the shared DLL are separate artifacts; give each its own
+        # CMake directory and state file so the two never invalidate each other's cache
+        # when a Windows build produces both in one Lake invocation.
+        mode = "shared" if args.shared else "static"
+        directory = build_root / f"cmake-{mode}"
+        if sys.platform == "win32":
+            output = build_root / ("torchlean_libtorch.dll" if args.shared
+                                   else "torchlean_libtorch.lib")
+        else:
+            output = build_root / "libtorchlean_libtorch.so"
+        state_file = build_root / f"build-{mode}.json"
         try:
             previous = json.loads(state_file.read_text())
         except (FileNotFoundError, json.JSONDecodeError):
@@ -414,6 +478,18 @@ def build(args: argparse.Namespace, package: Path, home: Path) -> str:
             f"-DTORCHLEAN_OUTPUT_DIR={build_root}",
         ]
         command.extend(win_cmake_options(args, package, build_root))
+        if args.shared and sys.platform == "win32":
+            # Shared DLL variant for interpreter/#eval hosts: exports the C ABI via
+            # WINDOWS_EXPORT_ALL_SYMBOLS and imports the Lean runtime from the *shared*
+            # chain (libInit_shared.dll etc.), like torchlean_tensor_cpu.dll does.
+            lean_lib = lean_include.parent / "lib" / "lean"
+            if not (lean_lib / "libInit_shared.dll.a").is_file():
+                raise ValueError(
+                    f"--shared on Windows requires the Lean shared import libs in {lean_lib}"
+                )
+            command.extend([
+                "-DTORCHLEAN_BUILD_SHARED=ON", f"-DTORCHLEAN_LEAN_LIB={lean_lib}",
+            ])
         if args.cuda_home:
             if args.cuda_home.startswith("-"):
                 raise ValueError("cuda_home must be a directory path, not an option")
@@ -427,7 +503,17 @@ def build(args: argparse.Namespace, package: Path, home: Path) -> str:
         jobs = os.environ.get("TORCHLEAN_LIBTORCH_JOBS", "2")
         if not jobs.isdigit() or int(jobs) < 1:
             raise ValueError("TORCHLEAN_LIBTORCH_JOBS must be a positive integer")
-        output.unlink(missing_ok=True)
+        # A fresh build may need to replace an artifact that a concurrent sibling
+        # target or antivirus scan has transiently locked; retry briefly first.
+        deadline = time.monotonic() + 1.0
+        while True:
+            try:
+                output.unlink(missing_ok=True)
+                break
+            except PermissionError:
+                if time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.2)
         run([str(cmake), "--build", str(directory), "--target", "torchlean_libtorch",
              "--parallel", jobs], env=env)
         if not output.is_file():
@@ -451,6 +537,9 @@ def main() -> int:
     parser.add_argument("--cuda-home", default="")
     parser.add_argument("--msys2-lib-dir", default="")
     parser.add_argument("--msvc-lib-dir", default="")
+    parser.add_argument("--shared", action="store_true",
+                        help="build the Windows DLL variant (torchlean_libtorch.dll) "
+                             "for interpreter/#eval hosts instead of the static archive")
     parser.add_argument("--resolve-home", action="store_true")
     args = parser.parse_args()
     try:
