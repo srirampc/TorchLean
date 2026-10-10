@@ -85,9 +85,10 @@ also imports `NN.Core.Numeric` for native scalar instances, including direct bin
 
 ## Proofs retained at the TorchLean boundary
 
-`IEEEExec/Bridge/Finite.lean` transfers FloatLib's arithmetic refinement to configured binary32.
-Its add and multiply theorems have the original result-finiteness premise and conclude that the
-encoded real value equals one `Model.roundAt FloatFormat.binary32` of the exact operation. Subnormal cases do not acquire
+`IEEEExec/Bridge/Finite.lean` transfers FloatLib's arithmetic refinement to configured IEEE
+formats and provides binary32 specializations. For IEEE formats, its add and multiply theorems
+require a finite result and identify its real value with one rounding of the exact operation.
+The binary32 versions use `Model.roundAt FloatFormat.binary32`. Subnormal cases do not acquire
 a global relative-error assumption.
 
 Native proofs import FloatLib's native bridge directly. The CUDA contract reads native bits through
@@ -140,6 +141,14 @@ derivative can still overflow its destination format; neither the scalar library
 promise a finite encoded result for an unrepresentable derivative.
 
 ## Intervals, quantization, and external enclosures
+
+For real inequalities, import `FloatLib.Numerics.Automation.Interval` and use `interval` directly.
+It supports positive-base real powers, `Real.logb`, and inverse hyperbolic functions, with checks
+for each operation's domain. A custom function can register its executable enclosure and
+containment theorem with `@[interval_extension]`; the checker recomputes that enclosure on each
+subdivision. These are kernel-checked bounds on real expressions, not checks of native GPU output.
+The [floating-point guide](../../home_page/blueprint/TorchLeanBlueprint/Guide/Ch3_Backend/Floats.lean)
+includes a worked bound.
 
 Use `FloatLib.Numerics.Interval (FloatLib.Floats.ExecFloat.Binary 8 23)` directly for binary32
 endpoints, with arithmetic and conversion proofs from `ExecFloat.Binary.Interval`.

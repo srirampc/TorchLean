@@ -102,7 +102,7 @@ the storage layout, not a rank-specific implementation.
   let centered2 := Buffer.mul centered centered
   let varSum := Buffer.reduceSumByRow centered2 rows32 cols32
   let var := Buffer.scale varSum invCols
-  let epsVec := Buffer.full rows32 epsilon
+  let epsVec := Buffer.full rows32 epsilon (Buffer.dtype x)
   let varEps := Buffer.add var epsVec
   let std := Buffer.sqrt varEps
   let stdB := Buffer.broadcastVecToCols std rows32 cols32
@@ -161,10 +161,9 @@ the storage layout, not a rank-specific implementation.
 /-!
 ## Softmax (last axis, row folding)
 
-We implement softmax along the last axis by folding all leading dimensions into one `rows` axis.
-This covers:
-- 2D softmax (`(rows, cols)`),
-- 3D batched softmax (`(batch, rows, cols)`) by folding `batch*rows` into `rows`.
+All leading dimensions are folded into one row axis; normalization acts independently on the
+last axis at any rank. Empty tensors retain their shape. A scalar softmax is one, and a scalar
+log-softmax is zero; both have zero cotangent.
 -/
 
 /--
@@ -174,7 +173,7 @@ The scalar forward function runs only after input validation. Empty tensors are 
 non-scalar, nonempty tensors, row-dimension validation precedes input lookup.
 -/
 @[inline] def Internal.rowOpLast {s : Shape} (t : Tape) (opName : String) (xId : Nat)
-    (scalarForward : Unit → Buffer)
+    (scalarForward : Buffer → Buffer)
     (forward : Buffer → UInt32 → UInt32 → Buffer.WithWorkspace)
     (backward : Buffer → Buffer → UInt32 → UInt32 → Buffer) : Result (Tape × Nat) := do
   -- With no coordinates, both the result and its cotangent have the same empty shape.
@@ -182,9 +181,9 @@ non-scalar, nonempty tensors, row-dimension validation precedes input lookup.
     return ← unary t opName xId s s Buffer.copy (fun _ gradient => Buffer.copy gradient)
   match s with
   | .scalar =>
-      let _x ← requireValue (t := t) xId Shape.scalar
+      let x ← requireValue (t := t) xId Shape.scalar
       let one32 : UInt32 := 1
-      let y := scalarForward ()
+      let y := scalarForward x
       let node : Node :=
         { name := some opName
           value := { s := Shape.scalar, buf := y }
@@ -192,7 +191,7 @@ non-scalar, nonempty tensors, row-dimension validation precedes input lookup.
           parents := #[xId]
           backward := fun dLdyAny => do
             let _ ← requireGrad dLdyAny Shape.scalar
-            let dx := Buffer.zeros one32
+            let dx := Buffer.zeros one32 (Buffer.dtype x)
             pure #[(xId, { s := Shape.scalar, buf := dx })] }
       pure (t.addNode node)
   | _ =>
@@ -213,12 +212,12 @@ non-scalar, nonempty tensors, row-dimension validation precedes input lookup.
 
 /-- Record a last-axis softmax on the tape, returning the extended tape and the new node id. -/
 @[inline] def softmaxLast {s : Shape} (t : Tape) (xId : Nat) : Result (Tape × Nat) :=
-  Internal.rowOpLast (s := s) t "softmax" xId (fun () => Buffer.full 1 1.0)
+  Internal.rowOpLast (s := s) t "softmax" xId (fun x => Buffer.full 1 1.0 (Buffer.dtype x))
     rowSoftmaxForward rowSoftmaxBwd
 
 /-- Stable log-softmax along the last axis, implemented directly on CUDA buffers. -/
 @[inline] def logSoftmaxLast {s : Shape} (t : Tape) (xId : Nat) : Result (Tape × Nat) :=
-  Internal.rowOpLast (s := s) t "log_softmax" xId (fun () => Buffer.zeros 1)
+  Internal.rowOpLast (s := s) t "log_softmax" xId (fun x => Buffer.zeros 1 (Buffer.dtype x))
     rowLogSoftmaxForward rowLogSoftmaxBwd
 
 end Tape

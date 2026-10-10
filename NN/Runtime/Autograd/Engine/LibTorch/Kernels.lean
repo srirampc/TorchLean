@@ -3,10 +3,10 @@ Copyright (c) 2026 TorchLean
 Released under MIT license as described in the file LICENSE.
 Authors: TorchLean Team
 
-LibTorch FFI: additional ATen operations over `LibTorch.Buffer` (float32).
+LibTorch FFI: additional ATen operations over dtype-carrying `LibTorch.Buffer` values.
 
 Notes:
-- `LibTorch.Buffer` is an opaque contiguous float32 buffer in CUDA device memory.
+- `LibTorch.Buffer` is an opaque contiguous, dtype-carrying buffer in CUDA device memory.
 - These operations keep their shape APIs explicit: dimensions are passed as `UInt32`.
 - Build with `scripts/lake.sh -Kcuda=true build` and a LibTorch SDK; the default build links failing
   placeholders for these symbols.
@@ -21,7 +21,7 @@ public import NN.Runtime.Autograd.Engine.LibTorch.Trusted
 /-!
 # CUDA Buffer Kernels FFI
 
-Foreign-function declarations for ATen operations on TorchLean's float32
+Foreign-function declarations for ATen operations on TorchLean's dtype-carrying
 `LibTorch.Buffer`: reductions, indexing, matmul/BMM, normalization, Fourier transforms, scans,
 and broadcast/view helpers. Lean composes attention from these primitives in `Ops.Attention`.
 The declarations here are the Lean side of the LibTorch CUDA trust boundary documented in
@@ -35,6 +35,26 @@ namespace Autograd
 namespace LibTorch
 
 namespace Buffer
+
+/-- Stable softmax along a selected axis of a contiguous tensor, including empty tensors.
+
+The native boundary checks the supplied dimensions against the buffer and delegates to ATen.
+It does not record an autograd graph. Invalid dimensions, axes and device failures are IO errors.
+-/
+@[never_extract, extern "torchlean_cuda_buffer_softmax_io"]
+opaque softmax (input : @& Buffer) (dims : @& Array Nat) (axis : UInt32) : IO Buffer
+
+/-- Grouped convolution over a spatial suffix, with dilation and asymmetric zero padding.
+
+Axes before the channel axis are folded into a batch. `kernelDims` describes the dense
+`(outChannels, inChannels, spatial...)` layout used by the canonical IR; the bridge selects its
+group-diagonal blocks before calling ATen. LibTorch supports one to three spatial dimensions.
+Input lengths and all geometry are checked again at the foreign boundary. No gradient is recorded.
+-/
+@[never_extract, extern "torchlean_cuda_buffer_conv_io"]
+opaque conv (input kernel bias : @& Buffer)
+    (inputDims kernelDims stride paddingBefore paddingAfter dilation : @& Array Nat)
+    (groups : UInt32) : IO Buffer
 
 /--
 Sum across the columns of a 2D row-major buffer.
@@ -50,6 +70,7 @@ Maximum down the rows of a 2D row-major buffer.
 
 Input `b` has shape `(rows, cols)` and is stored as length `rows*cols`.
 Output is length `cols` (max down the rows for each column).
+When `rows = 0`, the result contains `cols` zeros by TorchLean's native compatibility convention.
 -/
 @[never_extract, extern "torchlean_cuda_buffer_reduce_max_by_column"]
 opaque reduceMaxByColumn (b : @& Buffer) (rows cols : UInt32) : Buffer
@@ -59,6 +80,7 @@ Maximum across the columns of a 2D row-major buffer.
 
 Input `b` has shape `(rows, cols)` and is stored as length `rows*cols`.
 Output is length `rows` (max across the columns for each row).
+When `cols = 0`, the result contains `rows` zeros by TorchLean's native compatibility convention.
 -/
 @[never_extract, extern "torchlean_cuda_buffer_reduce_max_by_row"]
 opaque reduceMaxByRow (b : @& Buffer) (rows cols : UInt32) : Buffer

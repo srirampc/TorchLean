@@ -116,7 +116,8 @@ private def checkCase (device : NN.Backend.Device) (equation explicit : String)
   let seed : Tensor Float sOut := Tensor.generateFlat _ fun i => (i % 5).toFloat / 3 - 0.5
   let expected ← reference explicit a b seed
   let tolerance := if device == .cuda then 2e-5 else 1e-10
-  for expression in [equation, explicit] do
+  let expressions := if equation == explicit then [equation] else [equation, explicit]
+  for expression in expressions do
     let actual ← evaluate device expression a b seed expectFast maxElements
     close s!"{expression}: values" actual.1 expected.1 tolerance
     close s!"{expression}: left VJP" actual.2.1 expected.2.1 tolerance
@@ -154,12 +155,12 @@ private def checkLargeCuda : IO Unit := do
     let a ← session.input (Tensor.ones (α := Float) aShape) (requiresGrad := true)
     let b ← session.input (Tensor.ones (α := Float) bShape) (requiresGrad := true)
     Runtime.Autograd.LibTorch.synchronize
-    let before ← Runtime.Autograd.LibTorch.Buffer.allocatorStats
+    let before ← Runtime.Autograd.LibTorch.Buffer.memory
     let some output ← Model.F.einsum (α := Float) (m := Torch.Internal.EagerM Float)
       (sOut := outShape) "...ij,...jk->...ik" [⟨aShape, a⟩, ⟨bShape, b⟩] session
       | throw <| IO.userError "large CUDA contraction was rejected"
     Runtime.Autograd.LibTorch.synchronize
-    let after ← Runtime.Autograd.LibTorch.Buffer.allocatorStats
+    let after ← Runtime.Autograd.LibTorch.Buffer.memory
     let growth := after.allocatedBytes.toNat - before.allocatedBytes.toNat
     IO.println s!"einsum CUDA large before: allocated={before.allocatedBytes} \
       reserved={before.reservedBytes} peak_allocated={before.peakAllocatedBytes} \

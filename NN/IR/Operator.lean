@@ -90,6 +90,9 @@ inductive OpKind where
   | const (valueShape : Shape)
       -- Constant tensor. We record the shape here, but keep the *value* in an external store
       -- (e.g. verifier parameters, exporter initializers).
+  | custom (name : String) (inputs : List Shape) (output : Shape)
+      -- A checked scalar program supplied separately in the node's payload. Input shapes fix
+      -- operand order; one program evaluation produces each flat output entry.
   | permute (perm : Array Nat)
       -- Permute axes (0-based). Similar to `torch.permute`.
   | transpose (axis₁ axis₂ : Nat)
@@ -188,7 +191,7 @@ structure OpMetadata where
 
 /-- Constructor identity of an `NN.IR.OpKind`, with the payload forgotten. -/
 inductive OpTag where
-  | input | const | permute | transpose | detach | randUniform | bernoulliMask
+  | input | const | custom | permute | transpose | detach | randUniform | bernoulliMask
   | add | sub | mulElem | abs | sqrt | inv | maxElem | minElem
   | maxPool | avgPool | broadcastTo | reduceSum | reduceMean | sum
   | matmul | linear | conv | batchNormEval
@@ -201,7 +204,7 @@ namespace OpTag
 
 /-- Every semantic operator identity, in declaration order. -/
 def all : List OpTag :=
-  [ .input, .const, .permute, .transpose, .detach, .randUniform, .bernoulliMask
+  [ .input, .const, .custom, .permute, .transpose, .detach, .randUniform, .bernoulliMask
   , .add, .sub, .mulElem, .abs, .sqrt, .inv, .maxElem, .minElem
   , .maxPool, .avgPool, .broadcastTo, .reduceSum, .reduceMean, .sum
   , .matmul, .linear, .conv, .batchNormEval
@@ -220,6 +223,7 @@ missing. Tensor parameters such as linear weights are read separately from the p
 def toKind? : OpTag → Option OpKind
   | .input => some .input
   | .const => none
+  | .custom => none
   | .permute => none
   | .transpose => none
   | .detach => some .detach
@@ -269,6 +273,7 @@ Parameters such as linear weights live outside the parent edges, so `linear` has
 def metadata : OpTag → OpMetadata
   | .input => ⟨"input", ⟨0, some 0⟩⟩
   | .const => ⟨"const", ⟨0, some 0⟩⟩
+  | .custom => ⟨"custom", ⟨0, none⟩⟩
   | .permute => ⟨"permute", ⟨1, some 1⟩⟩
   | .transpose => ⟨"transpose", ⟨1, some 1⟩⟩
   | .detach => ⟨"detach", ⟨1, some 1⟩⟩
@@ -317,6 +322,7 @@ namespace OpKind
 def opTag : OpKind → OpTag
   | .input => .input
   | .const .. => .const
+  | .custom .. => .custom
   | .permute .. => .permute
   | .transpose .. => .transpose
   | .detach => .detach
@@ -357,8 +363,11 @@ def opTag : OpKind → OpTag
   | .concat .. => .concat
   | .mseLoss => .mseLoss
 
-/-- Structural metadata, obtained from the operation's constructor identity. -/
-def metadata (kind : OpKind) : OpMetadata := kind.opTag.metadata
+/-- Structural metadata. Custom arity comes from the declared input signature. -/
+def metadata (kind : OpKind) : OpMetadata :=
+  match kind with
+  | .custom _ inputs _ => ⟨"custom", ⟨inputs.length, some inputs.length⟩⟩
+  | _ => kind.opTag.metadata
 
 /-- Forgetting attributes and reconstructing an attribute-free operation preserves it. -/
 theorem to_kind_op_tag (kind : OpKind) (h : kind.opTag.hasAttributes = false) :
@@ -389,41 +398,23 @@ it prints axes, shapes, seeds, and convolution/pooling metadata so malformed gra
 without cross-referencing the original builder.
 -/
 def describe : OpKind → String
-  | .input => "input"
   | .const valueShape => s!"const(shape={repr valueShape})"
+  | .custom name inputs output =>
+      s!"custom(name={name}, inputs={repr inputs}, output={repr output}, body=payload)"
   | .permute perm => s!"permute(perm={repr perm})"
   | .transpose axis₁ axis₂ => s!"transpose(axis1={axis₁}, axis2={axis₂})"
-  | .detach => "detach"
   | .randUniform seed => s!"rand_uniform(seed={seed})"
   | .bernoulliMask seed => s!"bernoulli_mask(seed={seed})"
-  | .add => "add"
-  | .sub => "sub"
-  | .mulElem => "mul_elem"
-  | .abs => "abs"
-  | .sqrt => "sqrt"
-  | .inv => "inv"
-  | .maxElem => "max_elem"
-  | .minElem => "min_elem"
   | .maxPool config => s!"max_pool(config={repr config})"
   | .avgPool config => s!"avg_pool(config={repr config})"
   | .broadcastTo s₁ s₂ => s!"broadcastTo(from={repr s₁}, to={repr s₂})"
   | .reduceSum axis => s!"reduce_sum(axis={axis})"
   | .reduceMean axis => s!"reduce_mean(axis={axis})"
-  | .sum => "sum"
-  | .matmul => "matmul"
   | .linear => "linear(payload=node_id)"
   | .conv config => s!"conv(config={repr config}, payload=node_id)"
   | .batchNormEval channelAxis channels =>
       s!"batch_norm_eval(channelAxis={channelAxis}, channels={channels}, payload=node_id)"
-  | .relu => "relu"
-  | .tanh => "tanh"
-  | .sigmoid => "sigmoid"
-  | .softplus => "softplus"
   | .safeLog => "safe_log(epsilon=scalar_parent)"
-  | .exp => "exp"
-  | .log => "log"
-  | .sin => "sin"
-  | .cos => "cos"
   | .softmax axis => s!"softmax(axis={axis})"
   | .hardMaskedSoftmax mask =>
       s!"hard_masked_softmax(maskShape={repr mask.shape})"
@@ -431,7 +422,7 @@ def describe : OpKind → String
   | .reshape inShape outShape => s!"reshape(from={repr inShape}, to={repr outShape})"
   | .flatten s => s!"flatten(shape={repr s})"
   | .concat axis => s!"concat(axis={axis})"
-  | .mseLoss => "mse_loss"
+  | kind => kind.tag
 
 end OpKind
 

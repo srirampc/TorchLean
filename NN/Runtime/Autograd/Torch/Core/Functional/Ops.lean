@@ -51,12 +51,19 @@ class Ops (m : Type → Type) (α : Type) [Storage α] [Context α] where
     (TensorPack α ss → Tensor α s → IO (TensorPack α ss)) → m Unit) := none
   /-- Record a fixed tensor value. -/
   const : {s : Shape} → (t : Tensor α s) → m (Ref s)
+  /-- Inspect a scalar for eager control flow. The comparison is not differentiated; the tape
+  records only the selected branch. Static graph builders reject this dynamic observation. -/
+  observe : Ref Shape.scalar → m α
   /-- Add tensors elementwise. -/
   add : {s : Shape} → (a b : Ref s) → m (Ref s)
   /-- Subtract tensors elementwise. -/
   sub : {s : Shape} → (a b : Ref s) → m (Ref s)
   /-- Multiply tensors elementwise. -/
   mul : {s : Shape} → (a b : Ref s) → m (Ref s)
+  /-- Divide tensors elementwise, recording the quotient-rule VJP at nonzero denominators. -/
+  div : {s : Shape} → (a b : Ref s) → m (Ref s)
+  /-- Negate each element directly, preserving the scalar's signed-zero convention. -/
+  neg : {s : Shape} → (x : Ref s) → m (Ref s)
   /-- Multiply every element by a scalar. -/
   scale : {s : Shape} → (x : Ref s) → (c : α) → m (Ref s)
   /-- Take the elementwise absolute value. -/
@@ -141,10 +148,11 @@ class Ops (m : Type → Type) (α : Type) [Storage α] [Context α] where
   /-- Apply the hyperbolic tangent elementwise. -/
   tanh : {s : Shape} → (x : Ref s) → m (Ref s)
   /--
-  Apply tanh-approximate GELU as one backend primitive.
+  Apply tanh-approximate GELU as one recorded operation.
 
-  The formula is `0.5 * x * (1 + tanh(√(2/π) * (x + 0.044715 * x^3)))`. Keeping it primitive
-  avoids building temporary tensors for each term. Backends must match `Activation.geluSpec` and
+  The formula is `0.5 * x * (1 + tanh(√(2/π) * (x + 0.044715 * x^3)))`. A backend may evaluate
+  it through several numerical primitives and temporary tensors without recording separate
+  tape nodes for the terms. The value and VJP follow `Activation.geluSpec` and
   `Activation.geluDerivSpec`.
   -/
   gelu : {s : Shape} → (x : Ref s) → m (Ref s)
@@ -177,9 +185,9 @@ class Ops (m : Type → Type) (α : Type) [Storage α] [Context α] where
   /--
   Apply `log(softplus(x) + epsilon)` elementwise.
 
-  Positive `epsilon` keeps the logarithm's argument positive, including when a floating-point
-  softplus rounds to zero. The derivative is `sigmoid(x) / (softplus(x) + epsilon)`, with
-  `epsilon` held fixed.
+  The derivative is `sigmoid(x) / (softplus(x) + epsilon)`, with `epsilon` held fixed. Over the
+  reals, positive `epsilon` keeps the argument positive. Executable arithmetic needs `epsilon`
+  to remain positive in its selected representation; this does not make nonfinite inputs finite.
   -/
   safeLog : {s : Shape} → Ref s → α → m (Ref s)
   /-- Sum every element into a scalar. -/

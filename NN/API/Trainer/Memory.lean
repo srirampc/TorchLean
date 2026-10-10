@@ -6,7 +6,9 @@ Authors: TorchLean Team
 
 module
 
-public import NN.Runtime.Autograd.Model -- shake: keep
+public import NN.Runtime.Autograd.Engine.LibTorch.Buffer
+public import NN.Runtime.Autograd.Engine.LibTorch.Controls
+public import NN.Runtime.Autograd.Torch.Core.Types
 
 /-!
 # Training Memory Monitoring
@@ -53,7 +55,7 @@ def sample (options : Runtime.Autograd.Torch.Config)
   if !options.usesCuda || watchEvery = 0 || (done != 0 && done % watchEvery != 0) then
     pure state?
   else
-    let stats ← Runtime.Autograd.LibTorch.Buffer.allocatorStats
+    let stats ← Runtime.Autograd.LibTorch.Buffer.memory
     IO.println s!"  cuda_mem step={done}: {stats.format}"
     let allocated := stats.allocatedBytes.toNat
     let unusedReserved := stats.reservedBytes.toNat - allocated

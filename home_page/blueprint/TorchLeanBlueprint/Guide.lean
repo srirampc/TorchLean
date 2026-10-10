@@ -16,6 +16,7 @@ import TorchLeanBlueprint.Guide.Ch2_Frontend.DataAndLoaders
 import TorchLeanBlueprint.Guide.Ch2_Frontend.TrainingFromScratch
 import TorchLeanBlueprint.Guide.Ch2_Frontend.TorchLeanAPI
 import TorchLeanBlueprint.Guide.Ch2_Frontend.ExecutionModes
+import TorchLeanBlueprint.Guide.Ch2_Frontend.CustomComputations
 import TorchLeanBlueprint.Guide.Ch2_Frontend.BackendSelection
 import TorchLeanBlueprint.Guide.Ch2_Frontend.AutogradWalkthrough
 import TorchLeanBlueprint.Guide.Ch2_Frontend.ScientificForwardModels
@@ -115,8 +116,8 @@ reading the API. Lean syntax enters as a way to express those objects and their 
 
 At the held-out input $`(0.25,-0.75)`, the network in our
 {ref "running-example"}[running example] initially predicts `-0.088261`. The target is `0.2`.
-After 200 Adam updates, its prediction is `0.228325`. The network still has the same two linear
-layers, the same eight hidden units, and the same ReLU between them. What changed was the set of
+After 200 Adam updates, we compare the trained prediction with the same target. The model still
+has two linear layers, eight hidden units, and a ReLU between them. What changed was the set of
 numbers inside its four parameter tensors. Understanding how those numbers determine a function,
 and how a training program changes them, gives us a way to read more than the final loss in a log.
 
@@ -207,6 +208,8 @@ and backward calculation through these interfaces makes their roles easier to di
 
 {include 2 TorchLeanBlueprint.Guide.Ch2_Frontend.ExecutionModes}
 
+{include 2 TorchLeanBlueprint.Guide.Ch2_Frontend.CustomComputations}
+
 {include 2 TorchLeanBlueprint.Guide.Ch2_Frontend.BackendSelection}
 
 {include 2 TorchLeanBlueprint.Guide.Ch2_Frontend.AutogradWalkthrough}
@@ -253,7 +256,10 @@ same real formula can return different values.
 
 In TorchLean, the scalar type selects a format from FloatLib. We will use binary32 for a first
 example, then change the precision through the same interface. Custom exponent and fraction widths
-are available on the typed CPU path; CUDA providers support native binary32 and binary64.
+work on the typed CPU path and in supported custom GPU forward computations. The native GPU tape
+retains binary32 or binary64. Configured binary arithmetic can record supported operations on
+the same GPU tape, keeping complete words for saved values and gradients. Native optimizers
+and the full LibTorch operator catalogue are not available for those configured formats.
 The useful question is what a precision change preserves in the actual calculation.
 
 An error bound adds another step. We need to relate the rounded operations to their real-valued

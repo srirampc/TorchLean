@@ -209,7 +209,7 @@ private def recordTriple (session : EagerSession Float) (p q : Param Float []) :
 private def firstMomentBytes (state : CudaAdamState) (index : Nat) : IO ByteArray := do
   let some entry := state.get? index
     | throw <| IO.userError "parameter aliases: missing CUDA Adam state"
-  Runtime.Autograd.LibTorch.Buffer.toFloat32BytesIO entry.m
+  Runtime.Autograd.LibTorch.Buffer.toBytesIO entry.m
 
 /-- Separate histories left by a former untied layout are rejected without updating storage. -/
 def checkCudaRetie : IO Unit := do
@@ -251,7 +251,7 @@ def checkCudaRetie : IO Unit := do
       ((← firstMomentBytes afterState 1) == beforeSecond)
   finally
     session.resetTape
-    releaseCudaAdamState (← state.get)
+    releaseAdam (← state.get)
 
 private def cudaStep (session : EagerSession Float)
     (config : IO.Ref (Option CudaAdamConfig)) (state : IO.Ref CudaAdamState) : IO Unit := do
@@ -264,10 +264,10 @@ private def sameCudaState (left right : CudaAdamState) : IO Bool := do
   for (id, entry) in left.toList do
     let some other := right.get? id | return false
     unless entry.t == other.t do return false
-    unless (← Runtime.Autograd.LibTorch.Buffer.toFloat32BytesIO entry.m) ==
-        (← Runtime.Autograd.LibTorch.Buffer.toFloat32BytesIO other.m) do return false
-    unless (← Runtime.Autograd.LibTorch.Buffer.toFloat32BytesIO entry.v) ==
-        (← Runtime.Autograd.LibTorch.Buffer.toFloat32BytesIO other.v) do return false
+    unless (← Runtime.Autograd.LibTorch.Buffer.toBytesIO entry.m) ==
+        (← Runtime.Autograd.LibTorch.Buffer.toBytesIO other.m) do return false
+    unless (← Runtime.Autograd.LibTorch.Buffer.toBytesIO entry.v) ==
+        (← Runtime.Autograd.LibTorch.Buffer.toBytesIO other.v) do return false
   pure true
 
 /-- Tied CUDA AdamW follows an independent run with gradients summed before the optimizer. -/
@@ -308,8 +308,8 @@ def checkCudaOptimizer : IO Unit := do
   finally
     session.resetTape
     reference.resetTape
-    releaseCudaAdamState (← state.get)
-    releaseCudaAdamState (← referenceState.get)
+    releaseAdam (← state.get)
+    releaseAdam (← referenceState.get)
 
 /--
 Restore tied AdamW state byte-for-byte, reject retied destinations, then match the next update.
@@ -333,19 +333,19 @@ def checkCudaCheckpoint : IO Unit := IO.FS.withTempDir fun directory => do
         !currentState.contains 2 && currentState.toList.all (fun entry => entry.2.t == 4))
     let schema ← checkpointParameterSchema (triple p q)
     let saved := directory / "adamw.bin"
-    writeCudaAdamStateFloat32 saved schema config state
+    saveAdam saved schema config state
     let pValue ← bits p
     let qValue ← bits q
     let restoredP ← scalar (Float.ofBits pValue)
     let restoredQ ← scalar (Float.ofBits qValue)
     let restoredSchema ← checkpointParameterSchema (triple restoredP restoredQ)
-    readCudaAdamStateFloat32 saved restoredSchema restoredConfig restoredState
+    loadAdam saved restoredSchema restoredConfig restoredState (dtype := .float64)
     check "restored moment bytes" (← sameCudaState (← state.get) (← restoredState.get))
     let wrong : ParamList Float [[], [], []] :=
       .cons restoredP (.cons restoredQ (.cons restoredQ .nil))
     let wrongSchema ← checkpointParameterSchema wrong
     rejects "retied checkpoint destination"
-      (readCudaAdamStateFloat32 saved wrongSchema restoredConfig restoredState)
+      (loadAdam saved wrongSchema restoredConfig restoredState (dtype := .float64))
     check "rejected restore preserves existing histories"
       (← sameCudaState (← state.get) (← restoredState.get))
     recordTriple session p q
@@ -357,33 +357,33 @@ def checkCudaCheckpoint : IO Unit := IO.FS.withTempDir fun directory => do
     check "checkpoint next moment bytes" (← sameCudaState (← state.get) (← restoredState.get))
     let savedNext := directory / "next.bin"
     let restoredNext := directory / "restored-next.bin"
-    writeCudaAdamStateFloat32 savedNext schema config state
-    writeCudaAdamStateFloat32 restoredNext restoredSchema restoredConfig restoredState
+    saveAdam savedNext schema config state
+    saveAdam restoredNext restoredSchema restoredConfig restoredState
     check "next checkpoint bytes"
       ((← IO.FS.readBinFile savedNext) == (← IO.FS.readBinFile restoredNext))
     let stochastic := directory / "stochastic.bin"
     let counter ← IO.mkRef 99
-    writeCudaAdamStateFloat32 stochastic schema config state (some 7)
-    readCudaAdamStateFloat32 stochastic restoredSchema restoredConfig restoredState (some counter)
+    saveAdam stochastic schema config state (some 7)
+    loadAdam stochastic restoredSchema restoredConfig restoredState (some counter) .float64
     check "checkpoint restores the next random invocation" ((← counter.get) == 7)
     rejects "random checkpoint without a destination counter"
-      (readCudaAdamStateFloat32 stochastic restoredSchema restoredConfig restoredState)
+      (loadAdam stochastic restoredSchema restoredConfig restoredState (dtype := .float64))
     rejects "random checkpoint with a retied destination"
-      (readCudaAdamStateFloat32 stochastic wrongSchema restoredConfig restoredState (some counter))
+      (loadAdam stochastic wrongSchema restoredConfig restoredState (some counter) .float64)
     let truncated := directory / "truncated.bin"
     let bytes ← IO.FS.readBinFile stochastic
     IO.FS.writeBinFile truncated (bytes.extract 0 (bytes.size - 1))
     rejects "truncated random checkpoint"
-      (readCudaAdamStateFloat32 truncated restoredSchema restoredConfig restoredState
-        (some counter))
+      (loadAdam truncated restoredSchema restoredConfig restoredState
+        (some counter) .float64)
     check "rejected checkpoint preserves random counter" ((← counter.get) == 7)
     check "rejected random checkpoint preserves moments"
       (← sameCudaState (← state.get) (← restoredState.get))
   finally
     session.resetTape
     resumed.resetTape
-    releaseCudaAdamState (← state.get)
-    releaseCudaAdamState (← restoredState.get)
+    releaseAdam (← state.get)
+    releaseAdam (← restoredState.get)
 
 /-- Typed SGD follows eager recording-order addition, current storage, and validation atomicity. -/
 def checkTypedGraphSgd : IO Unit := do
@@ -485,17 +485,17 @@ def runCpu : IO Unit := do
 /-- Native division retains the eager successive-division VJP at binary32 extremes. -/
 def checkCudaDivisionSchedule : IO Unit := do
   for (a, b) in [(1.0e30, 1.0e20), (1.0e-30, 1.0e-25)] do
-    let session ← EagerSession.new (α := Float) (options := { device := .cuda })
-    let x ← session.input (Tensor.scalar a) (requiresGrad := true)
-    let y ← session.input (Tensor.scalar b) (requiresGrad := true)
+    let session ← EagerSession.new (α := Float32) (options := { device := .cuda })
+    let x ← session.input (Tensor.scalar a.toFloat32) (requiresGrad := true)
+    let y ← session.input (Tensor.scalar b.toFloat32) (requiresGrad := true)
     let quotientId ← session.recordCuda fun tape => keepTapeOnError tape <|
       Runtime.Autograd.LibTorch.Tape.div (s := []) tape x.id y.id
-    let quotient : TensorRef Float [] := { id := quotientId }
-    let gradients ← session.backwardScalarDenseAll quotient
+    let quotient : TensorRef Float32 [] := { id := quotientId }
+    let gradients ← session.backwardDenseAll quotient (Tensor.scalar 1)
     let db ← EagerSession.grad gradients y
     let expected := (-((a.toFloat32 / b.toFloat32) / b.toFloat32)).toFloat
     check "native denominator VJP stays finite and follows successive division"
-      (expected.isFinite && expected < 0 && db.item.toBits == expected.toBits)
+      (expected.isFinite && expected < 0 && db.item.toFloat.toBits == expected.toBits)
     session.resetTape
 
 def runCuda : IO Unit := do

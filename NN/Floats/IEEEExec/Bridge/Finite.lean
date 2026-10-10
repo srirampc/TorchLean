@@ -10,6 +10,7 @@ public import NN.Floats.FP32
 public import FloatLib.Floats.Formats.BinaryInterchange.Configured
 public import FloatLib.Floats.Formats.IEEE754.Native
 public import FloatLib.Floats.ExecFloat.Proof.Arithmetic
+import FloatLib.Floats.Formats.BinaryInterchange.Conversion.Cast.Proof
 
 /-!
 # Finite configured arithmetic for reduction proofs
@@ -237,11 +238,6 @@ open FloatLib.Floats.Formats.BinaryInterchange
 @[simp] theorem toModel_add (x y : ExecFloat.Binary 8 23) :
     toModel (ExecFloat.add x y) = Model.add (toModel x) (toModel y) :=
   IEEEExec.toModel_add x y
-
-/-- Configured multiplication decodes to FloatLib's proved model multiplication. -/
-@[simp] theorem toModel_mul (x y : ExecFloat.Binary 8 23) :
-    toModel (ExecFloat.mul x y) = Model.mul (toModel x) (toModel y) :=
-  IEEEExec.toModel_mul x y
 
 /-- Quieting a binary32 NaN preserves its non-finite classification. -/
 theorem model_isFinite_quietNaN (x : Model FloatFormat.binary32) :

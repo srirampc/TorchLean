@@ -45,7 +45,8 @@ abbrev ChapterBinary32 :=
 
 Changing those two parameters selects a wider or custom format through the same arithmetic
 interface. The selected type can also be the element type of TorchLean's typed CPU tensors and
-model graphs. CUDA providers currently use native binary32 or binary64.
+model graphs. LibTorch providers use native binary32 or binary64. Custom scalar functions can
+also use configured binary arithmetic on CUDA; unsupported carriers retain their precision on CPU.
 
 The scalar examples only need FloatLib. TorchLean imports its definitions and proofs directly.
 Its dependency declaration follows FloatLib's `main` branch; the manifest records the exact
@@ -787,36 +788,9 @@ Only the third advances the result to the next representable value, `0x3f800001`
 1065353217
 ```
 
-Those three evaluations are the bit-level version of the spacing picture developed above. The
-equality check detects absorption in the first two: the accumulator is unchanged even
-though the exact real increment is positive.
-
-```lean (name := absorbQuarter)
--- Absorption asks whether the executable addition leaves
--- its first operand unchanged.
-#eval decide (unit + quarterUlpAtOne = unit)
-```
-```leanOutput absorbQuarter
-true
-```
-```lean (name := absorbHalf)
--- The midpoint is also absorbed when the retained
--- significand is even.
-#eval decide (unit + halfUlpAtOne = unit)
-```
-```leanOutput absorbHalf
-true
-```
-```lean (name := absorbOne)
--- The full spacing is large enough to escape absorption.
-#eval decide (unit + oneUlpAtOne = unit)
-```
-```leanOutput absorbOne
-false
-```
-
-Each check compares the rounded sum with its left operand. `decide` turns equality of the
-configured values into a Boolean, so the observed event is exact equality after rounding.
+The first two results have the same bits as `unit`: the increment is absorbed even though it is
+positive. The full-ULP increment changes the result. This depends on the operand's local spacing;
+it is not a universal smallest meaningful increment.
 
 In an accumulation, absorption means a new term leaves the accumulator unchanged. Repeating this
 can lose many small contributions even though each addition is correctly rounded, as happened to
@@ -874,19 +848,6 @@ Determinism fixes which answer an algorithm returns. A numerical accuracy claim 
 needs a range-specific error or interval contract for that function. The executable transcendental
 kernels have explicit special-value behavior, but the small Taylor bounds in the rules library do
 not by themselves certify every executable `sin`, `cos`, or `tanh` input.
-
-The three absorption results are observations about addition at one particular operand. They do
-not define a universal smallest meaningful increment: at a larger magnitude, the local spacing
-changes. The displayed equality fixes exactly what was tested: the first operand is unchanged
-after the executable addition. It neither estimates the
-lost real contribution nor records an error bound for a longer expression.
-
-The two division outcomes distinguish the result from the reason for it. Dividing a nonzero value
-by zero returns an infinity and sets divide-by-zero status; zero divided by zero returns NaN and
-sets invalid status. Similarly, an underflow flag is not a synonym for “the result is small.”
-Exact subnormal results and tiny inexact results can have different status. Keeping flags alongside
-bits lets a theorem or diagnostic ask about that distinction instead of inferring it from a
-decimal display.
 
 # Lean `Float32`
 
@@ -1236,13 +1197,9 @@ therefore especially useful inside an error analysis: it removes one prospective
 when its positivity and factor-of-two hypotheses hold, while leaving the operands' existing
 errors in place.
 
-The displayed executable example makes that distinction observable. Three and two are represented
-exactly, their ratio satisfies the hypothesis, and the difference is one with no inexact status.
-The absorption bridge addresses a different situation: it starts from an executable equality and
-finiteness of the sum to express that equality in the rounded-real model. The operand witnesses
-in the example remain valid hypotheses, but the current contract does not need them: a finite
-executable sum already forces finite operands. Neither theorem permits arbitrary reassociation
-of the surrounding computation.
+The absorption contract does not need separate operand-finiteness witnesses: a finite executable
+sum already forces finite operands. Neither theorem permits reassociation of the surrounding
+computation.
 
 # Tensors, Reductions, And Quantization
 
@@ -1302,13 +1259,32 @@ reconstruction bound additionally requires nearest rounding and inactive saturat
 work can add packed int8 or int4
 storage without changing these scalar theorems.
 
-For quantization, the no-clipping hypothesis locates the part of the error controlled by nearest
-rounding. Before clipping, an integer code is at most half a step from the scaled input. Multiplying
-back by a positive scale gives the reconstruction bound. If that code lies outside the allowed
-range, clipping can move it farther, so the same half-step conclusion no longer follows. The zero
-point changes where the integer codes are centered; it does not remove the need to check the
-range. This is a concrete example of a familiar numerical bound whose domain condition is part of
-its meaning.
+The zero point shifts the code grid; it does not remove the need to check for saturation.
+
+# Proving A Real Bound
+
+Sometimes we want a bound on a formula before choosing its floating-point implementation.
+For example, suppose a coordinate lies between one and two and we raise it to a real power.
+We can give FloatLib's `interval` tactic those assumptions and ask Lean to check an upper bound:
+
+```lean
+example (x y : ℝ)
+    (hx : x ∈ Set.Icc 1 2)
+    (hy : y ∈ Set.Icc (-2) 2) :
+    x ^ y < 5 := by
+  interval (depth := 0)
+```
+
+This proves the inequality for every pair in those ranges, not just sampled inputs. The same
+proof can be applied to tensor coordinates once we have their bounds. Real powers require a
+strictly positive base interval. FloatLib also provides `Real.logb` and inverse hyperbolic
+enclosures with their own domain checks.
+
+For a new named function, `@[interval_extension]` registers an executable enclosure together
+with its containment proof. The tactic evaluates that enclosure again when subdividing an input
+box. We use the upstream API directly rather than keeping a second registry in TorchLean.
+These proofs concern real expressions; relating them to a rounded tensor computation still
+requires the arithmetic and backend contracts below.
 
 # Native Backend Contracts
 

@@ -480,11 +480,11 @@ Optim.Step : (α : Type) → [Storage α] → Shape → Type → Type
 ```leanOutput wfMomentumType (whitespace := lax)
 @Optim.MomentumSGD.update : {α : Type} →
   [inst : Storage α] →
-    [inst_1 : Context α] →
-      [DecidableRel fun x1 x2 => x1 > x2] →
-        {s : Shape} →
-          Optim.MomentumSGD.State α s → Tensor α s →
-            Tensor α s →
+    [Add α] →
+      [Sub α] →
+        [Mul α] →
+          {s : Shape} →
+            Optim.MomentumSGD.State α s → Tensor α s → Tensor α s →
               Optim.Step α s (Optim.MomentumSGD.State α s)
 ```
 
@@ -774,7 +774,7 @@ def wfDrop : nn.Sequential [4] [4] :=
   nn.build 2026 (nn.dropout 0.5)
 
 #eval do
-  let m ← nn.Module.instantiate wfDrop { device := .cpu }
+  let m ← nn.Module.instantiate wfDrop { device := cpu }
   m.eval
   let a ← m.forward [1.0, 1.0, 1.0, 1.0]
   m.train

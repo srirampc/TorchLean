@@ -48,6 +48,7 @@ def Internal.eagerScalarTrainer {α δ : Type} [TorchLean.Storage α] [TorchLean
     (loss : ScalarLoss α δ paramShapes inputShapes dataInputShapes) :
     IO (ScalarTrainer α δ paramShapes inputShapes dataInputShapes) := do
   let session ← Internal.EagerSession.new (α := α) options
+  let options := session.options
   let adamStateRef ←
     IO.mkRef (Std.HashMap.emptyWithCapacity : Internal.EagerSession.CudaAdamState)
   let adamConfigRef ← IO.mkRef (none : Option Internal.EagerSession.CudaAdamConfig)
@@ -69,7 +70,7 @@ def Internal.eagerScalarTrainer {α δ : Type} [TorchLean.Storage α] [TorchLean
       adamStateRef.set Std.HashMap.emptyWithCapacity
       adamConfigRef.set none
       optimizerPathRef.set none
-      Internal.EagerSession.releaseCudaAdamState previous
+      Internal.EagerSession.releaseAdam previous
   let adamSchema ← Internal.checkpointParameterSchema parameters
   let eagerLoss := loss (m := Internal.EagerM α)
   let recordLoss (inputs : TorchLean.TensorPack α inputShapes)
@@ -85,7 +86,7 @@ def Internal.eagerScalarTrainer {α δ : Type} [TorchLean.Storage α] [TorchLean
       let lossWithData :=
         CurriedRef.uncurry (ss := paramShapes ++ inputShapes) eagerLoss arguments
       let lossRef ←
-        CurriedRef.uncurryPack (α := δ) (ss := dataInputShapes) lossWithData dataInputs
+        Curried.uncurry (α := δ) (ss := dataInputShapes) lossWithData dataInputs
       pure (lossRef, parameterRefs)) |>.run session
   -- Scalar results and gradient packs have been copied to host tensors before this cleanup.
   -- Reset only the completed recording; parameters, Adam moments, and the RNG remain available.
@@ -103,7 +104,8 @@ def Internal.eagerScalarTrainer {α δ : Type} [TorchLean.Storage α] [TorchLean
         lossRef (Tensor.scalar (1 : α))
       Internal.gradsOfRefsCuda (α := α) gradients parameterRefs
     else
-      let gradients ← Internal.EagerSession.backwardScalarDenseAll (α := α) session lossRef
+      let gradients ← Internal.EagerSession.backwardDenseAll (α := α) session
+        lossRef (Tensor.scalar (1 : α))
       Internal.gradsOfRefs (α := α) gradients parameterRefs
   let applyNativeGradient (optimizer : NativeOptimizer α)
       (gradients : Internal.EagerSession.CudaGradMap) : IO Unit := do
@@ -151,7 +153,7 @@ def Internal.eagerScalarTrainer {α δ : Type} [TorchLean.Storage α] [TorchLean
         if readLoss then
           -- Weight before adding: finite losses can overflow an unnormalized batch sum.
           let tape ← session.cudaTape.get
-          let sampleLoss ← okOrThrow <|
+          let sampleLoss ← IO.ofExcept <|
             Runtime.Autograd.LibTorch.Tape.requireValue tape lossRef.id []
           let previous ← lossAccumulator.get
           let weighted := Runtime.Autograd.LibTorch.Buffer.scale sampleLoss sampleWeight
@@ -271,13 +273,14 @@ def Internal.eagerScalarTrainer {α δ : Type} [TorchLean.Storage α] [TorchLean
     if options.usesCuda then
       some
         { save := fun path => do
-            Internal.EagerSession.writeCudaAdamStateFloat32
+            Internal.EagerSession.saveAdam
               path adamSchema adamConfigRef adamStateRef (some (← session.rngCounter.get))
           load := fun path => do
             -- Restored moments select the native history too. A failed load leaves the path alone.
             checkOptimizerPath .native
-            Internal.EagerSession.readCudaAdamStateFloat32
+            Internal.EagerSession.loadAdam
               path adamSchema adamConfigRef adamStateRef (some session.rngCounter)
+                (← TensorTransfer.dtype (α := α))
             useOptimizerPath .native }
     else
       none

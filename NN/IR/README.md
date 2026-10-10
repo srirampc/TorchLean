@@ -34,13 +34,21 @@ smallest `NN.IR.*` dependency they need.
   including arbitrary-leading linear and matrix multiplication, checked arbitrary-axis concat, and
   the scoped `IR` notation for graph denotation. `Graph.evalNodeRaw` is the operator dispatch and
   `Graph.evalNode` adds the declared-shape normalization.
-- `Payload.lean`: external constants, weights, and normalization parameters keyed by node id.
+- `Payload.lean`: external constants, weights, normalization parameters, and checked custom
+  computation bodies keyed by node id.
 - `HardMask.lean`: conversions between typed Boolean tensors and the row-major masks stored in
   `OpKind`, shared by graph builders, evaluators, and verifier passes.
 - `ShapeSoundness.lean`: the theorems relating `Infer` and `Semantics` (see below).
 - `Pretty.lean`: readable text and GraphViz renderers for debugging.
 
 ## One Shape Rule Per Operation
+
+Custom operations declare their input shapes in operand order and their output shape. Their
+`NN.Kernel.Program` bodies live in the payload, not in a display name or an opaque source string.
+Shape inference checks the declared signature; evaluation checks the actual parent tensors and
+runs the body with bounded reads. The body's source-correspondence proof also covers failed reads.
+This does not imply a derivative rule, a range rule, or an export translation. Those consumers must
+report unsupported custom operations until the corresponding implementation is supplied.
 
 `Infer.nodeOutShape` and `Graph.evalNodeRaw` are both matches over `OpKind`, but they do not
 contain two copies of the shape arithmetic. Every operation whose output shape is not simply a
@@ -105,19 +113,10 @@ There are several routes into the same graph language:
 - Verification examples can build small graphs directly when the graph itself is the artifact under
   study.
 
-Those routes are intentionally different producers with one consumer contract. Once a graph reaches
-`NN.IR.Graph`, downstream code should be able to ask the same questions: are node ids topological,
-are shapes inferred by the shared op contracts, which payloads are required, and what denotation does
-the graph have in the spec layer?
-
 ## Role And Scope
 
-The IR gives the runtime, checkers, exporters, and future compiler passes one graph object to share. Write
-ordinary models through `TorchLean.nn`, `Trainer`, or `GraphSpec`, then lower them. Construct `Node`
-arrays directly only when testing an IR consumer.
-
-Each runtime backend retains its own proof status. Proofs, tests, and trust-boundary statements say
-how a particular runtime, lowering fragment, or certificate checker relates to the shared graph.
+Write ordinary models through `TorchLean.nn`, `Trainer`, or `GraphSpec`, then lower them.
+Direct `Node` construction is useful for developing IR consumers and certificate examples.
 
 ## Current Consumers
 
@@ -147,15 +146,9 @@ used for verified claims.
 
 ## Payload Discipline
 
-The graph syntax stores operation structure. It does not smuggle learned tensors into node fields.
-Weights, constants, and normalization parameters live in `NN.IR.Payload` stores keyed by node id.
-Verifier input boxes belong to the verifier's separate payload boundary. This separation makes the
-data ownership explicit:
-
-- graph topology can be checked independently of parameter values,
-- payload shape mismatches are explicit errors,
-- certificate and verifier code can cite the node id that owns each parameter or input box,
-- imported weights can be treated as artifacts rather than trusted syntax.
+`NN.IR.Payload` stores constants, weights, normalization parameters, and custom bodies by node id.
+Topology checking needs no parameter values; evaluation rejects missing or inconsistent payloads.
+Verifier input boxes use a separate payload. Imported weights remain artifacts to validate.
 
 ## Release Invariants
 

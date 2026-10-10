@@ -26,14 +26,15 @@ on Windows, where the static backend archive's dependencies must be resolved by 
 private def libtorchLibs : Array String :=
   #["-ltorch", "-ltorch_cpu", "-ltorch_cuda", "-lc10", "-lc10_cuda"]
 
-/-- CUDA toolkit import libraries for the executable link (Windows only). -/
+/-- CUDA toolkit import libraries for the executable link (Windows only). `-lnvrtc` and `-lcuda`
+resolve the NVRTC/driver-API symbols of the runtime-compilation path (`csrc/libtorch/binary.h`). -/
 private def cudaLinkArgs : Array String :=
   if Platform.isWindows then
     let cudaHome := ((get_config? cuda_home).getD "").trimAscii.toString
     if cudaHome.isEmpty then
       #[]
     else
-      #["-L", s!"{cudaHome}/lib/x64", "-lcudart", "-lcublas", "-lcufft"]
+      #["-L", s!"{cudaHome}/lib/x64", "-lcudart", "-lcublas", "-lcufft", "-lnvrtc", "-lcuda"]
   else
     #[]
 
@@ -120,15 +121,14 @@ package TorchLean where
 `-K cuda=true` builds one LibTorch C++ library containing the numerical C ABI exports. CMake obtains
 the ABI, language standard, libraries, and runtime paths from the selected SDK. The default build
 needs neither LibTorch nor a CUDA toolkit: it links a small C file that reports the backend as not
-linked and fails every GPU call with an explanation.
+linked and rejects GPU computation. Status and memory queries remain available.
 -/
 
 /--
-Find the executable that will be passed to a native compile or link command.
-Keep its invocation path: names such as `clang++` can select a language mode even when they are
-symlinks to the same binary. The dependency trace separately records the resolved file.
+Resolve a compiler and trace its contents, so replacing it invalidates cached native objects.
+Preserve the invocation path: a `clang++` symlink can select a different mode from `clang`.
 -/
-private def nativeCompilerPath (name : String) : JobM FilePath := do
+private def nativeCompilerJob (name : String) : SpawnM (Job FilePath) := Job.async do
   let path := FilePath.mk name
   let cwd ← IO.currentDir
   -- Windows executables always carry a `.exe` extension, and `pathExists` is a plain
@@ -139,30 +139,20 @@ private def nativeCompilerPath (name : String) : JobM FilePath := do
       [path, FilePath.mk (path.toString ++ ".exe")]
     else
       [path]
-  if path.isAbsolute || path.components.length > 1 then
-    for nm in names do
-      let candidate := cwd / nm
-      if (← candidate.pathExists) && !(← candidate.isDir) then
-        return candidate.normalize
-  else
-    let candidates : List FilePath := List.flatMap (fun dir => names.map (cwd / dir / ·))
-      (SearchPath.parse ((← IO.getEnv "PATH").getD ""))
-    for candidate in candidates do
-      if (← candidate.pathExists) && !(← candidate.isDir) then
-        return candidate.normalize
+  let candidates ←
+    if path.isAbsolute || path.components.length > 1 then
+      pure (names.map (cwd / ·))
+    else
+      pure <| List.flatMap (fun dir => names.map (cwd / dir / ·))
+        (SearchPath.parse ((← IO.getEnv "PATH").getD ""))
+  for candidate in candidates do
+    if (← candidate.pathExists) && !(← candidate.isDir) then
+      let compiler := candidate.normalize
+      let resolved ← IO.FS.realPath compiler
+      addPureTrace (compiler.toString, resolved.toString) "native tool paths"
+      addTrace (.ofHash (← computeFileHash resolved) resolved.toString)
+      return compiler
   error s!"native compiler not found: {name}"
-
-/-- Hash tool contents on each build, including replacements installed at the same path. -/
-private def traceNativeTool (path : FilePath) : JobM Unit := do
-  let resolved ← IO.FS.realPath path
-  addPureTrace (path.toString, resolved.toString) "native tool paths"
-  addTrace (.ofHash (← computeFileHash resolved) resolved.toString)
-
-/-- Resolve and trace a native compiler before checking whether its object can be reused. -/
-private def nativeCompilerJob (name : String) : SpawnM (Job FilePath) := Job.async do
-  let compiler ← nativeCompilerPath name
-  traceNativeTool compiler
-  return compiler
 
 /-- Arguments for the LibTorch CMake build helper (`scripts/libtorch_build.py`), shared by
 its static-archive and Windows shared-DLL variant targets. -/
@@ -250,14 +240,14 @@ target torchlean_libtorch_unavailable pkg : FilePath := do
   let lean ← getLeanInstall
   let srcJob ← inputFile (pkg.dir / "csrc/libtorch/unavailable.c") false
   let operationsJob ← inputFile (pkg.dir / "csrc/libtorch/operations.h") false
-  let source := (srcJob.mix operationsJob).map fun _ => pkg.dir / "csrc/libtorch/unavailable.c"
+  let source := srcJob.zipWith (fun src _ => src) operationsJob
   let oFile := pkg.buildDir / "torchlean_libtorch_unavailable.o"
   let compilerJob ← nativeCompilerJob "cc"
   let oJob ← compilerJob.bindM fun compiler =>
     buildO oFile source #["-I", lean.includeDir.toString] #["-O2", "-fPIC"] compiler getLeanTrace
   buildStaticLib (pkg.buildDir / nameToStaticLib "torchlean_libtorch_unavailable") #[oJob]
 
-/-- Repair large frees and delayed arena purging in the pinned Linux allocator. -/
+/-- Build the pinned Linux allocator with shared-library TLS and the arena purge-wakeup repair. -/
 target torchlean_allocator pkg : FilePath := do
   let lean ← getLeanInstall
   let buildScript := pkg.dir / "scripts/lean_allocator.py"
@@ -278,8 +268,7 @@ target torchlean_allocator pkg : FilePath := do
 @[default_target]
 lean_lib NN where
   moreLinkObjs :=
-    (if Platform.isWindows || Platform.isOSX then (#[] : TargetArray FilePath)
-      else (#[torchlean_allocator] : TargetArray FilePath)) ++
+    (if Platform.isLinux then (#[torchlean_allocator] : TargetArray FilePath) else #[]) ++
     (#[torchlean_tensor_cpu] : TargetArray FilePath) ++
       if cudaEnabled then
         (#[torchlean_libtorch] : TargetArray FilePath)
@@ -326,10 +315,10 @@ lean_exe pytorch_export_check where
 lean_exe native_float32_parity where
   root := `NN.Tests.Floats.NativePrimitiveParityMain
 
--- Focused SDPA regression, linked with the complete LibTorch numerical backend:
---   scripts/lake.sh -Kcuda=true exe libtorch_sdpa_test
-lean_exe libtorch_sdpa_test where
-  root := `NN.Tests.Runtime.Cuda.LibTorchSDPA
+-- Focused LibTorch smoke test, linked with the complete numerical backend:
+--   scripts/lake.sh -Kcuda=true exe attention_test
+lean_exe attention_test where
+  root := `NN.Tests.Runtime.Cuda.Attention
 
 -- Repo-policy lints (header hygiene, banned constructs, etc.) via `scripts/lake.sh lint`.
 lean_exe torchlean_lint where
@@ -337,7 +326,7 @@ lean_exe torchlean_lint where
   root := `TorchLeanLint
 
 -- Runnable examples: `scripts/lake.sh exe torchlean <example> [args...]`.
--- Build with `scripts/lake.sh -Kcuda=true build` before passing `--cuda` to an example.
+-- Build with `scripts/lake.sh -Kcuda=true build` before passing `--device cuda` to an example.
 lean_exe torchlean where
   root := `NN.Examples.RunnerMain
 

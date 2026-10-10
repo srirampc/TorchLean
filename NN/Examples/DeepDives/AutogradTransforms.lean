@@ -11,6 +11,7 @@ public import NN.Proofs.Autograd.Model
 public import NN.Proofs.Autograd.Runtime.Link.GraphComposition
 public import NN.Tactic.Autograd
 import Batteries.Lean.LawfulMonad
+import all Init.System.IO
 
 /-!
 # Autograd Transforms
@@ -200,8 +201,8 @@ theorem expSquareProgram_eval {α : Type} [Storage α] [Context α] {shape : Spe
       (fun graph => graph.forward (TensorPack.singleton x)) =
       .ok (Tensor.expSpec (Tensor.mulSpec x x)) := by
   simp only [lowerToTypedGraph, lowerToTypedGraphWithData, expSquareProgram, GraphM.arg,
-    GraphM.square, GraphM.mul, GraphM.exp, GraphM.Internal.unaryWithSharedDerivative,
-    GraphM.push, GraphM.emptyWith, GraphM.mkIdx, GraphM.ctxLen]
+    GraphM.square, GraphM.mul, GraphM.exp, GraphM.Internal.unary,
+    GraphM.push, GraphM.run, GraphM.empty, GraphM.mkIdx, GraphM.ctxLen]
   simp
   dsimp only [Bind.bind, Except.bind, Functor.map, Except.map]
   simp
@@ -230,7 +231,7 @@ theorem expSquareProgram_derivative {shape : Spec.Shape} (n : Nat)
       (nested.forward (TensorPack.singleton (Dual.Nested.seedTensor directions x))) =
       iteratedFDeriv ℝ n (fun y => real.forward (TensorPack.singleton y)) x directions := by
   simp only [expSquareProgram_forward _ hn, expSquareProgram_forward _ hr,
-    Tensor.expSpec, Tensor.mulSpec, Tensor.mapSpec, funext Proofs.mathfunc_exp_eq_rexp]
+    Tensor.expSpec, Tensor.mulSpec, funext Proofs.mathfunc_exp_eq_rexp]
   autograd
 
 /-- A parameter-free model using the same square layer as executable neural networks. -/
@@ -240,7 +241,7 @@ def squareModel (shape : Spec.Shape) : nn.Sequential shape shape :=
 private theorem squareModel_forward {α : Type} [Storage α] [Context α]
     {m : Type → Type} [Monad m] [LawfulMonad m] [Ops m α] (shape : Spec.Shape) :
     (Layers.Seq.forward (squareModel shape) (α := α) (m := m) :
-      RefTy m α shape → m (RefTy m α shape)) = F.square := by
+      Ref (m := m) (α := α) shape → m (Ref (m := m) (α := α) shape)) = F.square := by
   funext x
   change Layers.Seq.forwardState (Layers.Seq.fromLayer Layers.square) .eval
     (RefList.nil.append .nil) x = F.square x
@@ -252,7 +253,7 @@ private def squareProgram {α : Type} [Storage α] [Context α] (shape : Spec.Sh
 
 private theorem squareModel_lower {α : Type} [Storage α] [Context α] {shape : Spec.Shape} :
     nn.lowerToTypedGraph (squareModel shape) (α := α) =
-      Autodiff.Impl.okOrThrow (lowerToTypedGraph (squareProgram (α := α) shape)) := by
+      IO.ofExcept (lowerToTypedGraph (squareProgram (α := α) shape)) := by
   unfold nn.lowerToTypedGraph
   have hvalid : nn.validate (squareModel shape) = .ok () := by
     simp [squareModel, Layers.Seq.fromLayer, Layers.Seq.validate, Layers.Layer.validate,
@@ -267,7 +268,7 @@ private theorem squareProgram_eval {α : Type} [Storage α] [Context α] {shape 
     (lowerToTypedGraph (squareProgram (α := α) shape)).map
       (fun graph => graph.forward (TensorPack.singleton x)) = .ok (Tensor.mulSpec x x) := by
   simp only [lowerToTypedGraph, lowerToTypedGraphWithData, squareProgram,
-    GraphM.square, GraphM.mul, GraphM.push, GraphM.emptyWith, GraphM.mkIdx, GraphM.ctxLen]
+    GraphM.square, GraphM.mul, GraphM.push, GraphM.run, GraphM.empty, GraphM.mkIdx, GraphM.ctxLen]
   simp
   dsimp only [Bind.bind, Except.bind, Functor.map, Except.map]
   simp
@@ -276,28 +277,28 @@ private theorem squareProgram_eval {α : Type} [Storage α] [Context α] {shape 
 /-- The public IO transform returns the exact mixed derivative, for every shape and order.
 
 There is no assumed lowering result: the proof checks model validation, graph recording, and
-execution before applying `autograd` to the arithmetic. The empty direction list is included.
+execution before applying `autograd` to the arithmetic. The empty direction axis is included.
 -/
-theorem squareModel_derivative {shape : Spec.Shape} (x : Tensor ℝ shape)
-    (directions : List (Tensor ℝ shape)) :
+theorem squareModel_derivative {shape : Spec.Shape} {order : Nat} (x : Tensor ℝ shape)
+    (directions : Tensor ℝ (shape.prependDim order)) :
     autograd.model.derivative (squareModel shape) nn.State.empty x directions =
-      pure (iteratedFDeriv ℝ directions.length (fun y => Tensor.mulSpec y y) x
-        (fun i : Fin directions.length => directions[i])) := by
+      pure (iteratedFDeriv ℝ order (fun y => Tensor.mulSpec y y) x
+        (fun i : Fin order => directions[i])) := by
   simp only [autograd.model.derivative, squareModel_lower]
   have heval := squareProgram_eval (Dual.Nested.seedTensor
-    (fun i : Fin directions.length => directions[i]) x)
-  cases h : lowerToTypedGraph (squareProgram (α := Dual.Nested ℝ directions.length) shape) with
+    (fun i : Fin order => directions[i]) x)
+  cases h : lowerToTypedGraph (squareProgram (α := Dual.Nested ℝ order) shape) with
   | error err => simp [h, Except.map] at heval
   | ok graph =>
       simp only [h, Except.map, Except.ok.injEq] at heval
-      dsimp only [Autodiff.Impl.okOrThrow]
       -- Normalize the empty state before applying IO laws to the recorded graph's type.
       dsimp only [squareModel, Layers.Seq.fromLayer, Layers.Seq.stateShapes, Layers.square]
+      dsimp only [IO.ofExcept]
       simp only [nn.TypedGraphModel.forward_empty]
       change (do
         let g ← (pure graph : IO _)
         pure (Dual.Nested.tangentTensor (g.forward (TensorPack.singleton
-          (Dual.Nested.seedTensor (fun i : Fin directions.length => directions[i]) x))))) = _
+          (Dual.Nested.seedTensor (fun i : Fin order => directions[i]) x))))) = _
       simp only [pure_bind]
       congr 1
       rw [heval]

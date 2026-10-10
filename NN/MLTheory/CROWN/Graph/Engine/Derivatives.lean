@@ -224,7 +224,7 @@ private def runFirstDerivativeWithSeed
       let d := node.outShape.size
       let z := Tensor.full (α:=α) (.dim d .scalar) 0
       drs.set! id (some { dim := d, lo := z, hi := z })
-    | .maxPool .. | .avgPool .. | .softplus | .safeLog =>
+    | .custom .. | .maxPool .. | .avgPool .. | .softplus | .safeLog =>
       -- Not supported by the derivative-bound passes (used by PINN tooling).
       drs
     | .hardMaskedSoftmax _ =>
@@ -340,7 +340,7 @@ private def runFirstDerivativeWithSeed
       | #[p1] =>
         match (drs[p1]?).join, (ibp[p1]?).join with
         | some dZ, some zB =>
-          match derivBoxExp? (α := α) zB with
+          match boxUnaryEnclosure? (α := α) NonlinearBoundOps.expBounds zB with
           | some dF =>
             match boxMulElem (α:=α) dZ dF with
             | some prod => drs.set! id (some prod)
@@ -481,7 +481,7 @@ def runMixedSecondDerivative (g : Graph) (ps : ParamStore α)
       let d := node.outShape.size
       let z := Tensor.full (α:=α) (.dim d .scalar) 0
       d2s.set! id (some { dim := d, lo := z, hi := z })
-    | .maxPool .. | .avgPool .. | .softplus | .safeLog =>
+    | .custom .. | .maxPool .. | .avgPool .. | .softplus | .safeLog =>
       -- Not supported by the second-derivative bound pass.
       d2s
     | .hardMaskedSoftmax _ =>
@@ -637,7 +637,7 @@ def runMixedSecondDerivative (g : Graph) (ps : ParamStore α)
       | #[p1] =>
         match (ibp[p1]?).join, (dLeft[p1]?).join, (dRight[p1]?).join, (d2s[p1]?).join with
         | some zB, some dzLeft, some dzRight, some d2z =>
-          match derivBoxExp? (α := α) zB with
+          match boxUnaryEnclosure? (α := α) NonlinearBoundOps.expBounds zB with
           | some derivative =>
             match boxMulElem (α := α) dzLeft dzRight with
             | none => d2s

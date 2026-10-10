@@ -5,10 +5,8 @@ layout: default
 
 # Getting Started
 
-Build the project, train a small model, and run interval bound propagation over a second model:
-
-The checkout selects Lean 4.34.0 and the pinned FloatLib dependency through Lake. Follow the
-[installation guide]({{ '/installation/' | relative_url }}) to prepare those dependencies.
+After [installing TorchLean]({{ '/installation/' | relative_url }}), let's train a small model
+and try interval bound propagation:
 
 ```bash
 scripts/lake.sh build
@@ -43,6 +41,7 @@ is a four-by-two tensor of `Float` values. `nn.Sequential!` is scoped syntax, so
 ```lean
 import NN.API
 open TorchLean
+open Trainer.Objective (mse)
 
 /-- A two-layer regression model. The dimensions are checked when the layers are composed. -/
 def model :=
@@ -67,11 +66,11 @@ def trainOnce : IO Unit := do
   -- Select the loss and train through a typed graph with FloatLib binary32 arithmetic.
   let trainer :=
     Trainer.new model
-      { objective := .mse
+      { objective := mse
         optimizer := optim.sgd { learningRate := 0.05 }
-        execution := .typedGraph
-        device := .cpu
-        arithmetic := .ieee }
+        execution := typedGraph
+        device := cpu
+        arithmetic := ieee }
   -- Inspect the initialized model before any parameter updates.
   let initialPrediction ← trainer.predict ([0.5, -0.25] : Tensor Float [2])
   IO.println s!"initial={reprStr initialPrediction}"
@@ -127,8 +126,10 @@ checkpoints keep that type. Typed sessions run on CPU and reject custom backend 
 results have no attached verifier, so `Result.verify` returns an error. Seeded initialization and
 optimizer/scheduler settings still begin with
 `Float` values; supply typed initial state when those initial values need extra precision.
-The eager CUDA runtime uses LibTorch binary32 buffers; its separate
-matrix-multiplication interface also supports binary64.
+The eager CUDA tape retains binary32 for `Float32` and binary64 for `Float`, including saved
+values, gradients and optimizer state. Custom configured-binary computations can also record
+supported arithmetic on the GPU tape, keeping the complete words for values and gradients.
+This does not extend native optimizers or the full LibTorch operator catalogue to those formats.
 
 For an explicit training loop, take the parameter gradients returned by
 `nn.TypedGraphModel.vjp` and pass them to `nn.sgdStep model learningRate state gradient`.
@@ -148,7 +149,7 @@ running-statistics updates or extend the trainer's checkpoint interface.
    explains eager and typed graph execution, autograd, runtime artifacts, PyTorch interop boundaries,
    data streams, and backend selection.
 4. [Semantics and Graphs]({{ '/blueprint/Semantics-and-Graphs/' | relative_url }}) explains the
-   graph IR, graph denotation, shape discipline, named operations, and why verifiers reuse the same
+   graph IR, graph denotation, shape checks, named operations, and why verifiers reuse the same
    graph rather than inventing a second model language.
 5. [Floating Point and Native Boundaries]({{ '/blueprint/Floating-Point-and-Native-Boundaries/' | relative_url }})
    separates real-valued specifications, executable Float32 models, CUDA/native execution, and

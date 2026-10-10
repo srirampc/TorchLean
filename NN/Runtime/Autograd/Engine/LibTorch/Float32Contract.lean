@@ -12,7 +12,9 @@ public import NN.Proofs.RuntimeApprox.IEEE32.Arithmetic
 /-!
 # CUDA float32 contract
 
-TorchLean's eager CUDA runtime stores binary32 values in opaque LibTorch tensors. The Lean
+The binary32 path stores values in opaque LibTorch tensors. This module's agreement contracts
+concern binary32 only; the native tape also supports binary64, without deriving binary64
+agreement from these theorems. The Lean
 proofs do not inspect compiled ATen operations, their library dependencies, or the device.
 The native backend therefore remains an explicit implementation boundary.
 
@@ -41,7 +43,7 @@ What is *not* proved here:
 
 Those are runtime/toolchain assumptions, and the CUDA stress tests are intended to validate them
 against this reference contract. The primitive-level part of that validation is
-`scripts/checks/cuda_float32_parity.sh`, which compares cases for the five fields of
+`scripts/checks/cuda.sh parity`, which compares cases for the five fields of
 `NativePrimitiveAgreement` against compiled host arithmetic and ATen GPU operations, bit for bit.
 A passing case is evidence for that input and build, not the universally quantified agreement
 hypothesis. Operator policy settings alone do not supply that hypothesis.
@@ -142,7 +144,7 @@ Agreement between a native result and the reference result, in the sense the the
 either the two bit patterns are equal, or both encode `NaN`.
 
 The relation permits different NaN encodings while requiring identical bits for every non-NaN
-result, including signed zeros. `scripts/checks/cuda_float32_parity.sh` tests this relation against
+result, including signed zeros. `scripts/checks/cuda.sh parity` tests this relation against
 the linked native backend and counts NaN encoding differences separately.
 
 Every error bound below requires a finite result. That hypothesis rules out the second disjunct,

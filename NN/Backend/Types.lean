@@ -108,6 +108,8 @@ inductive BackendOp where
   | add
   | sub
   | mul
+  | div
+  | neg
   | scale
   | abs
   | sqrt
@@ -150,6 +152,7 @@ inductive BackendOp where
   | fftFno
   | selectiveScan
   | attention
+  | custom
   deriving DecidableEq, BEq, ReflBEq, LawfulBEq, Repr
 
 namespace BackendOp
@@ -161,6 +164,8 @@ def name : BackendOp → String
   | .add => "add"
   | .sub => "sub"
   | .mul => "mul"
+  | .div => "div"
+  | .neg => "neg"
   | .scale => "scale"
   | .abs => "abs"
   | .sqrt => "sqrt"
@@ -203,6 +208,7 @@ def name : BackendOp → String
   | .fftFno => "fft_fno"
   | .selectiveScan => "selective_scan"
   | .attention => "attention"
+  | .custom => "custom"
 
 instance : ToString BackendOp where
   toString op := op.name
@@ -248,7 +254,8 @@ namespace AssurancePolicy
 Maintained TorchLean runtime policy.
 
 Implementations backed by maintained runtime guards and regression evidence are accepted. This
-includes TorchLean's LibTorch wrappers; it does not verify LibTorch, the FFI, or compiled code.
+includes LibTorch wrappers with retained CUDA comparisons; it does not verify LibTorch, the FFI,
+or compiled code.
 Capsules classified as `trustedExternal` and named trusted-boundary evidence are not admitted.
 -/
 def checked : AssurancePolicy := {}
@@ -296,3 +303,10 @@ structure KernelPolicy where
 
 end Backend
 end NN
+
+namespace TorchLean
+
+-- Keep application device selection short without introducing a second device type.
+export NN.Backend.Device (cpu gpu)
+
+end TorchLean

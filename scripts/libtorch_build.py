@@ -24,7 +24,7 @@ import time
 
 
 SOURCES = (
-    "torchlean.cpp", "torchlean_libtorch.h", "operations.h", "CMakeLists.txt",
+    "torchlean.cpp", "torchlean_libtorch.h", "operations.h", "binary.h", "CMakeLists.txt",
 )
 BUILD_ENV = (
     "PATH", "CXX", "CC", "CXXFLAGS", "CFLAGS", "CPPFLAGS", "LDFLAGS",
@@ -248,8 +248,13 @@ def libtorch_lib_on_path(home: Path) -> bool:
     through PATH when ``lean`` loads it for ``#eval``; without them loading fails
     with the cryptic ``ERROR_MOD_NOT_FOUND`` (Win32 126). Catching it here surfaces
     the same condition as a clear build error instead.
+
+    ``home`` may arrive in any of the forms the MSYS2 shell produces (``C:\\...``,
+    ``C:/...``, or the converted ``/c/...``), and ``Path.resolve`` would
+    misinterpret a leading ``/c`` as rooted at the current drive, so the whole
+    comparison runs through ``_norm_dir`` instead.
     """
-    lib = _norm_dir(str((home / "lib").resolve()))
+    lib = _norm_dir(str(home)) + "/lib"
     return any(_norm_dir(entry) == lib
                for entry in os.environ.get("PATH", "").split(os.pathsep) if entry)
 
@@ -265,7 +270,8 @@ def win_link_shim(args: argparse.Namespace, build_root: Path) -> None:
     failure. To solve, copy `libuuid.a` into a private shim directory. Libraries
     corresponding to the clang-cl /MD object's `/DEFAULTLIB:` records (msvcrt,
     oldnames, msvcprt, and our explicit `-l:libvcruntime.a`) are also
-    copied from the MSVC lib dir.
+    copied from the MSVC lib dir. The CUDA toolkit's `nvrtc.lib`/`cuda.lib`
+    import libraries carry `/DEFAULTLIB:LIBCMT`, provided here as well.
     """
     if sys.platform != "win32":
         return
@@ -284,10 +290,11 @@ def win_link_shim(args: argparse.Namespace, build_root: Path) -> None:
     if not libuuid_src.is_file():
         raise ValueError(f"Windows LibTorch build requires libuuid.a in {libuuid_src}")
     msvc_dir = Path(msvc)
-    # Copy all four libraries corresponding to /DEFAULTLIB: under their GNU
-    # names so the executable link depends only on this private shim directory.
+    # Copy all /DEFAULTLIB: libraries under their GNU names so the executable
+    # link depends only on this private shim directory.
     msvc_libraries = (("msvcrt.lib", "libmsvcrt.a"), ("oldnames.lib", "liboldnames.a"),
-                      ("msvcprt.lib", "libmsvcprt.a"), ("vcruntime.lib", "libvcruntime.a"))
+                      ("msvcprt.lib", "libmsvcprt.a"), ("vcruntime.lib", "libvcruntime.a"),
+                      ("libcmt.lib", "libLIBCMT.a"))
     for name, _ in msvc_libraries:
         if not (msvc_dir / name).is_file():
             raise ValueError(f"Windows LibTorch build requires {name} in {msvc_dir}")

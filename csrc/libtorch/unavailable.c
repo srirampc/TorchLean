@@ -18,6 +18,19 @@ static lean_obj_res unavailable_io(void) {
       lean_mk_io_user_error(lean_mk_string(TORCHLEAN_UNAVAILABLE_MESSAGE)));
 }
 
+LEAN_EXPORT lean_obj_res torchlean_kernel_run_buffer(
+    b_lean_obj_arg source, b_lean_obj_arg inputs, uint64_t count) {
+  (void)source; (void)inputs; (void)count;
+  return unavailable_io();
+}
+
+LEAN_EXPORT lean_obj_res torchlean_kernel_run_bytes(
+    b_lean_obj_arg source, uint32_t format, uint64_t width,
+    b_lean_obj_arg inputs, uint64_t count) {
+  (void)source; (void)format; (void)width; (void)inputs; (void)count;
+  return unavailable_io();
+}
+
 // 0 = built without LibTorch, 1 = LibTorch with a visible device, 2 = LibTorch without one.
 LEAN_EXPORT uint32_t torchlean_cuda_runtime_status(uint32_t token) {
   (void)token;
@@ -79,14 +92,26 @@ UNAVAILABLE_IO(torchlean_libtorch_set_setting, uint32_t setting, uint32_t enable
 UNAVAILABLE_IO(torchlean_libtorch_set_memory_fraction, double fraction)
 UNAVAILABLE_IO(torchlean_libtorch_synchronize, uint32_t token)
 UNAVAILABLE_IO(torchlean_libtorch_empty_cache, uint32_t token)
-UNAVAILABLE_IO(torchlean_cuda_buffer_zeros_io, uint32_t n)
-UNAVAILABLE_IO(torchlean_cuda_buffer_full_io, uint32_t n, double v)
-UNAVAILABLE_IO(torchlean_cuda_buffer_rand_uniform_io, uint32_t n, uint64_t key)
-UNAVAILABLE_IO(torchlean_cuda_buffer_bernoulli_mask_io, uint32_t n, double keepProb, uint64_t key)
-UNAVAILABLE_IO(torchlean_cuda_buffer_of_float_array_io, b_lean_obj_arg AObj)
+UNAVAILABLE_IO(torchlean_cuda_buffer_zeros_io, uint32_t n, uint8_t dtype)
+UNAVAILABLE_IO(torchlean_cuda_buffer_full_io, uint32_t n, double v, uint8_t dtype)
+UNAVAILABLE_IO(torchlean_cuda_buffer_rand_uniform_io, uint32_t n, uint64_t key, uint8_t dtype)
+UNAVAILABLE_IO(torchlean_cuda_buffer_bernoulli_mask_io,
+    uint32_t n, double keepProb, uint64_t key, uint8_t dtype)
+UNAVAILABLE_IO(torchlean_cuda_buffer_of_float_array_io, b_lean_obj_arg AObj, uint8_t dtype)
+UNAVAILABLE_IO(torchlean_cuda_buffer_of_encoded_io,
+    b_lean_obj_arg bytes, b_lean_obj_arg format, uint64_t width)
+UNAVAILABLE_IO(torchlean_cuda_buffer_to_encoded_io, b_lean_obj_arg buffer)
 UNAVAILABLE_IO(torchlean_cuda_buffer_to_float_array_io, b_lean_obj_arg BObj)
-UNAVAILABLE_IO(torchlean_cuda_buffer_to_float32_bytes_io, b_lean_obj_arg BObj)
-UNAVAILABLE_IO(torchlean_cuda_buffer_of_float32_bytes_io, b_lean_obj_arg BytesObj)
+UNAVAILABLE_IO(torchlean_cuda_buffer_to_bytes_io, b_lean_obj_arg BObj, uint8_t dtype)
+UNAVAILABLE_IO(torchlean_cuda_buffer_of_bytes_io,
+    b_lean_obj_arg BytesObj, uint8_t dtype, uint8_t source)
+UNAVAILABLE_IO(torchlean_cuda_buffer_softmax_io,
+    b_lean_obj_arg input, b_lean_obj_arg dims, uint32_t axis)
+UNAVAILABLE_IO(torchlean_cuda_buffer_conv_io,
+    b_lean_obj_arg input, b_lean_obj_arg kernel, b_lean_obj_arg bias,
+    b_lean_obj_arg input_dims, b_lean_obj_arg kernel_dims, b_lean_obj_arg stride,
+    b_lean_obj_arg padding_before, b_lean_obj_arg padding_after, b_lean_obj_arg dilation,
+    uint32_t groups)
 #undef UNAVAILABLE_IO
 
 // Reached only through a buffer, and no buffer exists in this build.
@@ -188,18 +213,27 @@ UNAVAILABLE(lean_obj_res, torchlean_cuda_buffer_scatter_add_rows,
     b_lean_obj_arg MObj, b_lean_obj_arg ValuesObj, uint32_t rows, uint32_t cols,
     b_lean_obj_arg IdxObj, uint32_t k)
 UNAVAILABLE(uint32_t, torchlean_cuda_buffer_size, b_lean_obj_arg BObj)
+UNAVAILABLE(uint8_t, torchlean_cuda_buffer_dtype, b_lean_obj_arg BObj)
+UNAVAILABLE(lean_obj_res, torchlean_cuda_buffer_format, b_lean_obj_arg buffer)
+UNAVAILABLE(lean_obj_res, torchlean_cuda_buffer_fail, b_lean_obj_arg message)
+UNAVAILABLE(lean_obj_res, torchlean_kernel_run_encoded,
+    b_lean_obj_arg source, b_lean_obj_arg inputs, b_lean_obj_arg format,
+    uint64_t width, uint64_t count)
 UNAVAILABLE(uint32_t, torchlean_cuda_buffer_size_with_token, b_lean_obj_arg BObj, uint32_t token)
 UNAVAILABLE(uint32_t, torchlean_cuda_buffer_release_with_token, b_lean_obj_arg BObj, uint32_t token)
 UNAVAILABLE(lean_obj_res, torchlean_cuda_buffer_release_then,
     b_lean_obj_arg scratchObj, b_lean_obj_arg keepObj)
-UNAVAILABLE(lean_obj_res, torchlean_cuda_buffer_zeros, uint32_t n)
-UNAVAILABLE(lean_obj_res, torchlean_cuda_buffer_full, uint32_t n, double v)
-UNAVAILABLE(lean_obj_res, torchlean_cuda_buffer_rand_uniform, uint32_t n, uint64_t key)
+UNAVAILABLE(lean_obj_res, torchlean_cuda_buffer_zeros, uint32_t n, uint8_t dtype)
+UNAVAILABLE(lean_obj_res, torchlean_cuda_buffer_zeros_like, b_lean_obj_arg reference, uint32_t n)
+UNAVAILABLE(lean_obj_res, torchlean_cuda_buffer_copy, b_lean_obj_arg reference)
+UNAVAILABLE(lean_obj_res, torchlean_cuda_buffer_duplicate, b_lean_obj_arg reference)
+UNAVAILABLE(lean_obj_res, torchlean_cuda_buffer_full, uint32_t n, double v, uint8_t dtype)
+UNAVAILABLE(lean_obj_res, torchlean_cuda_buffer_rand_uniform, uint32_t n, uint64_t key, uint8_t dtype)
 UNAVAILABLE(lean_obj_res, torchlean_cuda_buffer_rand_normal,
-    uint32_t n, double mean, double std, uint64_t key)
+    uint32_t n, double mean, double std, uint64_t key, uint8_t dtype)
 UNAVAILABLE(lean_obj_res, torchlean_cuda_buffer_bernoulli_mask,
-    uint32_t n, double keepProb, uint64_t key)
-UNAVAILABLE(lean_obj_res, torchlean_cuda_buffer_of_float_array, b_lean_obj_arg AObj)
+    uint32_t n, double keepProb, uint64_t key, uint8_t dtype)
+UNAVAILABLE(lean_obj_res, torchlean_cuda_buffer_of_float_array, b_lean_obj_arg AObj, uint8_t dtype)
 UNAVAILABLE(lean_obj_res, torchlean_cuda_buffer_to_float_array, b_lean_obj_arg BObj)
 UNAVAILABLE(lean_obj_res, torchlean_cuda_buffer_abs_bwd, b_lean_obj_arg XObj, b_lean_obj_arg GObj)
 UNAVAILABLE(lean_obj_res, torchlean_cuda_buffer_sqrt_bwd, b_lean_obj_arg XObj, b_lean_obj_arg GObj)

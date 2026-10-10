@@ -19,6 +19,7 @@ set(Torch_DIR "${TORCHLEAN_LIBTORCH_HOME}/share/cmake/Torch")
 set(Caffe2_DIR "${TORCHLEAN_LIBTORCH_HOME}/share/cmake/Caffe2")
 list(PREPEND CMAKE_PREFIX_PATH "${TORCHLEAN_LIBTORCH_HOME}")
 find_package(Torch REQUIRED CONFIG PATHS "${Torch_DIR}" NO_DEFAULT_PATH)
+find_package(CUDAToolkit REQUIRED)
 if(NOT TARGET torch_cuda)
   message(FATAL_ERROR "These regressions require the CUDA-enabled SDK.")
 endif()
@@ -39,9 +40,7 @@ endforeach()
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-add_executable(torchlean_elementwise_regression
-  regression.cpp
-  ../../../../scripts/checks/cuda_float32_parity.cpp)
+add_executable(torchlean_elementwise_regression regression.cpp)
 target_compile_definitions(torchlean_elementwise_regression PRIVATE TORCHLEAN_LIBTORCH)
 target_include_directories(torchlean_elementwise_regression PRIVATE
   "${TORCHLEAN_LEAN_PREFIX}/include")
@@ -49,7 +48,7 @@ target_include_directories(torchlean_elementwise_regression PRIVATE
 # first so SDK exceptions, including the invalid-setting regression, reach C++ catches.
 target_link_libraries(torchlean_elementwise_regression PRIVATE
   "-Wl,--push-state,--no-as-needed" gcc_s "-Wl,--pop-state"
-  "${TORCHLEAN_BACKEND_LIBRARY}" ${TORCH_LIBRARIES} "${LEAN_RUNTIME}")
+  "${TORCHLEAN_BACKEND_LIBRARY}" ${TORCH_LIBRARIES} CUDA::cuda_driver "${LEAN_RUNTIME}")
 separate_arguments(torch_sdk_cxx_flags NATIVE_COMMAND "${TORCH_CXX_FLAGS}")
 if(NOT CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   message(FATAL_ERROR "The staged host oracle needs GCC/Clang floating-point flags.")

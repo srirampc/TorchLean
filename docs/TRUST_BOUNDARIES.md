@@ -4,10 +4,6 @@ TorchLean uses Lean to state and check mathematical claims about neural-network 
 parts of the system are inside Lean's proof kernel; others are executable tools, native runtimes, or
 external producers whose outputs may be checked by Lean.
 
-This document records the assumptions that matter for correctness claims: Lean axioms, Prop-valued
-contracts, CUDA and FFI code, external numeric oracles, PyTorch import/export scripts, Julia/Python
-producers, and artifact-checking conventions.
-
 ## Levels of Assurance
 
 | Layer | Example | Assurance |
@@ -29,15 +25,8 @@ and over `ℝ` its input block is the adjoint of the Fréchet derivative of the 
 statements about the exact tape and spec models at the given carrier; neither says anything about
 `Float` rounding, compiled code, or CUDA.
 
-When writing a correctness claim, name the layer explicitly:
-
-- theorem claim: cite the Lean theorem and its hypotheses;
-- executable-checker claim: cite the checker command, artifact schema, and accepted predicate;
-- runtime claim: cite the backend, tests, sanitizer/parity evidence, and remaining native boundary;
-- producer claim: cite the external tool or script and the artifact that Lean later checks.
-
-This avoids collapsing "the command ran", "the checker accepted this artifact", and "Lean proved a
-mathematical statement" into one sentence.
+For a correctness claim, cite the applicable theorem and hypotheses, checker predicate, or native
+validation evidence. A successful command, an accepted artifact, and a proof are different results.
 
 The backend planner and capsule vocabulary are documented in the
 [Installation guide](https://lean-dojo.github.io/TorchLean/installation/#from-a-model-to-a-kernel).
@@ -61,9 +50,11 @@ with names such as `libtorch.matmul`. The single GPU attention implementation is
 `libtorch.direct_attention`: this retained capsule identity now describes forward and local VJP
 composition in Lean over LibTorch numerical primitives. The tape owns its saved buffers.
 
-The maintained `checkedCuda` profile prefers LibTorch, including this attention capsule, and retains
-TorchLean's global tape. The profile requires runtime guards and named regression evidence. Its
-`checked` classification does not mean that LibTorch is inside Lean's proof kernel. Likewise,
+The default `libTorchCuda` profile prefers LibTorch and retains TorchLean's global tape. It admits
+explicit LibTorch implementation assumptions for operations without retained CUDA parity checks.
+The strict `checkedCuda` profile requires runtime guards and named regression evidence instead;
+it rejects those untested capsules. A `checked` classification does not mean that LibTorch is
+inside Lean's proof kernel. Likewise,
 `KernelPlanAudit.hasTrustedExternal = false` means no capsule has the `trustedExternal`
 classification; it does not mean that no foreign code runs. A descriptor naming a regression suite
 records the required validation, not a proof or a stored result from a particular test run.
@@ -198,7 +189,7 @@ or a complete concurrency proof of mimalloc, its compiler output, or operating-s
 
 ## LibTorch CUDA Runtime
 
-All CUDA primitive numerical work crosses the LibTorch ATen bridge. TorchLean retains graph
+Established CUDA model primitives cross the LibTorch ATen bridge. TorchLean retains graph
 recording, tape traversal, gradient accumulation policy, and the selection of local VJPs. Native
 forward and backward calls execute with gradient recording disabled; they do not create a second
 local or global LibTorch autograd graph. `VJPMode.backendVJP` means a bridge routine evaluates the
@@ -214,11 +205,14 @@ the existing numerical primitives.
   output sizes must fit the `UInt32` FFI ABI. Native guards must also check dtype, device, and
   layout. A typed capsule/handler binding proves agreement of operation, provider, and device;
   it does not prove those native guards or arithmetic correct.
-- Eager CUDA buffers hold contiguous row-major LibTorch float32 tensors. Native handles and views
+- Native eager CUDA buffers hold contiguous row-major LibTorch binary32 or binary64 tensors.
+  Custom configured-binary arithmetic uses byte tensors carrying complete scalar encodings,
+  including saved values and gradients on the same tape. Native model operators do not accept
+  those encoded formats. Native handles and views
   follow LibTorch ownership; Lean finalizers release their tensor owners rather than specifying
   direct `cudaFree` behavior. Borrowed Lean arguments still use `@&`, and native calls must respect
-  that calling convention. Dtype-specific interfaces remain separate from FloatLib's configured
-  software formats.
+  that calling convention. Both native and encoded interfaces must preserve their dtype and
+  buffer-layout requirements.
 - Native buffer operations remain marked `@[never_extract]` where resource behavior prevents
   commoning or deletion. Effectful constructors and explicit release sequence allocation and
   destruction. A `Buffer` is still a copyable reference, not a linear capability: explicit release
@@ -270,6 +264,35 @@ the existing numerical primitives.
 - Stream ordering, asynchronous errors, synchronization, and allocator behavior belong to the
   native bridge and LibTorch runtime. They require runtime validation; neither capsule selection
   nor the Lean tape theorem establishes them.
+
+## Custom Tensor Computations
+
+`NN.Kernel` applies scalar functions to tensors on CPU or compiles supported native and configured
+binary calculations to CUDA. `Program.correct`, `Program.lower_correct` and `Program.named_correct` prove source
+correspondence through the expression and statement representations. `Cuda.source_denotes`
+connects emitted source semantics under explicit arithmetic and reader contracts. These theorems
+do not verify NVRTC, the CUDA driver, hardware arithmetic, concurrent error recording or foreign
+memory. The native bridge checks reads, retains input owners until completion, and bounds its
+compiled-module cache; those checks remain native implementation obligations.
+
+Configured binary arithmetic uses complete encoded words in CUDA buffers, including saved values
+and gradients on the existing tape. Its generated arithmetic is compared with FloatLib, not
+verified by Lean's kernel. The format descriptor, byte transfer, slicing, concatenation and zero
+allocation are additional native implementation obligations. Encoded buffers cannot be used as
+native optimizer checkpoints or passed to unsupported ATen operations.
+
+Automatic recording checks the operation recipe against the original function. Scalar branches
+record only the selected path and synchronize to Lean for the decision. Fixed-parameter
+recurrences record their ordered steps. These source equalities do not establish differentiability
+at branch boundaries or turn floating-point VJPs into exact real derivatives; the existing
+derivative laws and their domain assumptions still apply.
+
+CPU evaluates the original scalar function. CPU-only carriers retain their type through a reported
+fallback; unsupported source for a GPU-capable carrier remains an error.
+Canonical IR stores a custom node's checked body separately from its shape signature. A source
+proof supplies neither a real-enclosure rule nor a derivative: IBP/CROWN, forward-only lowering
+and PyTorch export reject unsupported custom paths. See the
+[custom-computation guide](../NN/Kernel/README.md) for the supported frontend and precision limits.
 
 ## Executable Floating Point
 
@@ -342,7 +365,7 @@ checks positivity before scalar conversion; it does not establish positivity aft
 
 Kernel capsules record one numerical choice: the reduction order (`NumericalPolicy.reduction`,
 one of `fixedLeft`, `implementationDefined`, or `notApplicable`). It is audited contract data, not
-proof evidence, and it has exactly one consumer: `requireFixedLeftReduction` in
+proof evidence. The certificate guard `requireFixedLeftReduction` in
 `NN/Proofs/RuntimeApprox/Graph/NumericalCertificate/Contracts.lean` reads it as an `Except`
 precondition and rejects any node whose capsule does not advertise `fixedLeft`. Rounding mode,
 subnormal handling, and multiply-add contraction are not recorded; a certificate that depends on

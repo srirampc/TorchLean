@@ -62,9 +62,9 @@ Domain: real calculus does not define the derivative of `a/b` at `b = 0`, so thi
 the genuine quotient rule only where `b ≠ 0`. The carrier's `/` (and hence `divSpec`) may
 totalize or be backend-dependent at `b = 0`, but no real-valued gradient is implied there.
 
-Requires `[TorchLean.Storage α] [Context α]` like the sibling `abs`/`sqrt`/`exp` nodes (its
-`divSpec` forward rides the carrier's `/`). -/
-@[inline] def div {α : Type} [TorchLean.Storage α] [Context α] {s : Shape}
+The executable rule needs only division, multiplication, subtraction and zero; it does not require
+transcendental operations or an ordering on the scalar type. -/
+@[inline] def div {α : Type} [TorchLean.Storage α] [Div α] [Mul α] [Sub α] [Zero α] {s : Shape}
   (t : Tape α) (aId bId : Nat) : Result (Tape α × Nat) :=
   binary (α := α) (t := t) (σ₁ := s) (σ₂ := s) (τ := s) "div" aId bId
     (forward := divSpec)
@@ -74,6 +74,12 @@ Requires `[TorchLean.Storage α] [Context α]` like the sibling `abs`/`sqrt`/`ex
       let dLdyA : Tensor α s := mulSpec dLdy (divSpec (divSpec a b) b)
       let db : Tensor α s := subSpec (Tensor.full s (0 : α)) dLdyA
       (da, db))
+
+/-- Direct elementwise negation; unlike subtraction from zero, this preserves signed zero. -/
+@[inline] def neg {α : Type} [TorchLean.Storage α] [Neg α] {s : Shape}
+    (t : Tape α) (xId : Nat) : Result (Tape α × Nat) :=
+  unary (α := α) (t := t) (σ := s) (τ := s) "neg" xId
+    (forward := negSpec) (backward := fun _ seed => negSpec seed)
 
 /-- Multiply a tensor by a scalar constant. PyTorch: `x * c` for Python scalar `c`. -/
 @[inline] def scale {α : Type} [TorchLean.Storage α] [Mul α] {s : Shape}
@@ -112,7 +118,7 @@ PyTorch comparison: `torch.sqrt`.
     (forward := fun x => sqrtSpec (α := α) (s := s) x)
     (backward := fun x dLdy =>
       let dsqrt : Tensor α s :=
-        mapSpec (α := α) (s := s) (fun v =>
+        Tensor.map (α := α) (shape := s) (fun v =>
           if v > 0 then
             (1 : α) / (((2 : Nat) : α) * MathFunctions.sqrt v)
           else
@@ -133,7 +139,7 @@ PyTorch comparison: `torch.clamp`.
     (forward := fun x => clampSpec (α := α) (s := s) x minVal maxVal)
     (backward := fun x dLdy =>
       let dclamp : Tensor α s :=
-        mapSpec (α := α) (s := s) (fun v =>
+        Tensor.map (α := α) (shape := s) (fun v =>
           if v > minVal ∧ maxVal > v then (1 : α) else (0 : α)) x
       mulSpec dclamp dLdy)
 

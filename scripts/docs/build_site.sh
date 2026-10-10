@@ -6,6 +6,10 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 LAKE="${LAKE:-$ROOT/scripts/lake.sh}"
 cd "$ROOT"
 
+# Keep generated-document paths tied to this build profile even if another invocation switches
+# the checkout's `.lake/build` symlink between CPU and GPU checks.
+build_dir="$("$LAKE" --torchlean-build-dir)"
+
 echo "==> Building Lean modules"
 "$LAKE" build
 
@@ -17,13 +21,13 @@ echo "==> Building DocGen API reference"
 # Lake does not include DISABLE_EQUATIONS in the docInfo trace, so remove the cached DocGen DB/data
 # before rebuilding. Otherwise Lake may replay old noisy docInfo artifacts.
 if [ "${SKIP_DOCGEN:-0}" = "1" ]; then
-  if [ ! -d .lake/build/doc ]; then
+  if [ ! -d "$build_dir/doc" ]; then
     echo "error: SKIP_DOCGEN=1 requires an existing .lake/build/doc directory" >&2
     exit 1
   fi
   echo "    Reusing .lake/build/doc"
 else
-  rm -rf .lake/build/doc .lake/build/doc-data .lake/build/api-docs.db
+  rm -rf "$build_dir/doc" "$build_dir/doc-data" "$build_dir/api-docs.db"
   DISABLE_EQUATIONS=1 "$LAKE" -Kenv=dev build TorchLeanDocs:docs
 fi
 
@@ -31,7 +35,7 @@ echo "==> Copying DocGen output"
 # The public site serves DocGen from `home_page/docs`. Strip trace/hash files so
 # the checked-in preview tree contains browser assets rather than Lake internals.
 rm -rf home_page/docs
-cp -r .lake/build/doc home_page/docs
+cp -r "$build_dir/doc" home_page/docs
 find home_page/docs -name "*.trace" -delete
 find home_page/docs -name "*.hash" -delete
 python3 scripts/docs/polish_docgen.py --docs home_page/docs
@@ -53,7 +57,6 @@ if [ -d home_page/blueprint/TorchLeanBlueprint/Guide/Assets ]; then
   cp -r home_page/blueprint/TorchLeanBlueprint/Guide/Assets/* _out/blueprint/html-multi/Guide/Assets/
 fi
 python3 scripts/docs/polish_verso_guide.py --guide _out/blueprint/html-multi
-python3 scripts/docs/check_verso_layout.py --guide _out/blueprint/html-multi
 
 echo "==> Building dependency graph audit"
 # The Graphs page reads this JSON to populate the import explorer.
@@ -67,7 +70,7 @@ echo "==> Building interactive import graph HTML"
 # reflects the same module graph users get from the current checkout.
 mkdir -p home_page/importgraph
 "$LAKE" exe graph --to NN home_page/importgraph/index.html
-python3 scripts/docs/postprocess_importgraph.py home_page/importgraph/index.html
+python3 scripts/docs/polish_docgen.py --importgraph home_page/importgraph/index.html
 
 echo "==> Installing Jekyll bundle"
 # Prefer the lockfile Bundler version when installed, but keep local previewing
@@ -80,6 +83,9 @@ else
   BUNDLE_CMD=(bundle)
 fi
 (cd home_page && "${BUNDLE_CMD[@]}" config set path vendor/bundle && "${BUNDLE_CMD[@]}" install)
+
+echo "==> Refreshing CI timing history"
+python3 scripts/docs/ci_timings.py
 
 echo "==> Building Jekyll site"
 (cd home_page && rm -rf _site && "${BUNDLE_CMD[@]}" exec jekyll build --config _config.yml,_config_dev.yml)

@@ -120,8 +120,9 @@ def defaultAlphaVec {n : Nat} (lo hi : Tensor α [n]) : Tensor α [n] :=
 /--
 One-node α-CROWN step function for a supported subset of IR ops.
 
-This is a *safe* (Option-returning) step: it returns `none` when required parent bounds or
-parameters are missing, or when dimensions mismatch.
+The step returns `none` when required parent bounds or parameters are missing, or when dimensions
+mismatch. Callers must validate node ids and the size of the IBP table before calling it; direct
+array indexing relies on those invariants.
 
 It is intended to be used for:
 - executable per-node certificate checking (recompute node `id` from certificate parents), and
@@ -136,8 +137,10 @@ This step function handles the verifier core of the IR:
 - `.sum` (treated as a $1\times n$ linear layer)
 - `.reshape`, `.flatten` (shape-only, guarded by dimensional consistency)
 
-All other node kinds fall back to a conservative **constant** affine enclosure derived from the
-IBP box at the same node id (if present). The checker remains total over graphs that contain
+Custom computations return `none`, even when an IBP box is supplied: a source-evaluation proof
+does not supply a real-enclosure or derivative rule. Other node kinds fall back to a conservative
+**constant** affine enclosure derived from the IBP box at the same node id (if present).
+The checker remains total over graphs that contain
 operators outside this affine-transfer subset; end-to-end theorems account for those nodes through
 the soundness assumptions attached to their IBP boxes.
 -/
@@ -149,6 +152,7 @@ def alphaCrownStepNode?
     (ctx : AffineCtx) (id : Nat) : Option (FlatAffineBounds α) :=
   let node := nodes[id]!
   match node.kind with
+  | .custom .. => none
   | .input =>
       if id = ctx.inputId then
         some (boundsIdentity (α := α) ctx.inputDim)

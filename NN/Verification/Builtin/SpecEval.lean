@@ -17,15 +17,18 @@ public import NN.Spec.Layers.Pooling
 
 Pure (non-`IO`) TorchLean execution for forward models.
 
-This file gives the TorchLean `Program` interface a pure *spec semantics* backend:
+This file gives the TorchLean `Program` interface a pure reference interpreter:
 
 - `Ref s` is interpreted as an actual `Tensor α s`,
-- each primitive op is interpreted via the corresponding `Spec.*_spec` definition,
-- the monad is `Except String`, so unsupported verifier-fragment cases report explicit errors
-  instead of silently choosing a meaningless semantics.
+- operations use their tensor and layer specifications;
+- the monad is `Except String`, with errors for invalid pooling parameters and unsupported random
+  operations.
 
-This interpretation supplies the reference semantics for lowering-correctness theorems
-for `NN.Verification.Builtin.lowerForwardToIR`.
+This interpreter is not the `Proved.ForwardProgram` evaluator covered by the lowering theorem.
+It supports operations outside that proved fragment, including transposed convolution and smooth
+max pooling. Raw logarithm uses the scalar specification without the IR evaluator's positivity
+check, and log-softmax uses the stable specification rather than taking the logarithm of softmax.
+Agreement with the broader `lowerForwardToIR` builder is therefore not established for all programs.
 -/
 
 @[expose] public section
@@ -44,12 +47,15 @@ instance {α : Type} [TorchLean.Storage α] [Context α] :
   DataRef := fun β _ s => Tensor β s
 
   const := fun {_s} t => pure t
+  observe := fun x => pure x.item
   dataConst := fun t => t
   mapData := fun f t => f t
 
   add := fun {_s} a b => pure (Tensor.addSpec (α := α) a b)
   sub := fun {_s} a b => pure (Tensor.subSpec (α := α) a b)
   mul := fun {_s} a b => pure (Tensor.mulSpec (α := α) a b)
+  div := fun {_s} a b => pure (Tensor.divSpec (α := α) a b)
+  neg := fun {_s} x => pure (Tensor.negSpec (α := α) x)
   scale := fun {_s} x c => pure (Tensor.scaleSpec (α := α) x c)
   abs := fun {_s} x => pure (Tensor.absSpec (α := α) x)
   sqrt := fun {_s} x => pure (Tensor.sqrtSpec (α := α) x)
